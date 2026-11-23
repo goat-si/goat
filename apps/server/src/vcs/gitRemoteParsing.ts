@@ -1,3 +1,5 @@
+import { trimAsciiWhitespace } from "@goat/contracts";
+
 export function parseGitRemoteVerboseOutput(
   output: string,
 ): Map<string, { url?: string; pushUrl?: string }> {
@@ -37,8 +39,8 @@ export function parseUpstreamRefByFirstSeparator(
 ): { upstreamRef: string; remoteName: string; branchName: string } | null {
   const separatorIndex = upstreamRef.indexOf("/");
   if (separatorIndex <= 0 || separatorIndex === upstreamRef.length - 1) return null;
-  const remoteName = upstreamRef.slice(0, separatorIndex).trim();
-  const branchName = upstreamRef.slice(separatorIndex + 1).trim();
+  const remoteName = upstreamRef.slice(0, separatorIndex);
+  const branchName = upstreamRef.slice(separatorIndex + 1);
   if (remoteName.length === 0 || branchName.length === 0) return null;
   return { upstreamRef, remoteName, branchName };
 }
@@ -48,11 +50,11 @@ export function parseTrackingBranchByUpstreamRef(
   upstreamRef: string,
 ): string | null {
   for (const line of stdout.split("\n")) {
-    const trimmedLine = line.trim();
+    const trimmedLine = trimAsciiWhitespace(line);
     if (trimmedLine.length === 0) continue;
     const [branchNameRaw, upstreamBranchRaw = ""] = trimmedLine.split("\t");
-    const branchName = branchNameRaw?.trim() ?? "";
-    const candidateUpstreamRef = upstreamBranchRaw.trim();
+    const branchName = branchNameRaw ?? "";
+    const candidateUpstreamRef = upstreamBranchRaw;
     if (branchName.length === 0 || candidateUpstreamRef.length === 0) continue;
     if (candidateUpstreamRef === upstreamRef) return branchName;
   }
@@ -62,7 +64,7 @@ export function parseTrackingBranchByUpstreamRef(
 export function deriveLocalBranchNameFromRemoteRef(branchName: string): string | null {
   const separatorIndex = branchName.indexOf("/");
   if (separatorIndex <= 0 || separatorIndex === branchName.length - 1) return null;
-  const localBranch = branchName.slice(separatorIndex + 1).trim();
+  const localBranch = branchName.slice(separatorIndex + 1);
   return localBranch.length > 0 ? localBranch : null;
 }
 // Fetch stderr can carry credentials; persist only fixed diagnoses or generic failures.

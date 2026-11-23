@@ -5,8 +5,15 @@ import {
   GitCommandError,
   GitPreparePullRequestThreadResult,
   GitRunStackedActionInput,
+  VcsCreateWorktreeInput,
+  VcsRef,
 } from "./git.ts";
 
+const encodeVcsRef = Schema.encodeUnknownSync(VcsRef);
+const decodeVcsRef = Schema.decodeUnknownSync(VcsRef);
+const encodeCreateWorktreeInput = Schema.encodeUnknownSync(VcsCreateWorktreeInput);
+const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
+const decodeWorktreeHandoffInput = Schema.decodeUnknownSync(WorktreeMcpHandoffInput);
 const decodeGitCommandError = Schema.decodeUnknownSync(Schema.toCodecJson(GitCommandError));
 const decodePreparePullRequestThreadResult = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadResult,
@@ -60,5 +67,30 @@ describe("GitRunStackedActionInput", () => {
     });
 
     expect(parsed.filePaths).toEqual([" leading.txt", "trailing.txt "]);
+  });
+});
+
+describe("Git ref names", () => {
+  it.each(["origin/release/v2\u3000", "\u00a0release", "\u3000"])(
+    "keeps Unicode whitespace at the edges of %j across the wire",
+    (name) => {
+      const ref = { name, upstreamRef: `refs/remotes/${name}`, current: false, isDefault: false };
+      const wireRef = encodeVcsRef({ ...ref, worktreePath: null });
+      expect(decodeVcsRef(wireRef)).toMatchObject(ref);
+
+      const input = { cwd: "/repo", refName: name, newRefName: name, baseRefName: name };
+      const wireInput = encodeCreateWorktreeInput({ ...input, path: null });
+      expect(decodeCreateWorktreeInput(wireInput)).toMatchObject(input);
+
+      const handoff = { branch: name, baseRef: name, startFromOrigin: true };
+      expect(decodeWorktreeHandoffInput(handoff)).toEqual(handoff);
+    },
+  );
+
+  it("still trims ASCII whitespace and rejects a blank name", () => {
+    expect(
+      decodeCreateWorktreeInput({ cwd: "/repo", refName: " \tmain\n", path: null }).refName,
+    ).toBe("main");
+    expect(() => decodeCreateWorktreeInput({ cwd: "/repo", refName: " \t", path: null })).toThrow();
   });
 });
