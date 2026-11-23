@@ -9,10 +9,31 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import { vi } from "vite-plus/test";
+import { CaptureEventQueue } from "./ClaudeAdapterV2.observations.testkit.ts";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
 import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
-import { wakeTaskStarted, turnOneResult } from "./ClaudeWakeFrames.testkit.ts";
+import {
+  wakeTaskStarted,
+  turnOneResult,
+  makeResultFrame,
+  claudeSdkFrame,
+  WAKE_NATIVE_SESSION,
+} from "./ClaudeWakeFrames.testkit.ts";
+vi.mock("effect/Queue", async (importOriginal) => {
+  const actual = await importOriginal<typeof Queue>();
+  return {
+    ...actual,
+    take: <A, E>(queue: Queue.Dequeue<A, E>) =>
+      Effect.gen(function* () {
+        const capture = yield* CaptureEventQueue;
+        if (capture !== undefined && actual.isEnqueue<unknown, never>(queue))
+          yield* capture((marker) => actual.offer(queue, marker));
+        return yield* actual.take(queue);
+      }),
+  };
+});
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 describe("a model change after a Claude Code update", () => {
   /** An install as the Claude installer lays it out: one file per version and a link. */
@@ -103,8 +124,15 @@ describe("a model change after a Claude Code update", () => {
             providerTurnOrdinal: ordinal,
             modelSelection,
           });
+        let resultOrdinal = 0;
         const settle = Effect.gen(function* () {
-          yield* Queue.offer(harness.processQueues.at(-1) ?? harness.sdkMessages, turnOneResult);
+          yield* Queue.offer(
+            harness.processQueues.at(-1) ?? harness.sdkMessages,
+            makeResultFrame({
+              uuid: `00000000-0000-4000-8000-00000000070${++resultOrdinal}`,
+              result: "Done.",
+            }),
+          );
           yield* Queue.take(harness.terminalReceipts);
         });
         yield* harness.runtime.startTurn(turn(1, opus));
@@ -119,6 +147,20 @@ describe("a model change after a Claude Code update", () => {
         assert.deepEqual(harness.liveSelectionChanges[0], { model: "claude-sonnet-4-6" });
         assert.strictEqual(harness.getOpenedOptions(), originalOptions);
         assert.lengthOf(harness.processQueues, 1);
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: [],
+            uuid: "00000000-0000-4000-8000-000000000520",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        yield* harness.runtime.startTurn(turn(3, sonnet));
+        assert.lengthOf(harness.processQueues, 2);
+        assert.equal(harness.getOpenedOptions()?.model, "claude-sonnet-4-6");
+        assert.lengthOf(harness.offeredMessages, 3);
       }).pipe(Effect.provide(layerClaudeAdapterTest)),
     ),
   );
