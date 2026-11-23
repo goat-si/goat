@@ -203,6 +203,9 @@ const withRequestId = (
     ? { ...entry, frame: { ...entry.frame, id } }
     : entry;
 
+const outboundFrame = (entry: CodexReplay.CodexAppServerReplayEntry | undefined) =>
+  entry?.type === "expect_outbound" && Predicate.isObject(entry.frame) ? entry.frame : undefined;
+
 export function withThreadNames(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
   titles: readonly string[],
@@ -212,6 +215,15 @@ export function withThreadNames(
   let ids = new Map<number, number>();
   let named = new Set<unknown>();
   let titleIndex = 0;
+  // Only root threads GOAT starts turns on get a name; Codex starts subagent turns itself.
+  const rootThreads = new Set(
+    transcript.entries.flatMap((entry) => {
+      const frame = outboundFrame(entry);
+      return frame?.method === "turn/start" && Predicate.isObject(frame.params)
+        ? [frame.params.threadId]
+        : [];
+    }),
+  );
   for (const [index, entry] of transcript.entries.entries()) {
     const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
     if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
@@ -227,18 +239,26 @@ export function withThreadNames(
       }
       const params = Predicate.isObject(frame.params) ? frame.params : {};
       if (frame.method === "thread/name/set") named.add(params.threadId);
-      const next =
-        frame.method === "config/read"
-          ? transcript.entries
-              .slice(index + 1)
-              .find((candidate) => candidate.type === "expect_outbound")
-          : undefined;
       const nextFrame =
-        next?.type === "expect_outbound" && Predicate.isObject(next.frame) ? next.frame : undefined;
+        frame.method === "config/read" || frame.method === "thread/goal/get"
+          ? outboundFrame(
+              transcript.entries
+                .slice(index + 1)
+                .find((candidate) => candidate.type === "expect_outbound"),
+            )
+          : undefined;
+      // A turn's quiet check reads goals after the name; a /goal command reads before naming.
+      const quietCheckRead =
+        frame.method === "thread/goal/get" &&
+        rootThreads.has(params.threadId) &&
+        nextFrame?.method !== "thread/goal/set" &&
+        nextFrame?.method !== "thread/goal/clear";
       const turnParams =
-        frame.method === "turn/start" || frame.method === "thread/goal/get"
+        frame.method === "turn/start" || quietCheckRead
           ? params
-          : nextFrame?.method === "turn/start" && Predicate.isObject(nextFrame.params)
+          : frame.method === "config/read" &&
+              nextFrame?.method === "turn/start" &&
+              Predicate.isObject(nextFrame.params)
             ? nextFrame.params
             : undefined;
       if (turnParams !== undefined && !named.has(turnParams.threadId)) {
