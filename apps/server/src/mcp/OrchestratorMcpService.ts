@@ -1,3 +1,4 @@
+import { waitingTaskId } from "./waitingTaskId.ts";
 import { DelegatedTaskCancellation } from "../orchestration-v2/goat/DelegatedTaskCancellation.ts";
 import { taskPrompt, threadTitle } from "./goat/ThreadCreationText.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
@@ -3565,7 +3566,7 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
-      const taskId = result.run?.delegatedTaskId;
+      const taskId = waitingTaskId(result.run, target.thread);
       const ownedTask =
         result.timedOut &&
         status !== "waiting" &&
@@ -3577,9 +3578,9 @@ const make = Effect.gen(function* () {
             task.origin === "app_owned" &&
             task.threadId === parent.thread.id &&
             task.childThreadId === input.threadId &&
-            task.completionDelivery?.state !== "disposed",
+            task.completionDelivery?.state !== "disposed" &&
+            (result.run?.delegatedTaskId !== undefined || task.result === null),
         ) === true;
-      // A child waiting on a question or approval needs an answer, not a wake.
       const childRequests = ownedTask
         ? (yield* threadManagement
             .getThreadRecords(input.threadId, ["runtimeRequests"])

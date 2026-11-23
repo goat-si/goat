@@ -31,6 +31,7 @@ it.effect("tells the parent to end its turn only while its task still runs", () 
     const childThreadId = ThreadId.make("thread:mcp-next-child");
     const taskId = NodeId.make("node:mcp-next-task");
     let finished = false;
+    let firstRun = false;
     let pendingRequest: "live" | "message" | null = null;
     const parentProjection = () =>
       ({
@@ -59,7 +60,11 @@ it.effect("tells the parent to end its turn only while its task still runs", () 
     });
     const childProjection = () =>
       ({
-        thread: { id: childThreadId, title: "Child task" },
+        thread: {
+          id: childThreadId,
+          title: "Child task",
+          forkedFrom: { type: "node", nodeId: taskId },
+        },
         runs: [childRun()],
         contextTransfers: [],
         messages: [],
@@ -89,7 +94,7 @@ it.effect("tells the parent to end its turn only while its task still runs", () 
           Effect.succeed({
             threadId: childThreadId,
             run: childRun() as unknown as OrchestrationV2ThreadProjection["runs"][number],
-            timedOut: !finished,
+            timedOut: !finished || firstRun,
           }),
         dispatch: () => Effect.succeed({} as never),
       }),
