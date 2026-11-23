@@ -6648,6 +6648,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return void restartNotices.delete(threadId);
             }
             const start = dispatched.reservation;
+            if (validatedMemory)
+              yield* turnInput.onMemoryDeliveryUncertain?.(validatedMemory) ?? Effect.void;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
               new Map(current).set(threadId, MemoryContext.withoutMemoryBody(turnInput)),

@@ -1174,6 +1174,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const snapshot = wp4Memory();
       const params = yield* queuedMemoryParams(nativeThreadId, prompt, snapshot);
       let receipts = 0;
+      let uncertain = 0;
       const transcript = makeCodexReplayTranscript({
         scenario: "early-stop-await-native-start",
         entries: [
@@ -1249,8 +1250,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           Effect.sync(() => {
             receipts++;
           }),
+        onMemoryDeliveryUncertain: () =>
+          Effect.sync(() => {
+            uncertain++;
+          }),
       });
       assert.equal(receipts, 0);
+      assert.equal(uncertain, 1);
       const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
         driver: CodexAdapterV2.CODEX_DRIVER_KIND,
         nativeTurnId,
