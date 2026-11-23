@@ -57,7 +57,12 @@ export interface ActiveOpenCodeTurn {
   nextItemOrdinal: number;
   nativeUserMessageId: string | null;
   admissionMessageId: string | null;
-  pendingMemoryReceipt?: { readonly id: string; readonly receipt: Effect.Effect<void> } | undefined;
+  pendingMemoryReceipt?:
+    | {
+        readonly id: string;
+        readonly receipt: Effect.Effect<void>;
+      }
+    | undefined;
   priorWakePromptIds?: Set<string>;
   priorWakeSettled?: Deferred.Deferred<void>;
   interrupted: boolean;

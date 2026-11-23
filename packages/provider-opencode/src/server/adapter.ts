@@ -1546,6 +1546,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 lastError = turn.contextOverflow.message;
               }
               turn.finalized = true;
+              if (turn.pendingMemoryReceipt)
+                yield* takeMemoryReceipt(turn, turn.pendingMemoryReceipt.id, false);
               if (turn.priorWakeSettled !== undefined)
                 yield* Deferred.succeed(turn.priorWakeSettled, undefined);
               const completedAt = yield* DateTime.now;
@@ -2706,10 +2708,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           // Native workspace commands accept file parts only, so snapshots stay on prompts.
           if (!command) {
-            const { text: memory, receipt } = yield* MemoryContext.promptMemory(
-              memoryInput,
-              OPENCODE_PROVIDER,
-            );
+            const {
+              text: memory,
+              receipt,
+              uncertain,
+            } = yield* MemoryContext.promptMemory(memoryInput, OPENCODE_PROVIDER);
             const availability = McpProviderSession.memoryToolAvailability(
               !connection.external &&
                 currentMcp?.authorizationHeader === installedMcpSession?.authorizationHeader &&
@@ -2737,6 +2740,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .join("\n\n"),
                   };
             if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
+            yield* uncertain;
             turn.pendingMemoryReceipt = { id: payload.messageID, receipt };
             return yield* sdkCall("session.promptAsync", prepared, (signal) =>
               client.session.promptAsync(prepared, {

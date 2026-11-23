@@ -31,6 +31,7 @@ export const testInboxMemoryDelivery = () =>
       { replayGate: gate, memoryInstructions: () => new Response(null, { status: 204 }) },
     );
     const delivered: Array<unknown> = [];
+    const uncertain: Array<unknown> = [];
     const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
     yield* runtime.startTurn({
       ...turnInput(thread),
@@ -39,9 +40,14 @@ export const testInboxMemoryDelivery = () =>
         Effect.sync(() => {
           delivered.push(snapshot);
         }),
+      onMemoryDeliveryUncertain: (snapshot) =>
+        Effect.sync(() => {
+          uncertain.push(snapshot);
+        }),
     });
     assert.isTrue(yield* Effect.promise(() => gate.waitForReached("deliver-memory")));
     assert.isEmpty(delivered);
+    assert.lengthOf(uncertain, 1);
     gate.release("deliver-memory");
     yield* Fiber.join(terminal);
     assert.lengthOf(delivered, 1);

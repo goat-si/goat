@@ -1219,6 +1219,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const turn = state.active;
       if (turn === undefined) return;
       state.active = undefined;
+      yield* takeMemoryReceipt(turn, turn.pendingMemoryReceipt?.id ?? "", false);
       for (const inboxID of turn.steers) state.strandedSteers.add(inboxID);
       for (const entry of pending.values()) {
         const background = callsAbove(entry.sessionId).some((call) => call.background);
@@ -2322,6 +2323,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (!found) return undefined;
           const recent = before !== undefined && before !== null ? read.slice(0, -1) : read;
           for (const message of recent) {
+            if (message.type === "user") yield* takeMemoryReceipt(turn, message.id, true);
             if (message.type === "user" && turn.steers.delete(message.id)) {
               turn.settledInbox.add(message.id);
             }
@@ -3394,10 +3396,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               readModels(location.directory),
             );
       if (state.active !== turn || turn.interrupted) return;
-      const { receipt } = yield* prepareMemory(sessionId, state, turnInput);
+      const { receipt, uncertain } = yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
       if (!(yield* sending())) return;
+      yield* uncertain;
       turn.pendingMemoryReceipt = { id, receipt };
       return yield* client.session
         .prompt({

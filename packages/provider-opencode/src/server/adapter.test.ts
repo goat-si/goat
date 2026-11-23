@@ -52,6 +52,7 @@ import {
   providerTurn,
   makeOpenCodeRuntimeHarness,
   wp4Snapshot,
+  memoryReceiptFixture,
 } from "./adapter.harness.testkit.ts";
 
 describe("OpenCodeAdapterV2", () => {
@@ -2416,7 +2417,7 @@ describe("OpenCodeAdapterV2", () => {
         const sessions = yield* McpProviderSessions.McpProviderSessions;
         const suffix = `memory-${external}`;
         let refusePrompt = false;
-        const delivered: Array<typeof snapshot> = [];
+        const { delivered, uncertain, ...receiptHooks } = memoryReceiptFixture(snapshot);
         const config = {
           environmentId: EnvironmentId.make("fixture"),
           threadId: ThreadId.make(`thread-opencode-${suffix}`),
@@ -2459,10 +2460,7 @@ describe("OpenCodeAdapterV2", () => {
             memory: {
               memoryContext: snapshot,
               refreshMemoryContext: () => Effect.succeed(memory),
-              onMemoryDelivered: (accepted) =>
-                Effect.sync(() => {
-                  delivered.push(accepted);
-                }),
+              ...receiptHooks,
             },
           },
         );
@@ -2499,6 +2497,7 @@ describe("OpenCodeAdapterV2", () => {
           });
         yield* harness.startTurn();
         assert.isEmpty(delivered);
+        assert.deepEqual(uncertain, [snapshot]);
         yield* finish();
         assert.equal(payloads[0]?.system?.includes("## GOAT browser") ?? false, !external);
         assert.include(payloads[0]?.system ?? "", memoryContextText(snapshot));

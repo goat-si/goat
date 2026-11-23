@@ -130,7 +130,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
     readonly modelOptions?: ReadonlyArray<ProviderOptionSelection>;
     readonly memory?: Pick<
       ProviderAdapter.ProviderAdapterV2TurnInput,
-      "memoryContext" | "refreshMemoryContext" | "onMemoryDelivered"
+      "memoryContext" | "refreshMemoryContext" | "onMemoryDelivered" | "onMemoryDeliveryUncertain"
     >;
   } = {},
   host: Partial<ProviderHost.ProviderHost["Service"]> = {},
@@ -259,3 +259,20 @@ export const wp4Snapshot = () => {
   if (!snapshot) throw new Error("Expected a nonempty memory snapshot");
   return snapshot;
 };
+
+export function memoryReceiptFixture(snapshot: ReturnType<typeof wp4Snapshot>) {
+  const delivered: Array<typeof snapshot> = [];
+  const uncertain: Array<typeof snapshot> = [];
+  return {
+    delivered,
+    uncertain,
+    onMemoryDelivered: (item: typeof snapshot) =>
+      Effect.sync(() => {
+        delivered.push(item);
+      }),
+    onMemoryDeliveryUncertain: (item: typeof snapshot) =>
+      Effect.sync(() => {
+        uncertain.push(item);
+      }),
+  };
+}
