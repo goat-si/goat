@@ -298,7 +298,6 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
 ) {
   return yield* request(WS_METHODS.projectsMutate, mutation);
 });
-
 export const createProject = Effect.fn("EnvironmentCommands.createProject")(function* (
   input: CreateProjectInput,
 ) {
@@ -317,7 +316,6 @@ export const createProject = Effect.fn("EnvironmentCommands.createProject")(func
     ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
   });
 });
-
 export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(function* (
   input: UpdateProjectInput,
 ) {
@@ -341,7 +339,6 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
     ...(input.archived === undefined ? {} : { archived: input.archived }),
   });
 });
-
 export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(function* (
   input: DeleteProjectInput,
 ) {
@@ -352,7 +349,6 @@ export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(func
     ...(input.force === undefined ? {} : { force: input.force }),
   });
 });
-
 export const createThread = Effect.fn("EnvironmentCommands.createThread")(function* (
   input: CreateThreadInput,
 ) {
@@ -389,7 +385,6 @@ function simpleThreadCommand(
     Effect.flatMap((commandId) => dispatch({ type, commandId, threadId: input.threadId })),
   );
 }
-
 export const deleteThread = Effect.fn("EnvironmentCommands.deleteThread")(function* (
   input: DeleteThreadInput,
 ) {
@@ -434,7 +429,6 @@ export const resolveGuestMessage = Effect.fn("EnvironmentCommands.resolveGuestMe
     creationSource: input.creationSource ?? "web",
   });
 });
-
 export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(function* (
   input: ArchiveThreadInput,
 ) {
@@ -447,13 +441,11 @@ export const promoteThread = Effect.fn("EnvironmentCommands.promoteThread")(func
 ) {
   return yield* simpleThreadCommand("thread.promote", input);
 });
-
 export const unarchiveThread = Effect.fn("EnvironmentCommands.unarchiveThread")(function* (
   input: UnarchiveThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.unarchive", input);
 });
-
 export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(function* (
   input: SettleThreadInput,
 ) {
@@ -713,7 +705,12 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       ...(input.manualContinuationOfRunId === undefined
         ? {}
         : { manualContinuationOfRunId: input.manualContinuationOfRunId }),
-      text: input.message.text,
+      text:
+        input.manualContinuationOfRunId !== undefined &&
+        input.message.text.trim().length === 0 &&
+        attachments.length === 0
+          ? "Continue where you left off."
+          : input.message.text,
       ...(context ? { context } : {}),
       ...(input.message.idleCompaction === undefined
         ? {}
