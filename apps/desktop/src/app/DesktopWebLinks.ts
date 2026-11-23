@@ -27,6 +27,7 @@ const make = Effect.gen(function* () {
   const pending: Array<string> = [];
   let listening: Electron.WebContents | null = null;
   let detachListening: (() => void) | null = null;
+  let rendererHasListened = false;
 
   const stopListening = () => {
     detachListening?.();
@@ -53,6 +54,7 @@ const make = Effect.gen(function* () {
     if (listening === webContents) return;
     stopListening();
     listening = webContents;
+    rendererHasListened = true;
     const onNavigation = (
       event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
     ) => {
@@ -69,11 +71,12 @@ const make = Effect.gen(function* () {
   });
 
   return DesktopWebLinks.of({
-    receive: Effect.fn("DesktopWebLinks.receive")(function (url) {
-      return Effect.suspend(() => {
-        pending.push(url);
-        return flush;
-      });
+    receive: Effect.fn("DesktopWebLinks.receive")(function* (url) {
+      pending.push(url);
+      yield* flush;
+      if (!rendererHasListened || Option.isSome(yield* electronWindow.main)) return;
+      // macOS fires `activate` only on reopen, not when a link opens the app.
+      yield* desktopWindow.activate.pipe(Effect.ignore);
     }),
     setRendererReady: Effect.fn("DesktopWebLinks.setRendererReady")(function (ready) {
       return ready ? startListening : Effect.sync(stopListening);
