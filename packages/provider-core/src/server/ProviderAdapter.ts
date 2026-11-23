@@ -553,6 +553,7 @@ export interface ProviderInputDelivery {
 export interface TurnMemoryHooks {
   /** Called only after a provider transport accepts a prompt carrying this snapshot. */
   readonly onMemoryDelivered?: (snapshot: MemoryContextSnapshot) => Effect.Effect<void>;
+  readonly onMemoryDeliveryUncertain?: (snapshot: MemoryContextSnapshot) => Effect.Effect<void>;
   /** Process-local admission callback; never persisted or sent to a provider. */
   readonly refreshMemoryContext?: () => Effect.Effect<
     MemoryContextSnapshot | undefined,
@@ -570,6 +571,9 @@ export const turnMemoryHooks = (
         ...(input.onMemoryDelivered === undefined
           ? {}
           : { onMemoryDelivered: input.onMemoryDelivered }),
+        ...(input.onMemoryDeliveryUncertain === undefined
+          ? {}
+          : { onMemoryDeliveryUncertain: input.onMemoryDeliveryUncertain }),
         ...(input.refreshMemoryContext === undefined
           ? {}
           : { refreshMemoryContext: input.refreshMemoryContext }),

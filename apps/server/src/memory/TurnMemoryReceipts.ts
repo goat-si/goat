@@ -20,6 +20,23 @@ let untrackedWriteFailure = false;
 const eventLimit = 32;
 const responseByteLimit = 60 * 1024;
 
+export function markTurnMemoryIncomplete(
+  sql: SqlClient.SqlClient,
+  threadId: M.ThreadId,
+  runId: M.RunId,
+  space: M.MemorySpaceId,
+) {
+  return sql`INSERT OR IGNORE INTO turn_memory_receipt_failures(thread_id, run_id, space)
+    VALUES (${threadId}, ${runId}, ${space})`.pipe(
+    Effect.asVoid,
+    Effect.catch(() =>
+      Effect.sync(() => {
+        untrackedWriteFailure = true;
+      }),
+    ),
+  );
+}
+
 export function recordTurnMemory(
   sql: SqlClient.SqlClient,
   threadId: M.ThreadId,
@@ -39,14 +56,7 @@ export function recordTurnMemory(
            AND run_id=${runId} AND space=${space}) <= ${eventLimit}`.pipe(
     Effect.asVoid,
     Effect.catch(() =>
-      sql`INSERT OR IGNORE INTO turn_memory_receipt_failures(thread_id, run_id, space)
-        VALUES (${threadId}, ${runId}, ${space})`.pipe(
-        Effect.asVoid,
-        Effect.catch(() =>
-          Effect.sync(() => {
-            untrackedWriteFailure = true;
-          }),
-        ),
+      markTurnMemoryIncomplete(sql, threadId, runId, space).pipe(
         Effect.andThen(Effect.logWarning("Could not record turn memory receipt")),
       ),
     ),

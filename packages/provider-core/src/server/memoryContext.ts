@@ -15,13 +15,17 @@ export const promptMemory = Effect.fnUntraced(function* (
   driver: M.ProviderDriverKind,
 ) {
   const snapshot = yield* refreshSnapshot(input);
-  if (!snapshot) return { text: undefined, receipt: Effect.void };
+  if (!snapshot) return { text: undefined, receipt: Effect.void, uncertain: Effect.void };
   const text = yield* Effect.try({
     try: () => memoryContextText(snapshot),
     catch: () =>
       new ProviderAdapterProtocolError({ driver, detail: "Invalid memory context frame" }),
   });
-  return { text, receipt: deliveryReceipt(input, snapshot) };
+  return {
+    text,
+    receipt: deliveryReceipt(input, snapshot),
+    uncertain: input?.onMemoryDeliveryUncertain?.(snapshot) ?? Effect.void,
+  };
 });
 
 export const withoutMemoryBody = (input: ProviderAdapterV2TurnInput) => {

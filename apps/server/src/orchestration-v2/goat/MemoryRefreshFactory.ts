@@ -37,6 +37,10 @@ export const makeMemoryRefreshFactory = Effect.gen(function* () {
 
   return (threadId: ThreadId, runId: RunId) => ({
     refreshMemoryContext: makeRefreshMemoryContext(threadId, runId),
+    onMemoryDeliveryUncertain: (snapshot: MemoryContextSnapshot) =>
+      Option.isSome(memorySnapshot) && memorySnapshot.value.recordDeliveryUncertain
+        ? memorySnapshot.value.recordDeliveryUncertain(threadId, runId, snapshot.memorySpaceId)
+        : Effect.void,
     onMemoryDelivered: (snapshot: MemoryContextSnapshot) =>
       Option.isSome(memorySnapshot) && memorySnapshot.value.recordDelivery
         ? memorySnapshot.value.recordDelivery(

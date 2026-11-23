@@ -75,9 +75,7 @@ export interface ActiveTurn {
     | undefined;
   interrupted: boolean;
   unsent: boolean;
-  pendingMemoryReceipt?:
-    | { readonly inboxId: string; readonly receipt: Effect.Effect<void> }
-    | undefined;
+  pendingMemoryReceipt?: { readonly id: string; readonly receipt: Effect.Effect<void> } | undefined;
   readonly steers: Set<string>;
   readonly settledInbox: Set<string>;
   readonly takenPages: Set<string>;

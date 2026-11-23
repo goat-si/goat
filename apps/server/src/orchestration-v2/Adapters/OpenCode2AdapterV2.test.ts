@@ -1,3 +1,7 @@
+import {
+  testCommandMemoryDelivery,
+  testInboxMemoryDelivery,
+} from "./OpenCode2MemoryReceipt.testkit.ts";
 import { htmlRenderFromToolItem } from "@goat/shared/toolOutput";
 /**
  * Failures and settings a live OpenCode 2 server cannot produce on demand,
@@ -56,6 +60,7 @@ import { noMcpInstructions, openCode2ReplayRuntime } from "./OpenCode2AdapterV2.
 import { makeProviderReplayGate } from "@goat/provider-testing/replayGate";
 import {
   CHILD,
+  nativeGoal,
   PROMPT_ID,
   SESSION,
   WORK,
@@ -103,49 +108,9 @@ import {
   terminals,
 } from "./OpenCode2AdapterV2.fixtures.testkit.ts";
 
-const nativeGoal = (status: "active" | "paused" | "complete") => ({
-  id: "goal-1",
-  objective: "Write proof.txt",
-  status,
-  rounds: 2,
-  maxRounds: 100,
-  boot: "boot-1",
-  updatedAt: 1,
-  reason: "Checked proof.txt",
-});
-
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
-  it.effect("records memory only when an OpenCode inbox prompt is delivered (#3836)", () =>
-    Effect.gen(function* () {
-      const gate = makeProviderReplayGate(["deliver-memory"]);
-      const attempt = turnInput(providerThread).attemptId;
-      const inboxID = `msg_t3_turn_${SESSION}:${attempt}`;
-      const { runtime, thread } = yield* resumed(
-        [
-          out("session.prompt", { sessionID: SESSION, text: "hi" }),
-          promptAccepted,
-          event("session.inbox.delivered", { sessionID: SESSION, inboxID }, "deliver-memory"),
-          event("session.execution.succeeded", { sessionID: SESSION }),
-        ],
-        { replayGate: gate, memoryInstructions: () => new Response(null, { status: 204 }) },
-      );
-      const delivered: Array<unknown> = [];
-      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
-      yield* runtime.startTurn({
-        ...turnInput(thread),
-        memoryContext: memoryFixture(),
-        onMemoryDelivered: (snapshot) =>
-          Effect.sync(() => {
-            delivered.push(snapshot);
-          }),
-      });
-      assert.isTrue(yield* Effect.promise(() => gate.waitForReached("deliver-memory")));
-      assert.isEmpty(delivered);
-      gate.release("deliver-memory");
-      yield* Fiber.join(terminal);
-      assert.lengthOf(delivered, 1);
-    }).pipe(Effect.scoped),
-  );
+  it.effect("marks command memory uncertain (#3836)", testCommandMemoryDelivery);
+  it.effect("records delivered inbox memory (#3836)", testInboxMemoryDelivery);
   it.effect.each([false, true])(
     "WP4 OpenCode v2 framed instruction refresh and clear external=%s",
     (external) =>
