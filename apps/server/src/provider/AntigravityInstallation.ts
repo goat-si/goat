@@ -63,6 +63,7 @@ import {
 } from "./AntigravityInstallationLookup.ts";
 import { makeAntigravityValidator } from "./AntigravityInstallationValidate.ts";
 import { isNewer } from "./managedRelease.ts";
+import { launcherTargetFromContents } from "./AntigravityInstallationLauncher.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import {
@@ -227,18 +228,25 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   ) {
     if (!(yield* executableFile(candidate))) return null;
     const executablePath = yield* fs.realPath(candidate);
+    const target =
+      platform === "win32" && /\.(?:bat|cmd)$/iu.test(executablePath)
+        ? launcherTargetFromContents(path, executablePath, yield* fs.readFileString(executablePath))
+        : null;
+    const launched = target && (yield* executableFile(target)) ? yield* fs.realPath(target) : null;
     const realVersions = yield* fs.realPath(versionsDirectory).pipe(Effect.option);
-    const directory = path.dirname(executablePath);
+    const directory = path.dirname(launched ?? executablePath);
     if (
       Option.isSome(realVersions) &&
       path.dirname(directory) === realVersions.value &&
       /^[a-f0-9]{64}$/u.test(path.basename(directory))
     ) {
       const installed = yield* completedRelease(path.basename(directory));
-      return { ...installed, source };
+      return launched === null
+        ? { ...installed, source }
+        : { ...installed, executablePath, source };
     }
     // Keep launcher symlinks intact: version-manager shims dispatch by their invoked name.
-    if (isAntigravityCli(candidate, executablePath)) {
+    if (launched === null && isAntigravityCli(candidate, executablePath)) {
       return {
         executablePath: candidate,
         harnessPath: null,
