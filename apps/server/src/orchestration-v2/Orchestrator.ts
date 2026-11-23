@@ -11851,6 +11851,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     )
       return;
     const progress = delegatedTaskProgress(childControls);
+    const cancelAwaitsWork = progress.state === "working" && !progress.onlyAwaitsUserRun;
     const parent = yield* projectionStore.getThreadRecords(
       parentThreadId,
       ["subagents", "contextTransfers"],
@@ -11866,7 +11867,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         task.childThreadId !== childThreadId ||
         (task.id === childControls.thread.forkedFrom.nodeId &&
           progress.state !== "result_available" &&
-          (task.cancelledRunId === undefined || progress.state === "working")) ||
+          (task.cancelledRunId === undefined || cancelAwaitsWork)) ||
         (task.result !== null &&
           parent.contextTransfers.some(
             (transfer) =>

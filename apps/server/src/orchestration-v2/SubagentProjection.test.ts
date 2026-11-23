@@ -716,3 +716,42 @@ it("keeps the report when a run queued behind it ends without assistant text", (
     }
   }
 });
+
+it("keeps a delegated task open for a held user message after interruption", () => {
+  const { projection, run } = taskFixture();
+  const held = {
+    ...run,
+    id: RunId.make("held-user"),
+    ordinal: 2,
+    status: "queued" as const,
+    startedAt: null,
+    completedAt: null,
+    queueHeld: true,
+  };
+  const user = makeSubagentConversationArtifacts({
+    messageId: MessageId.make("held-message"),
+    turnItemId: TurnItemId.make("held-item"),
+    threadId: parentThreadId,
+    rootNodeId: NodeId.make("root"),
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    role: "user",
+    text: "Continue",
+    ordinal: 2,
+    now: childCreatedAt,
+  });
+  const progress = delegatedTaskProgress({
+    ...projection,
+    runs: [{ ...run, status: "interrupted" }, held],
+    messages: [{ ...user.message, runId: held.id, createdBy: "user" }],
+  });
+  assert.equal(progress.state, "working");
+  assert.isTrue(progress.onlyAwaitsUserRun);
+  const wake = delegatedTaskProgress({
+    ...projection,
+    runs: [run, held],
+    messages: [{ ...user.message, runId: held.id, createdBy: "agent" }],
+  });
+  assert.equal(wake.state, "result_available");
+});
