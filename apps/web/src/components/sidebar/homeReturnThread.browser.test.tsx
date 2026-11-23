@@ -381,6 +381,32 @@ it("Home does not reopen a draft on a removed machine", async () => {
   await expect.element(app.heading("Home landing")).toBeVisible();
 });
 
+it("a draft sent before a restart opens its thread only while that thread is listed", async () => {
+  using _data = setup();
+  const draftId = DraftId.make("draft-1");
+  useComposerDraftStore
+    .getState()
+    .setProjectDraftThreadId(PROJECT, draftId, { threadId: ThreadId.make("reserved-1") });
+  {
+    await using first = await openApp("/draft/draft-1");
+    await go(first.router, "/fleet");
+    const drafts = useComposerDraftStore.getState();
+    drafts.markDraftThreadPromoting(draftId, scopeThreadRef(ENV, ThreadId.make("sent-1")));
+    useComposerDraftStore.getState().finalizePromotedDraftThread(draftId);
+  }
+  // Landing on "/" records nothing, so the next launch still holds the sent draft.
+  data.shells.set(`${ENV}/sent-1`, { ...LIVE, archivedAt: "2026-11-23T00:00:00.000Z" });
+  {
+    await using second = await openApp("/fleet");
+    await userEvent.click(second.home());
+    await expect.element(second.heading("Home landing")).toBeVisible();
+  }
+  data.shells.set(`${ENV}/sent-1`, LIVE);
+  await using third = await openApp("/fleet");
+  await userEvent.click(third.home());
+  await expect.element(third.heading("Thread sent-1")).toBeVisible();
+});
+
 it("the last Home thread survives a restart", async () => {
   using _data = setup(["thread-a"]);
   {
