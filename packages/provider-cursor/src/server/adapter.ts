@@ -11,7 +11,6 @@ import {
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2PlanArtifact,
-  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
@@ -76,6 +75,7 @@ import {
   type ActiveCursorTextStream,
   type ActiveCursorTurn,
 } from "./activeTurn.ts";
+import { CursorProviderCapabilitiesV2 } from "./capabilities.ts";
 import { classifyCursorModelRejection } from "./modelRejection.ts";
 import { makeCommandOutputGate } from "./commandOutputGate.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
@@ -92,103 +92,7 @@ export const CURSOR_DRIVER_KIND = CursorAgentSdk.CURSOR_PROVIDER;
 export const CURSOR_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CURSOR_DRIVER_KIND);
 const DEFAULT_CURSOR_SETTINGS = Schema.decodeSync(CursorSettings)({});
 
-export const CursorProviderCapabilitiesV2 = {
-  sessions: {
-    supportsMultipleProviderThreadsPerSession: false,
-    supportsModelSwitchInSession: true,
-    supportsProviderSwitchingViaHandoff: true,
-    supportsRuntimeModeSwitchInSession: false,
-    pendingRequestsSurviveRestart: false,
-  },
-  threads: {
-    canCreateEmptyThread: true,
-    canReadThreadSnapshot: true,
-    canRollbackThread: false,
-    canForkThread: false,
-    canForkFromTurn: false,
-    canForkFromSubagentThread: false,
-    exposesNativeThreadId: true,
-  },
-  turns: {
-    exposesNativeTurnId: true,
-    emitsTurnStarted: true,
-    emitsTurnCompleted: true,
-    supportsInterrupt: true,
-    supportsActiveSteering: true,
-    // A steer can move a foreground subagent to the background. Mailbox wakes
-    // stay queued so a notification does not cut into the live turn.
-    activeSteeringInterruptsTools: true,
-    activeSteeringAcceptsAttachments: false,
-    supportsSteeringByInterruptRestart: true,
-    supportsQueuedMessages: true,
-    terminalStatusQuality: "strong",
-  },
-  streaming: {
-    streamsAssistantText: true,
-    streamsReasoning: true,
-    streamsToolOutput: true,
-    streamsPlanText: true,
-    emitsMessageCompleted: true,
-  },
-  tools: {
-    exposesToolItemIds: true,
-    emitsToolStarted: true,
-    emitsToolCompleted: true,
-    emitsToolOutput: true,
-    supportsMcpTools: true,
-    supportsDynamicToolCallbacks: false,
-  },
-  approvals: {
-    supportsCommandApproval: false,
-    supportsFileReadApproval: false,
-    supportsFileChangeApproval: false,
-    supportsApplyPatchApproval: false,
-    approvalsHaveNativeRequestIds: false,
-    approvalCallbacksAreLiveOnly: false,
-    approvalsCanOriginateFromSubagents: false,
-  },
-  planning: {
-    emitsPlanUpdated: true,
-    emitsTodoList: true,
-    emitsProposedPlan: true,
-    supportsStructuredQuestions: false,
-    planDeltasHaveItemIds: true,
-  },
-  subagents: {
-    supportsSubagents: true,
-    exposesSubagentThreadIds: false,
-    emitsSubagentLifecycle: true,
-    canWaitForSubagents: true,
-    canCloseSubagents: false,
-    canForkSubagentThread: false,
-  },
-  context: {
-    acceptsSystemContext: false,
-    acceptsDeveloperContext: false,
-    acceptsSyntheticUserContext: true,
-    canGenerateSummaries: true,
-    canConsumeHandoffSummaries: true,
-    supportsDeltaHandoff: true,
-    supportsFullThreadHandoff: true,
-    maxRecommendedHandoffChars: null,
-  },
-  checkpointing: {
-    appCanCheckpointFilesystem: true,
-    supportsNestedCheckpointScopes: true,
-    providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
-    providerCanReadConversationSnapshot: true,
-  },
-  identity: {
-    nativeThreadIds: "strong",
-    nativeTurnIds: "strong",
-    nativeItemIds: "weak",
-    nativeRequestIds: "none",
-  },
-  runtimePolicy: {
-    enforcement: "native",
-  },
-} satisfies OrchestrationV2ProviderCapabilities;
+export { CursorProviderCapabilitiesV2 } from "./capabilities.ts";
 
 function providerSession(input: {
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
@@ -234,6 +138,7 @@ export interface CursorAdapterV2Options extends SessionEnv.SessionAuth {
   readonly environment: SessionEnv.Source;
   /** The model catalog this key at this backend was last checked with, if any. */
   readonly getModels?: SessionEnv.CatalogModels;
+  readonly getSdkModels?: SessionEnv.CatalogSdkModels;
 }
 
 export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
@@ -1226,6 +1131,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
             models: adapterOptions.getModels?.(apiKey, env) ?? [],
+            sdkModels: adapterOptions.getSdkModels?.(apiKey, env) ?? [],
             runtimePolicy: openInput.runtimePolicy,
             platform,
             threadId: openInput.threadId,
@@ -1444,6 +1350,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   model: cursorSdkModelSelection(
                     turnInput.modelSelection,
                     adapterOptions.getModels?.(apiKey, env) ?? [],
+                    adapterOptions.getSdkModels?.(apiKey, env) ?? [],
                   ),
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
                   mcpServers,
