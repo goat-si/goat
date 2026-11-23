@@ -16,11 +16,14 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import { dismissContextMenu } from "~/contextMenuFallback";
 import { observeResize } from "~/lib/observeResize";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 import "~/index.css";
 
 const state = vi.hoisted(() => ({
   narrow: false,
+  privateNotes: false,
+  connecting: false,
   threads: [] as ReadonlyArray<unknown>,
   toasts: [] as string[],
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
@@ -98,7 +101,16 @@ vi.mock("~/state/channels", async (original) => {
 vi.mock("~/state/entities", async (original) => ({
   ...(await original<typeof import("~/state/entities")>()),
   useServerConfigs: () =>
-    new Map([["local", { environment: { capabilities: { goatBotNotes: true } } }]]),
+    new Map([
+      [
+        "local",
+        {
+          environment: {
+            capabilities: { goatBotNotes: true, goatBotPrivateNotes: state.privateNotes },
+          },
+        },
+      ],
+    ]),
 }));
 vi.mock("~/state/query", async (original) => ({
   ...(await original<typeof import("~/state/query")>()),
@@ -150,6 +162,8 @@ const environmentId = EnvironmentId.make("local");
 
 function setup(narrow = false) {
   state.narrow = narrow;
+  state.privateNotes = false;
+  state.connecting = false;
   state.threads = [];
   state.toasts = [];
   state.notes = [note];
@@ -173,7 +187,11 @@ function setup(narrow = false) {
           <GoatBotChatView
             openHome={openHome}
             onHomeHandled={onHomeHandled}
-            availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
+            availability={
+              state.connecting
+                ? { kind: "connecting", environmentId }
+                : { kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }
+            }
             canOperate
             rows={rows}
             onSend={onSend}
@@ -426,6 +444,82 @@ it("Ask to change fills the composer with the quoted change", async () => {
     .element(composer(screen))
     .toHaveValue(goatBotChangeNoteMessage(note.text, "Reply in English"));
   expect(onSend).not.toHaveBeenCalled();
+});
+
+it("#3824 keeps refused note wording through closing and reopening the narrow sheet", async () => {
+  const { view } = setup(true);
+  await using screen = await render(view());
+  await userEvent.type(composer(screen), "My own question");
+  await openMemory(screen);
+  await userEvent.click(page.getByRole("button", { name: "Ask to change" }));
+  await userEvent.clear(page.getByRole("textbox", { name: "New wording" }));
+  await userEvent.type(page.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  await userEvent.click(page.getByRole("button", { name: "Fill message" }));
+  await expect
+    .element(page.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
+  await userEvent.click(page.getByRole("button", { name: "Back to chat", exact: true }));
+  await expect.element(homeSheet()).not.toBeInTheDocument();
+  await userEvent.clear(composer(screen));
+  expect(navigationBlocked()).toBe(true);
+  await openMemory(screen);
+  await expect
+    .element(page.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
+  await userEvent.click(page.getByRole("button", { name: "Fill message" }));
+  await expect
+    .element(composer(screen))
+    .toHaveValue(goatBotChangeNoteMessage(note.text, "Reply in English"));
+  await expect.element(homeSheet()).not.toBeInTheDocument();
+});
+
+it("a notes capability change clears retained wording and releases navigation", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  expect(navigationBlocked()).toBe(true);
+  state.privateNotes = true;
+  await screen.rerender(view());
+  expect(navigationBlocked()).toBe(false);
+  state.privateNotes = false;
+  await screen.rerender(view());
+  await expect.element(screen.getByRole("button", { name: "Ask to change" })).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
+});
+
+it("a reconnect keeps retained wording for per-bot notes", async () => {
+  const { view } = setup();
+  state.privateNotes = true;
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  state.connecting = true;
+  await screen.rerender(view());
+  state.connecting = false;
+  await screen.rerender(view());
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.click(page.getByRole("tab", { name: "Library" }));
+  await expect
+    .element(screen.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
+});
+
+it("a changed note does not resurrect its old wording when the snapshot returns", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  state.notes = [{ ...note, text: "A changed note" }];
+  await screen.rerender(view());
+  await expect.element(screen.getByText("A changed note")).toBeVisible();
+  state.notes = [note];
+  await screen.rerender(view());
+  await expect.element(screen.getByRole("button", { name: "Ask to change" })).toBeVisible();
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("a draft action never replaces the person's typed message or rides on their staged files", async () => {
