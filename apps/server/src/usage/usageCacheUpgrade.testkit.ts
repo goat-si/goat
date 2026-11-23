@@ -200,7 +200,7 @@ export function registerCacheUpgradeTest(
             },
           ],
           tailRecords: [],
-          malformedRecords: 0,
+          malformedRecords: [],
           position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
         }) as const;
       yield* Effect.gen(function* () {

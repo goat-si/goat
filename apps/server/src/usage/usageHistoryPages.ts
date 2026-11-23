@@ -95,7 +95,7 @@ export class UsageHistoryPages {
       provider: entry.provider,
       mtimeMs: entry.mtimeMs,
       records: entry.records.length + entry.tailRecords.length,
-      malformedRecords: entry.malformedRecords,
+      malformedRecords: entry.malformedRecords.length,
       ...(remember ? { ref: new WeakRef(entry) } : {}),
     });
     if (previous !== undefined) this.#retire(previous.id);

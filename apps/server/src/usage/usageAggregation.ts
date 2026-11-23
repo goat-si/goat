@@ -95,6 +95,19 @@ export function mapUsageModel(
     : { ...rest, model, rateModel };
 }
 
+export function usageTimestampFilter(
+  options: Pick<
+    AggregateOptions,
+    "timeZone" | "sinceDay" | "untilDay" | "sinceTimeMs" | "untilTimeMs"
+  >,
+) {
+  const toDay = makeDayFormatter(options.timeZone);
+  return (timestampMs: number) =>
+    options.sinceTimeMs !== undefined && options.untilTimeMs !== undefined
+      ? timestampMs >= options.sinceTimeMs && timestampMs < options.untilTimeMs
+      : toDay(timestampMs) >= options.sinceDay && toDay(timestampMs) <= options.untilDay;
+}
+
 export function resolveModelAliases(
   aliases: Readonly<Record<string, string>>,
 ): ReadonlyMap<string, string> {
