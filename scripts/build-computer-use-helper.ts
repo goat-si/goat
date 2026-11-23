@@ -63,6 +63,38 @@ export const stageComputerUseDriver = Effect.fn("stageComputerUseDriver")(functi
   yield* fs.chmod(destination, 0o755);
 });
 
+export const compileComputerUseLauncher = Effect.fn("compileComputerUseLauncher")(function* (
+  sources: readonly string[],
+  executable: string,
+  work: string,
+  arch: HelperDriverArch,
+  runner: ReleaseCommandRunner,
+) {
+  const path = yield* Path.Path;
+  const compile = (slice: "arm64" | "x86_64", output: string) =>
+    requireReleaseCommand(runner, "xcrun", [
+      "swiftc",
+      "-O",
+      "-target",
+      slice + "-apple-macos13.0",
+      // audit_token_to_pid, for the parent check by audit token.
+      "-lbsm",
+      "-o",
+      output,
+      ...sources,
+    ]);
+  if (arch !== "universal") {
+    yield* compile(arch === "x64" ? "x86_64" : arch, executable);
+    return;
+  }
+
+  const arm64 = path.join(work, "helper-arm64");
+  const x64 = path.join(work, "helper-x86_64");
+  yield* compile("arm64", arm64);
+  yield* compile("x86_64", x64);
+  yield* requireReleaseCommand(runner, "lipo", ["-create", "-output", executable, arm64, x64]);
+});
+
 export const helperBundleIdForChannel = computerUseHelperBundleIdForChannel;
 
 const KEYCHAIN_REMEDY =
@@ -265,6 +297,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = input.runner ?? runReleaseCommand;
+  const arch = input.driverArch ?? "universal";
   const run = (program: string, args: readonly string[]) =>
     requireReleaseCommand(runner, program, args);
   if ((yield* HostProcess.Platform) !== "darwin")
@@ -329,7 +362,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     // Select the executable slice before signing the driver and sealing the helper bundle.
     const destination = path.join(driverDir, name);
     if (name === release.executable) {
-      yield* stageComputerUseDriver(source, destination, input.driverArch ?? "universal", runner);
+      yield* stageComputerUseDriver(source, destination, arch, runner);
     } else {
       yield* fs.writeFile(destination, yield* fs.readFile(source));
       yield* fs.chmod(destination, 0o755);
@@ -344,23 +377,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     .toSorted()
     .map((name) => path.join(sourceDir, name));
   const executable = path.join(contents, "MacOS", COMPUTER_USE_HELPER_NAME);
-  const slices: string[] = [];
-  for (const arch of ["arm64", "x86_64"]) {
-    const slice = path.join(work, "helper-" + arch);
-    yield* run("xcrun", [
-      "swiftc",
-      "-O",
-      "-target",
-      arch + "-apple-macos13.0",
-      // audit_token_to_pid, for the parent check by audit token.
-      "-lbsm",
-      "-o",
-      slice,
-      ...swiftSources,
-    ]);
-    slices.push(slice);
-  }
-  yield* run("lipo", ["-create", "-output", executable, ...slices]);
+  yield* compileComputerUseLauncher(swiftSources, executable, work, arch, runner);
 
   const bundleId = helperBundleIdForChannel(input.channel);
   const template = yield* fs.readFileString(path.join(sourceDir, "Info.plist"));
@@ -443,7 +460,7 @@ export const buildComputerUseHelperCommand = Command.make(
     channel: Flag.Literals("channel", ["dev", "nightly", "stable"]).pipe(Flag.withDefault("dev")),
     output: Flag.String("output").pipe(Flag.optional),
     driverArch: Flag.Literals("driver-arch", ["arm64", "x64", "universal"]).pipe(
-      Flag.withDescription("Target architecture of the embedded Cua Driver."),
+      Flag.withDescription("Target architecture of the helper launcher and embedded Cua Driver."),
       Flag.withDefault("universal"),
     ),
     identity: Flag.String("identity").pipe(
