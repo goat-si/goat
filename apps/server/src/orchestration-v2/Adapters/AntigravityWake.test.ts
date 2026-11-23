@@ -21,6 +21,97 @@ const layerSession = Layer.mergeAll(
 );
 
 describe("AntigravityAdapterV2 work after the prompt ends", () => {
+  // regression: #3864 a quoted task report is not a command completion.
+  it.effect.each([
+    { kind: "quoted", split: false, wrap: (header: string) => `The log says "${header}"` },
+    {
+      kind: "code block",
+      split: true,
+      wrap: (header: string) => `Example:\n\`\`\`\n${header}\n\`\`\``,
+    },
+    {
+      kind: "mid-sentence",
+      split: true,
+      wrap: (header: string) => `The command may later say ${header}`,
+    },
+  ])("keeps the command pending when its report is $kind", ({ wrap, split }) =>
+    Effect.gen(function* () {
+      const taskId = "664880dc-701a-4ab3-bd22-c00e2e605178/task-60";
+      const { command, usage, send, startTurn, throughPromptSettled, drain } =
+        yield* openSessionWithRunningCommand({}, undefined, {
+          initialToolCalls: [
+            {
+              sessionUpdate: "tool_call",
+              toolCallId: "call_fetch",
+              kind: "execute",
+              title: "node fetch_throughput.mjs",
+              status: "in_progress",
+              rawInput: { CommandLine: "node fetch_throughput.mjs", WaitMsBeforeAsync: 10000 },
+              content: [
+                {
+                  type: "content",
+                  content: {
+                    type: "text",
+                    text: `Tool is running as a background task with task id: ${taskId}`,
+                  },
+                },
+              ],
+            },
+          ],
+        });
+      yield* startTurn(1, false);
+      yield* throughPromptSettled;
+      const quoted = wrap(`Task id "${taskId}" finished with result:`);
+      if (split) {
+        const offset = quoted.indexOf("Task id");
+        yield* send({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: quoted.slice(0, offset) },
+        });
+        yield* send({
+          sessionUpdate: "agent_message_chunk",
+          messageId: "quoted-report",
+          content: { type: "text", text: quoted.slice(offset) },
+        });
+      } else {
+        yield* send({
+          sessionUpdate: "agent_message",
+          messageId: "quoted-report",
+          content: [{ type: "text", text: quoted }],
+        });
+      }
+      yield* send(usage);
+      yield* TestClock.adjust("3 seconds");
+      const events = Array.from(yield* drain);
+      assert.isTrue(
+        events.some(
+          (event) => event.type === "message.updated" && event.message.text.includes(quoted),
+        ),
+      );
+      assert.isFalse(
+        events.some((event) => event.type === "turn.terminal"),
+        "a quote must not release the run",
+      );
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === command.toolCallId &&
+            event.turnItem.status === "completed",
+        ),
+      );
+      yield* send({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `Task id "${taskId}" finished with result:\nDone.` },
+      });
+      yield* send(usage);
+      yield* TestClock.adjust("3 seconds");
+      assert.isTrue(
+        Array.from(yield* drain).some((event) => event.type === "turn.terminal"),
+        "the subsequent real report releases the run",
+      );
+    }).pipe(Effect.provide(layerSession)),
+  );
   // regression: #3823 a background task can report completion without a tool update.
   it.effect.each([
     { kind: "chunked success", full: false, status: "completed" as const },

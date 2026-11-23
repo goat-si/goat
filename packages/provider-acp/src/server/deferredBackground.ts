@@ -248,6 +248,25 @@ export const settleMessageBackgroundTools = Effect.fnUntraced(function* (
   }
 });
 
+export function appendBackgroundReportChunk(
+  context: ActiveAcpTurn,
+  flavor: AcpAdapterV2Flavor,
+  text: string,
+  messageId: string | null | undefined,
+): string {
+  if (!context.promptSettled || flavor.backgroundToolMessageStatus === undefined) return "";
+  const id = messageId || null;
+  const previous = context.backgroundReportMessage;
+  const prefix =
+    previous !== undefined &&
+    (id === null || previous.messageId === null || previous.messageId === id)
+      ? previous.text
+      : "";
+  const next = (prefix + text.slice(0, 8_000)).slice(0, 8_000);
+  context.backgroundReportMessage = { messageId: id ?? previous?.messageId ?? null, text: next };
+  return next;
+}
+
 export const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
   [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {
     const tool = context.tools.get(toolCallId);

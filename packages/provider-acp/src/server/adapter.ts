@@ -13,6 +13,7 @@ import {
   makeRearmDeferredFinalize,
   settleMessageBackgroundTools,
   hasSurvivingBackgroundWork,
+  appendBackgroundReportChunk,
 } from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError } from "./adapterErrors.ts";
@@ -3682,6 +3683,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
             } else if (context.nativeThreadId === notification.sessionId) {
               if (update.sessionUpdate === "usage_update") {
+                context.backgroundReportMessage = undefined;
                 context.replyOpen = false;
                 if (context.promptSettled)
                   yield* idleReportedSubagents(context, flavor, emitSubagent);
@@ -4072,7 +4074,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 yield* settleMessageBackgroundTools(
                   context,
                   flavor,
-                  context.assistant.current?.text ?? text,
+                  appendBackgroundReportChunk(context, flavor, text, update.messageId),
                   emitTool,
                 );
               }

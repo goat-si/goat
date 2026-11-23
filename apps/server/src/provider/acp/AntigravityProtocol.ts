@@ -98,12 +98,11 @@ export function antigravityBackgroundToolMessageStatus(
     .join("\n")
     .match(/Tool is running as a background task with task id:\s*([\w-]+\/task-\d+)/i)?.[1];
   if (id === undefined) return undefined;
-  for (const match of text.matchAll(
-    /Task id\s+"([\w-]+\/task-\d+)"\s+(finished|failed)\s+with\s+(?:result|error):/gi,
-  )) {
-    if (match[1] === id) return match[2]?.toLowerCase() === "failed" ? "failed" : "completed";
-  }
-  return undefined;
+  const match = text.match(
+    /^Task id[ \t]+"([\w-]+\/task-\d+)"[ \t]+(?:(finished)[ \t]+with[ \t]+result|failed[ \t]+with[ \t]+error):/i,
+  );
+  if (match?.[1] !== id) return undefined;
+  return match[2] === undefined ? "failed" : "completed";
 }
 
 /** Native questions share the permission method, but their choices are not approvals. */
