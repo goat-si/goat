@@ -1,3 +1,4 @@
+import { npmProviderPackageNames, resolveNpmGlobalLatestVersion } from "./maintenanceNpm.ts";
 import { resolveMacPortsOwner } from "./maintenanceMacPorts.ts";
 import { runProbe } from "./maintenanceProbe.ts";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
@@ -513,8 +514,10 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   // npm proof outranks a containing Homebrew keg; Homebrew Node globals still belong to npm.
   const npmPrefix = yield* resolveNpmGlobalPrefix(context, packageName);
   if (npmPrefix) {
+    npmProviderPackageNames.add(packageName);
+    const services = yield* Effect.context<ProviderMaintenanceResolverServices>();
     // npm 12 requires script approval to install native binaries; older npm only warns about the flag.
-    return makeProviderMaintenanceCapabilities({
+    const capabilities = makeProviderMaintenanceCapabilities({
       provider: definition.provider,
       packageName,
       updateExecutable: "npm",
@@ -528,7 +531,20 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       ],
       updateLockKey: `npm-global:${normalizeCommandPath(npmPrefix)}`,
       env: context.env,
+      latestVersion: null,
+      lookupLatestVersion: resolveNpmGlobalLatestVersion(packageName, npmPrefix, context.env).pipe(
+        Effect.provideContext(services),
+      ),
     });
+    return {
+      ...capabilities,
+      latestVersionCacheKey: [
+        "npm-global",
+        normalizeCommandPath(npmPrefix),
+        packageName,
+        environmentCacheKey(context.env),
+      ].join("\0"),
+    };
   }
 
   const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);
@@ -673,6 +689,7 @@ const resolveNpmGlobalPrefix = Effect.fn("resolveNpmGlobalPrefix")(function* (
 export function makePackageManagedProviderMaintenanceResolver(
   definition: PackageManagedProviderMaintenanceDefinition,
 ): ProviderMaintenanceCapabilitiesResolver {
+  npmProviderPackageNames.add(definition.npmPackageName);
   return {
     resolve: (context) => resolvePackageManagedProviderMaintenance(definition, context),
   };
