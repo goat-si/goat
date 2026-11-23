@@ -1,5 +1,10 @@
+import * as Data from "effect/Data";
 import type { ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
 import type { WebhookRequest } from "./webhookTemplate.ts";
+
+export class WebhookDeliverySkipped extends Data.TaggedError("WebhookDeliverySkipped")<{
+  readonly reason: string;
+}> {}
 
 export interface WebhookTriggerRequest extends WebhookRequest {
   readonly hookId: string;

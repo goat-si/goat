@@ -1,3 +1,4 @@
+import { webThreadFollowPaletteItems } from "./goatBot/goatBotThreadFollowMenu";
 import { topLevelThreadCandidates } from "./sidebar/topLevelThreadCandidates";
 import { useGT } from "gt-react";
 import { useCommandPaletteSettingsItems } from "./useCommandPaletteSettingsItems";
@@ -112,6 +113,7 @@ import { notesPaletteItems } from "../notes/notesPaletteItems";
 import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
 import { BotTaskSearchStatus, useGoatBotTaskSearch } from "./goatBot/useGoatBotTaskSearch";
 import { useGoatBotPaletteNewBot } from "./goatBot/goatBotPaletteNewBot";
+import { GoatBotTemplatePicker } from "./goatBot/GoatBotTemplatePicker";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -287,6 +289,7 @@ import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { threadRecentUse } from "@goat/shared/paletteSearch";
 
 export function CommandPalette({ children }: { children: ReactNode }) {
+  const [templateHost, setTemplateHost] = useState<EnvironmentId | null>(null);
   const navigate = useNavigate();
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
@@ -399,6 +402,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   return (
     <ComposerHandleContext value={composerHandleRef}>
       <ThreadContextDragGhost />
+      {templateHost && (
+        <GoatBotTemplatePicker environmentId={templateHost} close={() => setTemplateHost(null)} />
+      )}
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
@@ -422,6 +428,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
             openChildSearch={openChildSearch}
             initialContext={state.restoredSearch}
             clearOpenIntent={clearOpenIntent}
+            openTemplates={setTemplateHost}
           />
         </CommandPaletteDialog>
       </CommandDialog>
@@ -439,6 +446,7 @@ function OpenCommandPaletteDialog(props: {
   ) => void;
   readonly initialContext: CommandPaletteReturnContext | undefined;
   readonly clearOpenIntent: () => void;
+  readonly openTemplates: (environmentId: EnvironmentId) => void;
 }) {
   const gt = useGT();
   const navigate = useNavigate();
@@ -503,7 +511,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
   const goatBots = useGoatBotPaletteBots();
-  const goatBotNewBot = useGoatBotPaletteNewBot();
+  const goatBotNewBot = useGoatBotPaletteNewBot(props.openTemplates);
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1642,7 +1650,11 @@ function OpenCommandPaletteDialog(props: {
   });
 
   const goatBotItems = goatBotPaletteItems(goatBots, navigate);
-  actionItems.push(...goatBotItems.actions, ...goatBotNewBot);
+  actionItems.push(
+    ...goatBotItems.actions,
+    ...goatBotNewBot,
+    ...webThreadFollowPaletteItems(activeThread),
+  );
 
   actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 

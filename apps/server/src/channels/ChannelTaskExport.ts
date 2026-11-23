@@ -1,6 +1,7 @@
 import {
   ChannelTaskExportRow,
   ChannelTaskLedgerExportRow,
+  type ChannelTaskBrief,
   type ChannelTaskExportInput,
   type ChannelTaskExportResult,
   type ChannelTaskMemoryDelivered,
@@ -18,6 +19,18 @@ import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { answerForwardIdsFor } from "./channelIds.ts";
+
+const exportBrief = (brief: ChannelTaskBrief | null) => {
+  if (brief === null) return null;
+  const { notesPath, ...context } = brief.context;
+  if (
+    notesPath === undefined &&
+    context.notesRevision == null &&
+    !brief.deliveredText.includes("<goat_bot_notes>")
+  )
+    return brief;
+  return { ...brief, deliveredText: brief.instruction, context };
+};
 
 export class ChannelTaskExport extends Context.Service<
   ChannelTaskExport,
@@ -139,6 +152,7 @@ const make = Effect.gen(function* () {
             const { channelAnswers, ...outcome } = row;
             return encodeRow({
               ...outcome,
+              brief: exportBrief(outcome.brief),
               humanInterventions: { channelAnswers, threadAnswers: yield* threadAnswers(row) },
               memoryDelivered: yield* memoryDelivered(row),
             });

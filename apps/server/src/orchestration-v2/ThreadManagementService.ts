@@ -68,6 +68,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as WorktreeSendCheck from "./goat/WorktreeSendCheck.ts";
 import { checkForceStopTarget, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
+import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
 import { projectTranscriptRowForClient, projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -189,7 +190,7 @@ export interface ThreadManagementServiceShape {
      * worktree GOAT cannot restore. Server-originated sends omit it: they are stored and their
      * turn fails where a person sees it. Not part of the command, so no client can set it.
      */
-    options?: { readonly refuseUnrestorableWorktree?: boolean },
+    options?: { readonly refuseUnrestorableWorktree?: boolean; readonly confirm?: LaunchConfirm },
   ) => Effect.Effect<
     Orchestrator.OrchestratorV2DispatchResult,
     | Orchestrator.OrchestratorV2Error
@@ -903,6 +904,17 @@ const make = Effect.gen(function* () {
             })
           : Effect.void,
       ),
+      Effect.andThen(
+        confirmLaunchStep(
+          options?.confirm,
+          (cause) =>
+            new Orchestrator.OrchestratorCommandRejectedError({
+              commandType: command.type,
+              commandId: command.commandId,
+              cause,
+            }),
+        ),
+      ),
       Effect.andThen(orchestrator.dispatch(command)),
     );
 
@@ -1100,7 +1112,10 @@ const make = Effect.gen(function* () {
           createdBy: input.createdBy,
           creationSource: input.creationSource,
         },
-        { refuseUnrestorableWorktree: input.refuseUnrestorableWorktree === true },
+        {
+          refuseUnrestorableWorktree: input.refuseUnrestorableWorktree === true,
+          ...(replayRestart || input.confirm === undefined ? {} : { confirm: input.confirm }),
+        },
       );
       return yield* readDelivery(
         input,

@@ -182,9 +182,13 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.notesStartWork]: AuthOrchestrationOperateScope,
   [WS_METHODS.notesAttach]: AuthOrchestrationOperateScope,
 
+  [CHANNEL_GATEWAY_WS_METHODS.followThread]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listFollowedThreads]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
   // What the bots wait on is task state, the same read their waiting badges need.
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listBotAttention]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: AuthOrchestrationReadScope,
@@ -192,6 +196,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
   // Adding, hiding, removing and bringing back a bot are the same standing kind of change.
   [CHANNEL_GATEWAY_WS_METHODS.createBot]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.exportBotPackage]: AuthSettingsWriteScope,
+  [CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage]: AuthSettingsWriteScope,
+  [CHANNEL_GATEWAY_WS_METHODS.importBotPackage]: AuthSettingsWriteScope,
+  [CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.setBotHidden]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.deleteBot]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.restoreBot]: AuthOrchestrationOperateScope,
@@ -201,6 +209,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.listBotArtifacts]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.readBotArtifact]: AuthFilesystemReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: AuthSettingsWriteScope,

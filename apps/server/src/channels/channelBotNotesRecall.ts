@@ -15,6 +15,8 @@ const NOTES_RECENT_CHARS = 6_000;
 const NOTES_MATCHED_CHARS = 3_000;
 /** The whole notes section; a file whose notes in force fit goes in whole. */
 export const NOTES_SECTION_CHARS = NOTES_RECENT_CHARS + NOTES_MATCHED_CHARS;
+/** Remote workers can receive both note scopes with a newline joining them. */
+export const REMOTE_WORKER_NOTES_CHARS = 2 * NOTES_SECTION_CHARS + 1;
 /** How much of the end of the notes file is read and searched. */
 export const NOTES_SCAN_BYTES = 256 * 1024;
 
@@ -109,7 +111,12 @@ const scoreLines = (lines: ReadonlyArray<ChannelBotNoteLine>, query: string) => 
  * The notes for one message from the text of the notes file (or its newest part). Newest wins is
  * judged over all of that text, so a correction hides the note it replaces wherever either sits.
  */
-export const selectChannelBotNotes = (text: string, query: string): ChannelBotNotesSnapshot => {
+export const selectChannelBotNotes = (
+  text: string,
+  query: string,
+  budget = NOTES_SECTION_CHARS,
+): ChannelBotNotesSnapshot => {
+  const recentBudget = Math.floor((budget * NOTES_RECENT_CHARS) / NOTES_SECTION_CHARS);
   const normal = text.replaceAll("\r\n", "\n");
   const live = parseChannelBotNoteLines(
     normal.startsWith(NOTES_HEADER) ? normal.slice(NOTES_HEADER.length) : normal,
@@ -122,9 +129,9 @@ export const selectChannelBotNotes = (text: string, query: string): ChannelBotNo
   let used = 0;
   for (let at = live.length - 1; at >= 0; at--) {
     const length = live[at]?.raw.length ?? 0;
-    if (joined > NOTES_SECTION_CHARS && length > NOTES_RECENT_CHARS) continue;
+    if (joined > budget && length > recentBudget) continue;
     const cost = length + (standing.size === 0 ? 0 : 1);
-    if (joined > NOTES_SECTION_CHARS && used + cost > NOTES_RECENT_CHARS) break;
+    if (joined > budget && used + cost > recentBudget) break;
     standing.add(at);
     used += cost;
   }
@@ -133,7 +140,7 @@ export const selectChannelBotNotes = (text: string, query: string): ChannelBotNo
     .flatMap((line, at) => ((scores[at] ?? 0) > 0 ? [{ line, at, score: scores[at] ?? 0 }] : []))
     .toSorted((left, right) => right.score - left.score || right.at - left.at);
   const matched: Array<{ readonly line: ChannelBotNoteLine; readonly at: number }> = [];
-  let room = NOTES_MATCHED_CHARS;
+  let room = budget - recentBudget;
   for (const entry of ranked) {
     if (standing.has(entry.at) || entry.line.raw.length + 1 > room) continue;
     matched.push(entry);

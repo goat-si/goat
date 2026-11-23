@@ -88,6 +88,37 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect(
+    "preserves old remote dispatches without inferring an environment from their alias",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 177 });
+        yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, created_at, updated_at)
+        VALUES ('legacy', 'thread', 'origin', 'box', 'worker', 'read-key', 'wake', 'running',
+          '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`;
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 184 }), [
+          ...migrationManifest.filter(([id]) => id > 177 && id < 184),
+          [184, "RemoteDispatchEnvironment"],
+        ]);
+        assert.deepStrictEqual(
+          yield* sql`
+        SELECT host, remote_thread_id, remote_environment_id, state
+        FROM remote_dispatches WHERE correlation_id = 'legacy'
+      `,
+          [
+            {
+              host: "box",
+              remote_thread_id: "worker",
+              remote_environment_id: null,
+              state: "running",
+            },
+          ],
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("drops the unused correlation index and keeps correlation values", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -206,12 +237,34 @@ describe("runMigrations", () => {
   );
 });
 
-it.effect("rechecks a current database without taking a write transaction", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations();
-    yield* sql`PRAGMA query_only = ON`;
-    assert.deepStrictEqual(yield* runMigrations(), []);
-    assert.deepStrictEqual(yield* history, migrationManifest);
-  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+it.effect.each(["with indexes", "without indexes"] as const)(
+  "rechecks a current database %s without taking a write transaction",
+  (indexState) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ skipStartupRepairs: true });
+      if (indexState === "without indexes") {
+        yield* sql`DROP INDEX IF EXISTS scheduled_tasks_work_trigger_idx`;
+        yield* sql`DROP INDEX IF EXISTS scheduled_task_channel_inputs_work_trigger_idx`;
+        yield* sql`DROP INDEX IF EXISTS channel_tasks_work_trigger_idx`;
+      }
+
+      yield* sql`PRAGMA query_only = ON`;
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      const indexes = yield* sql<{ readonly name: string }>`SELECT name FROM sqlite_schema
+        WHERE type = 'index' AND name IN ('scheduled_tasks_work_trigger_idx',
+          'scheduled_task_channel_inputs_work_trigger_idx', 'channel_tasks_work_trigger_idx')
+        ORDER BY name`;
+      assert.deepStrictEqual(
+        indexes.map(({ name }) => name),
+        indexState === "with indexes"
+          ? [
+              "channel_tasks_work_trigger_idx",
+              "scheduled_task_channel_inputs_work_trigger_idx",
+              "scheduled_tasks_work_trigger_idx",
+            ]
+          : [],
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

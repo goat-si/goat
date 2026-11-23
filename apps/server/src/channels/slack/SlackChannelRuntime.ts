@@ -11,6 +11,7 @@
  */
 import type {
   RuntimeMode,
+  SlackBotBindings,
   SlackChannelConnectionStatus,
   SlackChannelDeliveryError,
   SlackChannelStatusEvent,
@@ -57,6 +58,7 @@ export interface SlackRuntimeConnection {
   readonly expectedTeamId: string | undefined;
   readonly owner: ChannelConnectionOwner | undefined;
   readonly botUserId?: string;
+  readonly botBindings?: SlackBotBindings;
   readonly revoked?: "bot_revoked" | "app_uninstalled";
   readonly onRevoked?: (
     event: SlackRevocationEvent,
@@ -290,6 +292,7 @@ const make = Effect.gen(function* () {
               generation,
               teamId: identity.teamId,
               botUserId: identity.botUserId,
+              customizeReplies: identity.customizeReplies === true,
               botApi,
             }),
       );
@@ -346,6 +349,9 @@ const make = Effect.gen(function* () {
             connectionId: connection.connectionId,
             classifier,
             owner,
+            ...(connection.botBindings === undefined
+              ? {}
+              : { botBindings: connection.botBindings }),
             ...(connection.unlinkedRuntimeModeCeiling === undefined
               ? {}
               : { unlinkedRuntimeModeCeiling: connection.unlinkedRuntimeModeCeiling }),

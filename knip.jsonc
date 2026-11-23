@@ -69,6 +69,7 @@
         "scripts/sync-mcp-client-skill.ts",
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
+        "scripts/verify-built-serve.ts",
         "src/provider/testFixtures/*.mjs",
         // sshRuntimeSpawn.test.ts spawns it by path as a separate process.
         "src/cloud/sshRuntimeSpawn.fixture.ts",

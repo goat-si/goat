@@ -3,6 +3,7 @@ import {
   CHANNEL_BOT_THREADS_HISTORY_LIMIT,
   ChannelGatewayError,
   ChannelTask,
+  MAIN_BOT_ID,
   type ChannelTaskId,
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a synchronous digest keeps the cursor codec pure.
@@ -11,9 +12,23 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import {
+  joinRemoteLaunch,
+  remotePullRequestColumns,
   threadPullRequestColumns,
+  type RemotePullRequestColumns,
   type ThreadPullRequestColumns,
 } from "./channelBotRowPullRequests.ts";
+
+export const botWorkConversationFilter = (sql: SqlClient.SqlClient, botId: string) =>
+  botId === MAIN_BOT_ID ? sql`c.kind = 'goat'` : sql`c.kind IN ('goat', 'slack')`;
+
+// Member Slack turns have their own work row because the conversation stays in Slack.
+export const botWorkTaskFilter = (sql: SqlClient.SqlClient, botId: string) => {
+  const work = sql`COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'`;
+  return botId === MAIN_BOT_ID
+    ? work
+    : sql`(${work} OR json_extract(t.task_json, '$.originAddress.kind') = 'slack')`;
+};
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 // [botTag, ownerTag, createdAt, taskId]
@@ -84,7 +99,7 @@ export const decodeHistoryCursor = Effect.fn("ChannelBotThreads.decodeHistoryCur
  * finished. Counted states move only to counted ones. The terms are channel_child_work_launches'
  * own; INDEXED BY makes a mismatch fail instead of scanning every child record.
  */
-const openableLaunch = (sql: SqlClient.SqlClient) =>
+export const openableLaunch = (sql: SqlClient.SqlClient) =>
   sql`s.key >= 'child-work:' AND s.key < 'child-work;'
     AND json_extract(s.value_json, '$.surface') IN ('thread_launch', 'ssh_thread_launch')
     AND json_extract(s.value_json, '$.destination.threadId') IS NOT NULL
@@ -94,7 +109,12 @@ const openableLaunch = (sql: SqlClient.SqlClient) =>
 /** A task's newest openable launches, read from their index; one more tells whether there are more. */
 export const launchesStatement = (
   sql: SqlClient.SqlClient,
-  input: { readonly ownerId: string; readonly taskId: string; readonly limit: number },
+  input: {
+    readonly ownerId: string;
+    readonly taskId: string;
+    readonly limit: number;
+    readonly finished?: boolean;
+  },
 ) =>
   sql<
     {
@@ -103,24 +123,27 @@ export const launchesStatement = (
       readonly title: string | null;
       readonly project_id: string | null;
       readonly work_kind: unknown;
-    } & ThreadPullRequestColumns
+    } & ThreadPullRequestColumns &
+      RemotePullRequestColumns
   >`SELECT s.key, s.value_json, p.title, p.project_id,
-      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
+      json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}, ${remotePullRequestColumns(sql)}
     FROM channel_runtime_state s INDEXED BY channel_child_work_launches
     -- Only a local launch's thread is in this machine's projection.
     LEFT JOIN orchestration_v2_projection_threads p
       ON json_extract(s.value_json, '$.surface') = 'thread_launch'
       AND json_extract(s.value_json, '$.destination.host') IS NULL
       AND p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+    ${joinRemoteLaunch(sql)}
     WHERE json_extract(s.value_json, '$.taskId') = ${input.taskId} AND ${openableLaunch(sql)}
       AND json_extract(s.value_json, '$.ownerId') = ${input.ownerId}
-    ORDER BY json_extract(s.value_json, '$.createdAt') DESC, s.key DESC
+      ${input.finished ? sql`AND json_extract(s.value_json, '$.state') IN ('completed', 'failed', 'cancelled')` : sql``}
+    ORDER BY ${input.finished ? sql`json_extract(s.value_json, '$.updatedAt')` : sql`json_extract(s.value_json, '$.createdAt')`} DESC, s.key DESC
     LIMIT ${input.limit}`;
 
 /**
  * A bot's tasks by creation, newest first, one row per task examined; created_at and task_id never
  * change, so a task keeps its place between pages. task_json is set only for a task history lists:
- * a turn joins once a launch has a thread, and never leaves. The row value makes the cursor one
+ * a chat turn joins once a launch has a thread, and never leaves. The row value makes the cursor one
  * range on the index's four columns, so a page costs the same anywhere inside a tie.
  */
 export const historyStatement = (
@@ -138,8 +161,8 @@ export const historyStatement = (
   }>`SELECT t.task_id, t.created_at, CASE
       WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c
         WHERE c.conversation_id = t.conversation_id AND c.owner_id = ${input.ownerId}
-          AND c.kind = 'goat') THEN NULL
-      WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn' THEN t.task_json
+          AND ${botWorkConversationFilter(sql, input.botId)}) THEN NULL
+      WHEN ${botWorkTaskFilter(sql, input.botId)} THEN t.task_json
       WHEN EXISTS (SELECT 1 FROM channel_runtime_state s INDEXED BY channel_child_work_launches
         -- "+" drops task_id's TEXT affinity, which would keep SQLite from seeking the index.
         WHERE json_extract(s.value_json, '$.taskId') = +t.task_id AND ${openableLaunch(sql)})
@@ -200,9 +223,12 @@ export const readHistoryPage = Effect.fn("ChannelBotThreads.historyPage")(functi
   return {
     tasks,
     skippedTasks,
-    // A turn's answer is in the chat; it is listed by the threads it launched.
     threadsOnly: new Set<ChannelTaskId>(
-      tasks.flatMap((task) => (task.kind === "turn" ? [task.taskId] : [])),
+      tasks.flatMap((task) =>
+        task.kind === "turn" && (scope.botId === MAIN_BOT_ID || task.originAddress.kind !== "slack")
+          ? [task.taskId]
+          : [],
+      ),
     ),
     ...(next === undefined || endedEarly ? {} : { nextCursor: next }),
     ...(endedEarly ? { endedEarly } : {}),

@@ -1,3 +1,4 @@
+import "./goatBotNativeModules.testkit";
 import { useState } from "react";
 import { act, useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
@@ -15,6 +16,8 @@ const forward = (props: Props) => ({
 });
 const nativeAlert = vi.hoisted(() => vi.fn());
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
+
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
 }));
@@ -168,7 +171,6 @@ vi.mock("../../native/StackHeader", () => ({
     )),
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
 }));
@@ -204,6 +206,7 @@ vi.mock("@expo/ui/community/datetime-picker", () => ({
     </button>
   ),
 }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
@@ -696,12 +699,14 @@ it("retains list work without a child capability and reads again after collapse 
       lastActivityAt: at,
       environmentId: "remote",
       threadId: "remote-thread",
+      pullRequests: [{ repository: "goat-si/goat", number: 42, state: "open", watching: true }],
     },
     {
       childWorkId: "r2",
       taskId: "t1",
       callerThreadId: "bot",
       host: "other",
+      pullRequests: [{ repository: "goat-si/other", number: 73, state: "merged", watching: false }],
       state: "running",
       lastActivityAt: at,
     },
@@ -712,6 +717,8 @@ it("retains list work without a child capability and reads again after collapse 
   expect(state.childKeys).toHaveLength(0);
   expect(home()?.textContent).toContain("Open work thread on mini");
   expect(home()?.textContent).toContain("other · Unavailable");
+  expect(home()?.textContent).toContain("#42");
+  expect(home()?.textContent).toContain("#73");
   state.childSupported = true;
   await open();
   expect(state.childKeys.at(-1)).toEqual({ environmentId: "env", input: { taskIds: ["t1"] } });

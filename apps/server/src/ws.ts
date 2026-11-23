@@ -12,6 +12,7 @@ import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
+import { makeThreadFollowService } from "./channels/channelThreadFollowService.ts";
 import { channelBotWorkRpcHandlers } from "./channels/channelBotWorkRpc.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
@@ -109,7 +110,6 @@ import {
   type ProjectMutation,
   type ProviderInstanceId,
   type PullRequestRef,
-  type ScheduledTaskListResult,
   AutomationResumeError,
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -157,6 +157,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import { reauthorizeSession } from "./auth/McpClientAuthority.ts";
 import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -167,6 +168,7 @@ import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
 import * as ChannelLedger from "./channels/ChannelLedger.ts";
 import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
+import { readTaskForAttention } from "./channels/channelBotAttention.ts";
 import { ownerFromSession } from "./channels/channelOwner.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -302,6 +304,7 @@ import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import { makeScheduledTaskRpcAccess } from "./scheduledTasks/scheduledTaskRpcAccess.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -997,7 +1000,7 @@ export const layerWsRpc = (
       const channelEnvironmentId = yield* (yield* ServerEnvironment.ServerEnvironment)
         .getEnvironmentId;
       // Channel calls act for the authenticated session; nothing here comes from client input.
-      const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
+      const channelOwner = ownerFromSession(channelEnvironmentId, currentSession, currentSessionId);
       const decisionCaller = yield* DecisionClient.caller(channelEnvironmentId, currentSession);
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -1310,14 +1313,11 @@ export const layerWsRpc = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
-      // Webhook URLs start agents; expose them only to operate-scoped sessions while keeping tasks readable.
-      const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
-        currentSession.scopes.includes(AuthOrchestrationOperateScope)
-          ? result
-          : {
-              ...result,
-              tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
-            };
+      const scheduledTaskAccess = makeScheduledTaskRpcAccess(
+        currentSession,
+        channelOwner,
+        sessions,
+      );
       const authorizeEffect = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
@@ -1644,7 +1644,21 @@ export const layerWsRpc = (
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         ...ChannelBotRegistry.statusHandler(channelBots, channelOwner),
-        ...ChannelBotMembers.rpcHandlers(channelBotMembers, channelOwner),
+        ...ChannelBotMembers.rpcHandlers(
+          channelBotMembers,
+          channelOwner,
+          reauthorizeSession(sessions, currentSessionId)([AuthOrchestrationOperateScope]),
+          {
+            service: scheduledTasks,
+            capture: scheduledTaskAccess.capture(captureTaskMemoryCeiling),
+          },
+          clientOrigin.surface !== "mobile",
+        ),
+        ...(yield* makeThreadFollowService(channelLedger)).rpcHandlers(
+          channelOwner,
+          channelEnvironmentId,
+          currentSessionId,
+        ),
         ...(yield* channelBotWorkRpcHandlers(channelOwner)),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
@@ -1653,14 +1667,7 @@ export const layerWsRpc = (
             caller: { type: "rpc", clientId: currentSessionId },
           }),
         [CHANNEL_GATEWAY_WS_METHODS.getTask]: (input) =>
-          channelLedger.getTask(input.taskId).pipe(
-            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-            Effect.flatMap((stored) =>
-              stored === undefined || stored.ownerId !== channelOwner.ownerId
-                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
-                : Effect.succeed(stored.task),
-            ),
-          ),
+          readTaskForAttention(channelLedger, input, channelOwner.ownerId),
         [CHANNEL_GATEWAY_WS_METHODS.listTasks]: (input) =>
           channelLedger
             .listTasks({
@@ -1988,25 +1995,22 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
-          scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
+          scheduledTasks.list().pipe(Effect.flatMap(scheduledTaskAccess.visibleUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
-          scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
+          scheduledTasks.subscribeList().pipe(Stream.mapEffect(scheduledTaskAccess.visibleUrls)),
         [WS_METHODS.scheduledTasksUpsert]: (input) =>
-          captureTaskMemoryCeiling.pipe(
-            Effect.flatMap((memoryGrantCeiling) =>
-              scheduledTasks.upsert(input, { memoryGrantCeiling, owner: channelOwner }),
-            ),
-          ),
+          scheduledTaskAccess
+            .capture(captureTaskMemoryCeiling)
+            .pipe(Effect.flatMap((captured) => scheduledTasks.upsert(input, captured))),
         [WS_METHODS.scheduledTasksSetEnabled]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
-            Effect.andThen(captureTaskMemoryCeiling),
-            Effect.flatMap((memoryGrantCeiling) =>
-              scheduledTasks.setEnabled(input, { memoryGrantCeiling }),
-            ),
+            Effect.andThen(scheduledTaskAccess.capture(captureTaskMemoryCeiling)),
+            Effect.flatMap((captured) => scheduledTasks.setEnabled(input, captured)),
           ),
         [WS_METHODS.scheduledTasksDelete]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
-            Effect.andThen(scheduledTasks.delete(input)),
+            Effect.andThen(scheduledTaskAccess.owner),
+            Effect.flatMap((owner) => scheduledTasks.delete(input, owner)),
           ),
         [WS_METHODS.scheduledTasksRunNow]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
@@ -2014,7 +2018,8 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.scheduledTasksRotateWebhookToken]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
-            Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
+            Effect.andThen(scheduledTaskAccess.owner),
+            Effect.flatMap((owner) => scheduledTasks.rotateWebhookToken(input, owner)),
           ),
         [WS_METHODS.handoffsOpen]: (input) => handoffs.open(input, currentSessionId),
         [WS_METHODS.handoffsRespond]: (input) =>

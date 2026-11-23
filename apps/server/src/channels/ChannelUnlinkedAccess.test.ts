@@ -30,6 +30,7 @@ import {
   defaultScript,
   goatInput,
   linkSlackUser,
+  memorySlackContext,
   makeHarness,
   modelSelection,
   onlyTask,
@@ -522,11 +523,11 @@ describe("a linked person asking to change notes without starting work", () => {
         : defaultScript(input);
     return Effect.gen(function* () {
       yield* setupBot;
-      yield* linkSlackUser("U1");
+      yield* linkSlackUser("U1", true);
       yield* writeNotes(standingNotes);
       yield* (yield* ChannelGateway.ChannelGateway).ingest(
         slackInput(request, "linked-forget-reply"),
-        slackContext,
+        memorySlackContext,
       );
       yield* (yield* ChannelRuntime.ChannelRuntime).drain;
       const tasks = yield* (yield* ChannelLedger.ChannelLedger).listTasks({

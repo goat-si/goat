@@ -31,13 +31,13 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import migration from "../persistence/Migrations/091_RemoteReports.ts";
 import dispatchMigration from "../persistence/Migrations/092_RemoteDispatches.ts";
+import channelLedger from "../persistence/Migrations/093_ChannelLedger.ts";
 import threadRunResultsMigration from "../persistence/Migrations/095_ThreadRunResults.ts";
 import relayMigration from "../persistence/Migrations/096_RemoteReportRelay.ts";
 import observedChecksMigration from "../persistence/Migrations/113_ThreadRunObservedChecks.ts";
 import inboxRunIdMigration from "../persistence/Migrations/123_RemoteReportInboxRunId.ts";
 import fencesMigration from "../persistence/Migrations/127_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
-
 const threadId = ThreadId.make("remote-thread");
 const runA = RunId.make("run-a");
 const runB = RunId.make("run-b");
@@ -82,7 +82,7 @@ const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   for (const step of [migration, dispatchMigration, threadRunResultsMigration]) yield* step;
   for (const step of [observedChecksMigration, relayMigration, inboxRunIdMigration]) yield* step;
-  yield* fencesMigration;
+  yield* fencesMigration.pipe(Effect.andThen(channelLedger));
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const changeTypes = [
     "thread.deleted",
@@ -771,16 +771,10 @@ test("a completed run stays held by its watched pull request without provider ba
     state.shell = { ...state.shell, pullRequests: [watchedPullRequest] };
     const result = yield* service.wait(waitInput);
     expect(result.observedRun?.holds?.backgroundTasks).toBeGreaterThanOrEqual(1);
+    const { repository, number, url, linkedAt } = watchedPullRequest;
     expect(result.observedRun?.observation).toEqual({
       result: { runId: runA, observedCheckPending: true },
-      pullRequests: [
-        {
-          repository: "goat-si/goat",
-          number: 42,
-          url: "https://github.com/goat-si/goat/pull/42",
-          watching: true,
-        },
-      ],
+      pullRequests: [{ repository, number, url, linkedAt, watching: true }],
       needsYou: [],
     });
   }));

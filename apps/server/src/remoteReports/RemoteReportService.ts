@@ -45,7 +45,12 @@ import { frameRemoteReport } from "./reportFrame.ts";
 import { redactGoatCredentialsDeep } from "../mcp/goatCredentialRedaction.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import {
+  bindRemoteWorkerNotes,
+  unbindRemoteWorkerNotes,
+} from "../channels/channelProviderBrief.ts";
+import {
   completionHoldCount,
+  needsYouFromApprovalHandoffs,
   needsYouFromRuntimeRequests,
   scanSubagents,
   observeWorker,
@@ -147,7 +152,19 @@ const sameHolds = (known: RemoteKnownRun["holds"], observed: RemoteObservedRun["
 const sameObservation = (
   known: RemoteKnownRun["observation"],
   observed: RemoteObservedRun["observation"],
-) => known === undefined || channelWorkerObservationEquals(known, observed);
+) => {
+  if (known === undefined || channelWorkerObservationEquals(known, observed)) return true;
+  if (!observed?.needsYou.some((need) => need.handoff !== undefined)) return false;
+  // An older origin echoes the approval kind and time without its durable reference.
+  return channelWorkerObservationEquals(known, {
+    ...observed,
+    needsYou: observed.needsYou.map(({ handoff, ...need }, index) =>
+      handoff !== undefined && known.needsYou[index]?.handoff !== undefined
+        ? { ...need, handoff }
+        : need,
+    ),
+  });
+};
 /**
  * Whether a read differs from the caller's last view. Questions, holds and the
  * observation count only when the caller sent them, so an older origin that cannot
@@ -171,6 +188,7 @@ export class RemoteReportService extends Context.Service<
     readonly bind: (
       threadId: ThreadId,
       input: RemoteReportBindingInput,
+      providerNotes?: { readonly messageId: MessageId; readonly notes: string },
     ) => Effect.Effect<void, RemoteReportError>;
     readonly unbind: (threadId: ThreadId) => Effect.Effect<void, RemoteReportError>;
     /** The machine and thread this thread was launched from, when it reports to one. */
@@ -245,6 +263,7 @@ const make = Effect.gen(function* () {
   const bind = Effect.fn("RemoteReportService.bind")(function* (
     threadId: ThreadId,
     input: RemoteReportBindingInput,
+    providerNotes?: { readonly messageId: MessageId; readonly notes: string },
   ) {
     const value = yield* decodeBindingInput(input).pipe(Effect.mapError(invalid));
     const createdAt = DateTime.formatIso(yield* DateTime.now);
@@ -262,6 +281,8 @@ const make = Effect.gen(function* () {
               (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
             VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${relaySendLevel(value)}, ${createdAt})
           `;
+          if (providerNotes !== undefined)
+            yield* bindRemoteWorkerNotes(sql, threadId, providerNotes, createdAt);
         }),
       )
       .pipe(Effect.mapError(storageUnlessReport));
@@ -275,6 +296,7 @@ const make = Effect.gen(function* () {
           yield* sql`DELETE FROM remote_relay_requests WHERE correlation_id IN
         (SELECT correlation_id FROM remote_report_bindings WHERE thread_id = ${threadId})`;
           yield* sql`DELETE FROM remote_report_bindings WHERE thread_id = ${threadId}`;
+          yield* unbindRemoteWorkerNotes(sql, threadId);
         }),
       )
       .pipe(Effect.mapError(storage));
@@ -634,16 +656,20 @@ const make = Effect.gen(function* () {
         ) =>
           Effect.gen(function* () {
             const requests = yield* orchestrator
-              .getThreadRecords(binding.threadId, ["runtimeRequests", "subagents"])
+              .getThreadRecords(binding.threadId, ["runtimeRequests", "subagents", "turnItems"], {
+                turnItemTypes: ["human_handoff"],
+                turnItemStatuses: ["waiting"],
+                turnItemRunId: run.id,
+              })
               .pipe(Effect.mapError(unavailable));
-            const pullRequests = pullRequestsFromLinks(shell.pullRequests);
+            const pullRequests = pullRequestsFromLinks(shell.pullRequests, true);
             // A subagent on this machine waiting on a person blocks the work as much as the
             // worker. The approval names that thread, which is a thread on this machine.
             const children = yield* scanSubagents(requests.subagents, (threadId) =>
               orchestrator.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
             );
             watchedChildThreadIds = children.localThreadIds;
-            const needsYou = needsYouFromRuntimeRequests(
+            const runtimeNeeds = needsYouFromRuntimeRequests(
               [
                 ...requests.runtimeRequests.map((request) => ({
                   ...request,
@@ -653,6 +679,7 @@ const make = Effect.gen(function* () {
               ],
               (request) => request.threadId,
             );
+            const needsYou = [...runtimeNeeds, ...needsYouFromApprovalHandoffs(requests.turnItems)];
             if (!isTerminalRunStatus(run.status)) {
               const items = yield* orchestrator
                 .getThreadRecords(binding.threadId, ["turnItems"], {
@@ -820,12 +847,13 @@ const make = Effect.gen(function* () {
             value.watchRunId === null ? stream("run.created") : Stream.empty,
             // Questions open and close; background work starts and ends.
             stream("runtime-request.updated"),
-            // The question item can commit after its request; other items need no read.
             stream("turn-item.updated").pipe(
               Stream.filter(
                 (stored) =>
                   stored.event.type === "turn-item.updated" &&
-                  stored.event.payload.type === "user_input_request",
+                  (stored.event.payload.type === "user_input_request" ||
+                    (stored.event.payload.type === "human_handoff" &&
+                      stored.event.payload.handoff.kind === "approval")),
               ),
             ),
             stream("provider-thread.updated"),

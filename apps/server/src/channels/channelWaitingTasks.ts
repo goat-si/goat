@@ -34,7 +34,7 @@ export const botActiveTasksStatement = (
 export type WaitingAsk =
   | { readonly kind: "question"; readonly askedAt: string; readonly question: ChannelOpenQuestion }
   | {
-      readonly kind: "approval" | "native_question";
+      readonly kind: "approval" | "handoff" | "native_question";
       readonly askedAt: string;
       readonly ref: ChannelTaskApprovalRef;
     }
@@ -58,6 +58,13 @@ export const waitingAsks = (task: ChannelTask): Array<WaitingAsk> => {
     const askedAt = need.since;
     if (need.kind === "approval" && need.approval !== undefined) {
       asks.push({ kind: "approval", askedAt, ref: need.approval });
+    } else if (
+      need.kind === "approval" &&
+      need.handoff?.host !== undefined &&
+      need.handoff.host === task.worker?.host &&
+      need.handoff.threadId === task.worker.threadId
+    ) {
+      asks.push({ kind: "handoff", askedAt, ref: need.handoff });
     } else if (need.kind === "question" && need.question !== undefined) {
       asks.push({ kind: "native_question", askedAt, ref: need.question });
     } else if (need.kind === "sign_in" || need.kind === "usage_limit") {

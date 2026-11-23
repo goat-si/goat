@@ -12,7 +12,7 @@ import {
   goatBotNotesView,
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
-import type { ChannelBotNote, EnvironmentId } from "@goat/contracts";
+import type { BotId, ChannelBotNote, ChannelBotNoteScope, EnvironmentId } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
@@ -28,12 +28,13 @@ import {
 } from "./mobileNoteWordings";
 
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
-export function MobileBotMemory(props: {
+interface MobileBotMemoryProps {
   readonly environmentId: EnvironmentId | null;
   readonly connected: boolean;
   readonly supported: boolean;
-  /** A member bot's sheet, which shows the same notes as the main bot's. */
   readonly member: boolean;
+  readonly botId?: BotId | undefined;
+  readonly scoped?: boolean;
   readonly botName?: string;
   /** Fills the chat's message box; false when it was refused and nothing changed. */
   readonly onDraft?: ((text: string) => boolean) | undefined;
@@ -45,12 +46,37 @@ export function MobileBotMemory(props: {
   readonly onWordingChange: (key: string, wording: MobileNoteWording | null) => void;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly refreshKey?: string | undefined;
-}) {
-  const { environmentId, connected, supported, onDraft } = props;
+}
+
+export function MobileBotMemory(props: MobileBotMemoryProps) {
+  if (props.scoped !== true) return <MobileNotesSection {...props} />;
+  return (
+    <View className="gap-4">
+      {props.botId === undefined ? null : (
+        <MobileNotesSection key={props.botId} {...props} title="This bot" privateId={props.botId} />
+      )}
+      <MobileNotesSection {...props} title="All bots" shared />
+    </View>
+  );
+}
+
+function MobileNotesSection(
+  props: MobileBotMemoryProps & {
+    readonly title?: string;
+    readonly privateId?: BotId;
+    readonly shared?: boolean;
+  },
+) {
+  const { environmentId, connected, supported, onDraft, privateId } = props;
   const botName = props.botName ?? "GOAT Bot";
   const readable = environmentId !== null && connected && supported;
   const notes = useEnvironmentQuery(
-    readable ? channelEnvironment.listBotNotes({ environmentId, input: {} }) : null,
+    readable
+      ? channelEnvironment.listBotNotes({
+          environmentId,
+          input: privateId === undefined ? {} : { botId: privateId },
+        })
+      : null,
   );
   const refresh = notes.refresh;
   // Null while there is nothing to read; otherwise the latest answer or task change.
@@ -60,10 +86,25 @@ export function MobileBotMemory(props: {
     if (trigger !== null) refresh();
   }, [trigger, refresh]);
   const failure = notes.cause === null ? null : botNotesFailure(notes.cause, botName);
+  const scope = privateId ?? (props.shared ? "all" : "");
+  const wordings =
+    scope === ""
+      ? props.wordings
+      : new Map(
+          [...props.wordings]
+            .filter(([key]) => key.startsWith(scope + ":"))
+            .map(([key, value]) => [key.slice(scope.length + 1), value]),
+        );
   return (
     <View className="gap-3 py-2">
-      <Text className="text-foreground-muted">{GOAT_BOT_NOTES_COPY}</Text>
-      {props.member ? (
+      {props.title === undefined ? (
+        <Text className="text-foreground-muted">{GOAT_BOT_NOTES_COPY}</Text>
+      ) : (
+        <Text accessibilityRole="header" className="font-semibold text-foreground">
+          {props.title}
+        </Text>
+      )}
+      {props.member && props.scoped !== true ? (
         <Text className="text-foreground-muted">{GOAT_BOT_NOTES_SHARED_COPY}</Text>
       ) : null}
       {!connected ? (
@@ -93,8 +134,11 @@ export function MobileBotMemory(props: {
           notes={notes.data.notes}
           truncated={notes.data.truncated}
           onDraft={onDraft}
-          wordings={props.wordings}
-          onWordingChange={props.onWordingChange}
+          scope={props.shared ? "shared" : privateId === undefined ? undefined : "private"}
+          wordings={wordings}
+          onWordingChange={(key, value) =>
+            props.onWordingChange(scope === "" ? key : scope + ":" + key, value)
+          }
           botName={botName}
         />
       )}
@@ -106,6 +150,7 @@ function MobileNoteList(props: {
   readonly revision: string | null;
   readonly notes: ReadonlyArray<ChannelBotNote>;
   readonly truncated: boolean;
+  readonly scope: ChannelBotNoteScope | undefined;
   readonly onDraft: ((text: string) => boolean) | undefined;
   readonly wordings: MobileNoteWordings;
   readonly onWordingChange: (key: string, wording: MobileNoteWording | null) => void;
@@ -125,7 +170,11 @@ function MobileNoteList(props: {
       {view.empty === "none" ? (
         <MobileBotPanelEmpty
           title="No notes yet"
-          next={`Ask ${props.botName} to remember a standing rule.`}
+          next={
+            props.scope === "shared"
+              ? "Ask to “remember for all bots” to save a shared note."
+              : `Ask ${props.botName} to remember a standing rule.`
+          }
         />
       ) : view.empty === "none_in_window" ? (
         <Text className="text-foreground-muted">
@@ -147,6 +196,7 @@ function MobileNoteList(props: {
               botName={props.botName}
               source={goatBotNoteSourceLabel(note.source, { now })}
               onDraft={props.onDraft}
+              scope={props.scope}
               wording={held?.kept.wording ?? null}
               onWordingChange={(wording) =>
                 props.onWordingChange(
@@ -224,6 +274,7 @@ function MobileNoteList(props: {
 }
 
 function MobileNoteRow(props: {
+  readonly scope: ChannelBotNoteScope | undefined;
   readonly note: ChannelBotNote;
   /** Why a change or forget request naming this note by its words could act on another note. */
   readonly heldBack: GoatBotNoteHeldBack | null;
@@ -235,7 +286,7 @@ function MobileNoteRow(props: {
 }) {
   const { note, onDraft, wording } = props;
   const setWording = props.onWordingChange;
-  const draft = wording === null ? null : changeNoteDraft(note, wording);
+  const draft = wording === null ? null : changeNoteDraft(note, wording, props.scope);
   const canAsk = onDraft !== undefined;
   // A forget request names its note by its words too, so it is held back the same way.
   const [forgetting, setForgetting] = useState(false);
@@ -270,7 +321,9 @@ function MobileNoteRow(props: {
             accessibilityRole="button"
             disabled={!canAsk}
             onPress={() =>
-              props.heldBack !== null ? setForgetting(true) : onDraft?.(forgetNoteDraft(note))
+              props.heldBack !== null
+                ? setForgetting(true)
+                : onDraft?.(forgetNoteDraft(note, props.scope))
             }
             className="min-h-[44px] min-w-[44px] items-center justify-center px-2"
           >

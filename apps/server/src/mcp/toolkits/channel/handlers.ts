@@ -1,5 +1,6 @@
 import {
-  type ChannelGatewayError,
+  AuthOrchestrationReadScope,
+  ChannelGatewayError,
   type ChannelInboundMessage,
   type ChannelTaskEvent,
   OrchestratorMcpFailure,
@@ -9,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as ChannelBotHome from "../../../channels/ChannelBotHome.ts";
+import * as ChannelBotThreads from "../../../channels/ChannelBotThreads.ts";
 import * as ChannelBotProfiles from "../../../channels/ChannelBotProfiles.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelTaskExport from "../../../channels/ChannelTaskExport.ts";
@@ -202,9 +204,17 @@ export const layer = McpToolAccess.toLayer(
         Effect.gen(function* () {
           const ledger = yield* ChannelLedger.ChannelLedger;
           const ownerId = yield* ownerIdOf;
+          const scope = yield* McpInvocationContext.McpInvocationContext;
           const stored = yield* ledger.getTask(input.taskId).pipe(Effect.mapError(failureFor));
           if (stored === undefined || stored.ownerId !== ownerId) return yield* notFound();
-          return stored.task;
+          const activity = yield* ledger
+            .readTaskActivity({
+              task: stored.task,
+              ownerId,
+              environmentId: scope.environmentId,
+            })
+            .pipe(Effect.mapError(failureFor));
+          return { ...stored.task, activity };
         }),
       ),
       channel_task_list: McpToolAccess.reads((input) =>
@@ -282,18 +292,67 @@ export const layer = McpToolAccess.toLayer(
           return yield* home.read.pipe(Effect.mapError(failureFor));
         }),
       ),
-      goat_channel_bot_list: McpToolAccess.reads(() =>
+      goat_channel_bot_propose: McpToolAccess.proposesForReview((input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const reauthorize = scope.reauthorize?.(["orchestration:read"]);
+          if (reauthorize !== undefined) {
+            yield* reauthorize.pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestratorMcpFailure({
+                    code: "capability_denied",
+                    message: "Posting a bot proposal requires access to GOAT Bot on this machine.",
+                  }),
+              ),
+            );
+          }
+          if (input.templateId !== undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "This host does not support bot templates. Supply explicit fields and omit templateId.",
+            });
+          }
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          return yield* runtime
+            .proposeBot(input, { ownerId: yield* ownerIdOf }, scope.requestNamespace)
+            .pipe(Effect.mapError(failureFor));
+        }),
+      ),
+      goat_channel_bot_list: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
           const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
           const bots = yield* profiles
             .list({ ownerId: yield* ownerIdOf })
             .pipe(Effect.mapError(failureFor));
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          if (input.followedBy !== undefined && scope.client !== undefined) {
+            if (scope.reauthorize === undefined)
+              return yield* failureFor(new ChannelGatewayError({ reason: "forbidden" }));
+            yield* scope
+              .reauthorize([AuthOrchestrationReadScope])
+              .pipe(
+                Effect.mapError(() => failureFor(new ChannelGatewayError({ reason: "forbidden" }))),
+              );
+          }
           return {
+            ...(input.followedBy === undefined
+              ? {}
+              : {
+                  followedThreads: yield* (yield* ChannelBotThreads.ChannelBotThreads)
+                    .listFollowed(yield* ownerIdOf, input.followedBy)
+                    .pipe(Effect.mapError(failureFor)),
+                }),
             bots: bots.map((bot) => ({
               botId: bot.botId,
               role: bot.role,
               name: bot.name,
               purpose: bot.purpose,
+              ...(bot.tools === undefined ? {} : { tools: bot.tools }),
+              ...(bot.importedToolNames === undefined
+                ? {}
+                : { importedToolNames: bot.importedToolNames }),
               hidden: bot.hidden === true,
               sessionThreadId: bot.sessionThreadId,
             })),

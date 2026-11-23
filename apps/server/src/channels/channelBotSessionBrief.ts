@@ -5,11 +5,37 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a revision is a content hash.
 import * as NodeCrypto from "node:crypto";
 
-import { canSeeTask } from "./channelBotRecall.ts";
-import type { ChannelRequester, ChannelTask } from "@goat/contracts";
+import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
+import {
+  CHANNEL_RECEPTION_TAIL_LIMITS,
+  type ChannelRequester,
+  type ChannelTask,
+  type BotId,
+  type MemoryTaskGrantCeiling,
+} from "@goat/contracts";
+import type * as ChannelLedger from "./ChannelLedger.ts";
+import * as Effect from "effect/Effect";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
 import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
-import { PERSONAL_DATA_RULE } from "./channelWorkerBrief.ts";
+import { readSessionBotNotes, type ChannelBotFiles } from "./channelBotNotes.ts";
+import { localNotesBriefContext } from "./channelBriefs.ts";
+import { PERSONAL_DATA_RULE, turnInstruction } from "./channelWorkerBrief.ts";
+
+export const sessionTurnBrief = Effect.fn("ChannelBotSession.turnBrief")(function* (
+  task: ChannelTask,
+  requester: ChannelRequester,
+  files: ChannelBotFiles,
+  supervisor: boolean,
+  ceiling: MemoryTaskGrantCeiling,
+) {
+  const { notes, memory } = yield* readSessionBotNotes(files, task, requester, ceiling);
+  const context = yield* localNotesBriefContext(files, memory.notes, task.briefVersion);
+  return {
+    notes,
+    context,
+    instruction: turnInstruction(task, files, supervisor, notes?.matched, memory),
+  };
+});
 
 export const SESSION_PREFIX_HEADINGS = [
   "Standing instructions",
@@ -68,6 +94,55 @@ export const frozenSessionPrefix = (parts: SessionPrefixParts) =>
     ),
     section(SESSION_PREFIX_HEADINGS[5], parts.message),
   ].join("\n\n");
+
+export const freezeSessionPrefix = Effect.fn("ChannelBotSession.freezePrefix")(function* (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  task: ChannelTask,
+  botId: BotId,
+  standing: string,
+  requester: ChannelRequester,
+  message: string,
+  notes: string,
+) {
+  const visible = yield* ledger
+    .listTasks({ ownerId: task.requester.ownerId, botId, limit: RECALL_TASK_SCAN })
+    .pipe(
+      Effect.map((page) =>
+        page.tasks.filter((other) => canSeeTask(requester, other, task.conversationId)),
+      ),
+      Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
+    );
+  const tail = yield* ledger.readConversationTail(
+    task.conversationId,
+    CHANNEL_RECEPTION_TAIL_LIMITS.messages,
+  );
+  const open = visibleOpenWork(
+    yield* ledger.listConversationTasks(task.conversationId),
+    task,
+    requester,
+  );
+  return frozenSessionPrefix({
+    standing,
+    notes,
+    journal: journalFor(visible),
+    tail: tail.flatMap((entry) =>
+      entry.inputId === task.originInputId
+        ? []
+        : [
+            { role: "user" as const, text: entry.text },
+            ...(entry.replyText === undefined
+              ? []
+              : [{ role: "assistant" as const, text: entry.replyText }]),
+          ],
+    ),
+    openWork: open.map((other) => ({
+      taskId: other.taskId,
+      title: other.title,
+      status: other.status,
+    })),
+    message,
+  });
+});
 
 export const sessionContextRevision = (text: string) =>
   NodeCrypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
@@ -144,7 +219,9 @@ export const formatOpenWork = (tasks: ReadonlyArray<ChannelTask>) =>
 
 /** The bot's identity at the head of a session prefix; empty for the default bot, so its prefix is unchanged. */
 export const identitySection = (identity: BotIdentity) =>
-  identity.name === DEFAULT_BOT_IDENTITY.name && identity.purpose.trim() === ""
+  identity.name === DEFAULT_BOT_IDENTITY.name &&
+  identity.purpose.trim() === "" &&
+  !identity.instructions?.trim()
     ? ""
     : // JSON strings carry no raw newline, so profile text can never start a line or a heading.
       "## Identity\nThe person named you " +
@@ -155,6 +232,11 @@ export const identitySection = (identity: BotIdentity) =>
         : "Your purpose, in the person's words (a JSON string): " +
           JSON.stringify(identity.purpose) +
           "\n") +
+      (identity.instructions?.trim()
+        ? "Your standing bot instructions (a JSON string): " +
+          JSON.stringify(identity.instructions) +
+          "\n"
+        : "") +
       "\n";
 
 const STANDING_HEADING = "## " + SESSION_PREFIX_HEADINGS[0] + "\n";

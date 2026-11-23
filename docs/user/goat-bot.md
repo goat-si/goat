@@ -30,7 +30,8 @@ under its own name and purpose from its next conversation session.
 - Edit any bot, including the main one, from its row menu (long press on mobile), **Edit bot** in
   its home (its name at the top of its chat on web and desktop), or **Settings → GOAT Bot →
   Profile**. A new name also changes how the main bot
-  introduces itself in Slack and iMessage.
+  introduces itself in Slack and iMessage. Use **Instructions** for rules the bot should follow
+  on every request. Changes reach the next turn after the current work ends.
 - An added bot's model can change in its edit dialog or from the model button in its message
   box; its next turn uses it. **Use GOAT Bot's model** makes it follow the main
   bot's model again.
@@ -39,8 +40,12 @@ under its own name and purpose from its next conversation session.
 - **Hide** moves a bot under **Hidden bots**; it still answers there. **Delete** archives its
   conversation and moves it under **Deleted bots**, where **Restore** brings it back with its
   history. A bot with open tasks can't be deleted until they finish or you stop them.
-- Bots you add are reachable in the GOAT app only. Slack and iMessage talk to the main bot.
-- Notes and skills are shared by all bots on the machine GOAT Bot lives on.
+- [Slack](./slack.md) can reach bots you add through channel bindings or by name.
+  iMessage reaches the main bot.
+- In **Edit bot → Tools** on web and desktop, you can choose which MCP servers and skills a bot
+  may use. Leaving an allowlist empty permits none. Narrowing a list stops active work.
+  For now, a bot with tool limits can't start work. To run it again, allow all MCP servers
+  and all skills. Mobile shows the bot's current tool settings.
 - A bot can read files on the machine it lives on. It looks at private data such as browser
   history, mail, messages or saved credentials only when you ask about it.
 - Agents can list your bots with `goat_channel_bot_list`; they can't create bots or send work to
@@ -51,11 +56,39 @@ other requests that need your attention, including requests from hidden bots. Ex
 an item to open its task. Use the **Open next bot ask** command to move through them. When more
 wait than the list shows, **Show more** lists the next ones.
 
-On a phone, while the computer GOAT Bot runs on is offline, the Bots list and **Needs you** show
-what the phone last read from it, which may be out of date. You can open a bot's conversation, but
-bots can't be added or changed until the computer is back. Closing the app forgets that list.
-**Settings → GOAT Bot** also shows the bot's settings as the phone last read them; they can't be
-changed until the computer is back.
+On a phone, the Bots list can reopen while its computer is offline. It shows when the phone last
+read the bot names, avatars and **Needs you** counts. The phone keeps those rows and the bot, kind,
+task and time of each open request for up to seven days. Question text, approval details and card
+contents stay off the saved list. The offline list is read-only. The phone clears the saved summary
+when you sign out, remove the computer or it refuses your pairing. If someone revokes your access
+while the computer is offline, the phone learns about it the next time it contacts the computer.
+**Settings → GOAT Bot** shows the last settings the phone read and lets you change them once the
+computer is back.
+
+Choose **From a template** when creating a bot to start with instructions for CI monitoring,
+pull request reviews, release notes, standups, or issue triage. The picker previews the
+instructions, the paused automation, and the first message. You can edit the message in
+the composer before sending it. To start an automation, open the bot's Home and resume
+the routine. For a webhook trigger, configure its signing secret and connect the source
+before enabling it. If setup reports that it could not add the routine, choose **Retry**
+in the picker or in the bot’s conversation to finish setting up the same bot.
+
+### Share a bot’s setup
+
+Open a bot’s row menu (long press on mobile), choose **Share setup**, and review the
+`.goatbot.json` package before saving it. The file includes the bot’s profile, instructions,
+automation definitions, and named tools. Conversations, notes, task history, Slack bindings,
+webhook URLs, and signing secrets stay on the source computer. Export stops if text looks
+like a secret. Edit the flagged fields and try again. The check catches known token shapes
+and high-entropy strings. Review the file for any other private information before sharing it.
+
+On web or desktop, choose **Import bot package** in the Bots list on the destination computer.
+The review shows the fields GOAT will use and any it will ignore. Confirm to add the bot.
+If setup fails after creating it, use **Retry import** in the review to finish the same bot.
+Automations start paused. In the bot’s Home, provide each signed trigger’s secret and connect
+its source before enabling it. Use **Edit bot → Tools** to grant access by entering the
+matching local MCP server or skill identifiers. A name in the package grants no access by
+itself.
 
 ## The face
 
@@ -75,6 +108,10 @@ move when the window is hidden or when your system asks to reduce motion.
 
 ## Work
 
+Tasks a member bot starts in Slack appear in its **Home → Work** on
+web, desktop and mobile. The member's Home shows its configured Slack
+channel IDs. You can change the bindings in [Slack settings](slack.md).
+
 On web and desktop, the bot's name at the top of its chat opens the bot's home, where **Edit
 bot** changes its name, face, purpose and model. **Home** is one page: a status note when
 something needs fixing, the bot's tasks, its routines and the machines its work runs on. Selecting
@@ -82,6 +119,15 @@ a task shows its conversation right there, beside the chat, and marks it read; *
 opens it in full. A task's menu pins it, marks it done or marks it read.
 A pull request on a task's row shown without Open, Merged or Closed has no state GOAT is checking;
 open its thread to see where it stands.
+
+Open the task in full to see **Done means**, the bot's completion criterion, and **Activity**.
+Activity lists the latest status changes, worker launches, linked PRs, and questions. Each worker
+opens in its own thread.
+
+Use **Snooze** to set a task aside for an hour, until tomorrow, or until next week. Find it under
+**Snoozed** on Home and choose **Unsnooze** to bring it back early. It also returns when the snooze
+ends or the task changes status. Questions and approvals still appear in **Needs you**.
+Use **Show more** in **Snoozed** to see up to 500 snoozed tasks.
 
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
@@ -104,16 +150,20 @@ While no Slack channel is
 connected, GOAT Bot's home also suggests connecting one; **Hide** removes the suggestion on this
 device, and **Settings → GOAT Bot → Suggestions on the bot's home** brings it back.
 **Library** holds the files the bot saved and its memory. On mobile, **Work** opens a sheet of the
-bot's tasks, and a task opens in its own view.
+bot's tasks, and a task opens in its own view. If workers are waiting for approval, the task
+shows how many are waiting and offers **Open worker** for workers this phone can reach.
 
 - The status note says why the bot can't work right now: the machine it answers on, its model,
   open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
   allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
   run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
-  see what it said. **Check in on me** sets up a routine on the days and hours you choose: the bot
-  looks over its tasks and writes only when something needs you. A routine whose last run failed
-  shows **Run now**. **New routine** starts a routine request in the message box for you to finish
+  see what started it and what it said. On web and desktop, you can also open the task if it
+  started one. On mobile, an incomplete history is marked above the runs. **Check in on me**
+  sets up a routine on the days and hours you choose. The bot looks over its tasks and writes
+  only when something needs you. On web and desktop, a timer routine whose last run failed shows
+  **Run now**. On mobile, **Run now** starts a timer routine on demand, even when it is paused.
+  Webhook routines explain how an incoming delivery starts them. **New routine** starts a routine request in the message box for you to finish
   and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
   and files.
 - **New routine**, **Ask to change** and **Ask to forget** fill only a message box with no words or
@@ -123,8 +173,15 @@ bot's tasks, and a task opens in its own view.
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not
   retried from here: check it on that computer, then ask the bot again.
-- **Memory** shows the notes GOAT Bot keeps, newest first, with where each was asked for. **Ask
-  to change** or **Ask to forget** puts a request quoting the note in the message box for you to
+- **Library → Memory** shows **This bot** for a member's own notes and **All bots** for shared
+  notes, including notes kept before this feature. When you ask a member to remember something,
+  it goes in **This bot**. To share new information, send `Remember for all bots: <note>` and
+  choose **For all bots** in the reply. The main bot uses this confirmation for new shared notes.
+  To edit or forget an existing shared note, choose it under **All bots**.
+  Reading or using these notes requires GOAT memory access.
+  Changing them requires memory write access. A full-access worker on the machine can still read
+  the files directly.
+- **Ask to change** or **Ask to forget** puts a request quoting the note in the message box for you to
   send. Sent as is, it changes or forgets that note at once without starting other work, and the
   bot answers "Changed that note." or "Forgot that note." If another note change is still
   running, the note can't be found, or the file is too large to edit, the bot's answer says so
@@ -137,10 +194,37 @@ bot's tasks, and a task opens in its own view.
   files download, or open the share sheet on mobile. Files over 20 MB don't open.
 - **Machines** shows which machines the bot's running tasks use.
 
+From a named bot's **Home → Routines**, choose **New trigger** on web or desktop. Pick **Pull
+request opened**, **Check failed**, or **Any webhook**, choose the project, and add a signing
+secret. Copy the webhook URL from the saved trigger and configure the sender to sign each
+delivery. A trigger saved without a secret stays paused until you add one in Scheduled tasks.
+A trigger starts new work only in its selected project, with approvals required. Pausing it or
+revoking the device session that authorized it blocks queued work. Open and save the trigger
+again from a trusted session to authorize future work.
+
+On web and desktop, open **Deliveries** on the trigger under **Home → Routines** or in Scheduled tasks to see why
+unsigned, duplicate, and own-work events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
+them in the trigger. You can pause or resume a configured trigger on mobile.
+
 ## Going back to an older GOAT
+
+Once you save a work trigger, older GOAT versions that cannot check its dispatch grant refuse to
+open that database. To go back to one of those versions, restore a backup from before you saved
+the first work trigger.
 
 An older GOAT keeps your bots' data, but it doesn't know about added bots. Before you go back,
 let added bots finish or stop their tasks, and don't edit added bots while the older version
 runs. Work that one of them had already accepted runs as the main bot there, and its replies
 stay in the main chat. After you update again, check the added bots' conversations; their tasks
 return to them, but replies already shown in the main chat stay there.
+
+### Follow an existing thread
+
+Open a thread’s actions menu and choose **Ask a bot to follow…**. Pick a bot on
+the thread’s computer, then choose the bot task that should receive updates.
+The thread stays in Threads and continues to run. The bot reports updates in
+its conversation, including when it loses access to the thread.
+
+Open the bot’s Home to find followed threads, their status, and any associated
+pull request. Choose **Stop following** from Home or the thread’s actions menu
+to remove the follow. The thread and its work stay in place.

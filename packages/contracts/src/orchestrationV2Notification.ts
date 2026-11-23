@@ -1,4 +1,5 @@
 /** Notices GOAT puts in a thread, and the kind unions that decode kinds this build does not know. */
+import { BotProposalCard } from "./botProfile.ts";
 import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -115,6 +116,7 @@ export const OrchestrationV2Notification = Schema.Struct({
    * decodes as absent, leaving the plain notification.
    */
   ledgerTask: ForwardCompatibleOptional(ChannelTaskChip),
+  botProposal: ForwardCompatibleOptional(BotProposalCard),
   /** The run whose background work this notice reports, so its answer can go to that run's request. */
   aboutRunId: Schema.optional(RunId),
 });

@@ -50,6 +50,10 @@ export type FiringTerminalObserver = (input: {
 export class ScheduledTaskRuns extends Context.Service<
   ScheduledTaskRuns,
   {
+    readonly intakeBusy: (
+      task: Pick<ScheduledTask, "id" | "createdAt">,
+      except?: CommandId,
+    ) => Effect.Effect<boolean, ScheduledTaskError>;
     readonly begin: (input: {
       readonly task: ScheduledTask;
       readonly firingId: CommandId;
@@ -58,7 +62,7 @@ export class ScheduledTaskRuns extends Context.Service<
       readonly triggerKind: "scheduled" | "manual" | "webhook";
       readonly webhookDeliveryId: string | null;
     }) => Effect.Effect<
-      { readonly created: boolean; readonly dispatch: boolean },
+      { readonly created: boolean; readonly dispatch: boolean; readonly deferred?: true },
       ScheduledTaskError
     >;
     readonly finishDispatch: (input: {
@@ -339,6 +343,25 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
         ORDER BY requested_at DESC,firing_id DESC LIMIT 5)`;
   });
 
+  const markDeliveryFired = (deliveryId: string | null) =>
+    deliveryId === null
+      ? Effect.void
+      : sql`INSERT INTO scheduled_task_webhook_firings (delivery_id)
+          SELECT delivery_id FROM scheduled_task_webhook_deliveries WHERE delivery_id=${deliveryId}
+          ON CONFLICT (delivery_id) DO NOTHING`.pipe(Effect.asVoid);
+
+  const intakeBusy: ScheduledTaskRuns["Service"]["intakeBusy"] = Effect.fn(
+    "ScheduledTaskRuns.intakeBusy",
+  )(
+    function* (task, except) {
+      const rows = yield* sql`SELECT 1 FROM scheduled_task_runs
+      WHERE task_id=${task.id} AND task_created_at=${task.createdAt} AND firing_id<>${except ?? ""}
+        AND (dispatch_bookkept_at IS NULL OR dispatch_status='dispatching') LIMIT 1`;
+      return rows.length !== 0;
+    },
+    Effect.mapError(failure("Could not check firing intake readiness.")),
+  );
+
   const begin: ScheduledTaskRuns["Service"]["begin"] = Effect.fn("ScheduledTaskRuns.begin")(
     function* (input) {
       return yield* sql.withTransaction(
@@ -397,9 +420,10 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             )
               return { created: false, dispatch: false };
           }
-          const busy =
-            yield* sql`SELECT 1 FROM scheduled_task_runs WHERE task_id=${input.task.id} AND task_created_at=${input.task.createdAt} AND firing_id<>${input.firingId} AND (dispatch_bookkept_at IS NULL OR dispatch_status='dispatching')`;
-          if (busy.length)
+          const busy = yield* intakeBusy(input.task, input.firingId);
+          if (busy && input.triggerKind === "webhook" && input.task.routineMode === "work")
+            return { created: false, dispatch: false, deferred: true } as const;
+          if (busy)
             return yield* new ScheduledTaskError({
               message: "Schedule task is already running.",
             });
@@ -551,6 +575,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           message: "Scheduled firing changed during observation.",
         });
       if (!changed) continue;
+      if (next.dispatchStatus === "accepted" && before.dispatchStatus !== "accepted")
+        yield* markDeliveryFired(row.webhook_delivery_id);
       const ended =
         run !== null &&
         next.dispatchStatus === "accepted" &&
@@ -699,7 +725,12 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             const json = yield* encode(next);
             yield* sql`UPDATE scheduled_task_runs SET thread_id=${next.threadId},run_id=NULL,dispatch_status=${next.dispatchStatus},
               status=${next.status},completed_at=${next.completedAt},snapshot_json=${json} WHERE firing_id=${row.firing_id}`;
+            if (input.outcome.type === "accepted")
+              yield* markDeliveryFired(row.webhook_delivery_id);
             const error = input.outcome.type === "failed" ? input.outcome.error : null;
+            if (row.webhook_delivery_id !== null && error !== null)
+              yield* sql`UPDATE scheduled_task_webhook_deliveries SET outcome='dispatch_failed', error=${error}
+                WHERE delivery_id=${row.webhook_delivery_id} AND outcome='accepted'`;
             yield* sql`UPDATE scheduled_tasks SET last_run_status=${legacyStatus(next.status)},last_run_error=${error},updated_at=${input.at}
               WHERE task_id=${row.task_id} AND created_at=${row.task_created_at} AND last_firing_id=${row.firing_id}`;
           }
@@ -841,6 +872,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     }
   }).pipe(Effect.mapError(failure("Could not reconcile scheduled firings.")));
   return ScheduledTaskRuns.of({
+    intakeBusy,
     begin,
     finishDispatch,
     finishChannelFiring,

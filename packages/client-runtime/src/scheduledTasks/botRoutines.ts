@@ -15,7 +15,12 @@ export type BotRoutineSource = Pick<
   | "lastRunStatus"
   | "lastRunError"
 > &
-  Partial<Pick<ScheduledTask, "lastRun" | "recentRuns">>;
+  Partial<
+    Pick<
+      ScheduledTask,
+      "lastRun" | "recentRuns" | "recentRunsIncomplete" | "routineMode" | "webhook"
+    >
+  >;
 
 export interface BotRoutineRow {
   readonly id: ScheduledTaskId;
@@ -26,6 +31,7 @@ export interface BotRoutineRow {
   readonly nextText: string;
   readonly lastText: string;
   readonly lastFailed: boolean;
+  readonly workTrigger: boolean;
 }
 
 /** Routines bound to a bot's conversation, active and soonest first. */
@@ -48,6 +54,7 @@ export function botRoutineRows(
         nextText: nextRunText(task, nowMs),
         lastText: lastRunText(task, run, nowMs),
         lastFailed: run.tone === "error",
+        workTrigger: task.routineMode === "work",
       };
     });
 }

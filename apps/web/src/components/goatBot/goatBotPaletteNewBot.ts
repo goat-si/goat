@@ -27,12 +27,14 @@ type PaletteNewBotSource = NonNullable<ReturnType<typeof useGoatBotPaletteNewBot
 const paletteOwner = {};
 
 /** The palette's New bot: the roster's create, with no roster needed to see it through. */
-export function useGoatBotPaletteNewBot(): CommandPaletteActionItem[] {
+export function useGoatBotPaletteNewBot(
+  openTemplates?: (environmentId: EnvironmentId) => void,
+): CommandPaletteActionItem[] {
   const source = useGoatBotPaletteNewBotSource();
   const router = useRouter();
   const { operation } = useNewBotSlot(source?.environmentId ?? null);
   if (source === null) return [];
-  return [
+  const items: CommandPaletteActionItem[] = [
     {
       kind: "action",
       value: "action:goat-bot-new",
@@ -51,6 +53,17 @@ export function useGoatBotPaletteNewBot(): CommandPaletteActionItem[] {
       run: async () => startPaletteNewBot(source, router),
     },
   ];
+  if (source.supportsTemplates && openTemplates !== undefined) {
+    items.push({
+      kind: "action",
+      value: "action:goat-bot-template",
+      searchTerms: ["bot", "new", "starter", "template"],
+      title: "From a template",
+      icon: createElement(PlusIcon, { className: ITEM_ICON_CLASS }),
+      run: async () => openTemplates(source.environmentId),
+    });
+  }
+  return items;
 }
 
 function startPaletteNewBot(

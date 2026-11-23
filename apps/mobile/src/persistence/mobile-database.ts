@@ -54,6 +54,8 @@ const MobileDatabaseOperation = Schema.Literals([
   "list-cache",
   "save-cache",
   "remove-cache",
+  "sweep-bot-summary-cache",
+  "delete-bot-summary-cache",
   "clear-cache-kind",
   "clear-environment-cache",
   "clear-all-caches",
@@ -195,6 +197,12 @@ async function migrateLegacyFileCaches(database: SQLiteDatabase): Promise<boolea
   }
 }
 
+// Local metadata is outside the ID space of paired environments.
+export const botSummaryLocalId = "" as EnvironmentId;
+export const botSummaryCloudAccountKey = "goat-bot-summary-cloud-account";
+export const botSummaryPurgeKey = "goat-bot-summary-purge";
+export const botSummaryGlobalPurgeKey = "goat-bot-summary-purge-all";
+
 export class MobileDatabase extends Context.Service<
   MobileDatabase,
   {
@@ -228,6 +236,12 @@ export class MobileDatabase extends Context.Service<
       environmentId: EnvironmentId,
       kind: ClientCacheKind,
       cacheKey: string,
+    ) => Effect.Effect<void, MobileDatabaseError>;
+    readonly sweepBotSummaryCache: (
+      expiredBefore?: number,
+    ) => Effect.Effect<void, MobileDatabaseError>;
+    readonly deleteBotSummaryCache: (
+      environmentId: EnvironmentId | null,
     ) => Effect.Effect<void, MobileDatabaseError>;
     readonly clearCacheKind: (
       environmentId: EnvironmentId,
@@ -429,6 +443,54 @@ const makeAvailable = Effect.gen(function* () {
         catch: databaseError("remove-cache"),
       }).pipe(Effect.asVoid),
     ),
+    sweepBotSummaryCache: Effect.fn("MobileDatabase.sweepBotSummaryCache")((expiredBefore) =>
+      Effect.tryPromise({
+        try: () =>
+          // Capture the tombstones before deleting them and their covered rows in the same statement.
+          database.runAsync(
+            `WITH pending_purges AS MATERIALIZED (
+               SELECT environment_id, cache_key FROM client_cache
+               WHERE kind = 'shell' AND cache_key IN (?, ?)
+             )
+             DELETE FROM client_cache
+             WHERE kind = 'shell' AND (
+               cache_key IN (?, ?, 'goat-bot-summary:bots', 'goat-bot-summary:asks') OR (
+                 (cache_key GLOB 'goat-bot-summary:bots:*' OR cache_key GLOB 'goat-bot-summary:asks:*')
+                 AND (
+                   EXISTS (
+                     SELECT 1 FROM pending_purges
+                     WHERE cache_key = ? OR environment_id = client_cache.environment_id
+                   )
+                   OR CASE WHEN json_valid(payload)
+                        THEN json_extract(payload, '$.readAt') <= ?
+                        ELSE 1 END
+                 )
+               )
+             )`,
+            botSummaryPurgeKey,
+            botSummaryGlobalPurgeKey,
+            botSummaryPurgeKey,
+            botSummaryGlobalPurgeKey,
+            botSummaryGlobalPurgeKey,
+            expiredBefore ?? null,
+          ),
+        catch: databaseError("sweep-bot-summary-cache"),
+      }).pipe(Effect.asVoid),
+    ),
+    deleteBotSummaryCache: Effect.fn("MobileDatabase.deleteBotSummaryCache")((environmentId) =>
+      Effect.tryPromise({
+        try: () =>
+          database.runAsync(
+            `DELETE FROM client_cache
+             WHERE kind = 'shell' AND environment_id = COALESCE(?, environment_id)
+               AND (cache_key IN ('goat-bot-summary:bots', 'goat-bot-summary:asks')
+                 OR cache_key GLOB 'goat-bot-summary:bots:*'
+                 OR cache_key GLOB 'goat-bot-summary:asks:*')`,
+            environmentId,
+          ),
+        catch: databaseError("delete-bot-summary-cache"),
+      }).pipe(Effect.asVoid),
+    ),
     clearCacheKind: Effect.fn("MobileDatabase.clearCacheKind")((environmentId, kind) =>
       Effect.tryPromise({
         try: () =>
@@ -448,21 +510,27 @@ const makeAvailable = Effect.gen(function* () {
       }).pipe(Effect.asVoid),
     ),
     clearAllCaches: Effect.tryPromise({
-      try: () => database.runAsync("DELETE FROM client_cache"),
+      // Keep the last account observation even when the user clears cached content.
+      try: () =>
+        database.runAsync(
+          "DELETE FROM client_cache WHERE NOT (environment_id = ? AND kind = 'shell' AND cache_key = ?)",
+          botSummaryLocalId,
+          botSummaryCloudAccountKey,
+        ),
       catch: databaseError("clear-all-caches"),
     }).pipe(Effect.asVoid),
     inspectCaches: Effect.tryPromise({
       try: () =>
-        database.getAllAsync<unknown>(`
-                SELECT
-                  environment_id AS environmentId,
-                  kind,
-                  COUNT(*) AS recordCount,
+        database.getAllAsync<unknown>(
+          `SELECT environment_id AS environmentId, kind, COUNT(*) AS recordCount,
                   COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS payloadBytes
-                FROM client_cache
-                GROUP BY environment_id, kind
-                ORDER BY environment_id, kind
-              `),
+           FROM client_cache
+           WHERE environment_id <> ? AND cache_key <> ?
+           GROUP BY environment_id, kind
+           ORDER BY environment_id, kind`,
+          botSummaryLocalId,
+          botSummaryPurgeKey,
+        ),
       catch: databaseError("inspect-caches"),
     }).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(ClientCacheSummaryRows)),
@@ -513,6 +581,8 @@ function makeUnavailable(error: MobileDatabaseError): MobileDatabase["Service"] 
     listCache: () => fail,
     saveCache: () => fail,
     removeCache: () => fail,
+    sweepBotSummaryCache: () => fail,
+    deleteBotSummaryCache: () => fail,
     clearCacheKind: () => fail,
     clearEnvironmentCache: () => fail,
     clearAllCaches: fail,

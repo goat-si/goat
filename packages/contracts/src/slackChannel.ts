@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { BotId } from "./botProfile.ts";
 import { ChannelDeliveryErrorCode } from "./channelCommon.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
@@ -72,6 +73,16 @@ export const resolveSlackAccess = (fields: SlackAccessFields) => ({
     fields.unlinkedRuntimeModeCeiling ?? SLACK_DEFAULT_UNLINKED_RUNTIME_MODE,
 });
 
+export const SLACK_BOT_BINDING_LIMIT = 100;
+const SlackBotBinding = Schema.Struct({
+  channelId: TrimmedNonEmptyString.check(Schema.isMaxLength(32)),
+  botId: BotId,
+});
+export const SlackBotBindings = Schema.Array(SlackBotBinding).check(
+  Schema.isMaxLength(SLACK_BOT_BINDING_LIMIT),
+);
+export type SlackBotBindings = typeof SlackBotBindings.Type;
+
 export const SlackChannelSettings = Schema.Struct({
   connectionId: SlackChannelConnectionId,
   enabled: Schema.Boolean,
@@ -86,6 +97,7 @@ export const SlackChannelSettings = Schema.Struct({
   /** The highest access level for work from people who have not linked their account. */
   unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
+  botBindings: Schema.optionalKey(SlackBotBindings),
   status: SlackChannelConnectionStatus,
   /** Redacted; never contains a token. */
   lastError: Schema.optional(Schema.String),
@@ -109,6 +121,7 @@ export const SlackChannelConfigureInput = Schema.Struct({
   userAccess: Schema.optional(SlackUserAccess),
   unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
+  botBindings: Schema.optionalKey(SlackBotBindings),
 });
 export type SlackChannelConfigureInput = typeof SlackChannelConfigureInput.Type;
 

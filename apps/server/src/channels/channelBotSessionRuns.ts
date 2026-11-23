@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import { parseLaunchWake } from "./channelLaunchWake.ts";
+import { recordSessionForwardEvent } from "./channelSessionForwardEvent.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
@@ -55,7 +56,7 @@ type Records = {
 };
 
 /** The intent row a message was recorded under, if GOAT sent it into a session. */
-const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
+export const sessionIntentFor = (sql: SqlClient.SqlClient, threadId: string, messageId: string) =>
   sql<SessionIntent>`
     SELECT * FROM channel_bot_session_runs WHERE thread_id = ${threadId} AND message_id = ${messageId}
   `.pipe(Effect.map((rows) => rows[0]));
@@ -85,30 +86,47 @@ export const launchWakeParentRun = Effect.fn("ChannelBotSession.launchWakeParent
   return rows.length === 1 ? (rows[0]?.run_id ?? undefined) : undefined;
 });
 
+const projectedRunLineage = (sql: SqlClient.SqlClient, threadId: string, runId: string) =>
+  sql<{ readonly messageId: string; readonly parentRunId: string | null }>`
+    SELECT json_extract(run.payload_json, '$.userMessageId') AS messageId,
+      COALESCE(json_extract(message.payload_json, '$.delegatedCompletion.parentRunId'),
+        json_extract(run.payload_json, '$.restartContinuationOfRunId'),
+        json_extract(message.payload_json, '$.notification.aboutRunId')) AS parentRunId
+    FROM orchestration_v2_projection_runs AS run
+    LEFT JOIN orchestration_v2_projection_messages AS message
+      ON message.thread_id = run.thread_id
+      AND message.message_id = json_extract(run.payload_json, '$.userMessageId')
+    WHERE run.thread_id = ${threadId} AND run.run_id = ${runId}
+  `.pipe(Effect.map((rows) => rows[0]));
+
 /**
  * The task a session run serves: the intent its own message was sent under, or for a delegated
  * completion, restart continuation or launched thread's end wake, the run it continues.
- * Undefined when GOAT never sent it.
+ * On a writer transaction without preloaded records, look up only the run's lineage.
  */
 export const resolveSessionRun = Effect.fn("ChannelBotSession.resolveSessionRun")(function* (
   sql: SqlClient.SqlClient,
   threadId: string,
-  records: Records,
+  records: Records | undefined,
   runId: string,
 ) {
-  let run = records.runs.find((candidate) => candidate.id === runId);
-  for (let hops = 0; run !== undefined && hops < 32; hops += 1) {
-    const current: OrchestrationV2Run = run;
-    const intent = yield* sessionIntentFor(sql, threadId, current.userMessageId);
+  let current: string | undefined = runId;
+  for (let hops = 0; current !== undefined && hops < 32; hops += 1) {
+    const runIdAtHop: string = current;
+    const run = records?.runs.find((candidate) => candidate.id === runIdAtHop);
+    const projected =
+      records === undefined ? yield* projectedRunLineage(sql, threadId, runIdAtHop) : undefined;
+    const messageId = run?.userMessageId ?? projected?.messageId;
+    if (messageId === undefined) return undefined;
+    const intent = yield* sessionIntentFor(sql, threadId, messageId);
     if (intent !== undefined) return intent;
-    const message = records.messages.find((candidate) => candidate.id === current.userMessageId);
-    const parent =
+    const message = records?.messages.find((candidate) => candidate.id === messageId);
+    current =
       message?.delegatedCompletion?.parentRunId ??
-      current.restartContinuationOfRunId ??
+      run?.restartContinuationOfRunId ??
       message?.notification?.aboutRunId ??
-      (yield* launchWakeParentRun(sql, threadId, current.userMessageId));
-    if (parent === undefined || parent === null) return undefined;
-    run = records.runs.find((candidate) => candidate.id === parent);
+      projected?.parentRunId ??
+      (yield* launchWakeParentRun(sql, threadId, messageId));
   }
   return undefined;
 });
@@ -182,16 +200,26 @@ export const sessionStore = (sql: SqlClient.SqlClient) => {
     messageId: MessageId,
     task: ChannelTask,
     kind: SessionIntent["kind"],
+    forwardSequence?: number,
   ) =>
     nowIso.pipe(
-      Effect.flatMap(
-        (now) => sql`
+      Effect.flatMap((now) => {
+        const write = sql`
           INSERT INTO channel_bot_session_runs
             (thread_id, message_id, task_id, task_generation, kind, created_at)
           VALUES (${threadId}, ${messageId}, ${task.taskId}, ${task.generation}, ${kind}, ${now})
           ON CONFLICT (thread_id, message_id) DO NOTHING
-        `,
-      ),
+        `;
+        return forwardSequence === undefined
+          ? write
+          : sql.withTransaction(
+              write.pipe(
+                Effect.andThen(
+                  recordSessionForwardEvent(sql, threadId, messageId, forwardSequence, now),
+                ),
+              ),
+            );
+      }),
     );
 
   const recordRun = (

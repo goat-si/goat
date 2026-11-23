@@ -1,19 +1,13 @@
-import { readRecords, rejected } from "./channelBotSessionRecords.ts";
+import { botToolsRefusal } from "./channelBotTools.ts";
+import { asLedgerError, readRecords, rejected, requireTarget } from "./channelBotSessionRecords.ts";
 import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
-/**
- * ChannelBotSession - GOAT Bot's warm session per conversation and requester: each task is its own
- * run there, follow-ups steer their task's run, and the session rotates only on a cold cache or a
- * full context.
- */
-
+/** Warm sessions are bound per conversation, bot and requester. */
 import {
-  CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelConversationId,
   type ChannelInputId,
   ChannelRequester,
   type ChannelTask,
   type ChannelTaskId,
-  type ChannelTaskSender,
   type ChatAttachment,
   CommandId,
   isChannelChildWorkActive,
@@ -48,25 +42,29 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { requesterForDispatch, sessionMemoryCeiling } from "./channelDispatchAuthority.ts";
+import {
+  makeDispatchConfirmation,
+  requesterForDispatch,
+  sessionMemoryCeiling,
+} from "./channelDispatchAuthority.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { ChannelLaunchWakes, owesLaunched, ownResultRuns } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
-import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
-import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import {
-  frozenSessionPrefix,
+  freezeSessionPrefix,
   visibleOpenWork,
   formatOpenWork,
   GOAT_BOT_SESSION_RULES,
   sessionContextRevision,
+  sessionTurnBrief,
 } from "./channelBotSessionBrief.ts";
 import * as Rotation from "./channelBotSessionRotation.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
-import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
+import { freezeChannelBrief } from "./channelBriefs.ts";
 import {
   answerForwardIdsFor,
   goatBotSessionSharingFor,
@@ -81,7 +79,10 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import * as SenderAuthority from "./channelSenderAuthority.ts";
 import { bindAfterSend } from "./channelSessionBind.ts";
-import { sessionFollowUpText, turnInstruction } from "./channelWorkerBrief.ts";
+import { sessionForwardDelivery } from "./channelSessionForwardEvent.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
+import { sessionCarriesNotes } from "./channelProviderBrief.ts";
+import { sessionFollowUpText } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
   isSessionTask,
@@ -95,17 +96,7 @@ import {
 const LIVE_SUBAGENT = new Set(["idle", "pending", "running", "waiting"]);
 const STOP_REASON = "Stopped from GOAT Bot.";
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
-const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
-
-const requireTarget = (task: ChannelTask) =>
-  task.target === undefined
-    ? Effect.fail(
-        new ChannelLedger.ChannelLedgerError({
-          reason: "version_conflict",
-          detail: "A GOAT Bot turn needs its dispatch target.",
-        }),
-      )
-    : Effect.succeed(task.target);
+type DispatchConfirmation = Effect.Success<ReturnType<typeof makeDispatchConfirmation>>;
 
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
@@ -140,7 +131,7 @@ const make = Effect.gen(function* () {
   const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const { stateDir } = yield* ServerConfig.ServerConfig;
   // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -161,6 +152,20 @@ const make = Effect.gen(function* () {
       },
       { owner, narrate: true },
     ).pipe(Effect.as("failed" as const));
+
+  const failPermission = (stored: ChannelLedger.ChannelStoredTask, owner: string) =>
+    fail(
+      stored,
+      owner,
+      "The requester’s permission to start this work changed.",
+      "permission_changed",
+    );
+
+  const dispatchRequester = (task: ChannelTask) =>
+    requesterForDispatch(task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
 
   const bindWorker = (
     stored: ChannelLedger.ChannelStoredTask,
@@ -187,7 +192,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  /** Whether the session still has work in flight that a replacement would orphan. */
   const sessionBusy = Effect.fn("ChannelBotSession.sessionBusy")(function* (
     threadId: ThreadId,
     records: Effect.Success<ReturnType<typeof readRecords>>,
@@ -227,10 +231,6 @@ const make = Effect.gen(function* () {
     return false;
   });
 
-  /**
-   * The newest run any session already holds for this task generation, found by its intents;
-   * "unknown" when a session that may hold one cannot be read now.
-   */
   const sentRun = Effect.fn("ChannelBotSession.sentRun")(function* (task: ChannelTask) {
     const sessions = yield* sql<{ readonly thread_id: ThreadId }>`
       SELECT DISTINCT thread_id FROM channel_bot_session_runs
@@ -255,56 +255,6 @@ const make = Effect.gen(function* () {
     return unreadable ? ("unknown" as const) : undefined;
   });
 
-  /** The six-part prefix for a new session, frozen into its row; the journal is what the requester may see now. */
-  const freezePrefix = Effect.fn("ChannelBotSession.freezePrefix")(function* (
-    task: ChannelTask,
-    requester: ChannelRequester,
-    message: string,
-    notes: string,
-  ) {
-    const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-    const standing = resolveProjectSettings(settings, (yield* requireTarget(task)).projectId)
-      .settings.standingInstructions;
-    const visible = yield* ledger
-      .listTasks({ ownerId: task.requester.ownerId, limit: RECALL_TASK_SCAN })
-      .pipe(
-        Effect.map((page) =>
-          page.tasks.filter((other) => canSeeTask(requester, other, task.conversationId)),
-        ),
-        Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
-      );
-    const tail = yield* ledger.readConversationTail(
-      task.conversationId,
-      CHANNEL_RECEPTION_TAIL_LIMITS.messages,
-    );
-    const open = visibleOpenWork(
-      yield* ledger.listConversationTasks(task.conversationId),
-      task,
-      requester,
-    );
-    return frozenSessionPrefix({
-      standing: prependStandingInstructions(standing, GOAT_BOT_SESSION_RULES).text,
-      notes,
-      journal: journalFor(visible),
-      tail: tail.flatMap((entry) =>
-        entry.inputId === task.originInputId
-          ? []
-          : [
-              { role: "user" as const, text: entry.text },
-              ...(entry.replyText === undefined
-                ? []
-                : [{ role: "assistant" as const, text: entry.replyText }]),
-            ],
-      ),
-      openWork: open.map((other) => ({
-        taskId: other.taskId,
-        title: other.title,
-        status: other.status,
-      })),
-      message,
-    });
-  });
-
   const modeLimit = (
     requester: Pick<ChannelRequester, "runtimeModeCeiling">,
     refused: Ref.Ref<DispatchModeRefusal | undefined>,
@@ -315,7 +265,6 @@ const make = Effect.gen(function* () {
       refused,
     });
 
-  /** The files the person sent with an input, as the gateway stored them for the bot thread. */
   const inputAttachments = (inputId: ChannelInputId) =>
     ledger
       .getInput(inputId)
@@ -328,11 +277,12 @@ const make = Effect.gen(function* () {
     row: SessionRow,
     owner: string,
     requester: ChannelRequester,
-    memoryGrantCeiling: ReturnType<typeof sessionMemoryCeiling>,
     attachments: ReadonlyArray<ChatAttachment>,
+    confirmation: DispatchConfirmation,
   ) {
     const task = stored.task;
     const target = yield* requireTarget(task);
+    const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ids = sessionLaunchIdsFor(task.taskId, task.generation);
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     // Only a requester at full access may act through the supervisor's owner profile.
@@ -363,9 +313,10 @@ const make = Effect.gen(function* () {
         runtimeMode: lowerRuntimeMode(target.runtimeMode, requester.runtimeModeCeiling),
         interactionMode: target.interactionMode,
         workspaceStrategy: { type: "root" },
+        ...confirmation.options,
         initialMessage: {
           messageId: ids.messageId,
-          text: row.context_text ?? "",
+          text: task.instruction,
           attachments,
           ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
         },
@@ -373,8 +324,10 @@ const make = Effect.gen(function* () {
         creationSource: "server",
       })
       .pipe(Effect.result);
-    // A launch can commit and still fail afterwards (reading its projection, say): look for its
-    // run before deciding nothing started. Only a refusal or a thread that never appeared is final.
+    if (launched._tag === "Failure" && (yield* confirmation.refused)) {
+      yield* setState(row, "retired");
+      return yield* failPermission(stored, owner);
+    }
     const landed =
       launched._tag === "Success"
         ? launched.success.projection.runs
@@ -410,10 +363,10 @@ const make = Effect.gen(function* () {
   const queueInto = Effect.fn("ChannelBotSession.queueInto")(function* (
     stored: ChannelLedger.ChannelStoredTask,
     threadId: ThreadId,
-    text: string,
     owner: string,
     requester: ChannelRequester,
     attachments: ReadonlyArray<ChatAttachment>,
+    confirmation: DispatchConfirmation,
   ) {
     const task = stored.task;
     const ids = sessionSendIdsFor(task.taskId, task.generation);
@@ -427,15 +380,17 @@ const make = Effect.gen(function* () {
         commandId: ids.commandId,
         threadId,
         messageId: ids.messageId,
-        text,
+        text: task.instruction,
         attachments,
         mode: "queue",
+        ...confirmation.options,
         ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
         createdBy: "user",
         creationSource: "server",
       })
       .pipe(modeLimit(requester, refused), Effect.result);
     if (sent._tag === "Failure") {
+      if (yield* confirmation.refused) return yield* failPermission(stored, owner);
       if ((yield* Ref.get(refused)) !== undefined || rejected(sent.failure))
         return yield* fail(stored, owner, "GOAT Bot's session did not take this request.");
       yield* Effect.logWarning("GOAT Bot session send failed; retrying", {
@@ -490,15 +445,12 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     const target = yield* requireTarget(initial.task);
-    const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
+    const instance = yield* providers.getInstance(target.modelSelection.instanceId);
+    const driver = instance?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
-    // A task already sent into a session (a pass interrupted after the send) only binds again,
-    // whichever session its requester maps to now: started work runs on, and a new send would
-    // run it twice.
     const sent = yield* sentRun(initial.task);
     if (sent === "unknown") return "deferred" as const;
     if (sent !== undefined) {
-      // A launch interrupted before it marked its session live counts as live once its run exists.
       yield* sql`
         UPDATE channel_bot_sessions SET state = 'active', version = version + 1
         WHERE thread_id = ${sent.threadId} AND state = 'starting'
@@ -506,22 +458,15 @@ const make = Effect.gen(function* () {
       yield* bindWorker(initial, sent.threadId, sent.runId, owner);
       return "served" as const;
     }
-    // The requester as they stand now: a Slack grant lowered since the message arrived counts,
-    // and one that can no longer start work is refused rather than served on intake authority.
-    const requester = yield* requesterForDispatch(initial.task).pipe(
-      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-    );
-    if (requester === undefined)
-      return yield* fail(
-        initial,
-        owner,
-        "The requester’s permission to start this work changed.",
-        "permission_changed",
-      );
+    const requester = yield* dispatchRequester(initial.task);
+    if (requester === undefined) return yield* failPermission(initial, owner);
     const identity = yield* Effect.option(profiles.identity(initial.ownerId, initial.botId));
     if (Option.isNone(identity)) return yield* fail(initial, owner, Rotation.PROFILE_UNREADABLE);
-    // The memory the session may use, lowered to what the requester's scopes allow now.
+    const refusal = botToolsRefusal(
+      identity.value,
+      instance?.displayName ?? target.modelSelection.instanceId,
+    );
+    if (refusal !== undefined) return yield* fail(initial, owner, refusal, "permission_changed");
     const memoryGrantCeiling = sessionMemoryCeiling(requester, target);
     const ceiling = { ...target, memoryGrantCeiling };
     const key = bindingKeyFor(initial.task, ceiling, sharing, requester, initial.botId);
@@ -554,32 +499,47 @@ const make = Effect.gen(function* () {
       initial.task,
       requester,
     );
-    const notes = yield* readChannelBotNotesSnapshot(botFiles, initial.task.instruction);
-    const message =
-      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled, notes?.matched) +
-      "\n\n" +
-      formatOpenWork(openWork);
+    const botFiles = channelBotFilesFor(path, stateDir, initial.botId);
+    const { notes, instruction, context } = yield* sessionTurnBrief(
+      initial.task,
+      requester,
+      botFiles,
+      settings.goatclaw.enabled,
+      memoryGrantCeiling,
+    ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+    const message = instruction + "\n\n" + formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
-    const notesRevision =
-      initial.task.briefVersion === undefined
-        ? yield* channelNotesRevision(botFiles.notes).pipe(
-            Effect.provideService(FileSystem.FileSystem, fileSystem),
-          )
-        : null;
-    const freeze = (text: string) =>
-      freezeChannelBrief(ledger, initial, owner, text, {
-        notesPath: botFiles.notes,
-        notesRevision,
-        skillsPath: botFiles.skills,
-      });
+    const freeze = (text: string) => freezeChannelBrief(ledger, initial, owner, text, context);
+    const confirm = (holdsNotes: boolean) =>
+      makeDispatchConfirmation(
+        context.notesPath !== undefined || holdsNotes,
+        dispatchRequester(initial.task).pipe(
+          Effect.map(
+            (current) =>
+              current !== undefined &&
+              canReadChannelBotNotes(current) &&
+              sessionMemoryCeiling(current, target) === memoryGrantCeiling,
+          ),
+        ),
+      );
     if (row?.state === "active") {
       const usage = Rotation.latestTurnUsage(records);
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
       const current = { identity: identity.value, notes: notes?.standing };
       const due = Rotation.sessionRotationReason(usage, nowMs, row.context_text, current);
       if (due === undefined) {
-        const { stored } = yield* freeze(message);
-        return yield* queueInto(stored, row.thread_id, message, owner, requester, attachments);
+        const { stored, brief } = yield* freeze(message);
+        return yield* queueInto(
+          stored,
+          row.thread_id,
+          owner,
+          requester,
+          attachments,
+          yield* confirm(
+            brief.context.notesPath !== undefined ||
+              (yield* sessionCarriesNotes(sql, row.thread_id)),
+          ),
+        );
       }
       const busy = Option.isSome(records) && (yield* sessionBusy(row.thread_id, records.value));
       if (read === "unknown" || busy) {
@@ -593,13 +553,33 @@ const make = Effect.gen(function* () {
       row = undefined;
     }
     if (row === undefined) {
-      const frozen = yield* freezePrefix(initial.task, requester, message, notes?.standing ?? "");
+      const latestSettings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const { standingInstructions } = resolveProjectSettings(
+        latestSettings,
+        target.projectId,
+      ).settings;
+      const frozen = yield* freezeSessionPrefix(
+        ledger,
+        initial.task,
+        initial.botId,
+        prependStandingInstructions(standingInstructions, GOAT_BOT_SESSION_RULES).text,
+        requester,
+        message,
+        notes?.standing ?? "",
+      );
       const prefix = Rotation.withIdentity(identity.value, frozen);
       row = yield* allocate(initial.task, requester, key, sharing, driver, prefix);
       if (row === undefined) return "deferred" as const;
     }
-    const { stored } = yield* freeze(row.context_text ?? message);
-    return yield* launchGeneration(stored, row, owner, requester, memoryGrantCeiling, attachments);
+    const { stored, brief } = yield* freeze(row.context_text ?? message);
+    return yield* launchGeneration(
+      stored,
+      row,
+      owner,
+      requester,
+      attachments,
+      yield* confirm(brief.context.notesPath !== undefined),
+    );
   });
 
   const serve: ChannelBotSession["Service"]["serve"] = (initial, owner) =>
@@ -607,7 +587,6 @@ const make = Effect.gen(function* () {
       .withPermits(1)(serveNow(initial, owner))
       .pipe(Effect.mapError(asLedgerError("serve")));
 
-  /** One message into the task's own live run, else as the task's next run; never another's. */
   const sendForTask = Effect.fn("ChannelBotSession.sendForTask")(function* (
     stored: ChannelLedger.ChannelStoredTask,
     threadId: ThreadId,
@@ -616,15 +595,14 @@ const make = Effect.gen(function* () {
       readonly first: ReturnType<typeof turnSteerIdsFor>;
       readonly queued: ReturnType<typeof turnSteerIdsFor>;
     },
-    attachments: ReadonlyArray<ChatAttachment> = [],
-    sender?: ChannelTaskSender,
+    attachments: ReadonlyArray<ChatAttachment>,
+    forward: ReturnType<typeof sessionForwardDelivery>,
   ) {
     const task = stored.task;
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
     const records = yield* readRecords(threads, threadId);
     const own = yield* sessionTaskRuns(sql, threadId, records, task);
     const current = ownResultRuns(own, records.messages).at(-1);
-    // A replay after a crash finds the run its first send started instead of sending again.
     const already = records.runs.find(
       (run) =>
         run.userMessageId === ids.first.messageId || run.userMessageId === ids.queued.messageId,
@@ -633,8 +611,6 @@ const make = Effect.gen(function* () {
       yield* recordRun(threadId, already.userMessageId as MessageId, already, false);
       return { _tag: "sent", run: already } as const;
     }
-    // A steer recorded before a crash replays under its own ids, whatever runs now: the thread
-    // answers an accepted one with the run it joined, and refuses one that never landed.
     const firstIntent = yield* sql<{ readonly steered_into_run_id: RunId | null }>`
       SELECT steered_into_run_id FROM channel_bot_session_runs
       WHERE thread_id = ${threadId} AND message_id = ${ids.first.messageId}
@@ -654,14 +630,17 @@ const make = Effect.gen(function* () {
       yield* recordRun(threadId, accepted.id, run, true);
       return { _tag: "sent", run } as const;
     }
-    // A person stopped this task's run in GOAT; sending would start it again.
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
-    // The requester and, for someone else's message, its sender, as they stand now.
-    const authority = yield* SenderAuthority.requesterForDelivery(task, sender).pipe(
+    const carriesNotes = yield* sessionCarriesNotes(sql, threadId).pipe(
+      Effect.mapError(asLedgerError("session notes")),
+    );
+    const { sender, inputId } = forward;
+    const live = SenderAuthority.requesterForDelivery(task, sender, inputId, carriesNotes).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
+    const authority = yield* live;
     if (authority._tag !== "allowed")
       return {
         _tag: "permission_changed",
@@ -669,9 +648,19 @@ const make = Effect.gen(function* () {
       } as const;
     const requester = authority.requester;
     const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
+    const confirmation = yield* makeDispatchConfirmation(
+      carriesNotes,
+      live.pipe(
+        Effect.map(
+          (current) =>
+            current._tag === "allowed" &&
+            sessionMemoryCeiling(current.requester, task.target) === memoryGrantCeiling,
+        ),
+      ),
+    );
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
-      writeIntent(threadId, which.messageId, task, "followup").pipe(
+      writeIntent(threadId, which.messageId, task, "followup", forward.sequence).pipe(
         Effect.andThen(
           threads
             .sendToThread({
@@ -682,6 +671,7 @@ const make = Effect.gen(function* () {
               text,
               attachments,
               mode,
+              ...confirmation.options,
               ...(mode === "steer" && current !== undefined ? { targetRunId: current.id } : {}),
               ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
               createdBy: "user",
@@ -698,14 +688,18 @@ const make = Effect.gen(function* () {
       sent === undefined ||
       (sent._tag === "Failure" &&
         rejected(sent.failure) &&
+        !(yield* confirmation.refused) &&
         (yield* Ref.get(refused)) === undefined &&
         ids.queued.messageId !== ids.first.messageId)
     ) {
       which = ids.queued;
       sent = yield* attempt("queue", ids.queued);
     }
-    if (sent._tag === "Failure")
+    if (sent._tag === "Failure") {
+      if (yield* confirmation.refused)
+        return { _tag: "permission_changed", senderName: sender?.requester.displayName } as const;
       return { _tag: "failed", failure: sent.failure, refusal: yield* Ref.get(refused) } as const;
+    }
     yield* recordRun(
       threadId,
       which.messageId,
@@ -745,7 +739,7 @@ const make = Effect.gen(function* () {
       sessionFollowUpText(event.payload),
       ids,
       event.payload.forwardKey === undefined ? yield* inputAttachments(event.payload.inputId) : [],
-      event.payload.sender,
+      sessionForwardDelivery(pending.sequence, event),
     );
     const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "permission_changed" && result.senderName !== undefined)
@@ -806,7 +800,7 @@ const make = Effect.gen(function* () {
       "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
       { first: ids, queued: ids },
       [],
-      event.payload.sender,
+      sessionForwardDelivery(pending.sequence, event),
     );
     if (result._tag === "failed" || result._tag === "permission_changed") {
       if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))
@@ -987,14 +981,5 @@ const make = Effect.gen(function* () {
 
   return ChannelBotSession.of({ serve, forward, eligible });
 });
-
-const asLedgerError = (operation: string) => (cause: unknown) =>
-  isLedgerError(cause)
-    ? cause
-    : new ChannelLedger.ChannelLedgerError({
-        reason: "persistence",
-        detail: "GOAT Bot session " + operation + " failed.",
-        cause,
-      });
 
 export const layer = Layer.effect(ChannelBotSession, make).pipe(Layer.provide(Profiles.layer));

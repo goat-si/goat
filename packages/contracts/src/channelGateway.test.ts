@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
+import { OrchestrationV2Notification } from "./orchestrationV2Notification.ts";
 
 import {
   BotProfile,
@@ -35,6 +36,15 @@ describe("channel.updateBot input", () => {
     ]) {
       expect(decode(input)._tag, JSON.stringify(input)).toBe("Failure");
     }
+  });
+  it("preserves empty tool allowlists and omission in edits from older clients", () => {
+    const decodeEdit = Schema.decodeUnknownSync(ChannelUpdateBotInput);
+    const tools = { mcpServers: [], skills: "all" };
+    expect(decodeEdit({ botId: "main", tools })).toEqual({ botId: "main", tools });
+    expect(decodeEdit({ botId: "main", name: "Scout" })).toEqual({
+      botId: "main",
+      name: "Scout",
+    });
   });
   it("accepts a partial edit and a cleared avatar", () => {
     expect(decode({ botId: "main", avatar: null })._tag).toBe("Success");
@@ -307,4 +317,34 @@ describe("identity link notices", () => {
     expect(decode(input)).toEqual(input);
     expect(() => decode({ ...input, notice: "free_text" })).toThrow();
   });
+});
+
+it("keeps a proposal notification readable across client versions", () => {
+  const { botProposal: _proposal, ...olderFields } = OrchestrationV2Notification.fields;
+  const decodeOlder = Schema.decodeUnknownSync(Schema.Struct(olderFields));
+  const decode = Schema.decodeUnknownSync(OrchestrationV2Notification);
+  const notification = {
+    source: { kind: "goat_bot_event" },
+    outcome: "updated",
+    summary: "Bot proposal: Reviewer",
+  };
+  const botProposal = {
+    proposalId: "a".repeat(64),
+    expiresAt: "2026-10-19T00:00:00.000Z",
+    fields: {
+      name: "Reviewer",
+      avatar: null,
+      purpose: "Review changes",
+      instructions: "Read tests",
+      why: "Reduce churn",
+    },
+    status: "pending",
+  };
+  const item = { ...notification, botProposal };
+  expect(decode(item)).toMatchObject({ botProposal });
+  expect(decodeOlder(item)).toEqual(notification);
+  expect(decode(notification)).not.toHaveProperty("botProposal");
+  expect(
+    decode({ ...notification, botProposal: { ...botProposal, status: "future" } }),
+  ).not.toHaveProperty("botProposal");
 });

@@ -28,6 +28,7 @@ const stream = vi.hoisted(() => {
             goatBotTaskThreads: true,
             goatBotMembers: true,
             goatBotProfileEdit: true,
+            goatBotTaskSnooze: false,
           },
         },
       },
@@ -35,6 +36,7 @@ const stream = vi.hoisted(() => {
     threads: {
       data: {
         mainMessageCount: 0,
+        snoozedNextCursor: undefined as string | undefined,
         remoteWork: [],
         rows: [
           {
@@ -136,6 +138,8 @@ vi.mock("~/state/channels", () => ({
     listBotThreadsPage: { execute: vi.fn() },
     updateBot: { permissionAtom: () => Atom.make(false) },
     updateTaskView: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
+    snoozeBotTask: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
+    unsnoozeBotTask: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
     listChildWork: () => null,
     remoteWorkOpenable: () => Atom.make(false),
     homeCurrentOpenableWorkAtom: () => Atom.make({ eligible: false, list: "pending", links: [] }),
@@ -180,7 +184,9 @@ const reply = (text: string) => ({
   },
 });
 
-function setup() {
+function setup(hasSnoozedPage = false) {
+  stream.environment.serverConfig.environment.capabilities.goatBotTaskSnooze = hasSnoozedPage;
+  stream.threads.data.snoozedNextCursor = hasSnoozedPage ? "snoozed-cursor" : undefined;
   stream.live = [chip(1)];
   stream.held = stream.live;
   stream.counts = { homeRenders: 0, panelRenders: 0, turnScans: 0, cardScans: 0 };
@@ -246,19 +252,22 @@ function ChatWithHome() {
   return <Home peekRows={() => rowsFrom(live)} />;
 }
 
-it("performance invariant: a streamed reply neither re-renders Home nor rescans the conversation, and a new task card version still updates its row", async () => {
-  setup();
-  await using screen = await render(<ChatWithHome />);
-  const row = screen.getByRole("button", { name: /^Fix the build/ });
-  await expect.element(row).toMatchTextContent(/Working/);
-  expect(stream.counts.homeRenders).toBeGreaterThan(0);
-  const cost = since();
-  const text = await streamReply();
-  expect(cost()).toMatchObject({ homeRenders: 0, turnScans: 0, cardScans: 0 });
-  const asked = [chip(2, [{ kind: "question" }]), reply(text)];
-  await emit(asked, asked);
-  await expect.element(row).toMatchTextContent(/Waiting for your answer/);
-});
+it.each([false, true])(
+  "a streamed reply does not re-render Home or rescan the conversation (snoozed page: %s)",
+  async (hasSnoozedPage) => {
+    setup(hasSnoozedPage);
+    await using screen = await render(<ChatWithHome />);
+    const row = screen.getByRole("button", { name: /^Fix the build/ });
+    await expect.element(row).toMatchTextContent(/Working/);
+    expect(stream.counts.homeRenders).toBeGreaterThan(0);
+    const cost = since();
+    const text = await streamReply();
+    expect(cost()).toMatchObject({ homeRenders: 0, turnScans: 0, cardScans: 0 });
+    const asked = [chip(2, [{ kind: "question" }]), reply(text)];
+    await emit(asked, asked);
+    await expect.element(row).toMatchTextContent(/Waiting for your answer/);
+  },
+);
 
 it("performance invariant: a streamed reply does not re-render the panel through the bot's task list", async () => {
   setup();

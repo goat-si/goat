@@ -1,3 +1,4 @@
+import type { BotProfile } from "@goat/contracts";
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import { useRef, useState, type ReactNode } from "react";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -28,6 +29,8 @@ export function MobileBotProfileSheet(props: {
   readonly extraChanged?: boolean;
   /** The server stores a member's colour; absent or false shows no swatches and sends none. */
   readonly colorEditable?: boolean | undefined;
+  readonly instructionsEditable?: boolean;
+  readonly tools?: BotProfile["tools"] | null;
   /** Starts the name field from words typed elsewhere; changes still count against `initial`. */
   readonly draftName?: string | undefined;
   /** Why `canSubmit` is false, shown by Save while it is off for that reason. */
@@ -36,6 +39,7 @@ export function MobileBotProfileSheet(props: {
   const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
+  const [instructions, setInstructions] = useState(props.initial.instructions ?? "");
   const [color, setColor] = useState<string | null>(props.initial.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +67,7 @@ export function MobileBotProfileSheet(props: {
       name,
       avatar,
       purpose,
+      ...(!create && props.instructionsEditable === true ? { instructions } : {}),
       // Without the swatches the form never carries a colour, so an older server gets no key.
       ...(props.colorEditable === true ? { color } : {}),
     });
@@ -205,9 +210,42 @@ export function MobileBotProfileSheet(props: {
                 {error}
               </Text>
             ) : null}
+            {!create && props.tools !== undefined ? (
+              <View className="gap-1">
+                <Text className="text-foreground">Tools</Text>
+                <Text className="text-foreground-muted">
+                  MCP servers · {toolNames(props.tools?.mcpServers)}
+                </Text>
+                <Text className="text-foreground-muted">
+                  Skills · {toolNames(props.tools?.skills)}
+                </Text>
+              </View>
+            ) : null}
+            {!create && props.instructionsEditable === true ? (
+              <>
+                <Text className="text-foreground">Instructions</Text>
+                <TextInput
+                  accessibilityLabel="Instructions"
+                  value={instructions}
+                  maxLength={16 * 1024}
+                  editable={!busy}
+                  multiline
+                  numberOfLines={4}
+                  placeholder="What should this bot do every time?"
+                  placeholderTextColorClassName="accent-placeholder"
+                  onChangeText={setInstructions}
+                  className={INPUT}
+                />
+              </>
+            ) : null}
           </ScrollView>
         </View>
       </MobileSheetSafeArea>
     </Modal>
   );
+}
+
+function toolNames(value: "all" | readonly string[] | undefined) {
+  if (value === undefined || value === "all") return "All";
+  return value.length === 0 ? "None" : value.join(", ");
 }

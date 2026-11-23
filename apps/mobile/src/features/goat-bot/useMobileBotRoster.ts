@@ -49,6 +49,8 @@ export function useMobileBotRoster() {
     bots: botRoster({ supportsProfiles, bots }),
     groups: botRosterGroups(bots ?? []),
     supportsMembers,
+    supportsTemplates: capabilities?.goatBotTemplates === true,
+    supportsPackages: capabilities?.goatBotPackages === true,
     /** No computer, or none of its capabilities read yet: not taken as an older server. */
     membersUnknown: capabilities === undefined,
     connected,

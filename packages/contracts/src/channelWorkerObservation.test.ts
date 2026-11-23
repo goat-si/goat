@@ -52,4 +52,23 @@ describe("channel run evidence contract", () => {
       }),
     ).toThrow();
   });
+  it("preserves a remote approval's environment and distinguishes it from an alias-only ref", () => {
+    const approval = { requestId: "request-1", threadId: "thread-1", host: "studio" };
+    const observation = (ref: typeof approval & { environmentId?: string }) =>
+      decode({
+        ...base,
+        needsYou: [{ kind: "approval", since: check.at, approval: ref }],
+      });
+    const legacy = observation(approval);
+    const bound = observation({ ...approval, environmentId: "studio-old" });
+    expect(legacy.needsYou[0]?.approval).toEqual(approval);
+    expect(bound.needsYou[0]?.approval?.environmentId).toBe("studio-old");
+    expect(channelWorkerObservationEquals(legacy, bound)).toBe(false);
+    expect(
+      channelWorkerObservationEquals(
+        bound,
+        observation({ ...approval, environmentId: "studio-new" }),
+      ),
+    ).toBe(false);
+  });
 });

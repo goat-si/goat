@@ -44,6 +44,7 @@ vi.mock("react-native", () => ({
   ),
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({
   ScreenScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));

@@ -1,7 +1,14 @@
-import type { ChannelRequester, ChannelTask, MemoryTaskGrantCeiling } from "@goat/contracts";
+import type {
+  ChannelInputId,
+  ChannelRequester,
+  ChannelTask,
+  MemoryTaskGrantCeiling,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import { captureMemoryGrantCeiling, MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 
+import * as ChannelLedger from "./ChannelLedger.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 
@@ -15,6 +22,37 @@ export const sessionMemoryCeiling = (
   return MEMORY_GRANT_RANK[allowed] < MEMORY_GRANT_RANK[recorded] ? allowed : recorded;
 };
 
+export const makeDispatchConfirmation = Effect.fn("channel.makeDispatchConfirmation")(function* (
+  required: boolean,
+  allowed: Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>,
+) {
+  const refused = yield* Ref.make(false);
+  return {
+    options: required
+      ? {
+          confirm: allowed.pipe(
+            Effect.orElseSucceed(() => false),
+            Effect.tap((allowed) => (allowed ? Effect.void : Ref.set(refused, true))),
+          ),
+        }
+      : {},
+    refused: Ref.get(refused),
+  };
+});
+
+export const narrowRequester = (
+  snapshot: ChannelRequester,
+  current: ChannelLedger.ChannelIdentity | undefined,
+) => {
+  if (current?.ownerId !== snapshot.ownerId || current.principalId !== snapshot.principalId)
+    return undefined;
+  return {
+    ...snapshot,
+    grantedScopes: snapshot.grantedScopes.filter((scope) => current.grantedScopes.includes(scope)),
+    runtimeModeCeiling: lowerRuntimeMode(snapshot.runtimeModeCeiling, current.runtimeModeCeiling),
+  };
+};
+
 /**
  * A linked account as it stands now on its own connection: scopes narrowed to its link and the
  * lower runtime mode; undefined once the link is gone or now belongs to someone else.
@@ -22,35 +60,58 @@ export const sessionMemoryCeiling = (
 export const currentRequester = Effect.fn("channel.currentRequester")(function* (
   snapshot: ChannelRequester,
   connectionId: string | undefined,
+  inputId?: ChannelInputId,
 ) {
+  if (
+    snapshot.originKind === "goat" &&
+    inputId !== undefined &&
+    snapshot.grantedScopes.some((scope) => scope === "memory:read" || scope === "memory:write")
+  ) {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const live = yield* ledger.inputSessionScopes(inputId);
+    if (live !== undefined)
+      return {
+        ...snapshot,
+        grantedScopes: snapshot.grantedScopes.filter(
+          (scope) => (scope !== "memory:read" && scope !== "memory:write") || live.includes(scope),
+        ),
+      };
+  }
   if (snapshot.originKind !== "slack" && snapshot.originKind !== "imessage") return snapshot;
   if (snapshot.externalActorId === undefined || connectionId === undefined) return undefined;
   const current = yield* currentChannelIdentity({
     connectionId,
     externalActorId: snapshot.externalActorId,
   });
-  if (
-    current === undefined ||
-    current.ownerId !== snapshot.ownerId ||
-    current.principalId !== snapshot.principalId
-  )
-    return undefined;
-  return {
-    ...snapshot,
-    grantedScopes: snapshot.grantedScopes.filter((scope) => current.grantedScopes.includes(scope)),
-    runtimeModeCeiling: lowerRuntimeMode(snapshot.runtimeModeCeiling, current.runtimeModeCeiling),
-  };
+  return narrowRequester(snapshot, current);
 });
 
 /** Intake is a snapshot; a queued task cannot keep a revoked or reassigned external grant. */
 export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(function* (
   task: ChannelTask,
 ) {
+  if (task.routineWork === true) {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const grant = yield* ledger.routineWorkAuthority(task.originInputId);
+    if (
+      "error" in grant ||
+      grant.projectId !== task.projectId ||
+      (task.target !== undefined &&
+        (task.target.projectId !== task.projectId || task.target.remote !== undefined))
+    )
+      return undefined;
+    return {
+      ...task.requester,
+      grantedScopes: grant.scopes,
+      runtimeModeCeiling: "approval-required" as const,
+    };
+  }
   const address = task.originAddress;
-  const requester =
-    address.kind === "slack" || address.kind === "imessage"
-      ? yield* currentRequester(task.requester, address.connectionId)
-      : task.requester;
+  const requester = yield* currentRequester(
+    task.requester,
+    address.kind === "slack" || address.kind === "imessage" ? address.connectionId : undefined,
+    task.originInputId,
+  );
   if (requester === undefined) return undefined;
   if (!requester.grantedScopes.includes("orchestration:operate")) return undefined;
   const target = task.target;
@@ -75,4 +136,22 @@ export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(fu
       return undefined;
   }
   return requester;
+});
+
+/** Reapply the current requester grant without widening a worker's recorded memory ceiling. */
+export const workerMemoryCeiling = Effect.fn("channel.workerMemoryCeiling")(function* (
+  task: ChannelTask,
+) {
+  if (task.routineWork === true) return "none" as const;
+  const requester = yield* currentRequester(
+    task.requester,
+    task.originAddress.kind === "slack" || task.originAddress.kind === "imessage"
+      ? task.originAddress.connectionId
+      : undefined,
+    task.originInputId,
+  );
+  if (requester === undefined) return "none" as const;
+  return task.target === undefined
+    ? captureMemoryGrantCeiling(requester.grantedScopes, false)
+    : sessionMemoryCeiling(requester, task.target);
 });

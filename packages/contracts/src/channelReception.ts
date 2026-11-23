@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { BotInstructions } from "./botProfile.ts";
 
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
@@ -11,6 +12,7 @@ import {
 import {
   ChannelDispatchTarget,
   ChannelTaskEventType,
+  ChannelTaskDoneMeans,
   ChannelTaskKind,
   ChannelTaskStatus,
 } from "./channelLedger.ts";
@@ -160,9 +162,16 @@ export const ChannelReceptionInput = Schema.Struct({
   /** Written procedures workers can follow. */
   skills: Schema.optional(Schema.Array(ChannelReceptionSkill)),
   /** The name and purpose people gave the bot; absent or the defaults leave the prompt as it was. */
-  identity: Schema.optional(Schema.Struct({ name: Schema.String, purpose: Schema.String })),
+  identity: Schema.optional(
+    Schema.Struct({
+      name: Schema.String,
+      purpose: Schema.String,
+      instructions: Schema.optionalKey(BotInstructions),
+    }),
+  ),
   /** A routine the person set up, not a live message: answer only, or no_update when nothing needs them. */
   routine: Schema.optional(Schema.Boolean),
+  routineWork: Schema.optional(Schema.Literal(true)),
   requester: ChannelRequester,
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
@@ -170,6 +179,7 @@ export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
 export const ChannelReceptionTaskSpec = Schema.Struct({
   title: TrimmedNonEmptyString,
   instruction: TrimmedNonEmptyString,
+  doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
   projectId: Schema.optional(ProjectId),
   /** One of `allowedHosts`, when the person asked for another machine. */
   host: Schema.optional(TrimmedNonEmptyString),
@@ -185,6 +195,7 @@ export const ChannelReceptionAction = Schema.Union([
     type: Schema.Literal("create_task"),
     title: TrimmedNonEmptyString,
     instruction: TrimmedNonEmptyString,
+    doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
     projectId: Schema.optional(ProjectId),
     /** One of `allowedHosts`, when the person asked for another machine. */
     host: Schema.optional(TrimmedNonEmptyString),

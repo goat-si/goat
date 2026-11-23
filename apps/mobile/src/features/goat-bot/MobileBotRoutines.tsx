@@ -6,7 +6,8 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, ScheduledTask, ThreadId } from "@goat/contracts";
-import { useState } from "react";
+import { Atom } from "effect/reactivity";
+import { useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
@@ -117,6 +118,8 @@ export function MobileBotRoutines(props: {
   );
 }
 
+const TIMER_ROUTINE = Atom.make(true);
+
 function MobileRoutineRow(props: {
   readonly environmentId: EnvironmentId;
   readonly row: BotRoutineRow;
@@ -132,13 +135,22 @@ function MobileRoutineRow(props: {
   const canRunNow = useAtomValue(
     serverEnvironment.runScheduledTaskNow.permissionAtom(environmentId),
   );
+  const canManageTrigger = useAtomValue(
+    row.workTrigger
+      ? serverEnvironment.botTriggerSettingsPermissionAtom(environmentId)
+      : TIMER_ROUTINE,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const webhook = props.task?.schedule.type === "webhook";
+  const showRun = props.task !== undefined && !webhook && canRunNow;
+  const runInFlight = useRef(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const runAgain = async () => {
-    if (running) return;
+  const runNow = async () => {
+    if (!showRun || runInFlight.current) return;
+    runInFlight.current = true;
     setRunning(true);
     setRunError(null);
     const result = await runAtomCommand(
@@ -147,6 +159,7 @@ function MobileRoutineRow(props: {
       { environmentId, input: { id: row.id } },
       { label: "GOAT Bot routine run now", reportFailure: false },
     );
+    runInFlight.current = false;
     setRunning(false);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const failure = squashAtomCommandFailure(result);
@@ -193,7 +206,7 @@ function MobileRoutineRow(props: {
         </Pressable>
         <ThemedSwitch
           accessibilityLabel={`${row.enabled ? "Pause" : "Resume"} ${row.title}`}
-          disabled={busy || !canOperate}
+          disabled={busy || !canOperate || (row.workTrigger && !canManageTrigger)}
           value={row.enabled}
           onValueChange={(enabled) => void toggle(enabled)}
         />
@@ -207,12 +220,22 @@ function MobileRoutineRow(props: {
         />
       ) : null}
       {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
-      {row.lastFailed && canRunNow ? (
+      {webhook ? (
+        <Text className="text-foreground-muted">
+          {row.enabled
+            ? row.workTrigger
+              ? "Signed deliveries to the webhook URL start work in its project."
+              : "Deliveries to the webhook URL start this routine."
+            : "Resume this trigger to run it on incoming deliveries."}{" "}
+          {row.workTrigger ? "Manage the URL and signing secret on web or desktop." : null}
+        </Text>
+      ) : null}
+      {showRun ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ disabled: running }}
           disabled={running}
-          onPress={() => void runAgain()}
+          onPress={() => void runNow()}
           className="min-h-[44px] self-start justify-center"
         >
           <Text className="text-foreground">Run now</Text>

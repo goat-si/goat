@@ -1,6 +1,13 @@
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import type { NotificationResponse } from "expo-notifications";
+import { resolveBotAttentionDecision } from "@goat/client-runtime/goatBot";
+import { readDecisionRequestTarget } from "@goat/client-runtime/state/decision-inbox";
+import { BotId, ChannelTaskId, EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
+import * as NodeModule from "node:module";
+import * as NodeURL from "node:url";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { resolveMobileBotAttentionLink } from "./goatBotAttentionLink";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 import {
@@ -105,6 +112,204 @@ describe("extractAgentNotificationDeepLink", () => {
 });
 
 describe("routeAgentNotificationResponseOnce", () => {
+  it("carries the exact SSH handoff and its originating Bot task to mobile Decisions", async () => {
+    const registry = AtomRegistry.make();
+    try {
+      const origin = EnvironmentId.make("origin");
+      const destination = EnvironmentId.make("remote/env");
+      const ref = {
+        host: "box",
+        threadId: ThreadId.make("mcp:worker"),
+        requestId: RuntimeRequestId.make("handoff:old"),
+      };
+      const task = {
+        originAddress: { kind: "slack" },
+        generation: 1,
+        openQuestions: [],
+        worker: { host: ref.host, environmentId: destination, threadId: ref.threadId },
+        observed: { needsYou: [{ kind: "approval", handoff: ref }] },
+      };
+      const allowed = Atom.make(true);
+      const channels = {
+        listBotAttention: { permissionAtom: () => allowed },
+        readAttentionTask: { run: async () => AsyncResult.success(task) },
+      } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
+      const target = {
+        environmentId: origin,
+        botId: BotId.make("scout"),
+        taskId: ChannelTaskId.make("task"),
+        generation: 1,
+        request: { kind: "handoff" as const, ...ref },
+      };
+      const decisions = { getDecision: { run: vi.fn() } } as unknown as Parameters<
+        typeof resolveBotAttentionDecision
+      >[1]["decisions"];
+      const link = await resolveMobileBotAttentionLink(
+        registry,
+        channels,
+        target,
+        (request, live) =>
+          resolveBotAttentionDecision(
+            registry,
+            { decisions, connected: (id) => id === destination },
+            origin,
+            live,
+            request,
+          ),
+      );
+      expect(link).toMatch(/^\/decisions\?/);
+      expect(
+        readDecisionRequestTarget(Object.fromEntries(new URLSearchParams(link?.split("?")[1]))),
+      ).toEqual({
+        environmentId: destination,
+        threadId: ref.threadId,
+        requestId: ref.requestId,
+        requestKind: "handoff",
+        originEnvironmentId: origin,
+        originTaskId: target.taskId,
+        originBotId: target.botId,
+        originDetail: "external",
+      });
+      const wrong = await resolveMobileBotAttentionLink(
+        registry,
+        channels,
+        { ...target, request: { ...target.request, host: "different" } },
+        (request, live) =>
+          resolveBotAttentionDecision(
+            registry,
+            { decisions, connected: () => true },
+            origin,
+            live,
+            request,
+          ),
+      );
+      expect(wrong).toMatch(/^\/bot\?/);
+    } finally {
+      registry.dispose();
+    }
+  });
+
+  it.each([true, false])(
+    "routes an exact native approval with duplicate ids (available: %s)",
+    async (available) => {
+      const registry = AtomRegistry.make();
+      try {
+        const allowed = Atom.make(true);
+        const task = {
+          originAddress: { kind: "slack" },
+          generation: 1,
+          openQuestions: [],
+          worker: { environmentId: "origin", threadId: "local-worker" },
+          observed: {
+            needsYou: [
+              {
+                kind: "approval",
+                approval: { host: "box", threadId: "subagent/one", requestId: "command:7/8" },
+              },
+              {
+                kind: "approval",
+                approval: { host: "other", threadId: "subagent/two", requestId: "command:7/8" },
+              },
+            ],
+          },
+        };
+        const channels = {
+          listBotAttention: { permissionAtom: () => allowed },
+          readAttentionTask: { run: vi.fn().mockResolvedValue(AsyncResult.success(task)) },
+        } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
+        const resolveDecision = vi.fn(async () =>
+          available
+            ? { environmentId: "remote/env", threadId: "subagent/one", requestId: "command:7/8" }
+            : null,
+        ) as unknown as Parameters<typeof resolveMobileBotAttentionLink>[3];
+        const require = NodeModule.createRequire(import.meta.url);
+        const nativeRequire = NodeModule.createRequire(require.resolve("@react-navigation/native"));
+        const corePath = nativeRequire.resolve("@react-navigation/core");
+        const coreRequire = NodeModule.createRequire(corePath);
+        const { getStateFromPath, getActionFromState } = await import(
+          NodeURL.pathToFileURL(corePath).href
+        );
+        const { StackRouter } = await import(
+          NodeURL.pathToFileURL(coreRequire.resolve("@react-navigation/routers")).href
+        );
+        const linking = { screens: { Home: "", GoatBot: "bot", Decisions: "decisions" } };
+        const options = {
+          routeNames: Object.keys(linking.screens),
+          routeParamList: {},
+          routeGetIdList: {},
+        };
+        const stack = StackRouter({});
+        let state = stack.getInitialState(options);
+        const response = responseWithData({
+          kind: "goat-bot-attention",
+          environmentId: "origin",
+          botId: "main",
+          taskId: "task",
+          requestId: "command:7/8",
+          request: {
+            kind: "runtime",
+            host: "box",
+            threadId: "subagent/one",
+            requestId: "command:7/8",
+          },
+          generation: 1,
+        }) as NotificationResponse;
+        await consumeLastAgentNotificationResponse({
+          getLastResponse: async () => response,
+          clearLastResponse: async () => {},
+          handleResponse: (response) =>
+            routeAgentNotificationResponseOnce({
+              response,
+              handledResponseIds: new Set(),
+              resolveBotTarget: (target) =>
+                resolveMobileBotAttentionLink(registry, channels, target, resolveDecision),
+              navigate: (href) => {
+                const linked = getStateFromPath(href, linking);
+                if (linked === undefined)
+                  throw new Error("Notification path did not match the stack");
+                const action = getActionFromState(linked, linking);
+                if (action === undefined)
+                  throw new Error("Notification path did not produce an action");
+                const next = stack.getStateForAction(state, action, options);
+                if (next == null) throw new Error("Stack did not handle the notification");
+                state = next;
+              },
+            }),
+        });
+        expect(resolveDecision).toHaveBeenCalledExactlyOnceWith(
+          {
+            kind: "runtime",
+            host: "box",
+            threadId: "subagent/one",
+            requestId: "command:7/8",
+          },
+          task,
+        );
+        expect(state.routes.at(-1)).toMatchObject(
+          available
+            ? {
+                name: "Decisions",
+                params: {
+                  environmentId: "remote/env",
+                  threadId: "subagent/one",
+                  requestId: "command:7/8",
+                },
+              }
+            : {
+                name: "GoatBot",
+                params: {
+                  taskId: "task",
+                  attentionEnvironment: "origin",
+                  attentionDetail: "external",
+                },
+              },
+        );
+      } finally {
+        registry.dispose();
+      }
+    },
+  );
+
   it("retries a failed initial response and deduplicates it after navigation succeeds", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const response = responseWithData({ deepLink: "/threads/env/thread" }) as NotificationResponse;
@@ -132,6 +337,78 @@ describe("routeAgentNotificationResponseOnce", () => {
 
     routeAgentNotificationResponseOnce({ handledResponseIds, response, navigate });
     expect(navigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens a cold Slack ask and its warm recorded answer, and rejects a revoked tap", async () => {
+    const registry = AtomRegistry.make();
+    try {
+      const allowed = Atom.make(true);
+      const originAddress = { kind: "slack" };
+      const open = { originAddress, generation: 1, openQuestions: [{ questionId: "ask" }] };
+      const answered = {
+        ...open,
+        openQuestions: [],
+        answeredQuestions: [{ questionId: "ask", answerText: "Option A" }],
+      };
+      const run = vi
+        .fn()
+        .mockResolvedValueOnce(AsyncResult.success(open))
+        .mockResolvedValueOnce(AsyncResult.success(answered))
+        .mockImplementationOnce(async () => {
+          registry.set(allowed, false);
+          return AsyncResult.success(answered);
+        })
+        .mockResolvedValueOnce(AsyncResult.success({ ...answered, generation: 2 }));
+      const channels = {
+        listBotAttention: { permissionAtom: () => allowed },
+        readAttentionTask: { run },
+      } as unknown as Parameters<typeof resolveMobileBotAttentionLink>[1];
+      const handledResponseIds = new Set<string>();
+      const navigate = vi.fn();
+      const data = {
+        kind: "goat-bot-attention",
+        environmentId: "env",
+        botId: "main",
+        taskId: "task",
+        requestId: "ask",
+        generation: 1,
+      };
+      const response = (id: string) => responseWithData(data, id) as NotificationResponse;
+      const handle = (notification: NotificationResponse) =>
+        routeAgentNotificationResponseOnce({
+          handledResponseIds,
+          response: notification,
+          navigate,
+          resolveBotTarget: (target) => resolveMobileBotAttentionLink(registry, channels, target),
+        });
+      await consumeLastAgentNotificationResponse({
+        getLastResponse: () => Promise.resolve(response("cold")),
+        clearLastResponse: () => Promise.resolve(),
+        handleResponse: handle,
+      });
+      await handle(response("cold"));
+      await handle(response("warm"));
+      await handle(response("revoked"));
+      registry.set(allowed, true);
+      await handle(response("stale-generation"));
+
+      const searches = navigate.mock.calls.map(([href]) =>
+        Object.fromEntries(new URL(String(href), "https://app.test").searchParams),
+      );
+      const detail = { taskId: "task", attentionEnvironment: "env", attentionDetail: "external" };
+      expect(searches).toEqual([
+        { ...detail, attentionRequest: "ask" },
+        { ...detail, attentionRequest: "ask" },
+        detail,
+      ]);
+      expect(run).toHaveBeenCalledTimes(4);
+      expect(run).toHaveBeenCalledWith(registry, {
+        environmentId: "env",
+        input: { taskId: "task", botId: "main", attentionRequest: "ask" },
+      });
+    } finally {
+      registry.dispose();
+    }
   });
 
   it("discards malformed destination ids without leaving the response pending", async () => {

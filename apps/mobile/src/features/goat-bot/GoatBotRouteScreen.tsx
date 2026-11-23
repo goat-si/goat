@@ -1,8 +1,9 @@
+import { MobileBotTemplateRetry } from "./MobileBotTemplateRetry";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { ChannelTaskId } from "@goat/contracts";
-import { goatBotName } from "@goat/client-runtime/goatBot";
+import { BotId, ChannelTaskId, EnvironmentId, MAIN_BOT_ID } from "@goat/contracts";
+import { decodeBotAttentionRequest, goatBotName } from "@goat/client-runtime/goatBot";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Text, View } from "react-native";
 import { useAppActive, useAppForeground } from "../../lib/appState";
 import { useThreadShell } from "../../state/entities";
@@ -12,6 +13,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotMember } from "./useMobileBotRoster";
 import { useMobileBotManage } from "./useMobileBotManage";
+import { MobileGoatBotAlertTask } from "./mobileGoatBotAlertRoute";
 import { GoatBotScreen } from "./GoatBotScreen";
 import {
   recordGoatBotLocalRead,
@@ -19,9 +21,27 @@ import {
   useGoatBotVisitSnapshot,
 } from "./useGoatBotVisitSnapshot";
 
+const MobileBotApprovals = lazy(() => import("./MobileBotApprovals"));
+function BotApprovalCards(props: React.ComponentProps<typeof MobileBotApprovals>) {
+  return (
+    <Suspense fallback={null}>
+      <MobileBotApprovals {...props} />
+    </Suspense>
+  );
+}
+
 export function GoatBotRouteScreen({
   route,
-}: StaticScreenProps<{ taskId?: string; botId?: string; taskTitle?: string }>) {
+}: StaticScreenProps<{
+  taskId?: string;
+  botId?: string;
+  taskTitle?: string;
+  attentionRequest?: string;
+  attentionNative?: string;
+  attentionGeneration?: string;
+  attentionEnvironment?: string;
+  attentionDetail?: "external";
+}>) {
   const focused = useIsFocused();
   const active = useAppActive();
   const foreground = useAppForeground();
@@ -98,6 +118,31 @@ export function GoatBotRouteScreen({
     conversation,
     newestAt,
   ]);
+  const attentionEnvironment = route.params?.attentionEnvironment;
+  const attentionRequest = route.params?.attentionRequest;
+  const request = decodeBotAttentionRequest(route.params?.attentionNative);
+  const generation = Number(route.params?.attentionGeneration);
+  if (
+    taskId !== undefined &&
+    attentionEnvironment !== undefined &&
+    (route.params?.attentionDetail === "external" ||
+      request !== undefined ||
+      attentionEnvironment !== (member?.environmentId ?? environmentId) ||
+      (botId !== undefined && member === null))
+  ) {
+    return (
+      <MobileGoatBotAlertTask
+        target={{
+          environmentId: EnvironmentId.make(attentionEnvironment),
+          botId: BotId.make(botId ?? MAIN_BOT_ID),
+          taskId: ChannelTaskId.make(taskId),
+          ...(attentionRequest === undefined ? {} : { requestId: attentionRequest }),
+          ...(request === undefined ? {} : { request }),
+          ...(Number.isSafeInteger(generation) && generation >= 0 ? { generation } : {}),
+        }}
+      />
+    );
+  }
   // A named member never falls back to the main bot's conversation.
   if (botId !== undefined && member === null)
     return (
@@ -110,10 +155,21 @@ export function GoatBotRouteScreen({
   return (
     <GoatBotScreen
       visible={focused}
+      approvalCards={BotApprovalCards}
       foreground={foreground}
       seen={seen}
       member={member}
       main={main}
+      templateRetry={
+        !taskId && member?.templateSetup !== undefined ? (
+          <MobileBotTemplateRetry
+            key={member.botId}
+            bot={member}
+            canRetry={manage.canCreate && manage.canUseTemplates}
+            retry={manage.createTemplate}
+          />
+        ) : undefined
+      }
       onRestoreMember={
         member !== null && member.state === "deleted" && manage.mayManage
           ? manage.connected
@@ -123,6 +179,7 @@ export function GoatBotRouteScreen({
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
       taskTitle={route.params?.taskTitle}
+      attentionRequest={route.params?.attentionRequest}
       readSnapshot={chat !== null ? readSnapshot : null}
     />
   );

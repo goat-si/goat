@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -270,7 +271,7 @@ describe("GOAT Bot sessions", () => {
           .filter((send) => send.threadId === ownerThread)
           .map((send) => JSON.stringify(send));
         assert.isFalse(ownerTexts.some((text) => text.includes("guest's task")));
-        assert.notInclude(launchOf(ownerThread)!.initialMessage!.text, "guest's task");
+        assert.notInclude(yield* launchBrief(launchOf(ownerThread)), "guest's task");
       }).pipe(Effect.provide(harness.layer));
     },
   );
@@ -293,7 +294,7 @@ describe("GOAT Bot sessions", () => {
         const second = yield* ask("look: two", "c2");
         assert.notStrictEqual(second.worker?.threadId, thread);
         assert.isTrue(isGoatBotSessionThreadId(second.worker!.threadId));
-        const text = harness.world.launches[1]!.initialMessage!.text;
+        const text = yield* launchBrief(harness.world.launches[1]);
         const positions = SESSION_PREFIX_HEADINGS.map((heading) => text.indexOf("## " + heading));
         assert.isTrue(positions.every((position) => position >= 0));
         assert.deepStrictEqual(
@@ -729,7 +730,7 @@ describe("GOAT Bot sessions", () => {
       const launch = harness.world.launches.find(
         (candidate) => candidate.threadId === b.worker?.threadId,
       );
-      const text = launch!.initialMessage!.text;
+      const text = yield* launchBrief(launch);
       const message = text.slice(text.indexOf("## Current message"));
       assert.include(message, "task b");
       assert.notInclude(message, "task a");

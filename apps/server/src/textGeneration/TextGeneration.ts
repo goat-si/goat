@@ -1,8 +1,11 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
-import type { TextGenerationOperations } from "@goat/provider-core/server/textGeneration";
+import type { ChannelReceptionInput, ModelSelection, ProviderInstanceId } from "@goat/contracts";
+import type {
+  ChannelReceptionGenerationInput,
+  TextGenerationOperations,
+} from "@goat/provider-core/server/textGeneration";
 import { TextGenerationError } from "@goat/contracts";
 
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
@@ -37,7 +40,18 @@ export type {
   MemoryGenerationExecution,
 } from "@goat/provider-core/server/textGeneration";
 
-export class TextGeneration extends Context.Service<TextGeneration, TextGenerationOperations>()(
+type ChannelReceptionRequest = ChannelReceptionGenerationInput & {
+  readonly recheckInput?:
+    | ((input: ChannelReceptionInput) => Effect.Effect<ChannelReceptionInput>)
+    | undefined;
+};
+type ServerTextGeneration = Omit<TextGenerationOperations, "generateChannelReception"> & {
+  readonly generateChannelReception?: (
+    request: ChannelReceptionRequest,
+  ) => ReturnType<NonNullable<TextGenerationOperations["generateChannelReception"]>>;
+};
+
+export class TextGeneration extends Context.Service<TextGeneration, ServerTextGeneration>()(
   "goat/textGeneration/TextGeneration",
 ) {}
 
@@ -169,19 +183,22 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
       );
     }),
-    generateChannelReception: (input) =>
-      resolveAgent("generateChannelReception", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) =>
-          textGeneration.generateChannelReception === undefined
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "generateChannelReception",
-                  detail: "This provider does not support channel reception.",
-                }),
-              )
-            : textGeneration.generateChannelReception(input),
-        ),
-      ),
+    generateChannelReception: Effect.fn("TextGeneration.generateChannelReception")(function* ({
+      recheckInput,
+      ...request
+    }: ChannelReceptionRequest) {
+      const provider = yield* resolveAgent(
+        "generateChannelReception",
+        request.modelSelection.instanceId,
+      );
+      if (provider.generateChannelReception === undefined)
+        return yield* new TextGenerationError({
+          operation: "generateChannelReception",
+          detail: "This provider does not support channel reception.",
+        });
+      const input = recheckInput === undefined ? request.input : yield* recheckInput(request.input);
+      return yield* provider.generateChannelReception({ ...request, input });
+    }),
     generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
       return resolveAgent("generateReviewGuide", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),

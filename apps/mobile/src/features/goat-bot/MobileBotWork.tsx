@@ -1,6 +1,8 @@
+import { mobileBotFollowedItems, sectionLabel } from "./MobileBotFollowedThread";
 import {
   accessDenied,
   botHomeWork,
+  withoutSnoozedBotTasks,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
@@ -39,6 +41,7 @@ import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
+import { message } from "./mobileBotHomeItems";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
@@ -49,13 +52,13 @@ import { useAfterSheetGone } from "./useAfterSheetGone";
 import { MobileBotTaskSearch } from "./MobileBotTaskSearch";
 import { MobileBotHomeChip } from "./MobileBotHomeChip";
 import { useMobileTaskScreen } from "./useMobileTaskScreen";
+import type { MobileTaskApprovalObservation } from "./useMobileBotTaskLookup";
 import { MobileTaskHeader } from "./MobileTaskHeader";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT } from "./goatBotDraftRequests";
 import { MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 import { NO_TASK_CHIPS, type MobileTaskChips } from "./mobileBotTaskStatus";
 
-/** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
 const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
@@ -71,7 +74,6 @@ import {
   type MobileCheckInDraftUpdate,
 } from "./mobileCheckInDraft";
 
-// Home is one scroll of machines, work and routines; Library holds files and notes.
 const tabs = ["Home", "Library"] as const;
 
 export function MobileBotWork(props: {
@@ -133,6 +135,9 @@ export function MobileBotWork(props: {
   readonly workRevision?: string | null | undefined;
   /** The newest chip of each task in the conversation: what its worker asks of the person. */
   readonly taskChips?: MobileTaskChips | undefined;
+  readonly renderTaskApprovals?:
+    | ((observation: MobileTaskApprovalObservation) => ReactNode)
+    | undefined;
   /** What the home opens on, from an event line; seq changes on every request. */
   readonly focus?: (MobileBotHomeFocus & { readonly seq: number }) | null | undefined;
 }) {
@@ -156,7 +161,6 @@ export function MobileBotWork(props: {
     member: member !== null,
   });
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
-  // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
     environmentId && enabled && (member === null || capabilities?.goatBotMembers === true)
       ? channelEnvironment.listBotThreads({
@@ -184,13 +188,17 @@ export function MobileBotWork(props: {
     capabilities,
     current: props.taskId ? null : listData,
     loaded: threads.successResult !== null,
+    home: threads,
     enabled: enabled && open && !props.taskId,
     scope: JSON.stringify([workOwner, sheet.generation]),
     owner: workOwner,
+    fallbackTasks: props.chatTasks,
   });
   useMobileHistoryAnnouncements(open && !props.taskId ? history : null);
   // Home lists older work with the current list; a task's own screen reads the current list only.
-  const homeRows = props.taskId ? rows : history.rows;
+  const { snoozed } = history.snoozeList;
+  const homeRows = props.taskId ? rows : withoutSnoozedBotTasks(history.rows, snoozed);
+  const [showSnoozed, setShowSnoozed] = useState(false);
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);
   const afterOlderHome = useAfterSheetGone(props.visible, Platform.OS !== "android", workOwner);
@@ -216,15 +224,22 @@ export function MobileBotWork(props: {
   );
   const botId = member?.botId ?? BotId.make("main");
   const older = !task && listData !== null && (offline || threads.successResult !== null);
+  const renderTaskApprovals =
+    props.visible && props.taskId !== undefined && !chips.has(props.taskId)
+      ? props.renderTaskApprovals
+      : undefined;
   const actions = useMobileTaskScreen({
     environmentId,
     owner: workOwner,
     botId,
     taskId: props.taskId ?? null,
     enabled,
-    lookupSupported: capabilities?.goatBotTaskLookupSearch === true,
+    capabilities,
+    supportsSnooze: capabilities?.goatBotTaskSnooze === true,
     list: threads,
     holdsTask: task !== undefined,
+    needsApprovalObservation: renderTaskApprovals !== undefined,
+    workRevision: props.workRevision,
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;
@@ -426,25 +441,6 @@ export function MobileBotWork(props: {
   ) {
     setShowAllRoutines(true);
   }
-  const sectionLabel = (
-    key: string,
-    text: string,
-    first = false,
-    action?: ReactNode,
-  ): MobileBotHomeItem => ({
-    key,
-    render: () => (
-      <View className={`${first ? "mt-2" : "mt-5"} flex-row items-center justify-between`}>
-        <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
-        {action}
-      </View>
-    ),
-  });
-  const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
-    key,
-    render: () => node,
-  });
-  // Home is one list that mounts only what is near the screen; a bot with many tasks stays light.
   const homeItems: MobileBotHomeItem[] = [
     {
       key: "identity",
@@ -523,6 +519,14 @@ export function MobileBotWork(props: {
     });
     homeItems.push(sectionLabel("work-label", "Work", true));
     const workStart = homeItems.length;
+    homeItems.push(
+      ...mobileBotFollowedItems(
+        environmentId,
+        botId,
+        capabilities?.goatBotThreadFollows === true ? threads.data?.followedThreads : undefined,
+        props.onOpenThread,
+      ),
+    );
     if (environmentId && enabled && capabilities?.goatBotTaskLookupSearch === true)
       homeItems.push(
         message(
@@ -616,6 +620,9 @@ export function MobileBotWork(props: {
               ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
             showAllFinished,
+            ...history.snoozeList,
+            showSnoozed,
+            onToggleSnoozed: () => setShowSnoozed((value) => !value),
             onToggleFinished: () => setShowAllFinished((value) => !value),
             expanded: new Set(expanded),
             onToggleExpanded: toggleExpanded,
@@ -778,6 +785,8 @@ export function MobileBotWork(props: {
             connected={selected?.connected === true}
             supported={capabilities?.goatBotNotes === true}
             member={member !== null}
+            botId={member?.botId}
+            scoped={capabilities?.goatBotPrivateNotes === true}
             botName={botName}
             onDraft={
               props.onDraft
@@ -852,7 +861,7 @@ export function MobileBotWork(props: {
       ) : props.sheetOnly ? null : Platform.OS === "android" ? (
         <MobileBotHomeChip botName={botName} face={props.chipFace} onOpen={() => setOpen(true)} />
       ) : null}
-      {/* Open Home on an older task's screen opens this bot's Home right here, as one more sheet. */}
+      {actions.approvalTask && renderTaskApprovals?.(actions.approvalTask)}
       {olderHome ? (
         <MobileBotWork
           {...props}

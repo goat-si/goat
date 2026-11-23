@@ -186,6 +186,15 @@ describe("V2 preview upgrade", () => {
         [169, "TurnItemInlineWorkOutput"],
         [170, "RepairStaleTitleRegeneration"],
         [175, "AcpSessionOwnerIndex"],
+        [176, "ChannelWorkerLaunchHeads"],
+        [177, "WorkTriggerAuthorityFence"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
+        [181, "ChannelBotAttention"],
+        [182, "SlackConversationBot"],
+        [183, "ChannelInputSessionAuthority"],
+        [184, "RemoteDispatchEnvironment"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -382,6 +391,15 @@ describe("V2 preview upgrade", () => {
         [169, "TurnItemInlineWorkOutput"],
         [170, "RepairStaleTitleRegeneration"],
         [175, "AcpSessionOwnerIndex"],
+        [176, "ChannelWorkerLaunchHeads"],
+        [177, "WorkTriggerAuthorityFence"],
+        [178, "WebhookDeliveryFiringEvidence"],
+        [179, "ChannelWorkerGenerations"],
+        [180, "ChannelBotTaskSnooze"],
+        [181, "ChannelBotAttention"],
+        [182, "SlackConversationBot"],
+        [183, "ChannelInputSessionAuthority"],
+        [184, "RemoteDispatchEnvironment"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

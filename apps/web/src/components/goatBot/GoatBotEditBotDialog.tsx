@@ -7,6 +7,7 @@ import { useState, type ComponentProps } from "react";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { GoatBotToolsField } from "./GoatBotToolsField";
 import { GoatBotModelField } from "./GoatBotModelField";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useGoatBotMainName } from "./goatBotMemberContext";
@@ -25,8 +26,12 @@ export function GoatBotEditBotDialog({
 } & Pick<ComponentProps<typeof GoatBotProfileDialog>, "draftName" | "finalFocus">) {
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
   const mainName = useGoatBotMainName();
+  const presentation = useEnvironment(bot.environmentId);
   const modelEditable = useGoatBotMemberModelEditable(bot);
   const colorEditable = useGoatBotMemberColorEditable(bot);
+  const [tools, setTools] = useState(bot.tools);
+  const toolsEditable = presentation?.serverConfig?.environment.capabilities.goatBotTools === true;
+  const toolsChanged = toolsEditable && JSON.stringify(tools) !== JSON.stringify(bot.tools);
   const [model, setModel] = useState(bot.defaultModelSelection);
   const modelChanged = modelEditable && !sameModel(model, bot.defaultModelSelection);
   return (
@@ -35,8 +40,11 @@ export function GoatBotEditBotDialog({
       draftName={draftName}
       finalFocus={finalFocus}
       canSubmit={canSubmit}
-      extraChanged={modelChanged}
+      extraChanged={modelChanged || toolsChanged}
       colorEditable={colorEditable}
+      instructionsEditable={
+        presentation?.serverConfig?.environment.capabilities.goatBotInstructions === true
+      }
       onClose={onClose}
       onSubmit={async (changes) => {
         const result = await update({
@@ -44,6 +52,7 @@ export function GoatBotEditBotDialog({
           input: {
             botId: bot.botId,
             ...changes,
+            ...(toolsChanged && tools !== undefined ? { tools } : {}),
             ...(modelChanged ? { defaultModelSelection: model } : {}),
           },
         });
@@ -52,6 +61,13 @@ export function GoatBotEditBotDialog({
         return null;
       }}
     >
+      {toolsEditable ? (
+        <GoatBotToolsField
+          importedNames={bot.importedToolNames}
+          value={tools ?? { mcpServers: "all", skills: "all" }}
+          onChange={setTools}
+        />
+      ) : null}
       {modelEditable ? (
         <GoatBotModelField
           environmentId={bot.environmentId}

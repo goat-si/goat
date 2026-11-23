@@ -1,29 +1,25 @@
+import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
+import { acceptChannelInput } from "./channelAcceptInput.ts";
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
 import { type ChannelDeliveryLedgerOps, deliveryLedger } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
 import * as ChannelWake from "./ChannelWake.ts";
+import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
+import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
-import { botLedger, type ChannelBotLedgerOps, isActiveMember } from "./channelBotLedger.ts";
+import { bindWorkerFollowUpSender, bindWorkerProviderBrief } from "./channelProviderBrief.ts";
+import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
+import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
+import { encodeEvent, encodeTask, makeTaskEventWriter } from "./channelTaskEventStore.ts";
 import { makeChannelTaskChanges } from "./channelTaskChanges.ts";
 import { insertOutboxRows, progressEndRows } from "./channelProgressMessages.ts";
-/**
- * ChannelLedger - durable state for channel input, tasks, and deliveries.
- *
- * One SQLite transaction commits an input with its decision, a task with its event, and the
- * outbox rows those changes need, so a crash never leaves a task without its event or a reply
- * without its delivery. Model calls, thread launches, and transport sends happen outside these
- * transactions, after commit.
- *
- * Background workers run in the one process that holds the worker ownership row. Their writes
- * pass that token and each transaction re-checks it first, so a process that lost ownership
- * (for example after being suspended past the heartbeat window) cannot commit a claim.
- *
- * @module ChannelLedger
- */
+// Inputs and decisions, task events, and their outbox deliveries commit together.
 import {
   AuthEnvironmentScopes,
+  type AuthEnvironmentScope,
+  type AuthSessionId,
   BotId,
   type ChannelAnswerProjectChoice,
   type ChannelConversationId,
@@ -35,17 +31,16 @@ import {
   ChannelOutboundMessage,
   type ChannelReceptionId,
   ChannelReceptionResult,
-  ChannelReplyAddress,
   ChannelRequester,
   ChannelTask,
   ChannelTaskEvent,
   ChannelWorkerRun,
-  type ChannelTaskBrief,
   type ChannelTaskExportInput,
   type ChannelTaskExportResult,
   type ChannelTaskEventId,
   type ChannelTaskId,
   type ChannelTaskStatus,
+  type MessageId,
   RuntimeMode,
   MAIN_BOT_ID,
   type ThreadId,
@@ -56,6 +51,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { makeTaskHistoryReads } from "./channelBotTaskActivity.ts";
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 import { ChannelLedgerError } from "./channelLedgerError.ts";
@@ -153,9 +149,18 @@ export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelT
 
 type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
 
+type ChannelLedgerOperations = ChannelLedgerOps & ReturnType<typeof makeTaskHistoryReads>;
+
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
-  ChannelLedgerOps & {
+  ChannelLedgerOperations & {
+    readonly recordLaunchHead: (
+      input: Parameters<typeof recordChannelLaunchHead>[0],
+    ) => Effect.Effect<void, ChannelLedgerError>;
+    readonly inputSessionScopes: (
+      inputId: ChannelInputId,
+    ) => Effect.Effect<ReadonlyArray<AuthEnvironmentScope> | undefined, ChannelLedgerError>;
+    readonly routineWorkAuthority: Effect.Success<ReturnType<typeof makeRoutineWorkAuthority>>;
     /** Stores an input, or returns the stored one for the same idempotency key. */
     readonly acceptInput: (input: {
       readonly ownerId: string;
@@ -167,8 +172,10 @@ export class ChannelLedger extends Context.Service<
       /** Undefined stores the input as rejected. */
       readonly requester: ChannelRequester | undefined;
       readonly acceptedAt: string;
+      readonly authSessionId?: AuthSessionId | undefined;
       /** The bot the input is for; main when absent. */
       readonly botId?: BotId | undefined;
+      readonly slackRouting?: ChannelIngressContext["slackRouting"];
       /** Committed with a rejected input, such as a link notice for an unlinked account. */
       readonly rejectNotice?: ChannelOutboxInsert | undefined;
     }) => Effect.Effect<ChannelIngestResult, ChannelLedgerError>;
@@ -282,10 +289,15 @@ export class ChannelLedger extends Context.Service<
       { readonly tasks: ReadonlyArray<ChannelTask>; readonly nextCursor: string | undefined },
       ChannelLedgerError
     >;
-    /** Most recently frozen brief, including earlier generations for version allocation. */
-    readonly latestTaskBrief: (
-      taskId: ChannelTaskId,
-    ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
+    readonly bindWorkerProviderBrief: (
+      task: ChannelTask,
+      threadId: ThreadId,
+    ) => Effect.Effect<void, ChannelLedgerError>;
+    readonly bindWorkerFollowUpSender: (
+      threadId: ThreadId,
+      messageId: MessageId,
+      inputId: ChannelInputId,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     /** Ledger-only JSONL source rows, in terminal-event order; ChannelTaskExport adds thread evidence. */
     readonly exportTasks: (
       input: ChannelTaskExportInput & { readonly ownerId: string },
@@ -575,16 +587,12 @@ export class ChannelLedger extends Context.Service<
 const ReplyState = Schema.Struct({ text: Schema.String, sentAt: Schema.optional(Schema.String) });
 const FailureState = Schema.Struct({ reason: Schema.String, message: Schema.String });
 
-const encodeInbound = Schema.encodeSync(Schema.fromJsonString(ChannelInboundMessage));
 const decodeInbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelInboundMessage));
-const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
 const decodeRequester = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelRequester));
 const decodeDecision = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelReceptionResult));
-const encodeTask = Schema.encodeSync(Schema.fromJsonString(ChannelTask));
 const encodeWorkerRun = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerRun));
 const decodeWorkerRun = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelWorkerRun));
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
-const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const encodeScopes = Schema.encodeSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const decodeScopes = Schema.decodeUnknownSync(Schema.fromJsonString(AuthEnvironmentScopes));
@@ -625,7 +633,6 @@ const validImessageCursor = (state: ImessageCursor) =>
       id <= state.cursor &&
       (index === 0 || id > ids[index - 1]!),
   );
-const encodeAddress = Schema.encodeSync(Schema.fromJsonString(ChannelReplyAddress));
 
 const WORKER_KEY = "worker";
 const CURSOR_KEY = "worker-cursor";
@@ -754,12 +761,6 @@ const toIdentity = (row: IdentityRow): ChannelIdentity => ({
   grantedScopes: decodeScopes(row.granted_scopes_json),
 });
 
-/** The receipt view of a stored input: no reply or read time. */
-const toIngestResult = (stored: ChannelStoredInput, duplicate: boolean): ChannelIngestResult => {
-  const { readAt: _readAt, reply: _reply, failure: _failure, ...result } = stored.snapshot;
-  return { ...result, duplicate };
-};
-
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const receiptGate = yield* SessionReceiptGate.SessionReceiptGate;
@@ -792,52 +793,7 @@ const make = Effect.gen(function* () {
       Effect.map((rows) => (rows[0] === undefined ? undefined : inboxSnapshot(rows[0]))),
     );
 
-  const writeTaskEvent = (write: ChannelTaskEventWrite) =>
-    Effect.gen(function* () {
-      const { next, event } = write;
-      const pendingAnswer =
-        write.pendingAnswerMessageId === undefined
-          ? sql`pending_answer_message_id`
-          : sql`${write.pendingAnswerMessageId}`;
-      const hold =
-        write.completionHold === undefined ? sql`completion_hold` : sql`${write.completionHold}`;
-      // A message may have moved updated_at past this write's clock; task activity never goes back.
-      const activeAt = sql`CASE WHEN julianday(updated_at) > julianday(${next.updatedAt})
-        THEN updated_at ELSE ${next.updatedAt} END`;
-      const updated = yield* sql<{ readonly task_id: string }>`
-        UPDATE channel_tasks SET
-          status = ${next.status},
-          version = ${next.version},
-          generation = ${next.generation},
-          worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = json_set(${encodeTask(next)}, '$.updatedAt', ${activeAt}),
-          newest_ask_at = ${newestAskAt(next)},
-          updated_at = ${activeAt},
-          pending_answer_message_id = ${pendingAnswer},
-          completion_hold = ${hold}
-        WHERE task_id = ${next.taskId} AND version = ${write.expectedVersion}
-        RETURNING task_id
-      `;
-      if (updated.length === 0) {
-        return yield* new ChannelLedgerError({
-          reason: "version_conflict",
-          detail: "Task " + next.taskId + " is not at version " + write.expectedVersion + ".",
-        });
-      }
-      const inserted = yield* sql<{ readonly sequence: number }>`
-        INSERT INTO channel_task_events (
-          event_id, task_id, task_version, type, event_json, occurred_at,
-          narration_state, forward_state
-        ) VALUES (
-          ${event.eventId}, ${event.taskId}, ${event.taskVersion}, ${event.type},
-          ${encodeEvent(event)}, ${event.occurredAt},
-          ${write.narrate === true ? "pending" : "none"},
-          ${write.forward === true ? "pending" : "none"}
-        )
-        RETURNING sequence
-      `;
-      return inserted[0]?.sequence ?? 0;
-    });
+  const writeTaskEvent = makeTaskEventWriter(sql);
 
   // A task belongs to the bot of the input that created it; no input of this owner, no task.
   const insertTask = (task: ChannelTask, ownerId: string, event: ChannelTaskEvent) =>
@@ -897,96 +853,24 @@ const make = Effect.gen(function* () {
       return next;
     });
 
-  const acceptInput: ChannelLedger["Service"]["acceptInput"] = (input) =>
-    sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const existing = yield* sql<InboxRow>`
-            SELECT * FROM channel_inbox
-            WHERE owner_id = ${input.ownerId} AND kind = ${input.message.kind}
-              AND connection_id = ${input.message.connectionId}
-              AND idempotency_key = ${input.message.idempotencyKey}
-          `;
-          const found = existing[0];
-          if (found !== undefined) {
-            if (found.content_hash !== input.contentHash) {
-              return yield* new ChannelLedgerError({
-                reason: "idempotency_conflict",
-                detail: "Different content under a stored idempotency key.",
-              });
-            }
-            return toIngestResult(inboxSnapshot(found), true);
-          }
-          // The decisive check against a delete: both are write transactions, so one sees the other.
-          if (input.botId !== undefined && input.botId !== MAIN_BOT_ID) {
-            if (!(yield* isActiveMember(sql, input.ownerId, input.botId))) {
-              return yield* new ChannelLedgerError({
-                reason: "bot_inactive",
-                detail: "The bot is not active.",
-              });
-            }
-          }
-          yield* sql`
-            INSERT INTO channel_conversations (
-              conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at
-            ) VALUES (
-              ${input.conversationId}, ${input.ownerId}, ${input.message.kind},
-              ${input.message.connectionId}, ${input.message.conversationKey}, ${input.acceptedAt}
-            )
-            ON CONFLICT (owner_id, kind, connection_id, conversation_key)
-            DO UPDATE SET last_activity_at = excluded.last_activity_at
-          `;
-          yield* sql`
-            INSERT INTO channel_bindings (
-              binding_id, conversation_id, connection_id, reply_address_json, last_activity_at
-            ) VALUES (
-              ${input.bindingId}, ${input.conversationId}, ${input.message.connectionId},
-              ${encodeAddress(input.message.replyAddress)}, ${input.acceptedAt}
-            )
-            ON CONFLICT (binding_id) DO UPDATE SET last_activity_at = excluded.last_activity_at
-          `;
-          yield* sql`
-            INSERT INTO channel_inbox (
-              input_id, owner_id, kind, connection_id, idempotency_key, content_hash,
-              conversation_id, binding_id, message_json, requester_json, state, accepted_at, bot_id
-            ) VALUES (
-              ${input.inputId}, ${input.ownerId}, ${input.message.kind},
-              ${input.message.connectionId}, ${input.message.idempotencyKey}, ${input.contentHash},
-              ${input.conversationId}, ${input.bindingId}, ${encodeInbound(input.message)},
-              ${input.requester === undefined ? null : encodeRequester(input.requester)},
-              ${input.requester === undefined ? "rejected" : "accepted"}, ${input.acceptedAt},
-              ${input.botId ?? MAIN_BOT_ID}
-            )
-          `;
-          if (input.rejectNotice !== undefined) {
-            yield* insertDeliveries([input.rejectNotice], input.acceptedAt);
-          }
-          const stored = yield* readInbox(input.inputId);
-          if (stored === undefined) {
-            return yield* new ChannelLedgerError({
-              reason: "persistence",
-              detail: "The stored input could not be read back.",
-            });
-          }
-          return toIngestResult(stored, false);
-        }),
-      )
-      .pipe(Effect.mapError(toLedgerError("acceptInput")));
-
+  const inputSessionScopes = yield* makeChannelInputSessionAuthority;
   const changes = yield* makeChannelTaskChanges(sql);
   const bots = botLedger(sql, changes);
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
-    acceptInput,
-
+    acceptInput: (input) =>
+      acceptChannelInput(sql, readInbox, input).pipe(Effect.mapError(toLedgerError("acceptInput"))),
+    inputSessionScopes: (id) =>
+      inputSessionScopes(id).pipe(Effect.mapError(toLedgerError("inputSessionScopes"))),
+    routineWorkAuthority: yield* makeRoutineWorkAuthority(),
+    recordLaunchHead: (input) =>
+      recordChannelLaunchHead(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
     setTimelineSequence: (inputId, sequence) =>
       sql`UPDATE channel_inbox SET timeline_sequence = ${sequence} WHERE input_id = ${inputId}`.pipe(
         Effect.asVoid,
         Effect.mapError(toLedgerError("setTimelineSequence")),
       ),
-
     getInput: (inputId) => readInbox(inputId).pipe(Effect.mapError(toLedgerError("getInput"))),
-
     listPendingInputs: (limit) =>
       sql<{ readonly input_id: ChannelInputId }>`
         SELECT input_id FROM channel_inbox WHERE state IN ('accepted', 'processing')
@@ -995,7 +879,6 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listPendingInputs")),
       ),
-
     // rowid breaks ties in arrival order: inputs accepted in the same millisecond keep the order
     // they were stored in.
     listReceivableInputs: (limit) =>
@@ -1013,10 +896,8 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
-
     ...receptionLedger(sql, reception),
     ...bots,
-
     readConversationTail: (conversationId, limit) =>
       sql<{
         readonly input_id: ChannelInputId;
@@ -1040,7 +921,6 @@ const make = Effect.gen(function* () {
         ),
         Effect.mapError(toLedgerError("readConversationTail")),
       ),
-
     searchConversation: (conversationId, query, limit, beforeInputId) => {
       const pattern = "%" + query.replace(/[\\%_]/gu, (char) => "\\" + char) + "%";
       return sql<{
@@ -1071,7 +951,6 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("searchConversation")),
       );
     },
-
     listConversationTasks: (conversationId) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
@@ -1081,7 +960,6 @@ const make = Effect.gen(function* () {
         Effect.map((rows) => rows.map((row) => storedTask(row).task)),
         Effect.mapError(toLedgerError("listConversationTasks")),
       ),
-
     listConversationNeedsYou: (conversationId) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold, bot_id
@@ -1144,18 +1022,10 @@ const make = Effect.gen(function* () {
         };
       }).pipe(Effect.mapError(toLedgerError("listTasks"))),
 
-    latestTaskBrief: (taskId) =>
-      sql<{ readonly event_json: string }>`
-        SELECT event_json FROM channel_task_events
-        WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
-        ORDER BY sequence DESC LIMIT 1
-      `.pipe(
-        Effect.map((rows) => {
-          const event = rows[0] === undefined ? undefined : decodeEvent(rows[0].event_json);
-          return event?.type === "task.brief.frozen" ? event.payload.brief : undefined;
-        }),
-        Effect.mapError(toLedgerError("latestTaskBrief")),
-      ),
+    bindWorkerProviderBrief: (task, threadId) => bindWorkerProviderBrief(sql, task, threadId),
+    bindWorkerFollowUpSender: (threadId, messageId, inputId) =>
+      bindWorkerFollowUpSender(sql, threadId, messageId, inputId),
+    ...makeTaskHistoryReads(sql, toLedgerError),
 
     exportTasks: (input) =>
       Effect.gen(function* () {

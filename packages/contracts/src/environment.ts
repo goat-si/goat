@@ -286,6 +286,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotOpenAsksLimit: Schema.optionalKey(Schema.Boolean),
   /** Server streams `channel.subscribeTaskChanges`; with older ones clients read on open and focus. */
   goatBotTaskChanges: Schema.optionalKey(Schema.Boolean),
+  goatBotAttention: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.updateBot`, and the main bot's sessions carry its name and purpose. */
@@ -293,21 +294,29 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** `channel.updateBot` takes a member's `defaultModelSelection`. Older servers drop the key. */
   goatBotMemberModelEdit: Schema.optionalKey(Schema.Boolean),
   /** `channel.createBot` and `channel.updateBot` store a member's `color`. Older servers drop it. */
+  goatBotTemplates: Schema.optionalKey(Schema.Boolean),
+  goatBotPackages: Schema.optionalKey(Schema.Boolean),
   goatBotProfileColor: Schema.optionalKey(Schema.Boolean),
+  goatBotProposals: Schema.optionalKey(Schema.Boolean),
   /** Server creates, hides, deletes and restores member bots, each with its own conversation. */
   goatBotMembers: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listChildWork`. */
   goatBotChildWork: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotThreads` and `channel.updateTaskView` for bot task threads. */
+  goatBotThreadFollows: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.listBotThreads` takes `history` and walks every task of a bot by cursor. Older
       servers drop the key and answer the current list. */
   goatBotTaskThreadsPaged: Schema.optionalKey(Schema.Boolean),
+  goatBotTaskSnooze: Schema.optionalKey(Schema.Boolean),
   goatBotTaskLookupSearch: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotNotes`. */
   goatBotNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotPrivateNotes: Schema.optionalKey(Schema.Boolean),
+  goatBotTools: Schema.optionalKey(Schema.Boolean),
+  goatBotInstructions: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBotArtifacts` and `channel.readBotArtifact`. */
   goatBotLibrary: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.retryTask`: a person runs a failed or stopped task again. */
@@ -317,6 +326,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers
       answer listed channels and linked accounts only and drop those fields. */
   slackChannelAccess: Schema.optionalKey(Schema.Boolean),
+  slackBotBindings: Schema.optionalKey(Schema.Boolean),
   /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
   linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
   revisionBoundPullRequestReviews: Schema.optionalKey(Schema.Boolean),

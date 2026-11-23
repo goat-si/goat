@@ -1,3 +1,6 @@
+import { GoatBotPackageImportButton } from "./GoatBotPackageActions";
+import { GoatBotTemplatePicker } from "./GoatBotTemplatePicker";
+import { useGoatBotTemplateSupport } from "./useGoatBotTemplateSupport";
 import { useAtomValue } from "@effect/atom-react";
 import {
   botManageFailure,
@@ -13,7 +16,7 @@ import {
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import { useRouter } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { PlusIcon } from "~/components/solar";
 import { selectGlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
 import { randomUUID } from "~/lib/utils";
@@ -127,6 +130,8 @@ function NewBotButton({
   botsError: string | null;
   retryBots: () => void;
 }) {
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const supportsTemplates = useGoatBotTemplateSupport(environmentId);
   const canCreate = useAtomValue(channelEnvironment.createBot.permissionAtom(environmentId));
   const send = useAtomCommand(channelEnvironment.createBot, { reportFailure: false });
   const { operation, created } = useNewBotSlot(environmentId);
@@ -210,6 +215,23 @@ function NewBotButton({
         <PlusIcon />
         New bot
       </Button>
+      {supportsTemplates && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!canCreate || bots === undefined}
+          onClick={() => setTemplatesOpen(true)}
+        >
+          From a template
+        </Button>
+      )}
+      <GoatBotPackageImportButton key={environmentId} environmentId={environmentId} />
+      {supportsTemplates && templatesOpen && (
+        <GoatBotTemplatePicker
+          environmentId={environmentId}
+          close={() => setTemplatesOpen(false)}
+        />
+      )}
     </SidebarGroup>
   );
 }

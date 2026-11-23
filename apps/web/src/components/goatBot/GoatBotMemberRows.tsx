@@ -30,11 +30,13 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
+import { useGoatBotPackageExport } from "./GoatBotPackageActions";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 import { GoatBotRowSignals, GoatBotWaitingMark } from "./GoatBotRowSignals";
+import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { goatBotGovernedAtom } from "./goatBotGoverned";
 
 const NO_PERMISSION = Atom.make(false);
@@ -55,6 +57,7 @@ export function GoatBotMemberRoster({
   const canEdit = useAtomValue(
     manage.canManage ? channelEnvironment.updateBot.permissionAtom(environmentId) : NO_PERMISSION,
   );
+  const sharing = useGoatBotPackageExport(environmentId);
   const [editing, setEditing] = useState<BotProfile | null>(null);
   const [deleting, setDeleting] = useState<BotProfile | null>(null);
   const [hiddenOpen, setHiddenOpen] = useState(false);
@@ -65,6 +68,7 @@ export function GoatBotMemberRoster({
     canManage: manage.canManage,
     canEdit,
     onEdit: setEditing,
+    onExport: sharing.open,
     onHide: (bot: BotProfile, hidden: boolean) => void manage.hide(bot, hidden),
     onDelete: setDeleting,
   };
@@ -121,6 +125,7 @@ export function GoatBotMemberRoster({
           </ul>
         </SidebarGroup>
       ) : null}
+      {sharing.dialog}
       {editing !== null ? (
         <GoatBotEditBotDialog bot={editing} canSubmit={canEdit} onClose={() => setEditing(null)} />
       ) : null}
@@ -157,6 +162,7 @@ function GoatBotMemberRow({
   canManage,
   canEdit,
   onEdit,
+  onExport,
   onHide,
   onDelete,
 }: {
@@ -165,6 +171,7 @@ function GoatBotMemberRow({
   readonly canManage: boolean;
   readonly canEdit: boolean;
   readonly onEdit: (bot: BotProfile) => void;
+  readonly onExport: ((bot: BotProfile) => void) | undefined;
   readonly onHide: (bot: BotProfile, hidden: boolean) => void;
   readonly onDelete: (bot: BotProfile) => void;
 }) {
@@ -228,9 +235,9 @@ function GoatBotMemberRow({
             </span>
           ) : null}
         </span>
-        {canManage ? <span aria-hidden className="w-5 shrink-0" /> : null}
+        {canManage || onExport !== undefined ? <span aria-hidden className="w-5 shrink-0" /> : null}
       </SidebarMenuButton>
-      {canManage ? (
+      {canManage || onExport !== undefined ? (
         <Menu>
           <MenuTrigger
             render={
@@ -238,7 +245,7 @@ function GoatBotMemberRow({
                 size="icon-xs"
                 variant="ghost-muted"
                 aria-label={`${bot.name} options`}
-                className="absolute top-1/2 right-1 -translate-y-1/2"
+                className="absolute top-6 right-1 -translate-y-1/2"
               />
             }
           >
@@ -246,18 +253,28 @@ function GoatBotMemberRow({
           </MenuTrigger>
           <MenuPopup align="end">
             <HoldsNavigation />
-            <MenuItem disabled={!canEdit} onClick={() => onEdit(bot)}>
-              Edit
-            </MenuItem>
-            <MenuItem onClick={() => onHide(bot, bot.hidden !== true)}>
-              {bot.hidden === true ? "Show" : "Hide"}
-            </MenuItem>
-            <MenuItem variant="destructive" onClick={() => onDelete(bot)}>
-              Delete
-            </MenuItem>
+            {canManage && (
+              <MenuItem disabled={!canEdit} onClick={() => onEdit(bot)}>
+                Edit
+              </MenuItem>
+            )}
+            {onExport !== undefined && (
+              <MenuItem onClick={() => onExport(bot)}>Share setup</MenuItem>
+            )}
+            {canManage && (
+              <>
+                <MenuItem onClick={() => onHide(bot, bot.hidden !== true)}>
+                  {bot.hidden === true ? "Show" : "Hide"}
+                </MenuItem>
+                <MenuItem variant="destructive" onClick={() => onDelete(bot)}>
+                  Delete
+                </MenuItem>
+              </>
+            )}
           </MenuPopup>
         </Menu>
       ) : null}
+      {bot.templateSetup !== undefined && <GoatBotTemplateRetry bot={bot} />}
     </SidebarMenuItem>
   );
 }
@@ -278,7 +295,8 @@ export function GoatBotMainMenu({
   );
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
   const [editing, setEditing] = useState(false);
-  if (!supported || !canEdit) return null;
+  const sharing = useGoatBotPackageExport(environmentId);
+  if ((!supported || !canEdit) && sharing.open === undefined) return null;
   return (
     <>
       <Menu>
@@ -288,7 +306,7 @@ export function GoatBotMainMenu({
               size="icon-xs"
               variant="ghost-muted"
               aria-label={`${main.name} options`}
-              className="absolute top-1/2 right-1 -translate-y-1/2"
+              className="absolute top-6 right-1 -translate-y-1/2"
             />
           }
         >
@@ -296,12 +314,19 @@ export function GoatBotMainMenu({
         </MenuTrigger>
         <MenuPopup align="end">
           <HoldsNavigation />
-          <MenuItem onClick={() => setEditing(true)}>Edit</MenuItem>
+          {canEdit && <MenuItem onClick={() => setEditing(true)}>Edit</MenuItem>}
+          {sharing.open !== undefined && (
+            <MenuItem onClick={() => sharing.open?.(main)}>Share setup</MenuItem>
+          )}
         </MenuPopup>
       </Menu>
+      {sharing.dialog}
       {editing ? (
         <GoatBotProfileDialog
           initial={main}
+          instructionsEditable={
+            presentation?.serverConfig?.environment.capabilities.goatBotInstructions === true
+          }
           canSubmit={canEdit}
           onClose={() => setEditing(false)}
           onSubmit={async (changes) => {

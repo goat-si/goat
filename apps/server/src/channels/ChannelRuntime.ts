@@ -42,6 +42,7 @@ import { CHANNEL_COPY } from "./channelCopy.ts";
 import { makeKeptNotes } from "./channelBotNotesKept.ts";
 import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import { deliveryIdFor } from "./channelIds.ts";
+import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRoutineIntake from "./ChannelRoutineIntake.ts";
@@ -83,12 +84,14 @@ export class ChannelRuntime extends Context.Service<
      */
     readonly claimForWork: Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
     readonly ownerToken: string;
+    readonly proposeBot: ChannelBotMembers.ChannelBotMembers["Service"]["propose"];
   }
 >()("goat/channels/ChannelRuntime") {}
 
 const make = Effect.gen(function* () {
   const hold = yield* AutomationHold.AutomationHold;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const follows = yield* makeThreadFollowService(ledger);
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const sessionFirst = yield* ChannelSessionFirst.ChannelSessionFirst;
   const members = yield* ChannelBotMembers.ChannelBotMembers;
@@ -346,6 +349,13 @@ const make = Effect.gen(function* () {
       ),
     );
     started += yield* reports.reconcile(owner);
+    yield* follows
+      .reconcile()
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Thread follows could not be reconciled", { cause }),
+        ),
+      );
     started += yield* keepNotes().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("GOAT Bot kept notes not restored", { cause }).pipe(Effect.as(0)),
@@ -408,6 +418,7 @@ const make = Effect.gen(function* () {
     recover,
     claimForWork,
     ownerToken: owner,
+    proposeBot: members.propose,
   });
 });
 

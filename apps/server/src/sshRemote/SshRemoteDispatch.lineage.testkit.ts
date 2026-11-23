@@ -22,6 +22,7 @@ import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
 import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
+import RemoteDispatchEnvironment from "../persistence/Migrations/184_RemoteDispatchEnvironment.ts";
 import * as Coordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
@@ -51,6 +52,7 @@ export const launchAgainst = (remote: {
   readonly afterLaunchedByRefusal?: {
     readonly advertisesMemory: boolean;
     readonly declaresMemoryCeiling: boolean;
+    readonly declaresProviderNotes?: boolean;
     readonly listFailure?: "failed" | "timeout" | "malformed" | "malformed-entry";
   };
   readonly callerRuntimeMode?: SshRemoteDispatch.SshLaunchInput["callerRuntimeMode"];
@@ -71,6 +73,8 @@ export const launchAgainst = (remote: {
   readonly onList?: () => void;
   readonly memoryCeilings?: ReadonlyArray<import("@goat/contracts").MemoryTaskGrantCeiling>;
   readonly declaresMemoryCeiling?: boolean;
+  readonly declaresProviderNotes?: boolean;
+  readonly providerNotes?: string;
   readonly advertisesMemory?: boolean;
   readonly onMemoryLaunch?: () => void;
   readonly declaresReport?: boolean;
@@ -206,6 +210,9 @@ export const launchAgainst = (remote: {
                           }
                         : {}),
                       ...(declaresReport ? { report: { type: "object" } } : {}),
+                      ...("declaresProviderNotes" in catalog && catalog.declaresProviderNotes
+                        ? { providerNotes: { type: "string" } }
+                        : {}),
                       ...(remote.declaresStandingInstructions
                         ? { standingInstructions: { type: "boolean" } }
                         : {}),
@@ -395,6 +402,7 @@ export const launchAgainst = (remote: {
             ...(remote.withReport === true
               ? { message: "Do the work", report: reportBinding, reportNote: "Report back." }
               : {}),
+            ...(remote.providerNotes === undefined ? {} : { providerNotes: remote.providerNotes }),
           };
           const coordinatorKind = remote.coordinatorKind;
           if (coordinatorKind === undefined) return dispatch.launchThread(input, Effect.void);
@@ -406,6 +414,7 @@ export const launchAgainst = (remote: {
             yield* Migration0068;
             yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
             yield* Migration0073;
+            yield* RemoteDispatchEnvironment;
             return yield* Effect.gen(function* () {
               const coordinator = yield* Coordinator.RemoteDispatchCoordinator;
               const launched = yield* coordinator.launch(

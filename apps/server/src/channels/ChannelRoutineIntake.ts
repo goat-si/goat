@@ -5,6 +5,8 @@
  */
 import {
   type ChannelGatewayError,
+  type ChannelInputId,
+  isChannelTaskTerminal,
   type ChannelIngestInput,
   CommandId,
   ScheduledTaskId,
@@ -23,10 +25,11 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { decodeRoutinePayload } from "../scheduledTasks/scheduledBotRoutines.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
 import { ChannelLedgerError } from "./channelLedgerError.ts";
 import { channelOwnerIdFor } from "./channelOwner.ts";
-import { inputIdFor } from "./channelIds.ts";
+import { inputIdFor, taskIdFor } from "./channelIds.ts";
 import { ROUTINE_KEY_PREFIX } from "./channelRoutineInputs.ts";
 
 const SETTLED_LINK_DAYS = 7;
@@ -61,12 +64,15 @@ interface PendingRow {
 interface FinishedRow {
   readonly firing_id: string;
   readonly inbox_state: string;
+  readonly input_id: ChannelInputId;
+  readonly work: number;
   readonly failure_json: string | null;
 }
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const gateway = yield* ChannelGateway.ChannelGateway;
+  const ledger = yield* ChannelLedger.ChannelLedger;
   const runs = yield* ScheduledTaskRuns.ScheduledTaskRuns;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const ownerId = channelOwnerIdFor(environmentId);
@@ -106,6 +112,10 @@ const make = Effect.gen(function* () {
         WHERE firing_id = ${row.firing_id}`.pipe(
       Effect.mapError(persistence("link routine input")),
     );
+    const grant =
+      payload.routineMode === "work" ? yield* ledger.routineWorkAuthority(inputId) : undefined;
+    if (grant !== undefined && "error" in grant)
+      return yield* refuse(row.firing_id, grant.error, at);
     const input: ChannelIngestInput = {
       kind: "goat",
       connectionId: ChannelGateway.GOAT_CONNECTION_ID,
@@ -124,7 +134,7 @@ const make = Effect.gen(function* () {
       ownerId,
       principalId: payload.principalId,
       displayName: "Owner",
-      grantedScopes: payload.grantedScopes,
+      grantedScopes: grant?.scopes ?? payload.grantedScopes,
       runtimeModeCeiling: "approval-required",
       caller: {
         type: "schedule",
@@ -185,7 +195,8 @@ const make = Effect.gen(function* () {
     const at = DateTime.formatIso(clock);
     const after = yield* Ref.get(settleAfter);
     const rows = yield* sql<FinishedRow>`
-      SELECT l.firing_id, i.state AS inbox_state, i.failure_json
+      SELECT l.firing_id, l.input_id, i.state AS inbox_state, i.failure_json,
+        COALESCE(json_extract(l.payload_json, '$.routineMode') = 'work', 0) AS work
       FROM scheduled_task_channel_inputs l JOIN channel_inbox i ON i.input_id = l.input_id
       WHERE l.state = 'ingested' AND i.state NOT IN ('accepted', 'processing') AND l.firing_id > ${after}
       ORDER BY l.firing_id LIMIT ${BATCH}`.pipe(
@@ -194,13 +205,18 @@ const make = Effect.gen(function* () {
     yield* advance(settleAfter, rows);
     let settled = 0;
     for (const row of rows) {
+      const task =
+        row.work === 1 ? (yield* ledger.getTask(taskIdFor(row.input_id, 0)))?.task : undefined;
+      if (task !== undefined && !isChannelTaskTerminal(task.status)) continue;
       const failure =
-        row.inbox_state === "replied" && row.failure_json === null
-          ? undefined
-          : Option.match(Option.flatMap(Option.fromNullishOr(row.failure_json), decodeFailure), {
-              onNone: () => ANSWER_FAILED,
-              onSome: (decoded) => decoded.message,
-            });
+        task !== undefined && task.status !== "completed"
+          ? (task.resultSummary ?? "The GOAT Bot task did not complete.")
+          : row.inbox_state === "replied" && row.failure_json === null
+            ? undefined
+            : Option.match(Option.flatMap(Option.fromNullishOr(row.failure_json), decodeFailure), {
+                onNone: () => ANSWER_FAILED,
+                onSome: (decoded) => decoded.message,
+              });
       const step = finish(
         row.firing_id,
         failure === undefined ? { type: "completed" } : { type: "failed", error: failure },

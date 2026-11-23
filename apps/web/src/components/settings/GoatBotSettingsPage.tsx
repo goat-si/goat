@@ -20,6 +20,7 @@ import {
 import { useGoatBotEnabled } from "../goatBot/useGoatBotSession";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { GoatBotAlertSettings } from "./GoatBotAlertSettings";
 import { GoatBotSettings } from "./GoatBotSettings";
 import { GoatBotStatusSettings } from "./GoatBotStatusSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -78,6 +79,9 @@ function GoatBotProfileSection() {
           key={environment.environmentId}
           environmentId={environment.environmentId}
           phase={presentation.connection.phase}
+          instructionsEditable={
+            presentation.serverConfig?.environment.capabilities.goatBotInstructions === true
+          }
           holdBack={nextHold !== null}
           refusedLine={refusedLine}
           deniedLine={deniedLine}
@@ -90,12 +94,14 @@ function GoatBotProfileSection() {
 function GoatBotProfileRow({
   environmentId,
   phase,
+  instructionsEditable,
   holdBack,
   refusedLine,
   deniedLine,
 }: {
   readonly environmentId: EnvironmentId;
   readonly phase: EnvironmentConnectionPhase;
+  readonly instructionsEditable: boolean;
   /** After a refusal, until a read settles: the answer held at the refusal is not shown. */
   readonly holdBack: boolean;
   readonly refusedLine: string;
@@ -144,6 +150,7 @@ function GoatBotProfileRow({
       {editing !== null ? (
         <GoatBotProfileDialog
           initial={editing}
+          instructionsEditable={instructionsEditable}
           canSubmit={canEdit}
           unavailableReason={connected ? undefined : `${editing.name}'s computer isn't connected.`}
           onClose={() => setEditing(null)}
@@ -181,6 +188,7 @@ export function GoatBotSettingsPanel() {
       <GoatBotStatusSettings />
       <GoatBotProfileSection />
       <GoatBotSettings />
+      <GoatBotAlertSettings />
       <SettingsSection title="Task threads">
         <SettingsRow
           title="Open task threads beside the main chat"

@@ -1,18 +1,37 @@
+import { vi } from "vite-plus/test";
+import * as NotesTail from "./channelBotNotesTail.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- mkfifo has no Effect API.
 import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { buildChannelReceptionPrompt } from "@goat/provider-core/server/channelReceptionPrompt";
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskId } from "@goat/contracts";
+import { BotId, ChannelTaskId, goatBotForgetNoteMessage, type ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { ProviderInstance } from "@goat/provider-core/server/driver";
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 
 import * as ServerConfig from "../config.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
+import { layerSessionStore } from "../auth/SessionEnd.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelBotMembers from "./ChannelBotMembers.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelLayers from "./ChannelLayers.ts";
+import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
 import { NOTES_HEADER, parseChannelBotNoteLines, replacesMarker } from "./channelBotNoteLines.ts";
@@ -20,6 +39,7 @@ import {
   channelBotFilesFor,
   readChannelBotNotes,
   readChannelBotNotesSnapshot,
+  recallChannelBotNotes,
 } from "./channelBotNotes.ts";
 import {
   EMPTY_NOTES,
@@ -42,12 +62,21 @@ import {
   type EvalSet,
 } from "./testkit/channelBotNotesEval.ts";
 import { HELDOUT_SET } from "./testkit/channelBotNotesHeldout.ts";
+import { dispatchBarrier } from "./testkit/dispatchRace.ts";
 import {
   defaultScript,
   goatInput,
+  linkSlackUser,
   makeHarness,
+  memoryRpcContext,
+  modelSelection,
   rpcContext,
+  environmentId,
+  owner,
+  botThreadId,
   setupBot,
+  slackContext,
+  slackInput,
 } from "./testkit/ChannelHarness.ts";
 
 const task = (instruction: string) => ({
@@ -103,6 +132,76 @@ const EVAL_CASES = [
   { name: "held-out", set: HELDOUT_SET, kilobytes: 64 },
   { name: "held-out", set: HELDOUT_SET, kilobytes: 200 },
 ];
+
+describe("scoped note reads", () => {
+  it.effect.each(["private", "shared"] as const)(
+    "keeps the readable file when the %s scope fails",
+    (broken) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const state = yield* fs.makeTempDirectoryScoped();
+        const own = channelBotFilesFor(path, state, BotId.make("scout"));
+        const shared = channelBotFilesFor(path, state);
+        const [bad, good] = broken === "private" ? [own, shared] : [shared, own];
+        const fact = line("The staging gate is Juniper.", "juniper");
+        yield* fs.makeDirectory(bad.notes, { recursive: true });
+        yield* fs.makeDirectory(good.dir, { recursive: true });
+        yield* fs.writeFileString(good.notes, NOTES_HEADER + fact + "\n");
+        const snapshot = yield* recallChannelBotNotes(own, "staging gate", true);
+        assert.include(snapshot?.standing ?? "", fact);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "keeps a member's own notes in the rendered prompt when shared notes fill the budget",
+    () => {
+      const harness = makeHarness();
+      const prompts: string[] = [];
+      harness.script.current = (input) => {
+        if (input.mode === "input") prompts.push(buildChannelReceptionPrompt(input).prompt);
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const scout = yield* (yield* ChannelBotMembers.ChannelBotMembers).create(
+          {
+            clientRequestId: "prompt-budget-scout",
+            name: "Scout",
+            avatar: null,
+            purpose: "",
+            defaultModelSelection: null,
+          },
+          owner,
+        );
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const state = (yield* ServerConfig.ServerConfig).stateDir;
+        const own = channelBotFilesFor(path, state, scout.botId);
+        const shared = channelBotFilesFor(path, state);
+        const privateFact = "Scout rollout uses Juniper.";
+        const sharedFact = "Every rollout must check CI.";
+        const sharedLines = [...filler(8_850), line(sharedFact, "shared-ci")].join("\n");
+        assert.isBelow(sharedLines.length, NOTES_SECTION_CHARS);
+        yield* fs.makeDirectory(own.dir, { recursive: true });
+        yield* fs.writeFileString(own.notes, line(privateFact, "scout-ci") + "\n");
+        yield* fs.writeFileString(shared.notes, sharedLines + "\n");
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          {
+            ...goatInput("How is rollout done?", "reception-note-budget"),
+            conversationKey: scout.sessionThreadId,
+            replyAddress: { kind: "goat", environmentId, threadId: scout.sessionThreadId },
+          },
+          memoryRpcContext,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.lengthOf(prompts, 1);
+        assert.include(prompts[0], sharedFact);
+        assert.include(prompts[0], privateFact);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});
 
 describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
   it.effect.each(EVAL_CASES)(
@@ -281,7 +380,7 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         yield* fs.writeFileString(files.notes, NOTES_HEADER + [old, ...filler(12_000)].join("\n"));
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
           goatInput("How often does the vendor portal change?", "portal-ask"),
-          rpcContext,
+          memoryRpcContext,
         );
         yield* (yield* ChannelRuntime.ChannelRuntime).drain;
         assert.lengthOf(seen, 1);
@@ -290,6 +389,190 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
       );
+    },
+  );
+
+  it.effect("rechecks the app session after its note snapshot and before first generation", () => {
+    const harness = makeHarness();
+    const prompts: Array<string | undefined> = [];
+    harness.script.current = (input) => {
+      if (input.mode === "input") prompts.push(input.notes);
+      return defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      const note = line("Use Juniper for staging.", "post-read-revoke");
+      yield* fs.writeFileString(files.notes, NOTES_HEADER + note + "\n");
+      const sessions = yield* SessionStore.SessionStore;
+      const { sessionId } = yield* sessions.issue({
+        subject: memoryRpcContext.principalId,
+        scopes: memoryRpcContext.grantedScopes,
+      });
+      const read = NotesTail.readChannelBotNotesTail;
+      let readNote = false;
+      using _tail = vi
+        .spyOn(NotesTail, "readChannelBotNotesTail")
+        .mockImplementation((path, bytes, hooks) =>
+          read(path, bytes, hooks).pipe(
+            Effect.tap((snapshot) =>
+              path === files.notes && snapshot !== null
+                ? Effect.sync(() => {
+                    readNote = new TextDecoder().decode(snapshot.bytes).includes(note);
+                  }).pipe(Effect.andThen(sessions.revoke(sessionId)), Effect.orDie)
+                : Effect.void,
+            ),
+          ),
+        );
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("How is staging set up?", "app-revoked-after-read"), {
+        ...memoryRpcContext,
+        authSessionId: sessionId,
+      });
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      assert.isTrue(readNote);
+      assert.deepStrictEqual(prompts, [undefined]);
+    }).pipe(
+      Effect.provide(
+        harness.layer.pipe(
+          Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+        ),
+      ),
+    );
+  });
+
+  it.effect("rechecks the requester after reception waits for a provider installation update", () =>
+    Effect.gen(function* () {
+      const gate = yield* ProviderInstallationGate.ProviderInstallationGate;
+      const update = yield* dispatchBarrier;
+      const waiting = yield* Deferred.make<void>();
+      const { instanceId } = modelSelection;
+      const prompts: string[] = [];
+      const generate: NonNullable<
+        ProviderInstance["textGeneration"]["generateChannelReception"]
+      > = ({ input }) => {
+        if (input.mode === "input") prompts.push(buildChannelReceptionPrompt(input).prompt);
+        return defaultScript(input);
+      };
+      const instance = {
+        instanceId,
+        textGeneration: { ...noMemoryGeneration, generateChannelReception: generate },
+      } as unknown as ProviderInstance;
+      const liveTextGeneration = TextGeneration.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+              getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),
+            }),
+            ServerSettings.layerTest().pipe(Layer.orDie),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => Effect.die("unused"),
+            }),
+            Layer.succeed(ProviderInstallationGate.ProviderInstallationGate, {
+              ...gate,
+              execute: (id, work) =>
+                gate.execute(id, work).pipe(
+                  Effect.forkChild({ startImmediately: true }),
+                  Effect.tap(() => Deferred.succeed(waiting, undefined)),
+                  Effect.flatMap(Fiber.join),
+                ),
+            }),
+          ),
+        ),
+      );
+      const harness = makeHarness({
+        channelsLayer: ChannelLayers.layerServices.pipe(Layer.provide(liveTextGeneration)),
+      });
+      yield* Effect.gen(function* () {
+        yield* setupBot;
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const fact = "Staging uses synthetic Juniper.";
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        yield* fs.writeFileString(files.notes, line(fact, "installation-wait") + "\n");
+        const sessions = yield* SessionStore.SessionStore;
+        const { sessionId } = yield* sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const updating = yield* Effect.forkScoped(gate.update([instanceId], update.pause));
+        yield* update.reached;
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          goatInput("How is staging set up?", "installation-wait"),
+          { ...memoryRpcContext, authSessionId: sessionId },
+        );
+        const reception = yield* Effect.forkScoped((yield* ChannelRuntime.ChannelRuntime).drain);
+        yield* Deferred.await(waiting);
+        assert.lengthOf(prompts, 0);
+        yield* sessions.revoke(sessionId);
+        yield* update.release;
+        yield* Fiber.join(updating);
+        yield* Fiber.join(reception);
+        assert.lengthOf(prompts, 1);
+        assert.notInclude(prompts[0], fact);
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(ProviderInstallationGate.layer)),
+  );
+
+  it.effect(
+    "strips shared notes from the second reception pass after Slack memory is revoked",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const grantedScopes = [...owner.grantedScopes, "memory:read" as const];
+        yield* linkSlackUser("U1", { ...owner, grantedScopes });
+        const fs = yield* FileSystem.FileSystem;
+        const files = channelBotFilesFor(
+          yield* Path.Path,
+          (yield* ServerConfig.ServerConfig).stateDir,
+        );
+        const note = line("The vendor rollout uses Indigo.", "vendor");
+        yield* fs.makeDirectory(files.dir, { recursive: true });
+        yield* fs.writeFileString(files.notes, NOTES_HEADER + note + "\n");
+        const first = yield* dispatchBarrier;
+        const prompts: Array<string | undefined> = [];
+        harness.script.current = (input) => {
+          if (input.mode !== "input") return defaultScript(input);
+          prompts.push(input.notes);
+          return input.readsAllowed === true
+            ? first.pause.pipe(
+                Effect.as({
+                  replyText: "",
+                  action: { type: "read", reads: [{ kind: "memory", query: "vendor rollout" }] },
+                } as const),
+              )
+            : Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+        };
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          slackInput("How is the vendor rollout set up?", "revoked-reception-notes"),
+          { ...slackContext, grantedScopes },
+        );
+        const reception = yield* Effect.forkScoped(runtime.drain);
+        yield* first.reached;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+        yield* first.release;
+        yield* Fiber.join(reception);
+        assert.lengthOf(prompts, 2);
+        assert.include(prompts[0] ?? "", note);
+        assert.isUndefined(prompts[1]);
+      }).pipe(Effect.provide(harness.layer));
     },
   );
 
@@ -404,5 +687,174 @@ describe("GOAT Bot notes beyond the newest 6,000 characters", () => {
         assert.isUndefined(yield* readChannelBotNotesSnapshot(files, "anything"));
         assert.strictEqual(yield* readChannelBotNotes(files, "anything"), "");
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "remembers and forgets in the resolved member only, and confirms sharing in its reply card",
+    () => {
+      const harness = makeHarness();
+      const seen: Array<{ text: string; input: string }> = [];
+      const privateNote = "Scout staging uses Juniper.";
+      const sharedNote = "Everyone releases on Thursday.";
+      harness.script.current = (input) => {
+        if (input.mode !== "input" || input.inputText?.startsWith("do:"))
+          return defaultScript(input);
+        if (input.inputText === "Remember Juniper") {
+          return Effect.succeed({
+            replyText: "Saved.",
+            action: { type: "report_only" },
+            rememberQuote: "Remember Juniper",
+            remember: privateNote,
+          });
+        }
+        seen.push({ text: input.notes ?? "", input: input.inputText ?? "" });
+        return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ goatBotSessionRouting: "reception" });
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const sessions = yield* SessionStore.SessionStore;
+        const liveSession = yield* sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const liveBrowser = { ...memoryRpcContext, authSessionId: liveSession.sessionId };
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const create = (name: string) =>
+          members.create(
+            {
+              clientRequestId: name,
+              name,
+              avatar: null,
+              purpose: "",
+              defaultModelSelection: null,
+            },
+            owner,
+          );
+        const scout = yield* create("Scout");
+        const review = yield* create("Review buddy");
+        const send = (
+          threadId: ThreadId,
+          text: string,
+          key: string,
+          context: ChannelIngressContext = liveBrowser,
+        ) =>
+          gateway.ingest(
+            {
+              ...goatInput(text, key),
+              conversationKey: threadId,
+              replyAddress: { kind: "goat", environmentId, threadId },
+            },
+            context,
+          );
+        const ask = (
+          threadId: ThreadId,
+          text: string,
+          key: string,
+          context?: ChannelIngressContext,
+        ) => send(threadId, text, key, context).pipe(Effect.tap(() => runtime.drain));
+
+        yield* ask(scout.sessionThreadId, "Remember Juniper", "private-note");
+        yield* ask(
+          review.sessionThreadId,
+          goatBotForgetNoteMessage(privateNote, "private"),
+          "wrong-forget",
+        );
+        const proposed = yield* ask(
+          scout.sessionThreadId,
+          "Remember for all bots: " + sharedNote,
+          "propose-note",
+        );
+        yield* ask(botThreadId, "before confirmation", "before-confirm");
+        assert.notInclude(seen.at(-1)?.text ?? "", sharedNote);
+        const proposal = (yield* ledger.getInput(proposed.inputId))?.decision?.action;
+        assert.strictEqual(proposal?.type, "clarify");
+        if (proposal?.type !== "clarify") return;
+        const option = proposal.options?.[0];
+        assert.isString(option);
+        if (option === undefined) return;
+
+        yield* ask(scout.sessionThreadId, option, "confirm-note");
+        const legacyEdit = yield* ask(
+          scout.sessionThreadId,
+          goatBotForgetNoteMessage(privateNote),
+          "legacy-unscoped-edit",
+        );
+        assert.include(
+          (yield* ledger.getInput(legacyEdit.inputId))?.decision?.replyText ?? "",
+          "Choose This bot or All bots",
+        );
+        yield* ask(scout.sessionThreadId, "scout authorized", "ask-scout");
+        yield* ask(review.sessionThreadId, "review authorized", "ask-review");
+        yield* ask(botThreadId, "main authorized", "ask-main");
+        yield* ask(scout.sessionThreadId, "scout denied", "ask-denied", rpcContext);
+        yield* ask(scout.sessionThreadId, "older app input", "ask-legacy", memoryRpcContext);
+        const shown = (query: string) => seen.find((item) => item.input === query)?.text ?? "";
+        assert.include(shown("scout authorized"), privateNote);
+        assert.include(shown("scout authorized"), sharedNote);
+        assert.include(shown("review authorized"), sharedNote);
+        assert.include(shown("main authorized"), sharedNote);
+        assert.notInclude(shown("review authorized"), privateNote);
+        assert.notInclude(shown("main authorized"), privateNote);
+        assert.strictEqual(shown("scout denied"), "");
+        assert.isTrue(seen.some(({ input }) => input === "older app input"));
+        assert.strictEqual(shown("older app input"), "");
+        const { sessionId } = yield* sessions.issue({
+          subject: memoryRpcContext.principalId,
+          scopes: memoryRpcContext.grantedScopes,
+        });
+        const browser = { ...memoryRpcContext, authSessionId: sessionId };
+        yield* ask(scout.sessionThreadId, "scout live", "ask-live", browser);
+        assert.include(shown("scout live"), privateNote);
+        yield* send(scout.sessionThreadId, "scout revoked", "ask-revoked", browser);
+        yield* sessions.revoke(sessionId);
+        yield* runtime.drain;
+        assert.strictEqual(shown("scout revoked"), "");
+        assert.isTrue(seen.some(({ input }) => input === "scout revoked"));
+
+        const work = (bot: typeof scout, title: string, context?: ChannelIngressContext) =>
+          Effect.gen(function* () {
+            yield* ask(bot.sessionThreadId, "do: " + title, title, context);
+            const tasks = yield* ledger.listTasks({
+              ownerId: owner.ownerId,
+              botId: bot.botId,
+              limit: 10,
+            });
+            const launched = tasks.tasks.find((task) => task.title === title);
+            assert.isDefined(launched?.worker);
+            const brief =
+              launched === undefined ? undefined : yield* ledger.latestTaskBrief(launched.taskId);
+            return brief?.deliveredText ?? "";
+          });
+        const scoutBrief = yield* work(scout, "scout worker");
+        const reviewBrief = yield* work(review, "review worker");
+        const deniedBrief = yield* work(scout, "worker without notes", rpcContext);
+        assert.include(scoutBrief, privateNote);
+        assert.include(scoutBrief, sharedNote);
+        assert.include(reviewBrief, sharedNote);
+        assert.notInclude(reviewBrief, privateNote);
+        assert.notInclude(deniedBrief, privateNote);
+        assert.notInclude(deniedBrief, sharedNote);
+
+        yield* ask(
+          scout.sessionThreadId,
+          goatBotForgetNoteMessage(privateNote, "private"),
+          "scout-forget",
+        );
+        yield* ask(scout.sessionThreadId, "after forget", "ask-after");
+        assert.notInclude(shown("after forget"), privateNote);
+        assert.include(shown("after forget"), sharedNote);
+      }).pipe(
+        Effect.provide(
+          harness.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(SqlitePersistence.layerMemory, layerSessionStore)),
+          ),
+        ),
+      );
+    },
   );
 });

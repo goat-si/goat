@@ -23,6 +23,12 @@ it("guards bot task lookup and search with read while preserving existing task p
   expect(clientRpcRequiredScopes("channel.retryTask", {})).toEqual(["orchestration:operate"]);
 });
 
+it("requires orchestration operate to snooze or unsnooze a bot task", () => {
+  for (const method of ["channel.bot_task_snooze", "channel.bot_task_unsnooze"] as const) {
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+  }
+});
+
 it("requires orchestration read for native child work", () => {
   expect(clientRpcRequiredScopes(ORCHESTRATION_V2_WS_METHODS.getNativeChildWork, {})).toEqual([
     "orchestration:read",
@@ -62,6 +68,7 @@ it("a desktop window's live picture needs the same read grant as a browser tab's
 });
 describe("memory client guards", () => {
   it("GOAT Bot's open asks need the orchestration read grant the server checks", () => {
+    expect(clientRpcRequiredScopes("channel.listBotAttention", {})).toEqual(["orchestration:read"]);
     expect(clientRpcRequiredScopes("channel.listOpenAsks", {})).toEqual(["orchestration:read"]);
     expect(clientRpcRequiredScopes("channel.subscribeTaskChanges", {})).toEqual([
       "orchestration:read",
@@ -69,6 +76,7 @@ describe("memory client guards", () => {
   });
 
   it("GOAT Bot's notes need the memory read grant before the client asks", () => {
+    expect(clientRpcRequiredScopes("channel.importBotPackage", {})).toEqual(["settings:write"]);
     expect(clientRpcRequiredScopes("channel.listBotNotes", {})).toEqual(["memory:read"]);
   });
 

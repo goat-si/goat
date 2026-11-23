@@ -1,7 +1,16 @@
 import * as Schema from "effect/Schema";
+import { ChannelAttentionFeedInput, ChannelAttentionFeedResult } from "./channelBotAttention.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 
+import {
+  BotPackageExportInput,
+  BotPackageExportResult,
+  BotPackageImportInput,
+  BotPackageImportResult,
+  BotPackageReviewInput,
+  BotPackageReviewResult,
+} from "./botPackage.ts";
 import { EnvironmentAuthorizationError } from "./auth.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
@@ -19,14 +28,21 @@ import {
   ChannelUpdateBotResult,
   ChannelBotResult,
   ChannelCreateBotInput,
+  ChannelResolveBotProposalInput,
   ChannelDeleteBotInput,
   ChannelRestoreBotInput,
   ChannelSetBotHiddenInput,
   ChannelListChildWorkInput,
   ChannelListChildWorkResult,
+  ChannelFollowThreadInput,
+  ChannelFollowTarget,
+  ChannelListFollowedThreadsInput,
+  ChannelListFollowedThreadsResult,
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
+  ChannelSnoozeBotTaskInput,
+  ChannelUnsnoozeBotTaskInput,
   ChannelTaskView,
   ChannelRetryTaskInput,
   ChannelRetryTaskResult,
@@ -86,6 +102,12 @@ const ChannelListOpenAsksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,
   error: ChannelRpcError,
 });
 
+const ChannelListBotAttentionRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotAttention, {
+  payload: ChannelAttentionFeedInput,
+  success: ChannelAttentionFeedResult,
+  error: ChannelRpcError,
+});
+
 const ChannelSubscribeTaskChangesRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges, {
   payload: ChannelSubscribeTaskChangesInput,
   success: ChannelTaskChangesEvent,
@@ -111,6 +133,28 @@ const ChannelCreateBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.createBot, {
   error: ChannelRpcError,
 });
 
+const BotPackageExportRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.exportBotPackage, {
+  payload: BotPackageExportInput,
+  success: BotPackageExportResult,
+  error: ChannelRpcError,
+});
+const BotPackageReviewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.reviewBotPackage, {
+  payload: BotPackageReviewInput,
+  success: BotPackageReviewResult,
+  error: ChannelRpcError,
+});
+const BotPackageImportRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.importBotPackage, {
+  payload: BotPackageImportInput,
+  success: BotPackageImportResult,
+  error: ChannelRpcError,
+});
+
+const ChannelResolveBotProposalRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.resolveBotProposal, {
+  payload: ChannelResolveBotProposalInput,
+  success: Schema.Void,
+  error: ChannelRpcError,
+});
+
 const ChannelSetBotHiddenRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.setBotHidden, {
   payload: ChannelSetBotHiddenInput,
   success: ChannelBotResult,
@@ -126,6 +170,21 @@ const ChannelDeleteBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.deleteBot, {
 const ChannelRestoreBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.restoreBot, {
   payload: ChannelRestoreBotInput,
   success: ChannelBotResult,
+  error: ChannelRpcError,
+});
+
+const ChannelFollowThreadRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.followThread, {
+  payload: ChannelFollowThreadInput,
+  success: Schema.Boolean,
+  error: ChannelRpcError,
+});
+const ChannelStopFollowingThreadRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.stopFollowingThread, {
+  payload: ChannelFollowTarget,
+  error: ChannelRpcError,
+});
+const ChannelListFollowedThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listFollowedThreads, {
+  payload: ChannelListFollowedThreadsInput,
+  success: ChannelListFollowedThreadsResult,
   error: ChannelRpcError,
 });
 
@@ -181,6 +240,17 @@ const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
   payload: ChannelGetTaskInput,
   success: ChannelTask,
   error: ChannelRpcError,
+});
+
+const ChannelSnoozeBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.snoozeBotTask, {
+  payload: ChannelSnoozeBotTaskInput,
+  success: ChannelTaskView,
+  error: ChannelGatewayError,
+});
+const ChannelUnsnoozeBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.unsnoozeBotTask, {
+  payload: ChannelUnsnoozeBotTaskInput,
+  success: ChannelTaskView,
+  error: ChannelGatewayError,
 });
 
 const ChannelGetBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotTask, {
@@ -250,13 +320,21 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
   ChannelListOpenAsksRpc,
+  ChannelListBotAttentionRpc,
   ChannelSubscribeTaskChangesRpc,
   ChannelListBotsRpc,
   ChannelUpdateBotRpc,
   ChannelCreateBotRpc,
+  BotPackageExportRpc,
+  BotPackageReviewRpc,
+  BotPackageImportRpc,
+  ChannelResolveBotProposalRpc,
   ChannelSetBotHiddenRpc,
   ChannelDeleteBotRpc,
   ChannelRestoreBotRpc,
+  ChannelFollowThreadRpc,
+  ChannelStopFollowingThreadRpc,
+  ChannelListFollowedThreadsRpc,
   ChannelListBotThreadsRpc,
   ChannelListBotNotesRpc,
   ChannelListBotArtifactsRpc,
@@ -267,6 +345,8 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelGetBotTaskRpc,
+  ChannelSnoozeBotTaskRpc,
+  ChannelUnsnoozeBotTaskRpc,
   ChannelSearchBotTasksRpc,
   ChannelListTasksRpc,
   ChannelGetInputRpc,

@@ -1,3 +1,4 @@
+import { botToolsRefusal } from "./channelBotTools.ts";
 import { sameRequester } from "./channelRequesterIdentity.ts";
 /**
  * ChannelDispatcher - the ledger's central decision maker.
@@ -18,14 +19,11 @@ import {
   type ChannelRequester,
   type ChannelTask,
   type ChannelTaskId,
-  type MemoryTaskGrantCeiling,
   type ModelSelection,
-  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
   resolveProjectProviderInstanceEnabled,
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
-import { prependStandingInstructions } from "@goat/shared/standingInstructions";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -37,14 +35,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 
-import {
-  type DispatchModeRefusal,
-  DispatchModeLimit,
-} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerConfig from "../config.ts";
-import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -54,7 +47,6 @@ import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { refuseForward } from "./channelForwardRefusal.ts";
 import { makeForwardFollowUp } from "./channelForwardFollowUp.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -63,16 +55,27 @@ import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
 import { answerForwardIdsFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
-import { requesterForDispatch } from "./channelDispatchAuthority.ts";
-import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
-import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
+import { prepareChannelWorkerWorkspace } from "./channelRoutineOwnWork.ts";
+import {
+  makeDispatchConfirmation,
+  requesterForDispatch,
+  sessionMemoryCeiling,
+  workerMemoryCeiling,
+} from "./channelDispatchAuthority.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
+import {
+  PlacementStarted,
+  askRequester,
+  refuseDispatch,
+  routineFailure,
+  unlessMovedOn,
+} from "./channelDispatchFences.ts";
+import { forwardLocalWorkerAnswer } from "./channelForwardAnswer.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
-import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
-import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { chooseBotModel } from "./channelBotModel.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
-import { workerInstruction } from "./channelWorkerBrief.ts";
+import { freezeLocalWorkerBrief } from "./channelLocalWorkerBrief.ts";
 import {
   ENDED_RUN_STATUSES,
   isThreadMissing,
@@ -97,8 +100,6 @@ export class ChannelDispatcher extends Context.Service<
   }
 >()("goat/channels/ChannelDispatcher") {}
 
-const MEMORY_CEILING_RANK = { none: 0, read: 1, read_write: 2 } as const;
-
 /** How many pieces of one person's work run at once before more wait in the queue. */
 export const WORKERS_PER_REQUESTER = 4;
 
@@ -107,20 +108,6 @@ const withoutKey = <V>(map: ReadonlyMap<string, V>, key: string) => {
   next.delete(key);
   return next;
 };
-
-/** The narrower of two memory ceilings. */
-const lowerMemoryCeiling = (
-  left: MemoryTaskGrantCeiling,
-  right: MemoryTaskGrantCeiling,
-): MemoryTaskGrantCeiling =>
-  MEMORY_CEILING_RANK[left] <= MEMORY_CEILING_RANK[right] ? left : right;
-
-const toLaunchStrategy = (
-  strategy: ChannelDispatchTarget["workspaceStrategy"],
-): OrchestrationV2ThreadLaunchWorkspaceStrategy =>
-  strategy.type === "root"
-    ? { type: "root" }
-    : { type: "worktree", baseRef: strategy.baseRef ?? "HEAD" };
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
@@ -142,7 +129,9 @@ const make = Effect.gen(function* () {
   /** Remote dispatches handed off but not yet claimed, by task, with whose work they are. */
   const remoteReservations = yield* Ref.make<ReadonlyMap<string, ChannelRequester>>(new Map());
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
-  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const { stateDir } = yield* ServerConfig.ServerConfig;
+  const filesFor = (botId: ChannelLedger.ChannelStoredTask["botId"]) =>
+    channelBotFilesFor(path, stateDir, botId);
   const proposals = yield* makeSkillProposalAnswers;
 
   /**
@@ -285,34 +274,11 @@ const make = Effect.gen(function* () {
       };
     });
 
-  /**
-   * The memory a task's worker may use: what the requester was granted, the same rule MCP and
-   * scheduled launches use. A Slack requester is judged by the identity link as it stands now,
-   * so a link narrowed or removed since the message arrived counts. A task that already chose a
-   * target never gets more than that target recorded, so choosing again cannot widen it.
-   */
   const requesterMemoryCeiling = (task: ChannelTask) =>
-    Effect.gen(function* () {
-      const recorded = task.target === undefined ? undefined : task.target.memoryGrantCeiling;
-      const cap = (ceiling: MemoryTaskGrantCeiling): MemoryTaskGrantCeiling =>
-        task.target === undefined ? ceiling : lowerMemoryCeiling(ceiling, recorded ?? "none");
-      let scopes = task.requester.grantedScopes;
-      if (task.originAddress.kind === "slack" || task.originAddress.kind === "imessage") {
-        const actor = task.requester.externalActorId;
-        if (actor === undefined) return "none" satisfies MemoryTaskGrantCeiling;
-        const linked = yield* currentChannelIdentity({
-          connectionId: task.originAddress.connectionId,
-          externalActorId: actor,
-        }).pipe(
-          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-          Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-        );
-        if (linked === undefined) return "none" satisfies MemoryTaskGrantCeiling;
-        scopes = scopes.filter((scope) => linked.grantedScopes.includes(scope));
-      }
-      // A read-only destination still narrows this when the thread starts.
-      return cap(captureMemoryGrantCeiling(scopes, false));
-    });
+    workerMemoryCeiling(task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
 
   /** The launch settings for a task, or the question to ask when they cannot be chosen. */
   const resolveTarget = (stored: ChannelLedger.ChannelStoredTask, allowRemote = false) =>
@@ -328,8 +294,16 @@ const make = Effect.gen(function* () {
       // A project named with the work wins over the channel's default project.
       const projectId = task.projectId ?? defaults?.projectId;
       // Named work may also go to the bot's own workspace, for work about the machine itself.
-      let chosen = shells.find((shell) => shell.id === projectId);
+      let chosen = shells.find(
+        (shell) =>
+          shell.id === projectId && (task.routineWork !== true || shell.archivedAt == null),
+      );
       if (projectId !== undefined && chosen === undefined) {
+        if (task.routineWork === true)
+          return {
+            type: "question" as const,
+            text: "The project configured for this GOAT Bot work trigger is unavailable.",
+          };
         const choices = yield* projectChoices(allowed, hostWorkspace);
         return {
           ...choices,
@@ -441,70 +415,61 @@ const make = Effect.gen(function* () {
       if (initial.task.target === undefined) return;
       // A session turn checks its requester itself, after binding any run a pass already sent.
       if (initial.task.kind === "turn") return yield* Effect.asVoid(session.serve(initial, owner));
-      if (
-        (yield* requesterForDispatch(initial.task).pipe(
-          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-          Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-        )) === undefined
-      ) {
-        yield* commitTransition(
-          ledger,
-          initial,
-          {
-            type: "task.failed",
-            payload: {
-              generation: initial.task.generation,
-              reason: "permission_changed",
-              summary: "The requester’s permission to start this work changed.",
-            },
-          },
-          { owner, narrate: true },
-        );
-        return;
-      }
+      const requester = yield* dispatchGrant(initial.task);
+      if (requester === undefined) return yield* refuseDispatch(ledger, initial, owner);
+      const botFiles = filesFor(initial.botId);
+      const mayRead = initial.task.routineWork !== true && canReadChannelBotNotes(requester);
+      const mayWrite = mayRead && requester.grantedScopes.includes("memory:write");
+      const identity = yield* profiles.identity(initial.ownerId, initial.botId).pipe(Effect.option);
+      if (Option.isNone(identity)) return yield* refuseDispatch(ledger, initial, owner);
+      const instance = yield* providers.getInstance(initial.task.target.modelSelection.instanceId);
+      const refusal = botToolsRefusal(
+        identity.value,
+        instance?.displayName ?? initial.task.target.modelSelection.instanceId,
+      );
+      if (refusal !== undefined) return yield* refuseDispatch(ledger, initial, owner, refusal);
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-      // The project's standing instructions go in front, as goat_thread_launch puts them, so a
-      // channel worker follows the rules every thread in that project follows.
-      const standing = resolveProjectSettings(settings, initial.task.target.projectId).settings
-        .standingInstructions;
-      const { stored, brief } = yield* freezeChannelBrief(
+      const { standingInstructions } = resolveProjectSettings(
+        settings,
+        initial.task.target.projectId,
+      ).settings;
+      const storedBrief = yield* freezeLocalWorkerBrief(
         ledger,
         initial,
         owner,
-        prependStandingInstructions(standing, workerInstruction(initial.task, botFiles)).text,
-        {
-          notesPath: botFiles.notes,
-          notesRevision:
-            initial.task.briefVersion === undefined
-              ? yield* channelNotesRevision(botFiles.notes).pipe(
-                  Effect.provideService(FileSystem.FileSystem, fileSystem),
-                )
-              : null,
-          skillsPath: botFiles.skills,
-        },
-      );
+        botFiles,
+        identity.value,
+        standingInstructions,
+        mayRead,
+        mayWrite,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+      const { stored, brief } = storedBrief;
       const task = stored.task;
       const target = task.target!;
-      const currentRequester = yield* requesterForDispatch(task).pipe(
-        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      const workspaceStrategy = yield* prepareChannelWorkerWorkspace(
+        task,
+        target,
+        ledger.recordLaunchHead,
+      ).pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projects));
+      const carriesNotes = brief.context.notesPath !== undefined;
+      const canDispatch = dispatchGrant(task).pipe(
+        Effect.map(
+          (current) =>
+            current !== undefined &&
+            (brief.context.notesPath === undefined ||
+              (mayRead &&
+                brief.context.notesPath === botFiles.notes &&
+                canReadChannelBotNotes(current) &&
+                sessionMemoryCeiling(current, target) === (target.memoryGrantCeiling ?? "none"))),
+        ),
       );
-      if (currentRequester === undefined) {
-        return yield* commitTransition(
-          ledger,
-          stored,
-          {
-            type: "task.failed",
-            payload: {
-              generation: task.generation,
-              reason: "permission_changed",
-              summary: "The requester’s permission to start this work changed.",
-            },
-          },
-          { owner, narrate: true },
-        ).pipe(Effect.asVoid);
-      }
+      if (!(yield* canDispatch)) return yield* refuseDispatch(ledger, stored, owner);
+      const confirmation = yield* makeDispatchConfirmation(
+        task.routineWork === true || carriesNotes,
+        canDispatch,
+      );
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
+      yield* ledger.bindWorkerProviderBrief(task, ids.threadId);
       const launched = yield* launches
         .launch({
           commandId: ids.commandId,
@@ -515,10 +480,11 @@ const make = Effect.gen(function* () {
           modelSelection: target.modelSelection,
           runtimeMode: target.runtimeMode,
           interactionMode: target.interactionMode,
-          workspaceStrategy: toLaunchStrategy(target.workspaceStrategy),
+          workspaceStrategy,
+          ...confirmation.options,
           initialMessage: {
             messageId: ids.messageId,
-            text: brief.deliveredText,
+            text: task.instruction,
             attachments: [],
             ...(target.memoryGrantCeiling === undefined
               ? {}
@@ -529,6 +495,8 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.result);
       if (launched._tag === "Failure") {
+        if (carriesNotes && (yield* confirmation.refused))
+          return yield* refuseDispatch(ledger, stored, owner);
         yield* Effect.logWarning("channel worker launch failed", {
           taskId: task.taskId,
           cause: launched.failure,
@@ -541,7 +509,8 @@ const make = Effect.gen(function* () {
             payload: {
               generation: task.generation,
               reason: "launch_failed",
-              summary: "The coding thread could not start.",
+              summary:
+                (yield* routineFailure(ledger, task)) ?? "The coding thread could not start.",
             },
           },
           { owner, narrate: true },
@@ -776,6 +745,11 @@ const make = Effect.gen(function* () {
     if (current !== undefined) yield* launch(current, owner);
   });
 
+  const dispatchGrant = (task: ChannelTask) =>
+    requesterForDispatch(task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
   const dispatch: ChannelDispatcher["Service"]["dispatch"] = (taskId, owner) =>
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
@@ -783,28 +757,8 @@ const make = Effect.gen(function* () {
       if (stored.task.skillProposal !== undefined) return yield* proposals.advance(stored, owner);
       let dispatchRequester = stored.task.requester;
       if (stored.task.status === "received") {
-        const requester = yield* requesterForDispatch(stored.task).pipe(
-          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-          Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-        );
-        if (requester === undefined) {
-          yield* unlessMovedOn(
-            commitTransition(
-              ledger,
-              stored,
-              {
-                type: "task.failed",
-                payload: {
-                  generation: stored.task.generation,
-                  reason: "permission_changed",
-                  summary: "The requester’s permission to start this work changed.",
-                },
-              },
-              { owner, narrate: true },
-            ),
-          );
-          return;
-        }
+        const requester = yield* dispatchGrant(stored.task);
+        if (requester === undefined) return yield* refuseDispatch(ledger, stored, owner);
         dispatchRequester = requester;
       }
       // A generation that may already run on another machine never starts anywhere else.
@@ -863,6 +817,7 @@ const make = Effect.gen(function* () {
         return;
       if (
         stored.task.kind !== "turn" &&
+        stored.task.routineWork !== true &&
         stored.task.host === undefined &&
         (yield* serverSettings.getSettings.pipe(Effect.orDie)).channelAutoPlacement
       ) {
@@ -894,6 +849,22 @@ const make = Effect.gen(function* () {
         task: { ...stored.task, requester: dispatchRequester },
       });
       if (resolved.type === "question") {
+        if (stored.task.routineWork === true)
+          return yield* unlessMovedOn(
+            commitTransition(
+              ledger,
+              stored,
+              {
+                type: "task.failed",
+                payload: {
+                  generation: stored.task.generation,
+                  reason: "launch_failed",
+                  summary: resolved.text,
+                },
+              },
+              { owner, narrate: true },
+            ),
+          ).pipe(Effect.asVoid);
         return yield* askRequester(
           ledger,
           stored,
@@ -1106,75 +1077,15 @@ const make = Effect.gen(function* () {
         yield* ledger.completeForward({ owner, sequence: pending.sequence });
         return;
       }
-      const ids = answerForwardIdsFor(event.eventId);
-      const authority = yield* requesterForDelivery(stored.task, event.payload.sender).pipe(
-        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      return yield* forwardLocalWorkerAnswer(
+        { ledger, threads, slackSettings },
+        stored,
+        worker.threadId,
+        projectId,
+        event,
+        pending.sequence,
+        owner,
       );
-      if (authority._tag !== "allowed") {
-        const projection = yield* threads
-          .getThreadRecords(worker.threadId, ["messages", "runs"])
-          .pipe(Effect.option);
-        if (Option.isNone(projection)) return;
-        const accepted =
-          projection.value.messages.some((message) => message.id === ids.messageId) ||
-          projection.value.runs.some((run) => run.userMessageId === ids.messageId);
-        if (accepted) {
-          yield* ledger.completeForward({ owner, sequence: pending.sequence });
-          return;
-        }
-        yield* refuseAnswerForward(ledger, stored, authority, owner, pending.sequence, ids);
-        return;
-      }
-      // The worker's modes may have been raised since the task started. The orchestrator re-checks
-      // them against the requester's ceiling inside the thread's command lock.
-      const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      const sent = yield* threads
-        .sendToThread({
-          projectId: ProjectId.make(projectId),
-          commandId: ids.commandId,
-          threadId: worker.threadId,
-          messageId: ids.messageId,
-          text: "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
-          attachments: [],
-          mode: "queue",
-          createdBy: "user",
-          creationSource: "server",
-        })
-        .pipe(
-          Effect.provideService(DispatchModeLimit, {
-            runtimeMode: authority.requester.runtimeModeCeiling,
-            interactionMode: "default",
-            refused,
-          }),
-          Effect.result,
-        );
-      if (sent._tag === "Failure") {
-        const refusal = yield* Ref.get(refused);
-        if (refusal !== undefined) {
-          // Keep the answer's intent: ask again, so the requester can lower the thread or answer there.
-          yield* refuseForward(
-            ledger,
-            stored,
-            "The coding thread now runs in " +
-              refusal.runtimeMode +
-              " mode, above what this task may use, so I didn't pass on your answer (\"" +
-              event.payload.answer +
-              "\"). Lower the thread's mode in GOAT and answer again, or answer in the thread.",
-            owner,
-            pending.sequence,
-            [ids.messageId],
-          );
-          return;
-        }
-        // Left pending; the next scan sends it again under the same command id.
-        yield* Effect.logWarning("channel answer forward failed", {
-          taskId: stored.task.taskId,
-          cause: sent.failure,
-        });
-        return;
-      }
-      yield* ledger.completeForward({ owner, sequence: pending.sequence });
     });
 
   return ChannelDispatcher.of({ dispatch, forward });

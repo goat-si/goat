@@ -56,6 +56,7 @@ export function makeFakeSlackSdk() {
           callWaiters.push({ call, resolve });
         });
   const sessions: FakeSlackSession[] = [];
+  const ephemeral: Array<Parameters<SlackBotApi["postEphemeral"]>[0]> = [];
   const posted: Array<Parameters<SlackBotApi["postMessage"]>[0]> = [];
   const updated: Array<Parameters<SlackBotApi["updateMessage"]>[0]> = [];
   const deleted: Array<Parameters<SlackBotApi["deleteMessage"]>[0]> = [];
@@ -138,6 +139,10 @@ export function makeFakeSlackSdk() {
           record("authTest");
           return script.authTest();
         },
+        postEphemeral: (input) => {
+          ephemeral.push(input);
+          return Promise.resolve({ ts: "1760000001.000101" });
+        },
         postMessage: (input) => {
           record("post");
           posted.push({ ...input });
@@ -170,6 +175,7 @@ export function makeFakeSlackSdk() {
     waitForCall,
     sessions,
     posted,
+    ephemeral,
     updated,
     deleted,
     script,

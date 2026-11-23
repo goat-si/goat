@@ -9,6 +9,10 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   CHANNEL_GATEWAY_WS_METHODS,
+  MAIN_BOT_ID,
+  type AuthEnvironmentScope,
+  type BotId,
+  type ChannelListBotNotesInput,
   ChannelGatewayError,
   type ChannelBotNote,
   type ChannelListBotNotesResult,
@@ -24,6 +28,7 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import { parseChannelBotNoteLines, type ChannelBotNoteLine } from "./channelBotNoteLines.ts";
 import { channelBotNoteSources } from "./channelBotNoteSources.ts";
+import { isActiveMember } from "./channelBotLedger.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { readChannelBotNotesTail, type NotesTailHooks } from "./channelBotNotesTail.ts";
 
@@ -50,6 +55,7 @@ export class ChannelBotNotesReader extends Context.Service<
   {
     readonly list: (
       viewer: ChannelConnectionOwner,
+      botId?: BotId,
     ) => Effect.Effect<ChannelListBotNotesResult, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotNotesReader") {}
@@ -60,10 +66,24 @@ export const make = Effect.fn("ChannelBotNotesReader.make")(function* (
   const path = yield* Path.Path;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const sql = yield* SqlClient.SqlClient;
-  const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const { stateDir } = yield* ServerConfig.ServerConfig;
 
-  const list = Effect.fn("ChannelBotNotesReader.list")(function* (viewer: ChannelConnectionOwner) {
+  const list = Effect.fn("ChannelBotNotesReader.list")(function* (
+    viewer: ChannelConnectionOwner,
+    botId?: BotId,
+  ) {
+    if (!viewer.grantedScopes.includes("memory:read"))
+      return yield* new ChannelGatewayError({ reason: "forbidden" });
     yield* home.requireHome;
+    if (
+      botId !== undefined &&
+      botId !== MAIN_BOT_ID &&
+      !(yield* isActiveMember(sql, viewer.ownerId, botId).pipe(
+        Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+      ))
+    )
+      return yield* new ChannelGatewayError({ reason: "not_found" });
+    const files = channelBotFilesFor(path, stateDir, botId);
     const read = yield* readChannelBotNotesTail(files.notes, TAIL_BYTES, options);
     if (read === null) return { revision: null, notes: [], truncated: false };
     const lines = parseChannelBotNoteLines(new TextDecoder().decode(read.bytes));
@@ -87,6 +107,20 @@ export const layer = Layer.effect(ChannelBotNotesReader, make());
 export const rpcHandlers = (
   service: ChannelBotNotesReader["Service"],
   viewer: ChannelConnectionOwner,
+  activeScopes?: Effect.Effect<ReadonlyArray<AuthEnvironmentScope>>,
 ) => ({
-  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: () => service.list(viewer),
+  [CHANNEL_GATEWAY_WS_METHODS.listBotNotes]: (input?: ChannelListBotNotesInput) =>
+    activeScopes === undefined
+      ? service.list(viewer, input?.botId)
+      : activeScopes.pipe(
+          Effect.flatMap((live) =>
+            service.list(
+              {
+                ...viewer,
+                grantedScopes: viewer.grantedScopes.filter((scope) => live.includes(scope)),
+              },
+              input?.botId,
+            ),
+          ),
+        ),
 });

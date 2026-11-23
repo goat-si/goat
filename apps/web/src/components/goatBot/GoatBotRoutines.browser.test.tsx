@@ -1,5 +1,6 @@
 import type { BotRoutineSource } from "@goat/client-runtime/scheduledTasks";
 import {
+  AuthOrchestrationOperateScope,
   ChannelInputId,
   CommandId,
   EnvironmentAuthorizationError,
@@ -18,22 +19,37 @@ import { render } from "../../../test/render";
 const mocks = vi.hoisted(() => ({ upsert: vi.fn(), setEnabled: vi.fn(), runNow: vi.fn() }));
 // Each run's input read: every key asked for, in render order, and what a key's read answers.
 const reads = vi.hoisted(() => ({
+  canReadDeliveries: true,
   keys: [] as Array<string | null>,
   answers: new Map<string, { data: unknown; error: string | null }>(),
   timestampFormat: "24-hour" as "locale" | "12-hour" | "24-hour",
 }));
 vi.mock("~/state/entities", () => ({
+  useProjects: () => [
+    { id: "trigger-project", title: "Demo Repository", environmentId: "env", archivedAt: null },
+  ],
   useThreadShell: () => ({
     id: "bot",
     projectId: "bot-project",
     modelSelection: { instanceId: "codex", model: "gpt-5" },
   }),
 }));
+vi.mock("~/state/session", async (original) => ({
+  ...(await original<typeof import("~/state/session")>()),
+  useEnvironmentScope: (_environment: string, scope: string) =>
+    scope !== AuthOrchestrationOperateScope || reads.canReadDeliveries,
+}));
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironmentHttpBaseUrl: () => "http://localhost:8309",
+}));
 vi.mock("~/state/server", () => ({
   serverEnvironment: {
+    scheduledTaskWebhookDeliveries: () => "deliveries",
     upsertScheduledTask: { permissionAtom: () => Atom.make(true), execute: mocks.upsert },
     setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
     runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: mocks.runNow },
+    rotateScheduledTaskWebhookToken: { permissionAtom: () => Atom.make(true) },
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -81,6 +97,7 @@ function setup() {
   mocks.upsert.mockReset();
   mocks.setEnabled.mockReset();
   mocks.runNow.mockReset();
+  reads.canReadDeliveries = true;
   reads.keys = [];
   reads.answers = new Map();
   reads.timestampFormat = "24-hour";
@@ -345,6 +362,54 @@ async function readRun(name: string) {
   expect(document.activeElement).toBe(dot(name).element());
   return said;
 }
+
+it("shows an unreadable history distinctly from an empty or legacy history", async () => {
+  setup();
+  const unavailable: BotRoutineSource = {
+    ...routine("Unavailable", []),
+    recentRunsIncomplete: true,
+  };
+  await using screen = await render(
+    routines([unavailable, routine("Empty", []), routine("Legacy", undefined)]),
+  );
+  await expect.element(screen.getByText("Couldn't read runs")).toBeVisible();
+  expect(screen.getByText("Couldn't read runs").all()).toHaveLength(1);
+});
+
+it("denied and revoked delivery access keep the request log closed", async () => {
+  setup();
+  reads.canReadDeliveries = false;
+  const trigger = routine("Review trigger", [], {
+    routineMode: "work",
+    schedule: { type: "webhook", signature: null },
+    webhook: { path: "/fixture", url: null, hasSecret: false },
+  });
+  await using screen = await render(routines([trigger]));
+  const deliveries = screen.getByRole("button", { name: "Deliveries", exact: true });
+  await expect.element(deliveries).not.toBeInTheDocument();
+  expect(readKeys()).not.toContain("deliveries");
+  reads.canReadDeliveries = true;
+  reads.answers.set("deliveries", { data: { deliveries: [] }, error: null });
+  await screen.rerender(routines([trigger]));
+  await userEvent.click(deliveries);
+  await expect.element(screen.getByText("No requests yet.")).toBeVisible();
+  reads.canReadDeliveries = false;
+  await screen.rerender(routines([trigger]));
+  await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
+  await expect.element(deliveries).not.toBeInTheDocument();
+});
+
+it("names the event and links the task created by the delivery", async () => {
+  setup();
+  answer("event-input", { taskIds: ["fixture-task"], reply: { text: "Started review." } });
+  const event = { ...finished(9, "completed", "event-input"), origin: "event" as const };
+  await using screen = await render(routines([routine("Review", [event])]));
+  await userEvent.click(dot("Run on Nov 14, 09:00, completed, Event"));
+  await expect.element(screen.getByRole("dialog")).toMatchTextContent("Event");
+  await expect
+    .element(screen.getByRole("link", { name: "Open task" }))
+    .toHaveAttribute("href", "/bot?task=fixture-task");
+});
 
 it("a routine's recent runs are one toolbar stop whose dots name each run in the Timestamp format's hours", async () => {
   setup();
@@ -645,4 +710,61 @@ it("a long reply with no chat row is fully reachable in the popover", async () =
     await expect.element(popup()).not.toBeInTheDocument();
     expect(document.activeElement).toBe(dot(name).element());
   }
+});
+
+it("creates a pull-request trigger with a project and required signature and lists it as a webhook", async () => {
+  setup();
+  const endpoint = "/api/hooks/fixture-trigger/fixture-token";
+  const workTrigger: BotRoutineSource = {
+    ...savedCheckIn,
+    title: "Pull request opened",
+    webhook: { path: endpoint, url: null, hasSecret: true },
+    routineMode: "work",
+    schedule: {
+      type: "webhook",
+      signature: { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" },
+    },
+  };
+  mocks.upsert.mockResolvedValue(AsyncResult.success({ task: workTrigger }));
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[savedCheckIn]}
+      error={null}
+      onRetry={() => {}}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "New trigger" }));
+  await userEvent.selectOptions(screen.getByLabelText("Event"), "pr-opened");
+  await expect.element(screen.getByLabelText("Project")).toBeVisible();
+  await expect.element(screen.getByText("Webhook URL appears after saving.")).toBeVisible();
+  await userEvent.fill(screen.getByLabelText("Signing secret"), "fixture-signing-secret");
+  await userEvent.click(screen.getByRole("button", { name: "Save trigger" }));
+  expect(mocks.upsert).toHaveBeenCalledWith({
+    environmentId,
+    input: expect.objectContaining({
+      routineMode: "work",
+      threadId,
+      projectId: "trigger-project",
+      schedule: expect.objectContaining({
+        type: "webhook",
+        signature: expect.objectContaining({ required: true }),
+      }),
+    }),
+  });
+  await screen.rerender(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={[workTrigger]}
+      error={null}
+      onRetry={() => {}}
+    />,
+  );
+  await expect.element(screen.getByText("On webhook · Listening")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Reveal webhook URL" }));
+  await expect
+    .element(screen.getByRole("textbox", { name: "Webhook URL" }))
+    .toHaveValue(`http://localhost:8309${endpoint}`);
 });

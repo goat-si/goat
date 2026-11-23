@@ -1,11 +1,3 @@
-/**
- * A channel core harness for tests: the GOAT bot thread is a real orchestrator thread whose
- * provider adapter refuses to run anything, worker threads are scripted (`WorkerWorld`), and the
- * reception model and Slack transport are fakes the test controls. Other lanes swap in their own
- * channel layer or Slack transport through `makeHarness` options.
- *
- * @module ChannelHarness
- */
 import {
   type ChannelIngestInput,
   type ChannelOutboundMessage,
@@ -96,10 +88,8 @@ export const modelSelection = {
 const refusingAdapter = {
   instanceId: modelSelection.instanceId,
   driver: ProviderDriverKind.make("codex"),
-  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-  openSession: () => Effect.die("the GOAT bot must never start a provider session"),
-} as ProviderAdapter.ProviderAdapterV2["Service"];
+};
 
 /** Scripted worker threads: their runs, final assistant text, and background work. */
 const LIVE_RUN = new Set(["queued", "preparing", "starting", "running", "waiting"]);
@@ -318,6 +308,7 @@ export function makeHarness(
     readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
+    readonly botWorkspaceRoot?: string;
     /**
      * Real directory as the work project's root. A .git inside it makes the dispatcher give the
      * task its own worktree; the default is a path that does not exist.
@@ -336,7 +327,9 @@ export function makeHarness(
     readonly fakeSlackTransport?: boolean;
     /** Exercise durable launch receipts instead of the scripted worker launch. */
     readonly realWorkerLaunch?: boolean;
+    readonly getWorkerBranch?: GitWorkflow.GitWorkflowService["Service"]["currentBranch"];
     readonly workerAdapter?: ProviderAdapter.ProviderAdapterV2["Service"];
+    readonly beforeWorkerCapabilities?: Effect.Effect<void>;
     /** Other machines over SSH; defaults to a machine that knows no SSH hosts. */
     readonly sshRemote?: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch>;
     /** The state database; defaults to a fresh in-memory one. A file lets a test restart. */
@@ -357,18 +350,21 @@ export function makeHarness(
   };
 
   const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
+  const layerFiles = AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-");
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "channel-scenarios" },
     ProviderAdapterRegistry.layerFromAdapters([
       options.workerAdapter ?? {
         ...refusingAdapter,
+        getCapabilities: () =>
+          Effect.as(options.beforeWorkerCapabilities ?? Effect.void, CodexProviderCapabilitiesV2),
         openSession: () =>
           Effect.sync(() => providerCalls.push("openSession")).pipe(
             Effect.andThen(Effect.die("the GOAT bot must never start a provider session")),
           ),
       },
     ]),
-    { databaseLayer: layerDatabase, runEffectWorker: false },
+    { databaseLayer: layerDatabase, serverConfigLayer: layerFiles, runEffectWorker: false },
   );
   const layerSettings =
     options.settingsLayer ??
@@ -692,7 +688,7 @@ export function makeHarness(
           {
             id: scratchProjectId,
             title: "Scratch",
-            workspaceRoot: "/nonexistent/scratch",
+            workspaceRoot: options.botWorkspaceRoot ?? "/nonexistent/scratch",
             defaultModelSelection: shellDefault,
             scripts: [],
             createdAt: "2026-10-12T00:00:00.000Z",
@@ -744,37 +740,35 @@ export function makeHarness(
       isScratchProject: () => Effect.succeed(false),
     }),
     layerSettings,
-  ).pipe(
-    // Server config, platform services, and the attachment files the gateway claims into.
-    Layer.provideMerge(AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-")),
-  );
+  ).pipe(Layer.provideMerge(layerFiles));
 
   const layerLaunchDependencies = Layer.mergeAll(
     layerOrchestrator,
     layerExternal,
     layerThreads,
     CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
+    layerDatabase,
     IdAllocator.layer,
     WorktreeSetupTracker.layer,
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
     Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
     Layer.mock(GitWorkflow.GitWorkflowService)({
-      currentBranch: () => Effect.succeed(null),
+      currentBranch: options.getWorkerBranch ?? (() => Effect.succeed(null)),
     }),
     Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
       runForThread: () => Effect.succeed({ status: "no-script" }),
     }),
     ProviderRegistryMock.layer(),
     Layer.mock(ProjectService.ProjectService)({
-      getById: () =>
+      getById: (id) =>
         Effect.succeed(
-          Option.some({
-            ...shells[0]!,
+          Option.map(Option.fromUndefinedOr(shells.find((shell) => shell.id === id)), (shell) => ({
+            ...shell,
             repositoryIdentity: null,
             faviconPath: null,
             defaultThreadEnvMode: null,
             deletedAt: null,
-          }),
+          })),
         ),
     }),
   );
@@ -849,7 +843,6 @@ export function makeHarness(
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
     Layer.provideMerge(layerDatabase),
   );
-  /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
   const removeProject = (id: ProjectId) => {
     const index = shells.findIndex((shell) => shell.id === id);
     if (index !== -1) shells.splice(index, 1);
@@ -941,15 +934,26 @@ export const slackContext = {
   ...owner,
   caller: { type: "transport" as const, kind: "slack" as const, connectionId: "slack-1" },
 };
-
-/** Links Slack user U1 the way a person would: a code from GOAT, sent to the bot. */
-export const linkSlackUser = (user = "U1") =>
+export const memoryRpcContext = {
+  ...rpcContext,
+  grantedScopes: [...rpcContext.grantedScopes, "memory:read", "memory:write"] as const,
+};
+export const memorySlackContext = {
+  ...slackContext,
+  grantedScopes: memoryRpcContext.grantedScopes,
+};
+export const linkSlackUser = (user = "U1", withMemory: boolean | typeof owner = false) =>
   Effect.gen(function* () {
     const identities = yield* ChannelIdentityService.ChannelIdentityService;
     const gateway = yield* ChannelGateway.ChannelGateway;
+    const context = withMemory === true ? memorySlackContext : { ...slackContext, ...withMemory };
     const { code } = yield* identities.createLink(
-      { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
-      owner,
+      {
+        connectionId: "slack-1",
+        runtimeModeCeiling: "auto-accept-edits",
+        ...(withMemory ? { grantedScopes: context.grantedScopes } : {}),
+      },
+      context,
     );
     yield* gateway.linkIdentity(
       {
@@ -965,7 +969,7 @@ export const linkSlackUser = (user = "U1") =>
           rootTs: "1",
         },
       },
-      slackContext,
+      context,
     );
   });
 

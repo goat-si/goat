@@ -5,6 +5,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
+import { Atom } from "effect/reactivity";
 import { useState } from "react";
 import { useEnvironmentScope } from "../../state/session";
 import { ScrollView, View } from "react-native";
@@ -12,6 +13,7 @@ import Animated, { useAnimatedStyle, type DerivedValue } from "react-native-rean
 import { AppText } from "../../components/ui/AppText";
 import { childThreadApprovalsAtom, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { ChildApprovalContext, type WaitingWorker } from "./ChildApprovalContext";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 
 function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
@@ -59,19 +61,31 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   );
 }
 
-export function ChildThreadApprovals({
-  threadRef,
-  maxHeight,
-}: {
-  threadRef: ScopedThreadRef | null;
-  maxHeight: DerivedValue<number>;
+const NO_APPROVALS = Atom.make<ReadonlyArray<ChildThreadApproval>>([]);
+
+export function ChildThreadApprovals(props: {
+  readonly threadRef?: ScopedThreadRef | null;
+  readonly approvals?: ReadonlyArray<ChildThreadApproval>;
+  readonly workers?: ReadonlyArray<WaitingWorker>;
+  readonly maxHeight?: DerivedValue<number>;
+  readonly onOpenWorker?: (thread: ScopedThreadRef) => void;
 }) {
-  const approvals = useAtomValue(childThreadApprovalsAtom(threadRef));
-  const heightStyle = useAnimatedStyle(() => ({ maxHeight: Math.min(320, maxHeight.value / 2) }));
-  if (approvals.length === 0) return null;
+  const { maxHeight, onOpenWorker } = props;
+  const children = useAtomValue(
+    props.threadRef ? childThreadApprovalsAtom(props.threadRef) : NO_APPROVALS,
+  );
+  const approvals = props.approvals ?? children;
+  const heightStyle = useAnimatedStyle(() => ({
+    maxHeight: maxHeight ? Math.min(320, maxHeight.value / 2) : 240,
+  }));
+  const workers = props.workers ?? approvals;
+  if (approvals.length === 0 && (!onOpenWorker || workers.length === 0)) return null;
   return (
     <Animated.View style={heightStyle} className="overflow-hidden">
       <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled style={{ flexShrink: 1 }}>
+        {onOpenWorker ? (
+          <ChildApprovalContext approvals={workers} onOpenWorker={onOpenWorker} />
+        ) : null}
         {approvals.map((entry) => (
           <ChildApproval
             key={JSON.stringify([

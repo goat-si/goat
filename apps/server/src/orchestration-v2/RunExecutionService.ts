@@ -224,6 +224,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly relatedThreadIds?: ReadonlyArray<ThreadId>;
   readonly relatedProviderThreadIds?: ReadonlyArray<ProviderThreadId>;
   readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
+  readonly providerInputRefusal?: Effect.Effect<OrchestrationV2ProviderFailure | undefined>;
   readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
   readonly hasWorkspaceMoved?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
@@ -1867,6 +1868,34 @@ export const layer: Layer.Layer<
             : yield* Effect.exit(input.shouldStartProviderTurn());
         if (Exit.isSuccess(shouldStart) && !shouldStart.value) {
           yield* interruptProviderEvents;
+          return;
+        }
+        const refusal =
+          Exit.isSuccess(shouldStart) && input.providerInputRefusal !== undefined
+            ? yield* input.providerInputRefusal
+            : undefined;
+        if (refusal !== undefined) {
+          yield* interruptProviderEvents;
+          yield* writeFinalRunEvents({
+            run: input.run,
+            rootNode: input.rootNode,
+            checkpointScope: input.checkpointScope,
+            providerThread: input.providerThread,
+            attempt: input.attempt,
+            writeIfRunCurrent: { activeAttemptId: input.attempt.id, expectedStatus: "running" },
+            terminal: makeFailedTerminalEvent(refusal, (yield* Ref.get(latestTurnItemOrdinal)) + 1),
+            failureItemPersisted: false,
+            refreshAfterTurn,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new RunExecutionStartError({
+                  commandId: input.commandId,
+                  runId: input.run.id,
+                  cause,
+                }),
+            ),
+          );
           return;
         }
 

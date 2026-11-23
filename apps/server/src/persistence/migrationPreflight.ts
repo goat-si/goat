@@ -7,8 +7,10 @@ import * as Migrator from "effect/sql/Migrator";
 import { V1_DATABASE_FILENAME } from "./initializeV2Database.ts";
 import { migrationEntries } from "./Migrations.ts";
 import {
+  canonicalMigrationName,
   displacedUpstreamMigrations,
   memoryMigrationProblem,
+  normalizeBotAttentionPreview,
   plannedGoatLedger,
   skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
@@ -81,7 +83,11 @@ export function migrationLedgerProblem(
 ): string | undefined {
   const entries = migrationEntries;
   const known = new Set<string>(entries.map(([, name]) => name));
-  const unknown = [...new Set(history.map((row) => row.name).filter((name) => !known.has(name)))];
+  const unknown = [
+    ...new Set(
+      history.map((row) => row.name).filter((name) => !known.has(canonicalMigrationName(name))),
+    ),
+  ];
   if (unknown.length > 0) {
     return `This database has migrations that goat@${version} does not know: ${unknown.join(", ")}. A newer build wrote them, and running goat@${version} on this database is not safe. Stay on the newer release, or wait for a release that includes these migrations.`;
   }
@@ -93,7 +99,10 @@ export function migrationLedgerProblem(
     history.map((row) => ({ id: row.migration_id, name: row.name })),
   );
   if (preview === null) return incompatible("an unexpected V2 preview history.");
-  const reconciled = preview.map((row) => ({ migration_id: row.id, name: row.name }));
+  const { history: reconciled } = normalizeBotAttentionPreview(
+    entries,
+    preview.map((row) => ({ migration_id: row.id, name: row.name })),
+  );
   const plan = plannedGoatLedger(entries, reconciled);
   if (plan instanceof Migrator.MigrationError) return incompatible(plan.message);
   const moved = plan?.moved ?? reconciled;

@@ -8,6 +8,7 @@ import {
   OrchestratorMcpFailure,
   CommandId,
   MessageId,
+  REMOTE_CHANNEL_WORKER_THREAD_PREFIX,
   ThreadId,
   type ModelSelection,
   type RuntimeMode,
@@ -304,7 +305,6 @@ const make = Effect.gen(function* () {
             (admission === undefined
               ? yield* newCommandId()
               : CommandId.make(admission.record.childWorkId));
-          const threadId = cloudRun?.threadId ?? ThreadId.make(commandId);
           const messageId = MessageId.make(commandId);
           const attachments = input.attachments ?? [];
           if (attachments.some((attachment) => !Claims.attachmentIsPendingUpload(attachment)))
@@ -322,6 +322,26 @@ const make = Effect.gen(function* () {
               code: "invalid_request",
               message: "An origin report binding may only be supplied by an outside client.",
             });
+          const providerNotes = input.providerNotes;
+          if (
+            providerNotes !== undefined &&
+            (report === undefined ||
+              !input.message?.trim() ||
+              forwarded === undefined ||
+              forwarded === "none")
+          )
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "Provider notes require an outside launch with a message, report binding and memory access.",
+            });
+          const threadId =
+            cloudRun?.threadId ??
+            ThreadId.make(
+              report?.botAttention === true
+                ? REMOTE_CHANNEL_WORKER_THREAD_PREFIX + commandId
+                : commandId,
+            );
           if (
             input.scratch === true &&
             (input.projectId !== undefined || input.workspaceStrategy !== undefined)
@@ -690,21 +710,29 @@ const make = Effect.gen(function* () {
                       // never created its thread loses it again; an accepted or uncertain
                       // launch keeps it, so the work it started can still report.
                       return yield* Effect.uninterruptibleMask((restore) =>
-                        reports.bind(threadId, report).pipe(
-                          Effect.mapError(unavailable),
-                          Effect.andThen(
-                            restore(protectedLaunch).pipe(
-                              Effect.onError(() =>
-                                context.threads.getThreadShell(threadId).pipe(
-                                  Effect.flatMap((shell) =>
-                                    shell === null ? reports.unbind(threadId) : Effect.void,
+                        reports
+                          .bind(
+                            threadId,
+                            report,
+                            providerNotes === undefined
+                              ? undefined
+                              : { messageId, notes: providerNotes },
+                          )
+                          .pipe(
+                            Effect.mapError(unavailable),
+                            Effect.andThen(
+                              restore(protectedLaunch).pipe(
+                                Effect.onError(() =>
+                                  context.threads.getThreadShell(threadId).pipe(
+                                    Effect.flatMap((shell) =>
+                                      shell === null ? reports.unbind(threadId) : Effect.void,
+                                    ),
+                                    Effect.ignore,
                                   ),
-                                  Effect.ignore,
                                 ),
                               ),
                             ),
                           ),
-                        ),
                       );
                     });
                 yield* bindChildWork(channelChildWork, admission, { threadId });

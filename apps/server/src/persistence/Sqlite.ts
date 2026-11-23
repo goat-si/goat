@@ -57,8 +57,8 @@ export class ServerOwnsDatabaseError extends Schema.TaggedError<ServerOwnsDataba
 const runMigrationsAsOwner = Effect.fn("SqlitePersistence.runMigrationsAsOwner")(function* (
   serverRuntimeStatePath: string,
 ) {
-  // With nothing pending, runMigrations only validates the recorded history and writes nothing.
-  if (!(yield* hasPendingMigrations())) return yield* runMigrations();
+  // While another process may own the database, only validate the recorded history.
+  if (!(yield* hasPendingMigrations())) return yield* runMigrations({ skipStartupRepairs: true });
   yield* ServerOwnership.holdServerOwnershipLock(serverRuntimeStatePath).pipe(
     Effect.catchTags({
       ServerAlreadyRunningError: ({ stateDir }) =>

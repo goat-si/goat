@@ -40,6 +40,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
 import { makeOperationTokens } from "./operations/OperationTokens.ts";
 import {
+  accessFixtureArgs,
   catalog,
   client,
   dependencies,
@@ -75,8 +76,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding and force stop, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw, hub device move, hub device routes and hub machine attach, reissue and list, preview stop.
-  expect(entries).toHaveLength(311);
+  expect(entries).toHaveLength(313);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -84,7 +84,6 @@ it("gives every entry a unique path, listed name and resolvable schema reference
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
     expect(path).toMatch(/^[a-z][a-z_]*\.[a-z][a-z_]*$/);
-    // The shipped name is either the one listed or one still callable unlisted.
     expect([listedToolName(entry), ...entry.legacyNames]).toContain(entry.name);
     const tools: Record<string, Tool.Any> = toolkits[entry.schemaRefs.toolkit].tools;
     const tool = tools[entry.schemaRefs.tool];
@@ -368,48 +367,16 @@ const callers = {
 type Caller = keyof typeof callers;
 const TARGET_THREAD = "thread:conformance-target";
 
-// Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
-// machine's SSH keys unless asked for the local answer.
-const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
-  "browser_claim.request": { pid: 42, windowId: 7, origin: "https://example.test" },
-  "decision.list": {},
-  "decision.read": { id: "decision:fixture" },
-  "decision.answer": { id: "decision:fixture", optionId: "wait", reason: "Wait for capacity" },
-  "note.read": { path: "inbox/note.md" },
-  "note.write": { path: "inbox/note.md", body: "- [ ] item", status: null, baseRevision: null },
-  "note.update": { path: "inbox/note.md", pinned: true },
-  "note.move": { from: "inbox/note.md", to: "done/note.md", baseRevision: "0".repeat(64) },
-  "note.delete": { path: "inbox/note.md", baseRevision: "0".repeat(64) },
-  "channel.task_export": { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" },
-  "scheduler.status": { local: false },
-  "pending_request.list": { scope: "launched", hosts: ["box"] },
-  "provider.host_matrix": { localOnly: false },
-  "host.status": { local: null },
-  "html.preview": { html: "<!doctype html><html><body>probe</body></html>" },
-  "html.render": {
-    html: "<!doctype html><html><body>probe</body></html>",
-    title: "Probe",
-    height: 300,
-  },
-  // A sampled patch names no setting, which is refused before access matters.
-  "environment.settings_read": {},
-  "environment.settings_update": { patch: { branchNamePrefix: "goat/" } },
-  "theme.set": { themeId: "" },
-  // A sampled cursor without its query is refused before access matters.
-  "surface.describe": { query: "thread" },
-};
-
 const REASONS = {
   sshFanOut:
     "Reaches other machines with this machine's SSH keys, which read-only clients may not use.",
   dryRunDefault: "Defaults to a dry run, which reads.",
   clientOnly: "Only another GOAT's dispatch session may call it.",
-  grantChecked: "Checks a scope the test client does not hold, inside its handler.",
+  grantChecked: "Checks a scope the test caller does not hold, inside its handler.",
   dispatches: "Runs other tools, each under its own declaration, and adds no gate of its own.",
   childSetupOnly:
     "Accepts only a Home-issued Child setup session; ToolAdmission.childSetup.test.ts covers it.",
 } as const;
-// Where the runtime outcome differs from what requires and effect alone predict, and why.
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {
@@ -482,10 +449,10 @@ const expectedOutcome = (entry: Entry, caller: Caller): Outcome => {
 // One decodable input per entry: sampled from the tool's own schema with a seed from its path,
 // then encoded through the JSON codec production decodes with (McpHttpServer decodeAsAdvertised).
 const argumentsFor = Effect.fn(function* (entry: Entry) {
-  const fixture = FIXTURE_ARGS[entry.path];
+  const fixture = accessFixtureArgs[entry.path];
   if (fixture !== undefined) return fixture;
   const tool = toolOf(entry);
-  // A schema the sampler cannot derive needs an entry in FIXTURE_ARGS.
+  // A schema the sampler cannot derive needs an entry in accessFixtureArgs.
   const [sample] = yield* Arbitrary.sampleEffect(Arbitrary.schema(tool.parametersSchema), {
     count: 1,
     seed: entry.path,
@@ -531,7 +498,6 @@ const via = {
       Effect.map(asDirectResult),
     ),
 };
-// legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
 type Route = keyof typeof via | "legacy";
 const ROUTES: ReadonlyArray<Route> = [
   ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
@@ -562,7 +528,6 @@ describe("agent surface access", () => {
                 : typeof clientRequestId === "string"
                   ? { ...rest, clientRequestId: `${clientRequestId}:${caller}:${route}` }
                   : args;
-            // goat_call and goat_eval refuse to call either meta tool by design.
             if (
               (route === "goat_call" || route === "goat_eval") &&
               (entry.path === "surface.call" || entry.path === "surface.eval")

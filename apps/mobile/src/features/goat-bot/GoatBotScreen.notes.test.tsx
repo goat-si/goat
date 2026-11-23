@@ -1,3 +1,4 @@
+import "./goatBotNativeModules.testkit";
 import {
   act,
   useEffect,
@@ -18,7 +19,10 @@ import {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => false }));
 
 const session = vi.hoisted(() => ({
   rows: [] as GoatBotRow[],
@@ -90,7 +94,9 @@ vi.mock("../../state/use-composer-drafts", () => ({
 vi.mock("../../lib/composerAttachmentFiles", () => ({
   retainComposerAttachmentFile: () => () => {},
 }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("react-native", () => ({
+  ActivityIndicator: () => null,
   StyleSheet: { hairlineWidth: 1 },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -266,7 +272,6 @@ vi.mock("./useMobileGoatBotSession", () => ({
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     // Home's shared current work; its links are not read in this file.

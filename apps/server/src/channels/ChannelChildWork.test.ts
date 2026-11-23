@@ -498,7 +498,7 @@ describe("ChannelChildWork reconcile after a host outage or a dismissal", () => 
 
 describe("ChannelChildWorkStore transition", () => {
   it.effect(
-    "refuses a destination together with threadIdIfMissing and keeps the recorded thread",
+    "refuses a destination together with an acknowledgement and keeps the recorded thread",
     () =>
       Effect.gen(function* () {
         const taskId = yield* seedWorker;
@@ -522,7 +522,11 @@ describe("ChannelChildWorkStore transition", () => {
             from: ["bound"],
             to: "completed",
             destination: { correlationId, host: "box" },
-            threadIdIfMissing: ThreadId.make("other-thread"),
+            acknowledgement: {
+              correlationId,
+              host: "box",
+              threadId: ThreadId.make("other-thread"),
+            },
             now: NOW,
           }),
         );

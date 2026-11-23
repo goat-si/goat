@@ -8,12 +8,17 @@ import {
 } from "@goat/shared/databaseMigrationLog";
 import {
   assertMemoryMigrationsCompatible,
+  canonicalMigrationName,
   displacedUpstreamMigrations,
   FIRST_V2_MIGRATION_ID,
   goatMigrationIdsMove,
   reconcileGoatMigrationIds,
+  reconcileWorkerReleaseRollback,
+  WORKER_GENERATIONS_MIGRATION_NAME,
+  WORK_TRIGGER_FENCE_MIGRATION_NAME,
   skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
+import { reconcileChannelWorkerGenerations } from "./reconcileChannelWorkerGenerations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
 
@@ -183,6 +188,15 @@ import Migration0168 from "./Migrations/168_TurnItemMessageOrdinalIndex.ts";
 import Migration0169 from "./Migrations/169_TurnItemInlineWorkOutput.ts";
 import Migration0170 from "./Migrations/170_RepairStaleTitleRegeneration.ts";
 import Migration0175 from "./Migrations/175_AcpSessionOwnerIndex.ts";
+import Migration0176 from "./Migrations/176_ChannelWorkerLaunchHeads.ts";
+import Migration0177 from "./Migrations/177_WorkTriggerAuthorityFence.ts";
+import Migration0178 from "./Migrations/178_WebhookDeliveryFiringEvidence.ts";
+import Migration0179 from "./Migrations/179_ChannelWorkerGenerations.ts";
+import Migration0180 from "./Migrations/180_ChannelBotTaskSnooze.ts";
+import Migration0181 from "./Migrations/181_ChannelBotAttention.ts";
+import Migration0182 from "./Migrations/182_SlackConversationBot.ts";
+import Migration0183 from "./Migrations/183_ChannelInputSessionAuthority.ts";
+import Migration0184 from "./Migrations/184_RemoteDispatchEnvironment.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -364,6 +378,15 @@ export const migrationEntries = [
   [169, "TurnItemInlineWorkOutput", Migration0169],
   [170, "RepairStaleTitleRegeneration", Migration0170],
   [175, "AcpSessionOwnerIndex", Migration0175],
+  [176, "ChannelWorkerLaunchHeads", Migration0176],
+  [177, WORK_TRIGGER_FENCE_MIGRATION_NAME, Migration0177],
+  [178, "WebhookDeliveryFiringEvidence", Migration0178],
+  [179, WORKER_GENERATIONS_MIGRATION_NAME, Migration0179],
+  [180, "ChannelBotTaskSnooze", Migration0180],
+  [181, "ChannelBotAttention", Migration0181],
+  [182, "SlackConversationBot", Migration0182],
+  [183, "ChannelInputSessionAuthority", Migration0183],
+  [184, "RemoteDispatchEnvironment", Migration0184],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -436,7 +459,7 @@ const failIfDatabaseNewerThanBuild = Effect.fn("failIfDatabaseNewerThanBuild")(f
   const unknownMigrations: Array<string> = [];
   const seen = new Set<string>();
   for (const row of recorded) {
-    if (knownMigrationNames.has(row.name) || seen.has(row.name)) continue;
+    if (knownMigrationNames.has(canonicalMigrationName(row.name)) || seen.has(row.name)) continue;
     seen.add(row.name);
     unknownMigrations.push(row.name);
   }
@@ -449,10 +472,12 @@ const failIfDatabaseNewerThanBuild = Effect.fn("failIfDatabaseNewerThanBuild")(f
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
+  readonly skipStartupRepairs?: boolean;
 }
 
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
+  skipStartupRepairs = false,
 }: RunMigrationsOptions = {}) {
   // The desktop waits past its readiness budgets until the finished line follows this one.
   const announced = yield* hasPendingMigrations();
@@ -500,6 +525,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
       }
       executed.push(...(yield* run({ loader: makeMigrationLoader(id) })));
     }
+    if (toMigrationInclusive === undefined && !skipStartupRepairs) {
+      yield* reconcileWorkerReleaseRollback();
+      yield* reconcileChannelWorkerGenerations();
+    }
     return executed;
   }).pipe(Effect.catchTags({ MigrationError: failIfDatabaseNewerThanBuild }));
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
@@ -518,7 +547,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     if (expected === undefined) {
       return [`${row.migration_id}:${row.name} (unknown to this build)`];
     }
-    return expected === row.name
+    return expected === canonicalMigrationName(row.name)
       ? []
       : [`${row.migration_id}:${row.name} (this build: ${expected})`];
   });

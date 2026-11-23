@@ -21,18 +21,23 @@ export function scheduledTaskSummary(
     boundThreadId: task.threadId,
     freshSession: scheduledTaskThreadMode(task) === "fresh_session",
     schedule: task.schedule,
+    ...(task.routineMode === "work" ? { routineMode: "work" } : {}),
     notificationPolicy: task.notificationPolicy ?? "all_runs",
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
     ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
     ...(task.lastRunError === null ? {} : { lastRunError: task.lastRunError }),
+    ...(task.recentRuns === undefined ? {} : { recentRuns: task.recentRuns }),
+    ...(task.recentRunsIncomplete === undefined
+      ? {}
+      : { recentRunsIncomplete: task.recentRunsIncomplete }),
     runCount: task.runCount,
     lastRunAt: task.lastRunAt,
-    ...webhookUrlFields(task.webhook, mayRun),
+    ...webhookUrlFields(task.routineMode === "work" ? undefined : task.webhook, mayRun),
     ...(task.webhook === undefined
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
-    ...(task.webhook?.secretRef === undefined
+    ...(task.routineMode === "work" || task.webhook?.secretRef === undefined
       ? {}
       : { webhookSignatureSecretRef: task.webhook.secretRef }),
   };

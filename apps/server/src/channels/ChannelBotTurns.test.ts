@@ -1,3 +1,4 @@
+import { launchBrief } from "./testkit/providerBrief.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
 import { MessageId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
@@ -130,21 +131,16 @@ describe("reception-created GOAT Bot turns", () => {
         assert.deepStrictEqual(launch.modelSelection, botModel);
         assert.strictEqual(launch.runtimeMode, "full-access");
         assert.deepStrictEqual(launch.workspaceStrategy, { type: "root" });
-        assert.include(launch.initialMessage?.text ?? "", "You are GOAT Bot handling this message");
+        const prompt = yield* launchBrief(launch);
+        assert.include(prompt, "You are GOAT Bot handling this message");
         // Read-only is the prompt's promise now that the sandbox allows everything.
-        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
-        assert.include(launch.initialMessage?.text ?? "", 'goat_call {path:"task.create"}');
-        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_ROUTING_RULE);
-        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
-        assert.include(
-          (launch.initialMessage?.text ?? "").replaceAll("\\", "/"),
-          "goat-bot/scratch",
-        );
-        assert.include(
-          (launch.initialMessage?.text ?? "").replaceAll("\\", "/"),
-          "goat-bot/artifacts",
-        );
-        assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
+        assert.include(prompt, GOAT_BOT_READ_ONLY_RULE);
+        assert.include(prompt, 'goat_call {path:"task.create"}');
+        assert.include(prompt, GOAT_BOT_ROUTING_RULE);
+        assert.include(prompt, GOAT_BOT_DISPATCH_RULE);
+        assert.include(prompt.replaceAll("\\", "/"), "goat-bot/scratch");
+        assert.include(prompt.replaceAll("\\", "/"), "goat-bot/artifacts");
+        assert.notInclude(prompt, GOAT_BOT_SUPERVISOR_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
         const texts = (yield* botMessages).messages.map((message) => message.text);
         assert.include(texts, "On it.");
@@ -168,7 +164,7 @@ describe("reception-created GOAT Bot turns", () => {
       assert.strictEqual((yield* onlyTask).kind, "turn");
       // The link was made at auto-accept-edits.
       assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
-      assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
+      assert.include(yield* launchBrief(launch), GOAT_BOT_READ_ONLY_RULE);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -183,7 +179,7 @@ describe("reception-created GOAT Bot turns", () => {
         yield* gateway.ingest(goatInput("look: land the green PRs", "g1"), rpcContext);
         yield* runtime.drain;
         const launch = harness.world.launches[0]!;
-        const text = launch.initialMessage?.text ?? "";
+        const text = yield* launchBrief(launch);
         assert.include(text, GOAT_BOT_READ_ONLY_RULE);
         assert.include(text, GOAT_BOT_SUPERVISOR_RULE);
         assert.isBelow(
@@ -209,7 +205,7 @@ describe("reception-created GOAT Bot turns", () => {
       yield* runtime.drain;
       const launch = harness.world.launches[0]!;
       assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
-      assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
+      assert.include(yield* launchBrief(launch), GOAT_BOT_SUPERVISOR_RULE);
       assert.isNull(yield* boundProfile(launch.threadId ?? "missing"));
     }).pipe(Effect.provide(harness.layer));
   });

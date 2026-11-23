@@ -1,28 +1,6 @@
-/**
- * ChannelRemoteWorkers - runs ledger tasks on another machine and brings their reports back.
- *
- * A task placed on another machine (an SSH alias this machine knows) runs in
- * that machine's own GOAT, in one of its existing projects, through the same SSH launch the
- * goat_ssh_thread_launch tool uses. The launch carries an origin report binding whose id
- * derives from the task and generation. The remote stores that binding before it creates the
- * thread and refuses a second one with the same id, so relaunching a generation after a lost
- * answer can never start a second remote thread.
- *
- * One observer fiber per running remote task long-polls goat_origin_reports_wait. Reports land
- * in a local inbox first (with the cursor, in one write), then each becomes at most one ledger
- * event with an id derived from the report, committed together with its removal from the inbox.
- * While an answer is on its way to the worker every report waits, so a stale question cannot
- * move the task before the answer's run is known. A finished remote run settles the task only
- * after a short second look finds no newer run or report.
- *
- * Remote completion is weaker than local: the remote does not tell us about provider background
- * work or a restart continuation that has not started a run yet.
- *
- * Everything here writes under the channel owner token and stops when it is lost. The remote
- * session's ceiling is the requester's runtime-mode ceiling, so the remote enforces it.
- *
- * @module ChannelRemoteWorkers
- */
+import { dropOldest } from "./channelRemoteAttempt.ts";
+import { remoteBotToolsRefusal } from "./channelBotTools.ts";
+import { canReadChannelBotNotes } from "./channelBotNoteAccess.ts";
 // @effect-diagnostics nodeBuiltinImport:off - read keys need node:crypto; the origin label is os.hostname.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -76,7 +54,9 @@ import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
-import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
+import { makeRemoteBotBrief, remoteBriefCarriesNotes } from "./channelRemoteWorkerBrief.ts";
+import { remoteWorkerLaunchPrompt } from "./channelWorkerBrief.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -84,7 +64,6 @@ import {
   remoteCorrelationFor,
   remoteReportEventIdFor,
 } from "./channelIds.ts";
-import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import {
   decodeOffered,
   matchingOfferedProviders,
@@ -106,10 +85,13 @@ import {
   resumeBranchFor,
 } from "./channelReplica.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
-import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
-import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
+import {
+  newApprovals,
+  observesUsageLimit,
+  observeRemoteWorker,
+} from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
 const REMOTE_WAIT_MS = 50_000;
@@ -489,8 +471,10 @@ const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
-  const replicaDir = path.join((yield* ServerConfig.ServerConfig).stateDir, "channel-replicas");
+  const { stateDir } = yield* ServerConfig.ServerConfig;
+  const profiles = yield* ChannelBotProfiles.ChannelBotProfiles;
+  const freezeWorkerBrief = makeRemoteBotBrief({ ledger, profiles, fileSystem, path, stateDir });
+  const replicaDir = path.join(stateDir, "channel-replicas");
   const fibers = yield* FiberMap.make<string, void, never>();
   const locks = new Map<string, Semaphore.Semaphore>();
   const lockFor = (taskId: string) => {
@@ -1297,17 +1281,6 @@ const make = Effect.gen(function* () {
       return { type: "target", target } as const;
     });
 
-  /**
-   * The worker's first message. GOAT Bot's notes and the skills the instruction names exist only
-   * on this machine, so they are read now and travel inside the message.
-   */
-  const workerMessage = (task: ChannelLedger.ChannelStoredTask["task"]) =>
-    Effect.gen(function* () {
-      const notes = yield* readChannelBotNotesSnapshot(botFiles, task.instruction);
-      const skills = yield* readNamedSkills(fileSystem, path, botFiles, task.instruction);
-      return remoteWorkerMessage(task, { notes, skills });
-    });
-
   /** Binds the task to the remote thread the launch (or its recovery) found. */
   const bindWorker = (
     owner: string,
@@ -1419,6 +1392,18 @@ const make = Effect.gen(function* () {
     error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
     (error.reason === "host_unavailable" || error.reason === "ssh_failed");
 
+  const currentRemoteNotesAccess = (task: ChannelLedger.ChannelStoredTask["task"]) =>
+    requesterForDispatch(task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      Effect.mapError(() => new AuthorityLost()),
+      Effect.flatMap((who) =>
+        who !== undefined && canReadChannelBotNotes(who)
+          ? Effect.void
+          : Effect.fail(new AuthorityLost()),
+      ),
+    );
+
   /**
    * Launch, or find what an earlier launch of this generation started. Never starts a second
    * remote thread: the binding id is fixed per generation and the remote refuses a duplicate.
@@ -1430,10 +1415,14 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const remote = task.target?.remote;
       if (remote === undefined) return;
-      const requester = yield* requesterForDispatch(task).pipe(
+      const refusal = yield* remoteBotToolsRefusal(profiles, stored, remote.host);
+      if (refusal !== undefined)
+        return yield* failTask(owner, stored, "permission_changed", refusal);
+      const dispatchRequester = requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
+      const requester = yield* dispatchRequester;
       const now = yield* nowIso;
       let state = yield* readState(taskId);
       if (
@@ -1584,7 +1573,6 @@ const make = Effect.gen(function* () {
         );
 
       const callerCeiling = state.connection?.runtimeModeCeiling ?? requester.runtimeModeCeiling;
-      // The project may have gone since the dispatcher chose it; ask instead of recreating it.
       const listed = yield* listRemoteProjects(state.host, authorize, connectionFor(state)).pipe(
         Effect.result,
       );
@@ -1593,18 +1581,15 @@ const make = Effect.gen(function* () {
           yield* failTask(owner, stored, "host_unavailable", REMOTE_COPY.unreachable(state.host));
         return;
       }
-      if (
-        !listed.success.some(
-          (project) =>
-            project.workspaceRoot === remote.cwd &&
-            (remote.automatic === undefined ||
-              canonicalKeyOf(project) === remote.automatic.canonicalKey),
-        )
-      ) {
+      const project = listed.success.find(
+        (project) =>
+          project.workspaceRoot === remote.cwd &&
+          (remote.automatic === undefined ||
+            canonicalKeyOf(project) === remote.automatic.canonicalKey),
+      );
+      if (project === undefined)
         return yield* askAgain(owner, stored, REMOTE_COPY.projectGone(state.host));
-      }
 
-      // A moved task starts from the copied work: place it in the new project first.
       const resume =
         state.resumeFrom?.generation === task.generation ? state.resumeFrom : undefined;
       if (resume !== undefined) {
@@ -1642,20 +1627,34 @@ const make = Effect.gen(function* () {
       const target = task.target!;
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
       const bot = yield* ledger.getBotById(stored.ownerId, stored.botId);
-      // A moved task's worker reads where its work came from; that is part of its brief.
-      const message =
-        (yield* workerMessage(task)) +
-        (resume === undefined ? "" : resumeNote(resume.fromHost, resume.capturedAt));
-      // SSH's extra reporting note is transport guidance, excluded from deliveredText.
-      // The notes travel inside the message unless they were dropped to fit its limit.
-      const notesRevision =
-        stored.task.briefVersion === undefined && message.includes("<goat_bot_notes>")
-          ? yield* channelNotesRevision(botFiles.notes).pipe(
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-            )
-          : null;
-      const frozen = yield* freezeChannelBrief(ledger, stored, owner, message, { notesRevision });
+      const frozen = yield* freezeWorkerBrief(
+        stored,
+        owner,
+        requester,
+        resume === undefined ? "" : resumeNote(resume.fromHost, resume.capturedAt),
+      ).pipe(Effect.catchTags({ ChannelGatewayError: () => Effect.succeed(null) }));
+      if (frozen === null)
+        return yield* failTask(
+          owner,
+          stored,
+          "launch_failed",
+          "GOAT Bot could not read its profile.",
+        );
       stored = frozen.stored;
+      if (frozen.denied)
+        return yield* failTask(
+          owner,
+          stored,
+          "permission_changed",
+          "The requester's memory access changed.",
+        );
+      if (resume !== undefined || target.workspaceStrategy.type === "worktree")
+        yield* ledger.recordLaunchHead({
+          taskId,
+          generation: task.generation,
+          repository: canonicalKeyOf(project)?.match(/^github\.com\/(.+)$/i)?.[1],
+          branch: remoteBranchFor(taskId, task.generation),
+        });
       const launched = yield* ssh
         .launchThread(
           {
@@ -1679,7 +1678,11 @@ const make = Effect.gen(function* () {
                     }
                   : { type: "cwd" },
             title: task.title,
-            message: frozen.brief.deliveredText,
+            ...remoteWorkerLaunchPrompt(
+              task,
+              frozen.brief.deliveredText,
+              frozen.sendsNotes || frozen.brief.context.notesRevision != null,
+            ),
             modelSelection: target.modelSelection,
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.
@@ -1694,6 +1697,7 @@ const make = Effect.gen(function* () {
               originLabel: NodeOS.hostname().slice(0, 120) || "GOAT",
               originThreadId: bot?.bot.threadId ?? ThreadId.make("channel-task:" + taskId),
               readKeyHash,
+              botAttention: true,
             },
             reportNote: REPORTING_NOTE,
           },
@@ -1701,6 +1705,7 @@ const make = Effect.gen(function* () {
             Effect.flatMap((ceiling) =>
               ceiling === callerCeiling ? Effect.void : Effect.fail(new Superseded()),
             ),
+            Effect.andThen(frozen.sendsNotes ? currentRemoteNotesAccess(task) : Effect.void),
           ),
         )
         .pipe(Effect.result);
@@ -2051,17 +2056,13 @@ const make = Effect.gen(function* () {
       // keeps the remote's own observation, so the next wait does not see the host we stamp here.
       stored = yield* ledger.getTask(taskId);
       if (stored === undefined || !sameWorker(stored, state)) return "stop" as const;
-      const observation = watched?.observation;
-      const stamped =
-        observation === undefined
-          ? undefined
-          : { ...observation, needsYou: withApprovalHost(observation.needsYou, state.host) };
+      const stamped = observeRemoteWorker(watched?.observation, state.host, stored.task.worker);
       if (
         stamped !== undefined &&
         watched !== null &&
         watched.runId === stored.task.worker?.runId &&
         (stored.task.status === "running" || stored.task.status === "waiting_input") &&
-        !channelWorkerObservationEquals(stored.task.observed, stamped)
+        !channelWorkerObservationEquals(stored.task.observed, stamped, true)
       ) {
         const card =
           stored.task.requester.originKind !== "mcp" &&
@@ -2078,7 +2079,7 @@ const make = Effect.gen(function* () {
       }
       // A usage limit pauses the worker; the continuation run the remote starts rebinds the task.
       const limited =
-        watched !== null && watched.status === "failed" && observesUsageLimit(observation);
+        watched !== null && watched.status === "failed" && observesUsageLimit(stamped);
 
       // 3. The inbox, oldest first, against the current run.
       if (state.dropped > 0) {
@@ -2528,10 +2529,13 @@ const make = Effect.gen(function* () {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const ids = answerForwardIdsFor(event.eventId);
-      // Runs last in authorize, which the SSH layer repeats right before each request, so requester
-      // and sender are judged together at that point. Whether an earlier attempt reached the host
-      // stays unknown either way.
-      const senderGate = requesterForDelivery(stored.task, event.payload.sender).pipe(
+      const brief = yield* ledger.latestTaskBrief(event.taskId, stored.task.generation);
+      const senderGate = requesterForDelivery(
+        stored.task,
+        event.payload.sender,
+        event.actor === "user" ? event.payload.inputId : undefined,
+        remoteBriefCarriesNotes(brief),
+      ).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         Effect.mapError(() => new Superseded()),
@@ -3032,19 +3036,5 @@ const make = Effect.gen(function* () {
     move,
   });
 });
-
-/** Progress goes first, then the oldest of the rest. */
-const dropOldest = (reports: ReadonlyArray<RemoteReport>, count: number) => {
-  const dropped = new Set<number>();
-  for (const report of reports) {
-    if (dropped.size >= count) break;
-    if (report.kind === "progress") dropped.add(report.sequence);
-  }
-  for (const report of reports) {
-    if (dropped.size >= count) break;
-    dropped.add(report.sequence);
-  }
-  return reports.filter((report) => !dropped.has(report.sequence));
-};
 
 export const layer = Layer.effect(ChannelRemoteWorkers, make);

@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer";
 
 import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
+import { layerBotAttentionExpiry } from "./channelBotAttention.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
 import * as ChannelBotEvents from "./ChannelBotEvents.ts";
@@ -54,8 +55,6 @@ import * as ImessageChannelRuntime from "./imessage/ImessageChannelRuntime.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 
 const layerFoundation = Layer.mergeAll(
-  // The ledger wakes the channel loop when a receipt deadline frees work held behind it.
-  ChannelLedger.layer.pipe(Layer.provideMerge(ChannelWake.layer)),
   ChannelChildWorkStore.layer,
   MemoryStore.layer,
   ChannelBotHome.layer,
@@ -63,6 +62,9 @@ const layerFoundation = Layer.mergeAll(
   ChannelBotProfiles.layer,
   ChannelTaskViews.layer,
   ChannelTransport.layer,
+).pipe(
+  // The ledger wakes the channel loop when a receipt deadline frees work held behind it.
+  Layer.provideMerge(ChannelLedger.layer.pipe(Layer.provideMerge(ChannelWake.layer))),
 );
 
 const layerTimeline = Layer.mergeAll(
@@ -157,4 +159,5 @@ const layerServicesWithSlack = makeLayerServicesWithSlack();
 export const layer = Layer.mergeAll(
   ChannelRuntime.layerBackground,
   ChannelBotRoutineEvents.layer,
+  layerBotAttentionExpiry,
 ).pipe(Layer.provideMerge(layerServicesWithSlack), Layer.provide(SlackSdk.layer));

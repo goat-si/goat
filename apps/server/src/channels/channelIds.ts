@@ -19,6 +19,7 @@ import {
   type ChannelQuestionId,
   type ChannelTaskEventId,
   type ChannelTaskId,
+  CHANNEL_WORKER_THREAD_PREFIX,
   CommandId,
   GOAT_BOT_SESSION_THREAD_PREFIX,
   MAIN_BOT_ID,
@@ -92,24 +93,26 @@ export const taskRetryEventIdFor = (taskId: ChannelTaskId, clientRequestId: stri
 /** Keeps a retried attempt's worker thread tied to its task after the ledger lets go of it. */
 export const retiredWorkerKeyFor = (threadId: string) => "retired-worker:" + threadId;
 
+export const attentionEventIdFor = (taskId: ChannelTaskId, generation: number, identity: string) =>
+  stableId("channel-attention", [taskId, String(generation), identity]);
+
 export const questionIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-question", [taskId, String(version)]) as ChannelQuestionId;
 
 export const deliveryIdFor = (causeKey: string) =>
   stableId("channel-delivery", [causeKey]) as ChannelDeliveryId;
 
+const WORKER_LAUNCH_MESSAGE_PREFIX = "channel-worker-message";
+
 /** The launch of one task generation: the same command, thread, and message on every retry. */
 export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) => ({
   commandId: CommandId.make(stableId("channel-launch", [taskId, String(generation)])),
-  threadId: ThreadId.make(stableId("channel-worker", [taskId, String(generation)])),
-  messageId: MessageId.make(stableId("channel-worker-message", [taskId, String(generation)])),
+  threadId: ThreadId.make(CHANNEL_WORKER_THREAD_PREFIX + digest([taskId, String(generation)])),
+  messageId: MessageId.make(stableId(WORKER_LAUNCH_MESSAGE_PREFIX, [taskId, String(generation)])),
 });
 
-/**
- * Whether a thread is a channel task's worker, from its id alone. The id is fixed when the
- * thread is created, before its first turn and before the ledger records the binding.
- */
-export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
+export const isChannelWorkerLaunchMessageId = (messageId: MessageId) =>
+  messageId.startsWith(WORKER_LAUNCH_MESSAGE_PREFIX + ":");
 
 /** One generation of a conversation's GOAT Bot session thread. */
 export const goatBotSessionThreadIdFor = (
@@ -136,9 +139,14 @@ export const sessionSendIdsFor = (taskId: ChannelTaskId, generation: number) => 
   messageId: MessageId.make(stableId("channel-session-send-message", [taskId, String(generation)])),
 });
 
+const ANSWER_MESSAGE = "channel-answer-message";
+
+export const isChannelAnswerMessageId = (messageId: MessageId) =>
+  messageId.startsWith(ANSWER_MESSAGE + ":");
+
 export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   commandId: CommandId.make(stableId("channel-answer", [eventId])),
-  messageId: MessageId.make(stableId("channel-answer-message", [eventId])),
+  messageId: MessageId.make(stableId(ANSWER_MESSAGE, [eventId])),
 });
 
 /**
@@ -169,11 +177,17 @@ export const childWorkStopCommandIdFor = (childWorkId: ChannelChildWorkId, attem
  * "queued" attempt is the second and last one, used only after the orchestrator rejected the
  * first, since a rejected command id is refused for good.
  */
+const TURN_STEER_MESSAGE = "channel-steer-message";
+const TOOL_STEER_MESSAGE = "channel-tool-steer-message";
+
+export const isChannelFollowUpMessageId = (messageId: MessageId) =>
+  messageId.startsWith(TURN_STEER_MESSAGE + ":") || messageId.startsWith(TOOL_STEER_MESSAGE + ":");
+
 export const turnSteerIdsFor = (inputId: ChannelInputId, attempt: "first" | "queued" = "first") => {
   const key = attempt === "first" ? [inputId] : [inputId, "queued"];
   return {
     commandId: CommandId.make(stableId("channel-steer", key)),
-    messageId: MessageId.make(stableId("channel-steer-message", key)),
+    messageId: MessageId.make(stableId(TURN_STEER_MESSAGE, key)),
   };
 };
 
@@ -184,7 +198,7 @@ export const toolSteerIdsFor = (forwardKey: string, attempt: "first" | "queued" 
   const key = attempt === "first" ? [forwardKey] : [forwardKey, "queued"];
   return {
     commandId: CommandId.make(stableId("channel-tool-steer", key)),
-    messageId: MessageId.make(stableId("channel-tool-steer-message", key)),
+    messageId: MessageId.make(stableId(TOOL_STEER_MESSAGE, key)),
   };
 };
 
@@ -232,9 +246,11 @@ export const childWorkIdFor = (taskId: ChannelTaskId, generation: number, reques
 export const childWorkCorrelationIdFor = (childWorkId: ChannelChildWorkId) =>
   stableId("channel-child-remote", [childWorkId]);
 
-/** The remote worktree branch for one task generation. */
+export const CHANNEL_WORKER_BRANCH_PREFIX = "goat/channel-";
+
+/** The worktree branch for one task generation. */
 export const remoteBranchFor = (taskId: ChannelTaskId, generation: number) =>
-  "goat/channel-" + digest([taskId]).slice(0, 8).toLowerCase() + "-g" + generation;
+  CHANNEL_WORKER_BRANCH_PREFIX + digest([taskId]).slice(0, 8).toLowerCase() + "-g" + generation;
 
 /** The ledger event that imports one remote report; a re-imported report finds it. */
 export const remoteReportEventIdFor = (correlationId: string, sequence: number) =>

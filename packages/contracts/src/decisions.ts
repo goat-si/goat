@@ -87,6 +87,7 @@ export const DecisionHandoff = Schema.Struct({
   parentThreadTitle: Schema.optionalKey(Schema.String),
   /** Never carries the person's instructions; those come only from the handoff open RPC. */
   handoff: Handoff,
+  botAttentionOwned: Schema.optionalKey(Schema.Boolean),
 });
 export type DecisionHandoff = typeof DecisionHandoff.Type;
 /** Every open item of one environment with its routing; pushed again whenever any of it changes. */
@@ -96,6 +97,7 @@ export const DecisionFeed = Schema.Struct({
   handoffs: Schema.optionalKey(Schema.Array(DecisionHandoff)),
   /** Set when more approvals are open than the feed sends (the newest are sent). */
   handoffsTotal: Schema.optionalKey(Schema.Number),
+  handoffRevision: Schema.optionalKey(Schema.Number),
 });
 export type DecisionFeed = typeof DecisionFeed.Type;
 export const DecisionGetInput = Schema.Struct({

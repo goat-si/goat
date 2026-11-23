@@ -9,15 +9,24 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type ThreadId,
+} from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { cn } from "~/lib/utils";
+import { useEnvironmentScope } from "~/state/session";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { WebhookDeliveriesDialog } from "../settings/WebhookDeliveriesDialog";
+import { WebhookEndpointField } from "../settings/WebhookEndpointField";
+import { GoatBotTriggerOffer } from "./GoatBotTriggerForm";
 import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
 import { useGoatBotName } from "./goatBotMemberContext";
 import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
@@ -111,6 +120,9 @@ export function GoatBotRoutines(props: {
   return (
     <div className="flex flex-col">
       {failure === null ? null : <div className="px-3 py-3">{failure}</div>}
+      {failure === null ? (
+        <GoatBotTriggerOffer environmentId={props.environmentId} threadId={props.threadId} />
+      ) : null}
       {offerCheckIn ? (
         <CheckInOffer environmentId={props.environmentId} threadId={props.threadId} />
       ) : null}
@@ -207,6 +219,9 @@ function RoutineRow({
     label: "GOAT Bot routine run now",
     reportFailure: false,
   });
+  const canManageTrigger = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const canReadDeliveries = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const [showEndpoint, setShowEndpoint] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -266,18 +281,29 @@ function RoutineRow({
             {row.lastText}
           </span>
         </Link>
-        {row.lastFailed && canRunNow ? (
+        {!row.workTrigger && row.lastFailed && canRunNow ? (
           <Button size="xs" variant="outline" disabled={running} onClick={() => void runAgain()}>
             Run now
           </Button>
         ) : null}
         <Switch
           checked={row.enabled}
-          disabled={busy || !canOperate}
+          disabled={busy || !canOperate || (row.workTrigger && !canManageTrigger)}
           aria-label={`${row.enabled ? "Pause" : "Resume"} ${row.title}`}
           onCheckedChange={(enabled) => void toggle(enabled)}
         />
       </div>
+      {row.workTrigger && canManageTrigger && task?.webhook !== undefined ? (
+        <div className="my-1 space-y-2">
+          <Button size="xs" variant="ghost" onClick={() => setShowEndpoint((shown) => !shown)}>
+            {showEndpoint ? "Hide webhook URL" : "Reveal webhook URL"}
+          </Button>
+          {showEndpoint ? <WebhookEndpointField environmentId={environmentId} task={task} /> : null}
+        </div>
+      ) : null}
+      {canReadDeliveries && task?.schedule.type === "webhook" ? (
+        <RoutineDeliveries environmentId={environmentId} task={task} />
+      ) : null}
       {task === undefined ? null : (
         <GoatBotRoutineRuns
           environmentId={environmentId}
@@ -299,5 +325,20 @@ function RoutineRow({
         </p>
       )}
     </div>
+  );
+}
+
+function RoutineDeliveries(props: {
+  readonly environmentId: EnvironmentId;
+  readonly task: BotRoutineSource;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button size="xs" variant="ghost" onClick={() => setOpen(true)}>
+        Deliveries
+      </Button>
+      {open ? <WebhookDeliveriesDialog {...props} onClose={() => setOpen(false)} /> : null}
+    </>
   );
 }

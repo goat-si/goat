@@ -58,6 +58,7 @@ it("records why a write that takes its own clientRequestId keeps that key out of
 it("declares the writes whose own store deduplicates clientRequestId, with the arguments that bypass it", () => {
   const domain = entries.filter((entry) => idempotencyOf(entry) === "domain");
   expect(domain.map((entry) => entry.path).sort()).toEqual([
+    "channel.bot_propose",
     "channel.ingest",
     "channel.task_answer",
     "channel.task_follow_up",
