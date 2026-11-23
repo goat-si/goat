@@ -213,6 +213,7 @@ function reviewFileQueries({
                 request: {
                   cwd,
                   ...(baseRef ? { baseRef } : {}),
+                  ...(source.mergeBase ? { mergeBase: source.mergeBase } : {}),
                   ignoreWhitespace,
                   file: {
                     path: file.path,

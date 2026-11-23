@@ -5,6 +5,13 @@ import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
 import {
+  WORKTREE_ADD_STALL_TIMEOUT_MS,
+  WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS,
+  FETCH_REMOTE_TIMEOUT_MS,
+  WORKTREE_REMOVE_TIMEOUT_MS,
+} from "./gitOperationTimeouts.ts";
+import { STATUS_UPSTREAM_REFRESH_ENV } from "./statusRefreshEnvironment.ts";
+import {
   NON_REPOSITORY_STATUS_DETAILS,
   NON_REPOSITORY_REMOTE_STATUS_DETAILS,
 } from "./nonRepositoryStatus.ts";
@@ -164,14 +171,6 @@ const branchBaseConfigKey = (branch: string) => `branch.${branch}.t3-merge-base`
  */
 const legacyBranchBaseConfigKey = (branch: string) => `branch.${branch}.gh-merge-base`;
 const gitProcesses = Semaphore.makeUnsafe(8);
-// Silence, not total time, marks a stuck checkout: a Windows checkout under real-time
-// scanning or a hook installing dependencies can print steadily for many minutes.
-const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
-// The first fetch after a long gap can pull thousands of new refs for minutes while
-// printing progress the whole time, so the worktree base fetch also stops only on silence.
-const WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
-const FETCH_REMOTE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
-const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
@@ -194,13 +193,7 @@ const LIST_REFS_REFRESH_COALESCE_TTL = Duration.seconds(5);
 const LIST_REFS_REFRESH_FAILURE_COOLDOWN = Duration.seconds(30);
 const STATUS_DEFAULT_BRANCH_CACHE_TTL = Duration.minutes(5);
 const STATUS_ORIGIN_EXISTS_CACHE_TTL = Duration.minutes(5);
-const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
-  GCM_INTERACTIVE: "never",
-  GIT_ASKPASS: "",
-  GIT_TERMINAL_PROMPT: "0",
-  SSH_ASKPASS: "",
-  SSH_ASKPASS_REQUIRE: "never",
-} satisfies NodeJS.ProcessEnv);
+
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 
 class StatusRemoteRefreshCacheKey extends Data.Class<{
@@ -2925,7 +2918,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES
       : REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES;
     const requestedScope = input.file?.sourceKind ?? input.scope;
-    const needsCurrentBranch = requestedScope === undefined || requestedScope === "branch-range";
+    const previewMergeBase =
+      input.file?.sourceKind === "branch-range" ? input.mergeBase : undefined;
+    const needsCurrentBranch =
+      previewMergeBase === undefined &&
+      (requestedScope === undefined || requestedScope === "branch-range");
     const repository = yield* resolveReviewRepository(input.cwd, needsCurrentBranch).pipe(
       Effect.catchTags({
         GitCommandError: (error) =>
@@ -2947,7 +2944,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const review =
       scope !== undefined && scope !== "branch-range"
         ? { baseRef: input.baseRef ?? null, mergeBase: null }
-        : yield* resolveReviewMergeBase(cwd, repository.currentBranch, input.baseRef);
+        : previewMergeBase !== undefined
+          ? { baseRef: input.baseRef ?? null, mergeBase: previewMergeBase }
+          : yield* resolveReviewMergeBase(cwd, repository.currentBranch, input.baseRef);
 
     const diffArgs = [
       ...REVIEW_DIFF_ARGS,
@@ -3102,6 +3101,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         title: review.baseRef ? `Changes vs ${review.baseRef}` : "Changes",
         baseRef: review.baseRef,
         headRef: repository.currentBranch ?? "HEAD",
+        ...(review.mergeBase === null ? {} : { mergeBase: review.mergeBase }),
         diff: baseDiff,
         ...(baseFiles === undefined ? {} : { files: baseFiles }),
         diffHash: baseDiffHash,

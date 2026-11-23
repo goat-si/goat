@@ -197,6 +197,17 @@ it.effect.each(["on a branch", "detached", "unborn"] as const)(
           general.sources.find((source) => source.kind === "branch-range")!.headRef,
           state === "detached" ? "HEAD" : yield* git(cwd, ["branch", "--show-current"]),
         );
+        const mergeBase = general.sources.find(
+          (source) => source.kind === "branch-range",
+        )!.mergeBase;
+        assert.isDefined(mergeBase);
+        spawnedArgs.length = 0;
+        yield* driver.getReviewDiffPreview({
+          cwd,
+          mergeBase,
+          file: { path: "new.txt", previousPath: null, sourceKind: "branch-range" },
+        });
+        assert.isFalse(spawnedArgs.some((args) => args.includes("merge-base")));
       }),
     ).pipe(Effect.provide(layerTest)),
 );
