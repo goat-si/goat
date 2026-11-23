@@ -340,6 +340,7 @@ function useSidebarThreads(input: {
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly routeRowThreadKey: string | null;
+  readonly departingThreadKey: string | null;
   readonly openSubagentOwnerKey: string | undefined;
   readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
 }) {
@@ -439,6 +440,7 @@ function useSidebarThreads(input: {
     routeRowThreadKey === null
       ? null
       : (launchGroups.ancestorKeys(routeRowThreadKey).at(-1) ?? routeRowThreadKey);
+  const parkedRouteShelfKey = routeRowThreadKey === input.departingThreadKey ? null : routeShelfKey;
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -452,7 +454,7 @@ function useSidebarThreads(input: {
     isListed: olderSettledShelf.isListed,
     unloadedCount: olderSettledShelf.unloadedCount,
     visibleCount: settledVisibleCount,
-    routeKey: routeShelfKey,
+    routeKey: parkedRouteShelfKey,
     expanded: settledShelfExpanded,
   });
   const listedSettledThreads = settledProjection.listed;
@@ -462,7 +464,7 @@ function useSidebarThreads(input: {
   const renderedSettledThreads = settledProjection.rendered;
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
-    : routeThreadOnly(snoozedThreads, routeShelfKey);
+    : routeThreadOnly(snoozedThreads, parkedRouteShelfKey);
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeShelfKey);
@@ -949,6 +951,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     setPersistedProjectScopeKeys([]);
   }, [clearSelection, revealWidensScope, setPersistedProjectScopeKeys]);
   const revealActiveRow = useActiveRowReveal(routeReveal, routeRowThreadKey);
+  const [departingThreadKey, setDepartingThreadKey] = useState<string | null>(null);
+  if (departingThreadKey !== null && departingThreadKey !== routeThreadKey) {
+    setDepartingThreadKey(null);
+  }
+  const departRouteThread = (threadKey: string) => setDepartingThreadKey(threadKey);
+  const stayOnRouteThread = (threadKey: string) =>
+    setDepartingThreadKey((current) => (current === threadKey ? null : current));
   const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
   const scopedProjectGroup = scopedProjectGroups.length === 1 ? scopedProjectGroups[0] : null;
@@ -1058,6 +1067,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     openSubagentOwnerKey,
     attentionByOwnerKey: subagentIndex.attentionByOwnerKey,
     routeRowThreadKey,
+    departingThreadKey,
     threads: listedThreads,
   });
 
@@ -1340,9 +1350,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (settlingThreadKeysRef.current.has(threadKey)) return;
       settlingThreadKeysRef.current.add(threadKey);
       const navigateAfterSettle = planForwardNavigation(threadKey, opts.coSettlingKeys);
+      if (navigateAfterSettle) departRouteThread(threadKey);
       const result = await settleThread(threadRef);
       settlingThreadKeysRef.current.delete(threadKey);
       if (result._tag === "Failure") {
+        stayOnRouteThread(threadKey);
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
           toastManager.add(
@@ -1365,6 +1377,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         })
       ) {
         navigateAfterSettle?.();
+      } else {
+        stayOnRouteThread(threadKey);
       }
     })();
   };
@@ -1863,6 +1877,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         case "settle": {
           settlingThreadKeysRef.current.add(activeKey);
           const navigateAfterSettle = planForwardNavigation(activeKey);
+          if (navigateAfterSettle) departRouteThread(activeKey);
           const settled = await run(settleThread(threadRef), "Failed to settle thread").finally(
             () => settlingThreadKeysRef.current.delete(activeKey),
           );
@@ -1877,6 +1892,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             })
           )
             navigateAfterSettle?.();
+          else stayOnRouteThread(activeKey);
           return;
         }
         case "move-active":
@@ -1931,9 +1947,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     snoozingThreadKeysRef.current.add(threadKey);
     const navigateAfterSnooze = planForwardNavigation(threadKey, opts.coSnoozingKeys);
+    if (navigateAfterSnooze) departRouteThread(threadKey);
     const result = await snoozeThread(threadRef, preset.snoozedUntil);
     snoozingThreadKeysRef.current.delete(threadKey);
     if (result._tag === "Failure") {
+      stayOnRouteThread(threadKey);
       return isAtomCommandInterrupted(result)
         ? ({ status: "interrupted" } as const)
         : ({ status: "failure", error: squashAtomCommandFailure(result) } as const);
@@ -1948,6 +1966,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })
     ) {
       navigateAfterSnooze?.();
+    } else {
+      stayOnRouteThread(threadKey);
     }
     return { status: "success" } as const;
   };

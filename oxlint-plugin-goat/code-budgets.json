@@ -475,7 +475,7 @@
   "apps/web/src/components/Sidebar.logic.test.ts": { "lines": 2403 },
   "apps/web/src/components/Sidebar.logic.ts": { "lines": 1706, "nonNull": 7 },
   "apps/web/src/components/Sidebar.motion.ts": { "nonNull": 6 },
-  "apps/web/src/components/Sidebar.tsx": { "lines": 3321, "nonNull": 1 },
+  "apps/web/src/components/Sidebar.tsx": { "lines": 3336, "nonNull": 1 },
   "apps/web/src/components/ThreadTerminalDrawer.tsx": { "lines": 1804 },
   "apps/web/src/components/chat/ChangedFilesTree.tsx": { "nonNull": 1 },
   "apps/web/src/components/chat/ChatComposer.tsx": { "lines": 3821, "nonNull": 2 },
