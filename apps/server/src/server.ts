@@ -264,7 +264,6 @@ import * as AutomationHold from "./automationHold.ts";
 import * as ServerActivation from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
-
 export { MemorySourceReadBinding, provideScreenPrimitives } from "./ServerPublicApi.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -805,6 +804,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     provideMemorySnapshot(
       application,
       ProviderInstanceRegistryHydration.layerWithProviderHome.pipe(
+        Layer.provide(layerPortScanner),
         Layer.provide(
           layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
         ),
