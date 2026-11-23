@@ -52,6 +52,10 @@ export function createAppUpdateDeferral(): AppUpdateDeferral {
 
 const appUpdateDeferral = createAppUpdateDeferral();
 
+export function isAppUpdatePending(): boolean {
+  return appUpdateDeferral.pendingInstall;
+}
+
 interface AppUpdateCheckOptions {
   readonly applyMode?: "background" | "immediate" | "manual";
   readonly client?: AppUpdateClient;

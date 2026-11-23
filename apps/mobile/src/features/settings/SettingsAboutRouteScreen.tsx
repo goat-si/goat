@@ -16,6 +16,7 @@ import { I18nProvider, useGT } from "../../i18n/I18nProvider";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
+  isAppUpdatePending,
   runAppUpdateCheck,
 } from "../updates/app-updates";
 import { SettingsRow } from "./components/SettingsRow";
@@ -54,7 +55,7 @@ function AppSettingsSection() {
     readonly state: AppUpdateCheckState;
     // "Up to date" is a confirmation that fades back to idle.
     readonly settledUntil: number | null;
-  }>({ state: "idle", settledUntil: null });
+  }>(() => ({ state: isAppUpdatePending() ? "ready" : "idle", settledUntil: null }));
   const confirmationExpired = useDeadlinePassed(checkState.settledUntil);
   const updateState =
     checkState.state === "current" && confirmationExpired ? "idle" : checkState.state;

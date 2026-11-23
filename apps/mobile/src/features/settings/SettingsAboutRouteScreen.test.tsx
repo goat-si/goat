@@ -4,7 +4,14 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const { mocks, Children } = vi.hoisted(() => ({
-  mocks: { platform: "ios", available: true, openURL: vi.fn(), alert: vi.fn(), check: vi.fn() },
+  mocks: {
+    platform: "ios",
+    available: true,
+    pending: false,
+    openURL: vi.fn(),
+    alert: vi.fn(),
+    check: vi.fn(),
+  },
   Children: ({ children }: { children?: ReactNode }) => children,
 }));
 vi.mock("react-native", () => ({
@@ -46,6 +53,7 @@ vi.mock("./components/SettingsRow", () => ({
 }));
 vi.mock("../updates/app-updates", () => ({
   isAppUpdateCheckAvailable: () => mocks.available,
+  isAppUpdatePending: () => mocks.pending,
   runAppUpdateCheck: mocks.check,
 }));
 
@@ -84,6 +92,32 @@ describe("About update actions (#3810)", () => {
       await act(async () => root.unmount());
     },
   );
+  it("keeps the install action after leaving and returning (#3830)", async () => {
+    const { SettingsAboutRouteScreen } = await import("./SettingsAboutRouteScreen");
+    mocks.available = true;
+    mocks.pending = false;
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    mocks.check.mockImplementation(
+      async ({ onStateChange }: { onStateChange: (s: string) => void }) => {
+        mocks.pending = true;
+        onStateChange("ready");
+      },
+    );
+    const container = document.createElement("div");
+    const first = createRoot(container);
+    await act(async () => first.render(<SettingsAboutRouteScreen />));
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((b) => b.textContent?.includes("Check for app updates"))
+        ?.click(),
+    );
+    await act(async () => first.unmount());
+    const second = createRoot(container);
+    await act(async () => second.render(<SettingsAboutRouteScreen />));
+    expect(container.textContent).toContain("Install app update");
+    await act(async () => second.unmount());
+    mocks.pending = false;
+  });
   it("hides the manual check when updates are unavailable", async () => {
     const { SettingsAboutRouteScreen } = await import("./SettingsAboutRouteScreen");
     mocks.available = false;
