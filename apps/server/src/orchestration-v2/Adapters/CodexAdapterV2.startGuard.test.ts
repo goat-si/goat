@@ -104,7 +104,7 @@ describe("Codex turn start on a busy native thread", () => {
         const snapshot = wp4Memory();
         const { additionalContext } = yield* buildCodexTurnStartParams({
           nativeThreadId: f.nativeThreadId,
-          codexInput: text("turn-2"),
+          codexInput: [{ type: "text", text: "turn-2" }],
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           modelSelection: CODEX_TEST_MODEL_SELECTION,
           memoryContext: snapshot,
