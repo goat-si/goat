@@ -1,3 +1,4 @@
+import { liveClaudeQueryFixture, wp4Memory } from "./ClaudeMemoryDelivery.testkit.ts";
 import { monitorFrames } from "./ClaudeMonitorFrames.testkit.ts";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
@@ -17,9 +18,7 @@ import { verifyClaudeReceipt } from "./ClaudeReceipt.testkit.ts";
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { beforeEach } from "vite-plus/test";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
-import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as M from "@goat/contracts";
-import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -27,7 +26,6 @@ import type {
   ElicitationRequest,
   Query as ClaudeQuery,
   SDKMessage,
-  SDKResultMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -82,7 +80,6 @@ import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
-import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
 import { AgentSurfaceToolkit } from "../../mcp/toolkits/agentSurface/tools.ts";
@@ -15680,163 +15677,232 @@ describe("ClaudeAdapterV2 query message stream", () => {
   );
 });
 
-const wp4Memory = () =>
-  MemoryContext.packMemoryContext({
-    memorySpaceId: M.MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: M.MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: M.MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: M.EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <untrusted> 'quoted' \"data\"",
-      },
-    ],
-  })!;
-
-const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function* (
-  config: McpProviderSession.McpProviderSessionConfig,
-  nativeSessionId: string,
-  currentMemoryPolicy: McpSessionRegistry.McpSessionRegistry["Service"]["currentMemoryPolicy"] = () =>
-    Effect.succeed(undefined),
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-    prefix: `goat-${config.threadId}-`,
-  });
-  const offers: SDKUserMessage[] = [];
-  const sdkMessages = yield* Queue.unbounded<SDKMessage>();
-  const registrations: Array<Record<string, unknown>> = [];
-  const opened: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions[] = [];
-  let closes = 0;
-  const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-    instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-    settings: DEFAULT_CLAUDE_SETTINGS,
-    environment: {},
-    attachmentsDir,
-    fileSystem,
-    path: yield* Path.Path,
-    random: yield* SecureRandom.SecureRandom,
-    idAllocator: yield* IdAllocator.IdAllocatorV2,
-    queryRunner: {
-      allocateSessionId: Effect.succeed(nativeSessionId),
-      open: (input) =>
-        Effect.sync(() => {
-          opened.push(input.options);
-          return {
-            messages: Stream.fromQueue(sdkMessages),
-            offer: (message) =>
-              Effect.sync(() => {
-                offers.push(message);
-              }),
-            setMcpServers: (servers) =>
-              Effect.sync(() => {
-                registrations.push(servers);
-              }),
-            setModel: () => Effect.void,
-            applyFlagSettings: () => Effect.void,
-            setPermissionMode: () => Effect.void,
-            backgroundTasks: () => Effect.succeed(false),
-            stopTask: () => Effect.void,
-            interrupt: Effect.void,
-            close: Effect.sync(() => void closes++),
-          } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
-        }),
-      forkSession: () => Effect.die("unused"),
-      subagentLaunchToolUseId: () => Effect.succeed(null),
-      assertComplete: Effect.void,
-    },
-  }).pipe(
-    Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
-      issue: () => Effect.die("unused"),
-      resolve: () => Effect.succeed(undefined),
-      touch: () => Effect.void,
-      revokeProviderSession: () => Effect.void,
-      revokeThread: () => Effect.void,
-      revokeAll: Effect.void,
-      subscribeChanges: Effect.die("unused"),
-      inspect: () => Effect.undefined,
-      currentMemoryPolicy,
-    }),
-  );
-  const sessions = yield* McpProviderSessions.McpProviderSessions;
-  yield* sessions.set(config);
-  const runtime = yield* adapter.openSession({
-    threadId: config.threadId,
-    providerSessionId: ProviderSessionId.make(`${config.threadId}-session`),
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-  });
-  const terminals = yield* Queue.unbounded<void>();
-  const approvalRequested = yield* Deferred.make<void>();
-  yield* runtime.events.pipe(
-    Stream.runForEach((event) => {
-      if (event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending")
-        return Deferred.succeed(approvalRequested, undefined);
-      return event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void;
-    }),
-    Effect.forkScoped,
-  );
-  const providerThread = yield* runtime.ensureThread({
-    threadId: config.threadId,
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-  });
-  const finish = Effect.fn("claudeTest.finishLiveTurn")(function* (
-    message: SDKUserMessage,
-    uuid: SDKResultMessage["uuid"],
-    beforeResult: ReadonlyArray<SDKMessage> = [],
-  ) {
-    yield* Queue.offer(sdkMessages, { ...message, session_id: nativeSessionId });
-    for (const frame of beforeResult) yield* Queue.offer(sdkMessages, frame);
-    yield* Queue.offer(sdkMessages, {
-      type: "result",
-      subtype: "success",
-      is_error: false,
-      duration_ms: 0,
-      duration_api_ms: 0,
-      num_turns: 1,
-      result: "done",
-      stop_reason: "end_turn",
-      total_cost_usd: 0,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
-        inference_geo: "fixture",
-        iterations: [],
-        server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
-        service_tier: "standard",
-        speed: "standard",
-      },
-      modelUsage: {},
-      permission_denials: [],
-      uuid,
-      session_id: nativeSessionId,
-      terminal_reason: "completed",
-    });
-  });
-  return {
-    offers,
-    registrations,
-    opened,
-    sessions,
-    runtime,
-    providerThread,
-    terminals,
-    approvalRequested,
-    finish,
-    get closes() {
-      return closes;
-    },
-  };
-});
-
 describe("Claude WP4 memory delivery", () => {
+  it.effect("does not record a root prompt stopped before Claude reads it (#3836)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("root-unread");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "fixture",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "root-unread-native",
+          () => Effect.undefined,
+          true,
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        let uncertain = 0;
+        const input = {
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make("root-unread"),
+            text: "unread",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              uncertain++;
+            }),
+        };
+        yield* fixture.runtime.startTurn(input);
+        assert.equal(uncertain, 1);
+        yield* fixture.runtime.interruptTurn({
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${input.attemptId}`,
+          }),
+        });
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 0);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+  it.effect("does not record an unread steer when stopped behind a tool (#3801)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("receipt-stop");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "receipt-stop-native",
+          () => Effect.succeed(undefined),
+          true,
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const input = {
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make("receipt-stop"),
+            text: "hello",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+        };
+        const providerTurnId = allocator.derive.providerTurn({
+          driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${input.attemptId}`,
+        });
+        yield* fixture.runtime.startTurn(input);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "assistant",
+            session_id: "receipt-stop-native",
+            user_message_uuid: fixture.offers[0]?.uuid,
+            uuid: "00000000-0000-4000-8000-000000000124",
+            parent_tool_use_id: null,
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "message-tool",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "tool-held",
+                  name: "Bash",
+                  input: { command: "echo fixture" },
+                },
+              ],
+            },
+          }),
+        );
+        yield* Deferred.await(fixture.toolStarted);
+        yield* fixture.runtime.steerTurn({
+          runId: input.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId,
+          message: { ...input.message, text: "unread" },
+        });
+        yield* fixture.runtime.interruptTurn({
+          providerThread: fixture.providerThread,
+          providerTurnId,
+        });
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 1);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+  it.effect("records a steer only after Claude accepts it (#3801)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("receipt-steer");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "receipt-native",
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const received = yield* Queue.unbounded<void>();
+        const makeInput = (attempt: string) => ({
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make(attempt),
+            text: "hello",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }).pipe(Effect.andThen(Queue.offer(received, undefined)), Effect.asVoid),
+        });
+        const start = makeInput("receipt-first");
+        yield* fixture.runtime.startTurn(start);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: fixture.offers[0]?.uuid,
+            state: "started",
+          }),
+        );
+        yield* Queue.take(received);
+        yield* fixture.runtime.steerTurn({
+          runId: start.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${start.attemptId}`,
+          }),
+          message: { ...start.message, text: "unread" },
+        });
+        assert.equal(receipts, 1);
+        yield* fixture.finish(fixture.offers[0]!, "00000000-0000-4000-8000-000000000121");
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 1);
+        const next = makeInput("receipt-second");
+        yield* fixture.runtime.startTurn(next);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: fixture.offers[2]?.uuid,
+            state: "started",
+          }),
+        );
+        yield* Queue.take(received);
+        yield* fixture.runtime.steerTurn({
+          runId: next.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${next.attemptId}`,
+          }),
+          message: { ...next.message, text: "accepted" },
+        });
+        assert.equal(receipts, 2);
+        yield* fixture.finish(
+          Object.assign({}, fixture.offers[3]!, { user_message_uuid: fixture.offers[3]!.uuid }),
+          "00000000-0000-4000-8000-000000000122",
+        );
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 3);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
   it.effect("refreshes both message builders and credentials while retaining the live query", () =>
     Effect.scoped(
       Effect.gen(function* () {

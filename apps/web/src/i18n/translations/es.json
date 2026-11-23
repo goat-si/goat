@@ -823,5 +823,15 @@
   "fdf309c643382f9a": "Hay más coincidencias. Acota la búsqueda.",
   "3603184704a873fc": "Cargando archivos…",
   "01cdd37750608ba0": "No hay archivos que coincidan.",
-  "ddb58ada5516a46d": "Archivos de {projectName}"
+  "ddb58ada5516a46d": "Archivos de {projectName}",
+  "5a10725cff6b45aa": "Memoria de este turno",
+  "af282d8bec98e6d4": "Cargando la memoria de este turno…",
+  "254fa55e3c133d4c": "La memoria de este turno no está disponible.",
+  "07ec4012f14e268b": "No se registró actividad de memoria en este turno.",
+  "41a9f21f1888c5cb": "Enviado al modelo",
+  "74d1eab671a41716": "Consulta de memoria",
+  "ab5f7cd7f8d24e36": "Consulta",
+  "540690430e586ae8": "No hay entradas visibles.",
+  "3d40ebe62a5baa33": "Revisión",
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }

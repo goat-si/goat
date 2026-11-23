@@ -674,3 +674,14 @@ export const terminals = (
     Stream.runCollect,
     Effect.forkScoped,
   );
+
+export const nativeGoal = (status: "active" | "paused" | "complete") => ({
+  id: "goal-1",
+  objective: "Write proof.txt",
+  status,
+  rounds: 2,
+  maxRounds: 100,
+  boot: "boot-1",
+  updatedAt: 1,
+  reason: "Checked proof.txt",
+});

@@ -338,6 +338,7 @@ export interface ActiveAcpTurn {
   lastProgressAt: number;
   inactivityWatchdog: Fiber.Fiber<void> | undefined;
   readonly promptDispatched: Deferred.Deferred<void>;
+  confirmMemory?: Effect.Effect<void>;
   /** Frees the runtime for the next prompt while the agent still holds this one's response. */
   readonly foregroundIdle: Deferred.Deferred<void>;
 }
@@ -4240,6 +4241,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             update.sessionUpdate !== "plan_removed" &&
             acpRootSessionUpdateIngestsOutput(notification)
           ) {
+            // Only post-dispatch output already attributed to the foreground root can acknowledge its prompt.
+            if (
+              context.confirmMemory &&
+              !context.promptSettled &&
+              acpPostSettleWakeEvidence(notification, flavor) &&
+              (yield* Deferred.isDone(context.promptDispatched))
+            ) {
+              yield* context.confirmMemory;
+              delete context.confirmMemory;
+            }
             yield* emitProviderRetry(context, "completed");
           }
           if (
@@ -7375,27 +7386,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     sessionLaunch,
                   });
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
-            const prompt = yield* Effect.gen(function* () {
-              const snapshot =
+            const { prompt, receipt, uncertain } = yield* Effect.gen(function* () {
+              const skipMemory =
                 isAppOwnedWakeTurn ||
                 (compactsContext &&
                   turnInput.message.text.trim() === "/compact" &&
-                  turnInput.message.attachments.length === 0)
-                  ? undefined
-                  : turnInput.refreshMemoryContext
-                    ? yield* turnInput.refreshMemoryContext()
-                    : turnInput.memoryContext;
-              const memory =
-                snapshot === undefined
-                  ? undefined
-                  : yield* Effect.try({
-                      try: () => MemoryContext.memoryContextText(snapshot),
-                      catch: () =>
-                        new ProviderAdapter.ProviderAdapterProtocolError({
-                          driver,
-                          detail: "Invalid memory context frame",
-                        }),
-                    });
+                  turnInput.message.attachments.length === 0);
+              const {
+                text: memory,
+                receipt,
+                uncertain,
+              } = yield* MemoryContext.promptMemory(skipMemory ? undefined : turnInput, driver);
               const config = yield* mcpSessions.read(turnInput.threadId);
               // Only the attachment installed on this native session can advertise tools.
               const attached = terminalEnvironmentBySessionId.get(requestedSessionId);
@@ -7411,18 +7412,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 hasMemoryTools || memoryToolClaims.has(requestedSessionId);
               if (hasMemoryTools) memoryToolClaims.add(requestedSessionId);
               else memoryToolClaims.delete(requestedSessionId);
-              return [
-                ...promptParts!.prompt,
-                ...(announceMemoryTools
-                  ? [
-                      {
-                        type: "text" as const,
-                        text: `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`,
-                      },
-                    ]
-                  : []),
-                ...(memory === undefined ? [] : [{ type: "text" as const, text: memory }]),
-              ];
+              return {
+                receipt,
+                uncertain,
+                prompt: [
+                  ...promptParts!.prompt,
+                  ...(announceMemoryTools
+                    ? [
+                        {
+                          type: "text" as const,
+                          text: `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`,
+                        },
+                      ]
+                    : []),
+                  ...(memory === undefined ? [] : [{ type: "text" as const, text: memory }]),
+                ],
+              };
             }).pipe(Effect.tapError(() => finalizeTurn(context, "failed")));
             if (promptInactivityTimeoutMillis !== undefined) {
               context.inactivityWatchdog = yield* watchPromptInactivity(
@@ -7431,6 +7436,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 promptInactivityTimeoutMillis,
               ).pipe(Effect.forkIn(sessionScope));
             }
+            yield* uncertain;
+            const confirm = yield* Effect.cached(receipt);
+            context.confirmMemory = confirm;
             yield* sendPromptWhenIdle(context, () =>
               runtime.prompt(
                 { prompt },
@@ -7438,6 +7446,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ),
             ).pipe(
               Effect.tap(() => turnInput.inputDelivery?.submitted() ?? Effect.void),
+              Effect.tap(() => confirm),
               Effect.tap(() =>
                 Ref.update(promptInstructionStates, (current) => {
                   if (promptParts?.instructionState === undefined) return current;

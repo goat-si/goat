@@ -1,3 +1,4 @@
+import "./filePreviewState.testkit";
 import {
   act,
   createElement,
@@ -160,18 +161,6 @@ vi.mock("../features/threads/ThreadMarkdownVideo", async (importOriginal) => {
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/client-runtime/state/runtime")>()),
   executeAtomQuery: (...args: unknown[]) => audio.query(...args),
-}));
-vi.mock("../state/projects", () => ({
-  projectEnvironment: {
-    searchEntries: (input: unknown) => input,
-    fileMetadata: (input: unknown) => input,
-  },
-}));
-vi.mock("../state/server", () => ({ serverEnvironment: {} }));
-vi.mock("../state/session", () => ({
-  readEnvironmentScope: () => true,
-  usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://example.com" } }),
-  environmentSession: { preparedConnectionValueAtom: () => null },
 }));
 vi.mock("../state/atom-registry", () => ({ appAtomRegistry: { get: () => ({ _tag: "None" }) } }));
 vi.mock("../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));

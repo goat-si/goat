@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import type { AuthEnvironmentScope } from "@goat/contracts";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as Exit from "effect/Exit";
@@ -34,7 +35,7 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { cursorMcpServers, makeCursorAdapterV2 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import { loadCursorSdk } from "./sdk.ts";
-import { wp4Snapshot } from "./adapterMemory.testkit.ts";
+import { gatedCursorRun, wp4Snapshot, cursorReceiptCounter } from "./adapterMemory.testkit.ts";
 
 const { ConfigurationError } = loadCursorSdk();
 
@@ -730,6 +731,8 @@ describe("CursorAdapterV2", () => {
       const sentMessages: Array<string> = [];
       const snapshot = wp4Snapshot();
       let refreshes = 0;
+      const receipts = cursorReceiptCounter();
+      const releaseFirst = yield* Deferred.make<void>();
       let memory: typeof snapshot | undefined = snapshot;
       let sendCalls = 0;
       const opens: CursorAgentSdk.CursorAgentSdkOpenInput[] = [];
@@ -783,21 +786,7 @@ describe("CursorAdapterV2", () => {
                       typeof input.message === "string" ? input.message : input.message.text,
                     );
                     const runId = `native-cursor-run-${sendCalls}`;
-                    return {
-                      agentId: "native-cursor-error",
-                      runId,
-                      wait: Effect.succeed({
-                        id: runId,
-                        requestId: `native-request-${sendCalls}`,
-                        status: "finished" as const,
-                        model: { id: "composer-2.5" },
-                        durationMs: 1,
-                        ...(sendCalls === 1
-                          ? { result: "Error: RetriableError: WritableIterable is closed" }
-                          : {}),
-                      }),
-                      cancel: Effect.void,
-                    };
+                    return gatedCursorRun(sendCalls, runId, releaseFirst);
                   }),
               };
             }),
@@ -845,6 +834,7 @@ describe("CursorAdapterV2", () => {
         modelSelection,
         runtimePolicy,
         memoryContext: snapshot,
+        ...receipts.hooks,
         refreshMemoryContext: () =>
           Effect.sync(() => {
             refreshes++;
@@ -865,6 +855,9 @@ describe("CursorAdapterV2", () => {
         },
       };
       yield* runtime.startTurn(ordinaryInput);
+      assert.equal(receipts.delivered, 0);
+      assert.equal(receipts.uncertain, 1);
+      yield* Deferred.succeed(releaseFirst, undefined);
       const first = yield* runtime.events.pipe(
         Stream.filter((event) => event.type === "turn.terminal"),
         Stream.runHead,
@@ -874,6 +867,8 @@ describe("CursorAdapterV2", () => {
         assert.equal(first.value.status, "failed");
         assert.equal(first.value.failure?.class, "transport_error");
       }
+      assert.equal(receipts.delivered, 0);
+      assert.equal(receipts.uncertain, 1);
 
       assert.include(sentMessages[0]!, memoryContextText(snapshot));
       assert.equal(refreshes, 1);
@@ -955,6 +950,7 @@ describe("CursorAdapterV2", () => {
           Stream.runHead,
         );
         assert.include(sentMessages[index + 4]!, memoryContextText(snapshot));
+        assert.equal(receipts.delivered, index + 1);
         assert.include(
           sentMessages[index + 4]!,
           `read=true, write=${index === 1}, source=${index === 1}`,
