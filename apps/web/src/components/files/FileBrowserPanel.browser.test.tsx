@@ -129,6 +129,7 @@ async function renderPanel(
     workspaceRoot?: string;
     hostFolder?: boolean;
     selectedPath?: string;
+    onOpenFile?: (path: string) => void;
   } = {},
 ) {
   const container = document.createElement("div");
@@ -142,7 +143,7 @@ async function renderPanel(
       projectName="repo"
       selectedPath={props.selectedPath ?? null}
       selectedPathRevealId={0}
-      onOpenFile={() => {}}
+      onOpenFile={props.onOpenFile ?? (() => {})}
       workspaceMutationId={null}
     />,
     { container, router: false /* the panel renders no links */ },
@@ -195,6 +196,16 @@ it("keeps a revealed folder visible while restored folders load above it", async
     expect(target!.getBoundingClientRect().top).toBeGreaterThanOrEqual(bounds.top);
     expect(target!.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom);
   });
+});
+
+it("opens the selected file again when its row is clicked", async () => {
+  setup();
+  const open = vi.fn();
+  await using screen = await renderPanel({ onOpenFile: open });
+  const file = await row(screen.container, "README.md");
+  await userEvent.click(file);
+  await userEvent.click(file);
+  expect(open).toHaveBeenCalledTimes(2);
 });
 
 function treeRoot(container: HTMLElement): ShadowRoot {
