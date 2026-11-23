@@ -1,3 +1,5 @@
+import { makeRecordWakeReport } from "./recordWakeReport.ts";
+import { readRetiredPromptOutcome, type PromptOutcomeCheck } from "./retiredPromptOutcome.ts";
 import {
   hasAcpDeferredBackgroundWork,
   idleReportedSubagents,
@@ -756,17 +758,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           readonly reports: ReadonlyMap<string, BackgroundWorkReport>;
           readonly offered: ReadonlySet<string>;
         }>(noWakeReports);
-        const recordWakeReport = Effect.fnUntraced(function* (
-          key: string,
-          report: BackgroundWorkReport,
-        ) {
-          const context = yield* Ref.get(activeTurn);
-          if (context !== null && !context.promptSettled && !context.finalized) return;
-          yield* Ref.update(wakeReports, ({ reports, offered }) => ({
-            reports: new Map(reports).set(key, report),
-            offered,
-          }));
-        });
+        const recordWakeReport = makeRecordWakeReport(activeTurn, wakeReports);
         const continuationRequested = yield* Ref.make(false);
         const continuationGeneration = yield* Ref.make(0);
         const continuationPermit = yield* Semaphore.make(1);
@@ -6756,6 +6748,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           generation: number,
           timeoutMillis: number,
+          checkPromptOutcome: PromptOutcomeCheck | undefined,
         ) {
           const retired = yield* runRuntimeCallbackAtGeneration(
             generation,
@@ -6777,14 +6770,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               yield* Ref.set(runtimeRestartRequired, true);
               yield* cancelPendingRuntimeRequests();
               yield* terminalizeOpenForegroundTools(context, "failed");
+              const recorded = yield* readRetiredPromptOutcome(checkPromptOutcome, driver);
               const minutes = Math.max(1, Math.round(timeoutMillis / 60_000));
               yield* finalizeTurn(
                 context,
                 "failed",
-                makeProviderFailure({
-                  class: "provider_error",
-                  message: `${flavor.runtimeHarness ?? driver} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}, so GOAT stopped the turn and restarted the agent. Send a message to continue.`,
-                }),
+                recorded ??
+                  makeProviderFailure({
+                    class: "provider_error",
+                    message: `${flavor.runtimeHarness ?? driver} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}, so GOAT stopped the turn and restarted the agent. Send a message to continue.`,
+                  }),
+                {
+                  threadDisposition:
+                    recorded?.code === "INVALID_THINKING_SIGNATURE" ? "broken" : "reusable",
+                },
               );
               return "retired" as const;
             }),
@@ -6808,6 +6807,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           generation: number,
           timeoutMillis: number,
+          checkPromptOutcome: PromptOutcomeCheck | undefined,
         ) {
           yield* Deferred.await(context.promptDispatched);
           context.lastProgressAt = yield* Clock.currentTimeMillis;
@@ -6826,7 +6826,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               continue;
             }
             const outcome = yield* runtimeTransitionPermit.withPermit(
-              retireInactivePrompt(context, generation, timeoutMillis),
+              retireInactivePrompt(context, generation, timeoutMillis, checkPromptOutcome),
             );
             if (outcome !== "rearm") return;
           }
@@ -7401,6 +7401,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 context,
                 promptGeneration,
                 promptInactivityTimeoutMillis,
+                checkPromptOutcome,
               ).pipe(Effect.forkIn(sessionScope));
             }
             yield* sendPromptWhenIdle(context, () =>

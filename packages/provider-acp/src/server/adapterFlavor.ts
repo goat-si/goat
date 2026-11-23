@@ -138,6 +138,7 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<
     (
       result: EffectAcpSchema.PromptResponse,
+      options?: { readonly retired?: boolean },
     ) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>
   >;
   readonly requiresSignIn?: (cause: unknown) => boolean;

@@ -62,11 +62,12 @@ describe("watchAntigravityPromptOutcome", () => {
       const turn = (
         steps: ReadonlyArray<readonly [number, Uint8Array]>,
         result: EffectAcpSchema.PromptResponse = { stopReason: "end_turn" },
+        options?: { readonly retired?: boolean },
       ) =>
         Effect.gen(function* () {
           const check = yield* watchAntigravityPromptOutcome(profileDirectory, sessionId);
           appendSteps(steps);
-          return yield* check(result);
+          return yield* check(result, options);
         });
       const input = Buffer.from("Run the fixture.");
       const reply = Buffer.from("FIXTURE_OK");
@@ -139,6 +140,44 @@ describe("watchAntigravityPromptOutcome", () => {
         ]);
         assert.equal(outcome?.code, "INVALID_THINKING_SIGNATURE");
       }
+      const gateway = errorPayload(
+        "Error 502, Message: Bad Gateway: Failed to connect to backend API, Status: 502 Bad Gateway, Details: []",
+      );
+      assert.deepInclude(
+        yield* turn([
+          [USER_INPUT, input],
+          [ERROR_MESSAGE, gateway],
+        ]),
+        {
+          class: "provider_error",
+          message: "Bad Gateway: Failed to connect to backend API",
+          retryable: true,
+        },
+      );
+      assert.isUndefined(
+        (yield* turn(
+          [
+            [USER_INPUT, input],
+            [ERROR_MESSAGE, RATE_LIMIT_ERROR],
+          ],
+          undefined,
+          { retired: true },
+        ))?.resetAt,
+      );
+      const absoluteQuota = errorPayload(
+        "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [reason:QUOTA_EXHAUSTED quotaResetTimeStamp:2026-11-09T01:05:00Z quotaResetDelay:3600s]",
+      );
+      assert.equal(
+        (yield* turn(
+          [
+            [USER_INPUT, input],
+            [ERROR_MESSAGE, absoluteQuota],
+          ],
+          undefined,
+          { retired: true },
+        ))?.resetAt,
+        "2026-11-09T01:05:00.000Z",
+      );
       // A completed tool keeps its usage, and the turn still fails.
       assert.equal(
         (yield* turn(
