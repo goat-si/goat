@@ -111,6 +111,12 @@ export interface AcpAdapterV2ExtensionContext {
  * with invalid params. `makeProviderFailure` shows its message to the user;
  * the agent's reply stays on `cause`.
  */
+/** The native session can carry on: a prompt-steering turn resends resumeWith once before failing. */
+export interface AcpResumablePromptFailure {
+  readonly failure: OrchestrationV2ProviderFailure;
+  readonly resumeWith: string;
+}
+
 export interface AcpAdapterV2Flavor {
   readonly preferHttpMcp?: boolean;
   readonly buildPrompt?: (input: {
@@ -126,7 +132,7 @@ export interface AcpAdapterV2Flavor {
   /**
    * Runs before `session/prompt`. The returned check sees a prompt the agent ended
    * without an error or cancel, and reports a failure its stop reason hid. A reported
-   * failure restarts the runtime before the next turn.
+   * failure restarts the runtime before the next turn, unless it names a prompt to resume with.
    */
   readonly watchPromptOutcome?: (
     sessionId: string,
@@ -139,7 +145,7 @@ export interface AcpAdapterV2Flavor {
     (
       result: EffectAcpSchema.PromptResponse,
       options?: { readonly retired?: boolean },
-    ) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>
+    ) => Effect.Effect<OrchestrationV2ProviderFailure | AcpResumablePromptFailure | undefined>
   >;
   readonly requiresSignIn?: (cause: unknown) => boolean;
   /**

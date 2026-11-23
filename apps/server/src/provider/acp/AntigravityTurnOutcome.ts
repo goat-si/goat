@@ -9,16 +9,21 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as EffectAcpSchema from "effect-acp/compat";
+import type { AcpResumablePromptFailure } from "@goat/provider-acp/server/adapter";
 
 import { antigravityManagedPath, antigravityProfileRoot } from "./AntigravityProfilePaths.ts";
 
 // CORTEX_STEP_TYPE_ERROR_MESSAGE in the native trajectory.
 const ERROR_STEP_TYPE = 17;
+// CORTEX_STEP_TYPE_PLANNER_RESPONSE: the model answered within this turn.
+const PLANNER_RESPONSE_STEP_TYPE = 15;
 // The harness error text leads the payload; a Go stack trace follows it.
 const MAX_ERROR_PAYLOAD_BYTES = 16_384;
 // The Go harness's rendering of a Google API error, as the agent's api_errors.py reads it.
 const API_ERROR =
   /Error (\d{3}), Message: ((?:(?!, Status: |Error \d{3}, Message: ).)+), Status: ([A-Z_]+|\d{3}[^,\n]*)/s;
+// Antigravity 1.5 with a Google account writes "STATUS (code NNN): message".
+const STATUS_ERROR = /(?<![A-Z_])([A-Z_]+) \(code (\d{3})\): (\P{Cc}+)/u;
 const QUOTA_EXHAUSTED = /\breason:QUOTA_EXHAUSTED\b/;
 const RESET_TIMESTAMP = /\bquotaResetTimeStamp:([^\s\]]+)/;
 const RESET_DELAY = /\bquotaResetDelay:((?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|h|m|s))+)(?=[\s\]])/;
@@ -39,6 +44,7 @@ const NATIVE_SESSION_ID = /^[\w-]+$/;
 interface LastStep {
   readonly type: number;
   readonly payload: Uint8Array | null;
+  readonly reachedModel: boolean;
 }
 
 const readSteps = <A>(file: string, read: (database: NodeSqlite.DatabaseSync) => A) =>
@@ -71,7 +77,15 @@ const lastStepAfter =
       )
       .get(MAX_ERROR_PAYLOAD_BYTES, index);
     if (typeof row?.type !== "number") return undefined;
-    return { type: row.type, payload: row.payload instanceof Uint8Array ? row.payload : null };
+    const reachedModel =
+      database
+        .prepare("SELECT 1 FROM steps WHERE idx > ? AND step_type = ? LIMIT 1")
+        .get(index, PLANNER_RESPONSE_STEP_TYPE) !== undefined;
+    return {
+      type: row.type,
+      payload: row.payload instanceof Uint8Array ? row.payload : null,
+      reachedModel,
+    };
   };
 
 function resetAtFrom(text: string, now: DateTime.Utc | undefined): string | undefined {
@@ -87,11 +101,17 @@ function resetAtFrom(text: string, now: DateTime.Utc | undefined): string | unde
   return delayMs > 0 ? DateTime.formatIso(DateTime.add(now, { milliseconds: delayMs })) : undefined;
 }
 
+// Reorders STATUS_ERROR's groups to API_ERROR's: HTTP status, message, status name.
+function statusError(text: string) {
+  const match = STATUS_ERROR.exec(text);
+  return match === null ? null : ([match[0], match[2], match[3], match[1]] as const);
+}
+
 function turnFailure(
   stopReason: EffectAcpSchema.StopReason,
   step: LastStep | undefined,
   now: DateTime.Utc | undefined,
-): OrchestrationV2ProviderFailure | undefined {
+): OrchestrationV2ProviderFailure | AcpResumablePromptFailure | undefined {
   const errorText =
     step?.type === ERROR_STEP_TYPE
       ? new TextDecoder().decode(step.payload ?? new Uint8Array())
@@ -99,7 +119,7 @@ function turnFailure(
   // The agent maps only the SDK's QUOTA_EXHAUSTED stop reason to `refusal`.
   if (errorText === undefined && stopReason !== "refusal") return undefined;
   const text = errorText ?? "";
-  const apiError = API_ERROR.exec(text);
+  const apiError = API_ERROR.exec(text) ?? statusError(text);
   if (stopReason === "refusal" || QUOTA_EXHAUSTED.test(text)) {
     return makeProviderFailure({
       class: "usage_limit",
@@ -130,13 +150,16 @@ function turnFailure(
   }
   const [, httpStatus, message, status] = apiError;
   const rateLimited = httpStatus === "429" || status === "RESOURCE_EXHAUSTED";
-  return makeProviderFailure({
+  // A 404 before the model answered is an unknown or unentitled model; after, a transient edge error.
+  const transientNotFound = httpStatus === "404" && step?.reachedModel === true;
+  const failure = makeProviderFailure({
     class: rateLimited ? "usage_limit" : "provider_error",
     message: (message ?? "").trim(),
     code: status ?? null,
-    retryable: rateLimited || Number(httpStatus) >= 500,
+    retryable: rateLimited || transientNotFound || Number(httpStatus) >= 500,
     resetAt: resetAtFrom(text, now) ?? null,
   });
+  return transientNotFound ? { failure, resumeWith: "continue" } : failure;
 }
 
 const conversationSegments = ["antigravity-acp", "conversations"];
