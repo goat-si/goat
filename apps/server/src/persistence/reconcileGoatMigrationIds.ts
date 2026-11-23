@@ -70,22 +70,6 @@ const BOT_ATTENTION_PREVIEW_PREDECESSORS = [
   [176, "ChannelWorkerLaunchHeads"],
   [177, WORK_TRIGGER_FENCE_MIGRATION_NAME],
 ] as const;
-const TURN_MEMORY_RECEIPTS_NAME = "TurnMemoryReceipts";
-const TURN_MEMORY_RECEIPTS_CURRENT_ID = 185;
-const TURN_MEMORY_RECEIPTS_PREVIEW_TAIL = [
-  [178, "WebhookDeliveryFiringEvidence"],
-  [179, WORKER_GENERATIONS_MIGRATION_NAME],
-  [180, "ChannelBotTaskSnooze"],
-  [181, BOT_ATTENTION_MIGRATION_NAME],
-  [182, "SlackConversationBot"],
-  [183, "ChannelInputSessionAuthority"],
-  [184, "RemoteDispatchEnvironment"],
-] as const;
-const TURN_MEMORY_RECEIPTS_PREVIEW_LEDGERS = [
-  { throughId: 177, receiptId: 178 },
-  { throughId: 181, receiptId: 184 },
-  { throughId: 183, receiptId: 184 },
-] as const;
 const prePenMemberMemoryNames = [
   "MemoryThreadLineage",
   "MemorySaveSuggestions",
@@ -188,7 +172,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RemoteDispatchEnvironment",
   "SlackConversationBot",
   "ChannelInputSessionAuthority",
-  TURN_MEMORY_RECEIPTS_NAME,
+  "TurnMemoryReceipts",
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -369,47 +353,6 @@ export const skippedV2Migrations = <E>(
       });
 };
 
-// Only the three published prefixes can move a receipt marker without replaying its DDL.
-const turnMemoryReceiptsPreviewPlan = <E>(
-  entries: ReadonlyArray<MigrationEntry<E>>,
-  history: ReadonlyArray<LedgerRow>,
-) => {
-  const currentId = TURN_MEMORY_RECEIPTS_CURRENT_ID;
-  const latest = Math.max(0, ...history.map(({ migration_id }) => migration_id));
-  if (
-    (latest !== 178 && latest !== 184) ||
-    !history.some(
-      ({ migration_id, name }) => migration_id === latest && name === TURN_MEMORY_RECEIPTS_NAME,
-    ) ||
-    !entries.some(([id, name]) => id === currentId && name === TURN_MEMORY_RECEIPTS_NAME)
-  )
-    return undefined;
-
-  const canonical = new Map(entries.map(([id, name]) => [id, name]));
-  if (!TURN_MEMORY_RECEIPTS_PREVIEW_TAIL.every(([id, name]) => canonical.get(id) === name))
-    return undefined;
-
-  for (const { throughId, receiptId } of TURN_MEMORY_RECEIPTS_PREVIEW_LEDGERS) {
-    if (
-      receiptId !== latest ||
-      history.some(
-        ({ migration_id, name }) =>
-          migration_id >= FIRST_V2_MIGRATION_ID &&
-          migration_id !== receiptId &&
-          (migration_id > throughId ||
-            canonical.get(migration_id) !== canonicalMigrationName(name)),
-      ) ||
-      skippedV2Migrations(entries, history, throughId) !== undefined
-    )
-      continue;
-    return {
-      receiptMove: { from: receiptId, to: currentId },
-      insertions: entries.filter(([id]) => id > throughId && id < currentId),
-    };
-  }
-  return undefined;
-};
-
 /**
  * Read-only preflight: preview reconciliation must not mutate incompatible memory sandboxes.
  *
@@ -449,7 +392,6 @@ export function memoryMigrationProblem<E>(
   const insertion = findPenMemberInsertion(entries, history);
   const firstBindId = legacyFirstBindId(entries, history);
   const legacyAttention = legacyBotAttentionId(entries, history);
-  const receiptPreviewId = turnMemoryReceiptsPreviewPlan(entries, history)?.receiptMove.to;
   const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
   const goatOffsets = new Set(
     history.flatMap((row) => {
@@ -459,10 +401,8 @@ export function memoryMigrationProblem<E>(
       const recordedId =
         row.name === FIRST_BIND_MIGRATION_NAME && firstBindId !== undefined
           ? firstBindId
-          : row.name === TURN_MEMORY_RECEIPTS_NAME && receiptPreviewId !== undefined
-            ? receiptPreviewId
-            : row.migration_id +
-              (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
+          : row.migration_id +
+            (insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0);
       return goatRow && currentId !== undefined ? [recordedId - currentId] : [];
     }),
   );
@@ -546,25 +486,9 @@ export const plannedGoatLedger = <E>(
       readonly moved: ReadonlyArray<LedgerRow>;
       readonly goatRows: ReadonlyArray<LedgerRow>;
       readonly insertions: ReadonlyArray<MigrationEntry<E>>;
-      readonly receiptMove?: { readonly from: number; readonly to: number };
     }
   | Migrator.MigrationError
   | undefined => {
-  const preview = turnMemoryReceiptsPreviewPlan(entries, history);
-  if (preview !== undefined) {
-    const { receiptMove, insertions } = preview;
-    return {
-      moved: [
-        ...history.map((row) =>
-          row.migration_id === receiptMove.from ? { ...row, migration_id: receiptMove.to } : row,
-        ),
-        ...insertions.map(([migration_id, name]) => ({ migration_id, name })),
-      ],
-      goatRows: [],
-      insertions,
-      receiptMove,
-    };
-  }
   if (!goatMigrationIdsMove(entries, history)) return undefined;
   const currentIds = new Map(entries.map(([id, name]) => [name, id]));
   const goatRows = history.flatMap((row) => {
@@ -663,25 +587,8 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
       AND name = ${BOT_ATTENTION_MIGRATION_NAME}`;
   }
   if (plan === undefined) return [];
-  const { moved, goatRows, insertions, receiptMove } = plan;
-  if (receiptMove !== undefined) {
-    const objects = yield* sql`SELECT name FROM sqlite_schema
-      WHERE (name = 'turn_memory_receipts' AND type = 'table')
-        OR (name = 'turn_memory_by_run' AND type = 'index' AND tbl_name = 'turn_memory_receipts')
-        OR (name = 'turn_memory_delete_thread' AND type = 'trigger' AND tbl_name = 'orchestration_v2_events')`;
-    if (objects.length !== 3) {
-      return yield* new Migrator.MigrationError({
-        kind: "BadState",
-        message:
-          "The recorded turn memory receipt preview is missing its table, index, or trigger.",
-      });
-    }
-    yield* sql`UPDATE effect_sql_migrations SET migration_id = ${receiptMove.to}
-      WHERE migration_id = ${receiptMove.from} AND name = ${TURN_MEMORY_RECEIPTS_NAME}`;
-  }
-  if (goatRows.length > 0) {
-    yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
-  }
+  const { moved, goatRows, insertions } = plan;
+  yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {
     yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${row.migration_id}, ${row.name})`;
   }
