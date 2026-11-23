@@ -265,7 +265,7 @@ function normalizeReplayFrame(value: unknown): unknown {
 const THREAD_CREDENTIAL_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set(
   [
     "GOAT_THREAD_ID",
-    "T3CODE_THREAD_ID",
+    "T3CODE_THREAD_ID", // goat-rename: legacy
     "GOAT_ACP_MCP_ENDPOINT",
     "GOAT_ACP_MCP_AUTHORIZATION",
     "TMPDIR",
