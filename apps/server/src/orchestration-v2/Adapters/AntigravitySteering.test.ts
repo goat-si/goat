@@ -343,6 +343,42 @@ describe("Antigravity steering", () => {
         assert.equal(terminal?.type === "turn.terminal" && terminal.status, "completed");
       }).pipe(Effect.provide(layerSession)),
   );
+  it.effect("a steer carries the MCP app context the session has not seen yet", () =>
+    Effect.gen(function* () {
+      const opened = yield* openSessionWithRunningCommand({});
+      yield* opened.startTurn(1, false);
+      const started = yield* opened.until(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === opened.command.toolCallId,
+      );
+      const providerTurnId = started.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn.id] : [],
+      )[0]!;
+      yield* opened.session.steerTurn({
+        threadId: ThreadId.make("thread-antigravity-wake"),
+        runId: RunId.make("run-antigravity-wake-1"),
+        providerThread: opened.providerThread,
+        providerTurnId,
+        message: {
+          messageId: MessageId.make("message-antigravity-steer-app"),
+          text: "What does the board show now?",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+        appContext: [{ key: "mcp_app_board", text: "Column Done holds 3 cards" }],
+      });
+      assert.equal(opened.cancels(), 0);
+      assert.lengthOf(opened.prompts, 2);
+      const steerText = opened.prompts[1]!.flatMap((block) =>
+        block.type === "text" ? [block.text] : [],
+      );
+      assert.isTrue(steerText.some((text) => text.includes("Column Done holds 3 cards")));
+      assert.equal(steerText.at(-1), "What does the board show now?");
+    }).pipe(Effect.provide(layerSession)),
+  );
+
   it.effect("steers a run held open by a detached subagent without stopping it", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

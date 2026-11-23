@@ -31,6 +31,12 @@ export const prepareAcpAppContext = Effect.fn("AcpAppContext.prepare")(
     }),
 );
 
+/** App context for a steer prompt, keyed by the session the active turn runs in. */
+export const steerAcpAppContext =
+  (delivery: Delivery, driver: ProviderDriverKind) =>
+  (sessionId: string, input: ProviderAdapter.ProviderAdapterV2SteerInput) =>
+    prepareAcpAppContext(delivery, sessionId, input.message.text, input.appContext, driver);
+
 // Runs for each ACP update under the adapter's existing tracing boundary.
 export const observeLateAcpCompaction = Effect.fnUntraced(function* (
   delivery: Delivery,

@@ -13,7 +13,11 @@ import {
 } from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError } from "./adapterErrors.ts";
-import { prepareAcpAppContext, observeLateAcpCompaction } from "./acpAppContextEffect.ts";
+import {
+  observeLateAcpCompaction,
+  prepareAcpAppContext,
+  steerAcpAppContext,
+} from "./acpAppContextEffect.ts";
 import { createAcpAppContext } from "./acpAppContext.ts";
 import { makeAcpMcpContextReader } from "./mcpCallLauncher.ts";
 import { readAgentModes, makeAgentModeReporter } from "./agentModeChanges.ts";
@@ -7579,6 +7583,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           atGeneration: runRuntimeCallbackAtGeneration,
           sessionScope,
           promptContent: messageContent,
+          appContext: steerAcpAppContext(appContextDelivery, driver),
           watchOutcome,
           startInactivityWatchdog,
           prompt: (prompt, promptOptions) => runtime.prompt({ prompt: [...prompt] }, promptOptions),

@@ -41,6 +41,17 @@ export interface AcpPromptSteerDeps {
     ReadonlyArray<EffectAcpSchema.ContentBlock>,
     ProviderAdapter.ProviderAdapterProtocolError
   >;
+  /** MCP app context the session has not seen; committed once the steered turn completes. */
+  readonly appContext: (
+    sessionId: string,
+    turnInput: ProviderAdapter.ProviderAdapterV2SteerInput,
+  ) => Effect.Effect<
+    {
+      readonly blocks: ReadonlyArray<EffectAcpSchema.ContentBlock>;
+      readonly commit: () => boolean;
+    },
+    ProviderAdapter.ProviderAdapterProtocolError
+  >;
   readonly watchOutcome: (sessionId: string) => Effect.Effect<PromptOutcomeCheck | undefined>;
   readonly startInactivityWatchdog: (
     context: ActiveAcpTurn,
@@ -108,6 +119,8 @@ export function makeAcpPromptSteer(deps: AcpPromptSteerDeps) {
             "is not active and cannot be steered",
           );
         }
+        const app = yield* deps.appContext(context.nativeThreadId, turnInput);
+        const prompt = [...app.blocks, ...blocks];
         const generation = yield* deps.currentGeneration;
         const settle = {
           generation,
@@ -120,6 +133,11 @@ export function makeAcpPromptSteer(deps: AcpPromptSteerDeps) {
           Effect.gen(function* () {
             if (context.finalized || context.interrupted) return false;
             const released = yield* reopenTurnForSteer(context, now);
+            const earlierCommit = context.appContextCommit;
+            context.appContextCommit = () => {
+              const earlier = earlierCommit?.() ?? false;
+              return app.commit() || earlier;
+            };
             yield* deps.startInactivityWatchdog(context, settle);
             const steerReleased = context.foregroundIdle;
             yield* deps
@@ -128,7 +146,7 @@ export function makeAcpPromptSteer(deps: AcpPromptSteerDeps) {
                 (superseded) =>
                   sendPromptWhenIdle(
                     context,
-                    () => deps.prompt(blocks, { dispatched, released: steerReleased }),
+                    () => deps.prompt(prompt, { dispatched, released: steerReleased }),
                     superseded,
                   ),
                 settle,
