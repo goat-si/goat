@@ -29,6 +29,7 @@ export const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
     body?: Stream.Stream<Uint8Array, HttpClientError.HttpClientError>;
     downloadStatus?: number;
     baseDir?: string;
+    preserveLocal?: boolean;
     local?: { version: string; appServerFails?: boolean; versionFails?: boolean };
     platform?: NodeJS.Platform;
     spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
@@ -43,7 +44,7 @@ export const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
   const localDirectory = `${baseDir}/local`;
   const localBinaryPath = `${localDirectory}/codex${input.platform === "win32" ? ".exe" : ""}`;
   const probeLog = `${baseDir}/local-probes.txt`;
-  if (input.local) {
+  if (input.local && !(input.preserveLocal && (yield* fs.exists(localBinaryPath)))) {
     yield* fs.makeDirectory(localDirectory, { recursive: true });
     yield* fs.writeFileString(
       localBinaryPath,
