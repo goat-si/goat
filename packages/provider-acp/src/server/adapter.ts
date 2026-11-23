@@ -13,6 +13,8 @@ import {
   acpProjectedCommandExitCode,
   commandExitCode,
   pathFromToolCall,
+  resolvedPathInfo,
+  webSearchLabel,
 } from "./toolProjection.ts";
 export { acpMcpToolCallOutput } from "./toolProjection.ts";
 import { acpUnfinishedStopMessage } from "./unfinishedStop.ts";
@@ -3075,11 +3077,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 };
                 break;
               case "search": {
-                const backendSearch = acpBackendWebSearch(rawInputRecord, rawOutputRecord);
+                const backendSearch = acpBackendWebSearch(
+                  rawInputRecord,
+                  rawOutput,
+                  typeof toolCall.data.title === "string" ? toolCall.data.title : title,
+                );
                 if (backendSearch !== undefined) {
-                  const label = nonEmptyText(toolCall.data.title, title ?? "Web search").replace(
-                    /:\s*$/u,
-                    "",
+                  const label = webSearchLabel(
+                    nonEmptyText(toolCall.data.title, title ?? "Web search"),
                   );
                   turnItem = {
                     ...base,
@@ -3097,6 +3102,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   };
                   break;
                 }
+                const pathIsQuery = resolvedPathInfo(toolCall)?.fromQuery === true;
                 turnItem = {
                   ...base,
                   title:
@@ -3107,7 +3113,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }) ?? title,
                   type: "file_search",
                   ...(path === undefined ? {} : { pattern: path }),
-                  ...(path === undefined
+                  ...(path === undefined ||
+                  (pathIsQuery && textFromUnknown(rawOutput) === undefined)
                     ? {}
                     : {
                         results: [

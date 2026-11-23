@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileSearchFixtures, webSearchFixtures } from "./acp-search-fixtures.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import { makeLoadReplayEmitter } from "./acp-mock-load-replay.ts";
 import * as NodeChildProcess from "node:child_process";
@@ -1288,6 +1289,7 @@ const program = Effect.gen(function* () {
             status: "completed",
             rawInput: { query: "TODO", path: "apps/web" },
           },
+          ...fileSearchFixtures,
           // Grok backend searches: the query only arrives in the completed rawOutput.
           {
             sessionUpdate: "tool_call_update",
@@ -1352,6 +1354,7 @@ const program = Effect.gen(function* () {
             rawInput: { command: "cat probe.txt" },
             rawOutput: { commandLine: "cat probe.txt", exitCode: 0, combinedOutput: "after\n" },
           },
+          ...webSearchFixtures,
           {
             sessionUpdate: "compaction_update",
             compactionId: "compact-1",
