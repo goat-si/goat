@@ -265,6 +265,7 @@ export const acpMemoryDelivery = (
     });
     if (crash) {
       let confirmed = 0;
+      let uncertain = 0;
       const attempt = input(12);
       const started = yield* runtime
         .startTurn({
@@ -276,6 +277,10 @@ export const acpMemoryDelivery = (
           onMemoryDelivered: () =>
             Effect.sync(() => {
               confirmed++;
+            }),
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              uncertain++;
             }),
         })
         .pipe(Effect.exit);
@@ -290,6 +295,7 @@ export const acpMemoryDelivery = (
       assert.lengthOf(prompts, 1);
       assert.isTrue(prompts[0]?.some((part) => part.text === memoryContextText(snapshot)));
       assert.equal(confirmed, crash === "after" ? 1 : 0);
+      assert.equal(uncertain, 1);
       return;
     }
     const transitions: ReadonlyArray<ReadonlyArray<M.AuthEnvironmentScope>> = [

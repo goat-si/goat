@@ -7386,16 +7386,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     sessionLaunch,
                   });
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
-            const { prompt, receipt } = yield* Effect.gen(function* () {
+            const { prompt, receipt, uncertain } = yield* Effect.gen(function* () {
               const skipMemory =
                 isAppOwnedWakeTurn ||
                 (compactsContext &&
                   turnInput.message.text.trim() === "/compact" &&
                   turnInput.message.attachments.length === 0);
-              const { text: memory, receipt } = yield* MemoryContext.promptMemory(
-                skipMemory ? undefined : turnInput,
-                driver,
-              );
+              const {
+                text: memory,
+                receipt,
+                uncertain,
+              } = yield* MemoryContext.promptMemory(skipMemory ? undefined : turnInput, driver);
               const config = yield* mcpSessions.read(turnInput.threadId);
               // Only the attachment installed on this native session can advertise tools.
               const attached = terminalEnvironmentBySessionId.get(requestedSessionId);
@@ -7413,6 +7414,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               else memoryToolClaims.delete(requestedSessionId);
               return {
                 receipt,
+                uncertain,
                 prompt: [
                   ...promptParts!.prompt,
                   ...(announceMemoryTools
@@ -7434,6 +7436,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 promptInactivityTimeoutMillis,
               ).pipe(Effect.forkIn(sessionScope));
             }
+            yield* uncertain;
             const confirm = yield* Effect.cached(receipt);
             context.confirmMemory = confirm;
             yield* sendPromptWhenIdle(context, () =>
