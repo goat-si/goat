@@ -97,6 +97,27 @@ describe("SidebarUpdatePill release notes", () => {
     sessionStorage.removeItem("desktop-update-notice");
   });
 
+  it("shows each new failure after a dismissed retry without reopening the offer (#3808)", async () => {
+    sessionStorage.removeItem("desktop-update-notice");
+    const update = nightlyUpdate([]);
+    const failure = {
+      ...update,
+      errorContext: "download" as const,
+      canRetry: true,
+      message: "offline",
+    };
+    setup(failure);
+    await using _screen = await render(<SidebarUpdatePill />);
+    const notice = () => document.querySelector('aside[aria-label="Update available"]');
+    expect(notice()?.textContent).toContain("Retry");
+    await userEvent.click(notice()!.querySelector('button[aria-label="Close"]')!);
+    await publish({ ...update, status: "downloading", downloadPercent: 20 });
+    expect(notice()).toBeNull();
+    await publish(failure);
+    expect(notice()?.textContent).toContain("Retry");
+    sessionStorage.removeItem("desktop-update-notice");
+  });
+
   it("closes when the release notes stop applying", async () => {
     setup(nightlyUpdate(RELEASE_NOTES));
     await using _screen = await render(<SidebarUpdatePill />);

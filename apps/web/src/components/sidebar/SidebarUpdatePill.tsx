@@ -341,10 +341,14 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     window.sessionStorage.getItem("desktop-update-notice"),
   );
   const noticeVersion = state?.downloadedVersion ?? state?.availableVersion;
-  const noticeKey =
-    noticeVersion && state
-      ? JSON.stringify([state.channel, noticeVersion, state.errorContext === "download"])
-      : null;
+  const noticeKey = noticeVersion && state ? JSON.stringify([state.channel, noticeVersion]) : null;
+  const isDownloadFailure = state?.errorContext === "download";
+  const [failureDismissed, setFailureDismissed] = useState(false);
+  const [previousFailure, setPreviousFailure] = useState(isDownloadFailure);
+  if (previousFailure !== isDownloadFailure) {
+    setPreviousFailure(isDownloadFailure);
+    if (isDownloadFailure) setFailureDismissed(false);
+  }
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [releaseNotesTriggerFocusVisible, setReleaseNotesTriggerFocusVisible] = useState(false);
   // Release notes close when they stop applying, and open when they start
@@ -701,7 +705,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       {isElectron &&
         state?.enabled &&
         noticeKey &&
-        dismissedNotice !== noticeKey &&
+        (isDownloadFailure ? !failureDismissed : dismissedNotice !== noticeKey) &&
         (action !== "none" || isDownloading) &&
         createPortal(
           <aside
@@ -726,6 +730,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
                 onClick={() => {
                   window.sessionStorage.setItem("desktop-update-notice", noticeKey);
                   setDismissedNotice(noticeKey);
+                  if (isDownloadFailure) setFailureDismissed(true);
                 }}
               >
                 ×
