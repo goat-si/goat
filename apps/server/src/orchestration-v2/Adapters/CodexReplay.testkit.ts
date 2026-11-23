@@ -203,6 +203,82 @@ const withRequestId = (
     ? { ...entry, frame: { ...entry.frame, id } }
     : entry;
 
+export function withThreadSetupReads(
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+): CodexReplay.CodexAppServerReplayTranscript {
+  const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [];
+  let offset = 0;
+  let ids = new Map<number, number>();
+  let pendingRead = false;
+  let previousMethod = "";
+  let previousId = -1;
+  let failed = "";
+  for (const [index, entry] of transcript.entries.entries()) {
+    const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
+    if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
+      entries.push(entry);
+      continue;
+    }
+    if (entry.type === "expect_outbound" && typeof frame.method === "string") {
+      if (frame.method === "initialize") {
+        offset = 0;
+        ids = new Map();
+        pendingRead = false;
+      }
+      const params = Predicate.isObject(frame.params) ? frame.params : {};
+      const next = transcript.entries
+        .slice(index + 1)
+        .find((candidate) => candidate.type === "expect_outbound");
+      const nextFrame =
+        next?.type === "expect_outbound" && Predicate.isObject(next.frame) ? next.frame : undefined;
+      const reload = frame.method === "thread/unsubscribe" && nextFrame?.method === "thread/resume";
+      const setup = ["thread/start", "thread/resume", "thread/fork"].includes(frame.method);
+      if (frame.method === "config/read") pendingRead = previousMethod !== "thread/start";
+      else if (setup && pendingRead) pendingRead = false;
+      else if (
+        (reload || setup) &&
+        failed !== frame.method &&
+        previousMethod !== "thread/unarchive"
+      ) {
+        const id = frame.id + offset;
+        entries.push(
+          {
+            type: "expect_outbound",
+            label: "config/read",
+            frame: {
+              id,
+              method: "config/read",
+              params: { cwd: params.cwd ?? null, includeLayers: false },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "config/read",
+            frame: { id, result: { config: {}, origins: {} } },
+          },
+        );
+        offset++;
+        if (reload) pendingRead = true;
+      }
+      previousMethod = frame.method;
+      previousId = frame.id;
+      failed = "";
+      ids.set(frame.id, frame.id + offset);
+      entries.push(withRequestId(entry, frame.id + offset));
+      continue;
+    }
+    if (entry.type === "emit_inbound" && frame.id === previousId && "error" in frame)
+      failed = previousMethod;
+    const mapped = ids.get(frame.id);
+    entries.push(
+      entry.type === "emit_inbound" && frame.method === undefined && mapped !== undefined
+        ? withRequestId(entry, mapped)
+        : entry,
+    );
+  }
+  return { ...transcript, entries };
+}
+
 /** Every turn/start follows a config/read; inserts that exchange and shifts later client ids. */
 function withConfigReadBeforeTurnStart(
   entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
@@ -254,6 +330,8 @@ function withConfigReadBeforeTurnStart(
 
 export function withConfigReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
+  includeSetup = true,
 ): CodexReplay.CodexAppServerReplayTranscript {
-  return { ...transcript, entries: withConfigReadBeforeTurnStart(transcript.entries) };
+  const setup = includeSetup ? withThreadSetupReads(transcript) : transcript;
+  return { ...setup, entries: withConfigReadBeforeTurnStart(setup.entries) };
 }

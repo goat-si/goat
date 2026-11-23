@@ -1,3 +1,4 @@
+import { withThreadSetupReads } from "./CodexReplay.testkit.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
@@ -296,7 +297,7 @@ export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness
           yield* Effect.addFinalizer(() => Effect.sync(() => replayGate.releaseAll()));
         }
         const driver = yield* CodexReplay.makeReplayDriver(
-          transcript,
+          withThreadSetupReads(transcript),
           replayGate === undefined
             ? {}
             : {

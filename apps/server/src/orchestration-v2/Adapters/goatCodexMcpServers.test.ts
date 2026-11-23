@@ -1,7 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
+import {
+  makeCodexMcpConfigReader,
+  codexStdioThreadEnvironment,
+  codexGoatServerConfig,
+} from "./goatCodexMcpServers.ts";
 
 const session = {
   environmentId: EnvironmentId.make("fixture"),
@@ -16,6 +20,35 @@ const session = {
     { providerName: "two_goat", transport: "http", url: "https://example.test", headers: {} },
   ],
 } as const;
+
+it("sets the thread id for stdio servers without changing HTTP or dotted server names", () => {
+  expect(
+    codexStdioThreadEnvironment(
+      {
+        local: { command: "node" },
+        remote: { url: "https://example.test" },
+        "dotted.name": { command: "node" },
+      },
+      ThreadId.make("thread-1"),
+    ),
+  ).toEqual({
+    "mcp_servers.local.env.GOAT_THREAD_ID": "thread-1",
+    "mcp_servers.local.env.T3CODE_THREAD_ID": "thread-1",
+  });
+});
+
+it("passes the thread id to GOAT configured stdio servers without changing HTTP servers", () => {
+  const configured = codexGoatServerConfig(session.goatMcpServers, session.threadId);
+  expect(configured["mcp_servers.one_goat"]).toEqual({
+    command: "one",
+    args: [],
+    env: { GOAT_THREAD_ID: "fixture", T3CODE_THREAD_ID: "fixture" },
+  });
+  expect(configured["mcp_servers.two_goat"]).toEqual({
+    url: "https://example.test",
+    http_headers: {},
+  });
+});
 
 it.effect("keeps the user's Codex server and injects nonconflicting GOAT servers", () =>
   Effect.gen(function* () {
