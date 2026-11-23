@@ -83,9 +83,12 @@ import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { capabilityModelOption, listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
-import { overrideOptionSelections } from "./modelOptionOverrides.ts";
-import { advertisedModel } from "./ModelSelectionValidation.ts";
-import { invalidOptionSelections, knownOptions } from "./ModelSelectionValidation.ts";
+import { antigravityDelegatedModel, delegatedOptions } from "./antigravityDelegatedModel.ts";
+import {
+  advertisedModel,
+  invalidOptionSelections,
+  knownOptions,
+} from "./ModelSelectionValidation.ts";
 import {
   delegatedTaskProgress,
   subagentResultForRun,
@@ -960,9 +963,10 @@ const make = Effect.gen(function* () {
     }
 
     const inheritedSelection = input.parent.thread.modelSelection;
-    const requestedModel = input.target?.model;
+    const antigravityTarget = antigravityDelegatedModel(provider, input.target?.model);
     const model =
-      requestedModel ??
+      antigravityTarget?.model ??
+      input.target?.model ??
       (instanceId === inheritedSelection.instanceId
         ? inheritedSelection.model
         : provider?.models[0]?.slug);
@@ -973,14 +977,13 @@ const make = Effect.gen(function* () {
       );
     }
     if (
-      requestedModel !== undefined &&
-      provider !== undefined &&
+      input.target?.model !== undefined &&
       provider.models.length > 0 &&
-      advertisedModel(provider, requestedModel) === undefined
+      advertisedModel(provider, model) === undefined
     ) {
       return yield* failure(
         "model_unavailable",
-        `Model ${requestedModel} is not advertised by provider ${instanceId}.`,
+        `Model ${input.target?.model} is not advertised by provider ${instanceId}.`,
       );
     }
     const advertised = advertisedModel(provider, model);
@@ -999,7 +1002,7 @@ const make = Effect.gen(function* () {
       instanceId === inheritedSelection.instanceId &&
       (advertised?.slug ?? model) ===
         (advertisedModel(provider, inheritedSelection.model)?.slug ?? inheritedSelection.model);
-    const options = overrideOptionSelections(
+    const options = delegatedOptions(
       inheritsOptions
         ? knownOptions(
             withLegacyUltracodeEffort(descriptors, inheritedSelection.options),
@@ -1007,6 +1010,7 @@ const make = Effect.gen(function* () {
           )
         : undefined,
       requestedOptions,
+      antigravityTarget?.thinking,
     );
     return {
       modelSelection: { instanceId, model, ...(options === undefined ? {} : { options }) },
