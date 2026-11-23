@@ -1,3 +1,4 @@
+import { liveClaudeQueryFixture, wp4Memory } from "./ClaudeMemoryDelivery.testkit.ts";
 import { monitorFrames } from "./ClaudeMonitorFrames.testkit.ts";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
@@ -17,9 +18,7 @@ import { verifyClaudeReceipt } from "./ClaudeReceipt.testkit.ts";
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { beforeEach } from "vite-plus/test";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
-import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as M from "@goat/contracts";
-import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -27,7 +26,6 @@ import type {
   ElicitationRequest,
   Query as ClaudeQuery,
   SDKMessage,
-  SDKResultMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -82,7 +80,6 @@ import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
-import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
 import { AgentSurfaceToolkit } from "../../mcp/toolkits/agentSurface/tools.ts";
@@ -15678,168 +15675,6 @@ describe("ClaudeAdapterV2 query message stream", () => {
       assert.isTrue(closed);
     }),
   );
-});
-
-const wp4Memory = () =>
-  MemoryContext.packMemoryContext({
-    memorySpaceId: M.MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: M.MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: M.MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: M.EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <untrusted> 'quoted' \"data\"",
-      },
-    ],
-  })!;
-
-const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function* (
-  config: McpProviderSession.McpProviderSessionConfig,
-  nativeSessionId: string,
-  currentMemoryPolicy: McpSessionRegistry.McpSessionRegistry["Service"]["currentMemoryPolicy"] = () =>
-    Effect.succeed(undefined),
-  interruptCloses = false,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-    prefix: `goat-${config.threadId}-`,
-  });
-  const offers: SDKUserMessage[] = [];
-  const sdkMessages = yield* Queue.unbounded<SDKMessage>();
-  const registrations: Array<Record<string, unknown>> = [];
-  const opened: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions[] = [];
-  let closes = 0;
-  const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-    instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-    settings: DEFAULT_CLAUDE_SETTINGS,
-    environment: {},
-    attachmentsDir,
-    fileSystem,
-    path: yield* Path.Path,
-    random: yield* SecureRandom.SecureRandom,
-    idAllocator: yield* IdAllocator.IdAllocatorV2,
-    queryRunner: {
-      allocateSessionId: Effect.succeed(nativeSessionId),
-      open: (input) =>
-        Effect.sync(() => {
-          opened.push(input.options);
-          return {
-            messages: Stream.fromQueue(sdkMessages),
-            offer: (message) =>
-              Effect.sync(() => {
-                offers.push(message);
-              }),
-            setMcpServers: (servers) =>
-              Effect.sync(() => {
-                registrations.push(servers);
-              }),
-            setModel: () => Effect.void,
-            applyFlagSettings: () => Effect.void,
-            setPermissionMode: () => Effect.void,
-            backgroundTasks: () => Effect.succeed(false),
-            stopTask: () => Effect.void,
-            interrupt: interruptCloses ? Queue.shutdown(sdkMessages) : Effect.void,
-            close: Effect.sync(() => void closes++),
-          } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
-        }),
-      forkSession: () => Effect.die("unused"),
-      subagentLaunchToolUseId: () => Effect.succeed(null),
-      assertComplete: Effect.void,
-    },
-  }).pipe(
-    Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
-      issue: () => Effect.die("unused"),
-      resolve: () => Effect.succeed(undefined),
-      touch: () => Effect.void,
-      revokeProviderSession: () => Effect.void,
-      revokeThread: () => Effect.void,
-      revokeAll: Effect.void,
-      subscribeChanges: Effect.die("unused"),
-      inspect: () => Effect.undefined,
-      currentMemoryPolicy,
-    }),
-  );
-  const sessions = yield* McpProviderSessions.McpProviderSessions;
-  yield* sessions.set(config);
-  const runtime = yield* adapter.openSession({
-    threadId: config.threadId,
-    providerSessionId: ProviderSessionId.make(`${config.threadId}-session`),
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-  });
-  const terminals = yield* Queue.unbounded<void>();
-  const approvalRequested = yield* Deferred.make<void>();
-  const toolStarted = yield* Deferred.make<void>();
-  yield* runtime.events.pipe(
-    Stream.runForEach((event) => {
-      if (event.type === "turn_item.updated" && event.turnItem.type === "command_execution")
-        return Deferred.succeed(toolStarted, undefined);
-      if (event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending")
-        return Deferred.succeed(approvalRequested, undefined);
-      return event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void;
-    }),
-    Effect.forkScoped,
-  );
-  const providerThread = yield* runtime.ensureThread({
-    threadId: config.threadId,
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-  });
-  const finish = Effect.fn("claudeTest.finishLiveTurn")(function* (
-    message: SDKUserMessage,
-    uuid: SDKResultMessage["uuid"],
-    beforeResult: ReadonlyArray<SDKMessage> = [],
-  ) {
-    yield* Queue.offer(sdkMessages, { ...message, session_id: nativeSessionId });
-    for (const frame of beforeResult) yield* Queue.offer(sdkMessages, frame);
-    yield* Queue.offer(sdkMessages, {
-      type: "result",
-      subtype: "success",
-      is_error: false,
-      duration_ms: 0,
-      duration_api_ms: 0,
-      num_turns: 1,
-      result: "done",
-      stop_reason: "end_turn",
-      total_cost_usd: 0,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
-        inference_geo: "fixture",
-        iterations: [],
-        server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
-        service_tier: "standard",
-        speed: "standard",
-      },
-      modelUsage: {},
-      permission_denials: [],
-      uuid,
-      session_id: nativeSessionId,
-      terminal_reason: "completed",
-    });
-  });
-  return {
-    offers,
-    registrations,
-    opened,
-    sessions,
-    runtime,
-    providerThread,
-    terminals,
-    approvalRequested,
-    toolStarted,
-    emit: (message: SDKMessage) => Queue.offer(sdkMessages, message),
-    finish,
-    get closes() {
-      return closes;
-    },
-  };
 });
 
 describe("Claude WP4 memory delivery", () => {
