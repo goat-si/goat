@@ -406,6 +406,11 @@ export function MemoryImportSettings({
               />
               {item.change === "Changed in both" && canCheck && allowed && enabled ? (
                 <>
+                  <Copy>
+                    Selecting this and applying it can create a conflict; GOAT may resolve it
+                    automatically using a model. Comparing versions does not choose which version to
+                    keep.
+                  </Copy>
                   <Action
                     label="Compare versions"
                     disabled={!writable || !canShowCodexComparison(item, exposure, exposure)}
