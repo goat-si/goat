@@ -134,16 +134,23 @@ export function resolveDraftProjectSelection(
             project.archivedAt == null,
         )
       : undefined;
-  const lastScope = last && projectScopes.find((scope) => scope.projects.includes(last));
   if (last) {
-    // Prefer the remembered copy, but not over a connected copy of the same project.
-    const project = lastScope
-      ? getProjectScopeSelectionTarget(
-          { ...lastScope, projects: lastScope.projects.filter((p) => p.archivedAt == null) },
-          last.environmentId,
-          draft.connectedEnvironmentIds,
-        )
-      : last;
+    // Prefer the remembered copy, but not over a connected copy of the same project. Match
+    // by projectRefs: a stale registration of a path is a ref of its scope, not a member.
+    const lastScope = projectScopes.find((scope) =>
+      scope.projectRefs.some(
+        (ref) => ref.environmentId === last.environmentId && ref.projectId === last.id,
+      ),
+    );
+    const live = lastScope?.projects.filter((project) => project.archivedAt == null) ?? [];
+    const project =
+      lastScope && live.length > 0
+        ? getProjectScopeSelectionTarget(
+            { ...lastScope, projects: live },
+            last.environmentId,
+            draft.connectedEnvironmentIds,
+          )
+        : last;
     return { kind: "select", project };
   }
   const onlyScope =

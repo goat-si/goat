@@ -239,6 +239,23 @@ describe("new task project choice", () => {
       kind: "select",
       project: online,
     });
+
+    // Grouping keeps only the freshest registration of a path as a member; a stale one
+    // stays a ref of the scope.
+    const stale = makeProject("stale-copy", "offline");
+    const groupedScope = {
+      ...makeScope([offline, online]),
+      projectRefs: [offline, stale, online].map((project) => ({
+        environmentId: project.environmentId,
+        projectId: project.id,
+      })),
+    };
+    expect(
+      resolveDraftProjectSelection(null, [...projects, stale], [groupedScope, scopes[1]!], {
+        ...draft,
+        lastProject: { environmentId: stale.environmentId, projectId: stale.id },
+      }),
+    ).toEqual({ kind: "select", project: online });
   });
 
   // regression: #1971 a cancelled multi-project share picker must leave a way out.
