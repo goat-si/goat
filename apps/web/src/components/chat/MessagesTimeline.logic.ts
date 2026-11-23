@@ -1181,6 +1181,7 @@ function deriveTimelineTurnFolds(input: TimelineFoldInput) {
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun?: TimelineLatestRun | null;
+  usageLimitRunId?: RunId | null;
   runningRunId?: RunId | null;
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
@@ -1201,6 +1202,7 @@ export function deriveMessagesTimelineRows(input: {
 }): MessagesTimelineRow[] {
   const isWorking = timelineIsWorking(input);
   const timelineEntries = timelineRowEntries(input, isWorking);
+
   const embeddedResultRunIds = new Set<RunId>();
   for (const entry of timelineEntries) {
     if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
@@ -1229,7 +1231,11 @@ export function deriveMessagesTimelineRows(input: {
   );
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
-  const itemizedRunIds = itemizedFailedRunIds(timelineEntries, failedRunIds);
+  const itemizedRunIds = itemizedFailedRunIds(
+    timelineEntries,
+    failedRunIds,
+    input.usageLimitRunId ?? null,
+  );
   const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
   const retainedAssistantReplyIds = retainedAssistantReplyEntryIds(timelineEntries);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(

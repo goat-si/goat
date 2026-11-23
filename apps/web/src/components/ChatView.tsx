@@ -668,14 +668,12 @@ export default function ChatView(props: ChatViewProps) {
   const isRevertingCheckpoint = useComposerDraftStore((store) =>
     store.rewindingThreadKeys.has(routeThreadKey),
   );
-
   const workspaceFileDragRouteKey = `${routeThreadKey}:${draftId ?? ""}`;
   const [workspaceFileDragRoute, setWorkspaceFileDragRoute] = useState(workspaceFileDragRouteKey);
   if (workspaceFileDragRoute !== workspaceFileDragRouteKey) {
     setWorkspaceFileDragRoute(workspaceFileDragRouteKey);
     setIsWorkspaceFileDragActive(false);
   }
-
   useEffect(() => {
     if (!isWorkspaceFileDragActive) return;
     const clearWorkspaceFileDrag = () => setIsWorkspaceFileDragActive(false);
@@ -730,11 +728,9 @@ export default function ChatView(props: ChatViewProps) {
   };
   const setMultipleModelSelectionsStable = useStableCallback(setMultipleModelSelections);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
-
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
   );
-
   const fallbackDraftProjectRef = draftThread
     ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
     : null;
@@ -961,6 +957,10 @@ export default function ChatView(props: ChatViewProps) {
   };
   const limitRecoveryRun = limitRecoveryRunFor(activeThreadShell, serverRuntime);
   const recoveryHoldsSnooze = limitRecoveryHoldsSnooze(activeThreadShell, serverRuntime);
+  const usageLimitRunId =
+    serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
+      ? (serverLatestRun?.runId ?? null)
+      : null;
   const timelineThreadError =
     limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
       ? null
@@ -3545,6 +3545,7 @@ export default function ChatView(props: ChatViewProps) {
                   listRef={legendListRef}
                   runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                   latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
+                  usageLimitRunId={paintOnlyDisplayedTimeline ? null : usageLimitRunId}
                   announcedRun={
                     paintOnlyDisplayedTimeline
                       ? null
@@ -3558,6 +3559,7 @@ export default function ChatView(props: ChatViewProps) {
                   turnDiffSummaries={
                     paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
                   }
+
                   activeThreadEnvironmentId={
                     displayedThreadRef?.environmentId ?? activeThread.environmentId
                   }

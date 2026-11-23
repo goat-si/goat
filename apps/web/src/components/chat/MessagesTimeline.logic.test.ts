@@ -116,7 +116,6 @@ describe("deriveMessagesTimelineRows", () => {
     }
     expect(first.kind === "work" && first.entry.toolLifecycleStatus).toBe("inProgress");
   });
-
   it("recovers the failed Sky call stored as a generic js integration", () => {
     const fixture = makeStreamingTimelineFixture();
     const source = fixture.visibleTurnItems.find((row) => row.item.type === "dynamic_tool")!;
@@ -146,7 +145,6 @@ describe("deriveMessagesTimelineRows", () => {
       toolSource: { key: "computer-use", kind: "computer" },
     });
   });
-
   it.each(["waiting", "completed"] as const)(
     "groups approval and user-input requests with commands without expanding them when %s",
     (status) => {
@@ -226,7 +224,6 @@ describe("deriveMessagesTimelineRows", () => {
       expect(workRows[0]).not.toMatchObject({ isExpandedToolGroup: true });
     },
   );
-
   it.each(["running", "completed", "superseded"] as const)(
     "keeps system notices visible as non-failing warnings through %s work",
     (state) => {
@@ -329,7 +326,6 @@ describe("deriveMessagesTimelineRows", () => {
       expect(row).toMatchObject({ kind: "work", groupedEntries: [notice.entry] });
     },
   );
-
   it.each([false, true])(
     "gives live compaction the activity slot and restores Thinking (runless: %s)",
     (runless) => {
@@ -372,7 +368,6 @@ describe("deriveMessagesTimelineRows", () => {
         label: "Compacting context",
       });
       expect(runningRows.some((row) => row.kind === "thinking")).toBe(false);
-
       const completedRows = deriveMessagesTimelineRows({
         ...input,
         timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
@@ -392,7 +387,6 @@ describe("deriveMessagesTimelineRows", () => {
         tokenCounts: { before: "899K", after: "19K" },
       });
       expect(completedRows.at(-1)?.kind).toBe("thinking");
-
       const settledRows = deriveMessagesTimelineRows({
         ...input,
         isWorking: false,
@@ -408,7 +402,6 @@ describe("deriveMessagesTimelineRows", () => {
       expect(computeStableMessagesTimelineRows(settledRows, stable).result).toEqual(settledRows);
     },
   );
-
   it("shows each compaction trigger as one live status, then a reasoned token divider", () => {
     const fixture = makeStreamingTimelineFixture();
     const [history0, history1, history2, liveUser, , liveAssistant] = fixture.visibleTurnItems;
@@ -445,7 +438,6 @@ describe("deriveMessagesTimelineRows", () => {
         turnDiffSummaries: [],
         supportsConversationRollback: false,
       });
-
     for (const [reason, live, title] of [
       [
         "beforeCacheExpires",
@@ -531,7 +523,6 @@ describe("deriveMessagesTimelineRows", () => {
       expect(computeStableMessagesTimelineRows(retries, stable).result).toEqual(retries);
     }
   });
-
   it.each(["/compact", "Continue"])(
     "keeps a completed compaction divider visible while other settled work folds for %s",
     (promptText) => {
@@ -582,7 +573,6 @@ describe("deriveMessagesTimelineRows", () => {
       }
     },
   );
-
   it("keeps only the latest compaction divider visible when a turn that compacted twice folds", () => {
     const fixture = makeStreamingTimelineFixture();
     const [, , , liveUser, liveWork, liveAssistant] = fixture.visibleTurnItems;
@@ -639,7 +629,6 @@ describe("deriveMessagesTimelineRows", () => {
       { tokenCounts: { before: "90K", after: "30K" } },
     ]);
   });
-
   it("folds an answered compact-on-return question into its compaction row", () => {
     const fixture = makeStreamingTimelineFixture();
     const [history0, history1, history2, liveUser, liveWork, liveAssistant] =
@@ -729,7 +718,6 @@ describe("deriveMessagesTimelineRows", () => {
       false,
     );
   });
-
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -782,17 +770,14 @@ describe("deriveMessagesTimelineRows", () => {
       turnDiffSummaries: [],
       supportsConversationRollback: false,
     });
-
     const assistantRows = rows.filter(
       (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
         row.kind === "message" && row.message.role === "assistant",
     );
-
     expect(assistantRows).toHaveLength(2);
     expect(assistantRows[0]?.showAssistantCopyButton).toBe(false);
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
   });
-
   it("projects assistant diffs and rewinds the first visible run to thread start after a rewind", () => {
     const assistantTurnDiffSummary = {
       runId: "turn-1" as never,
@@ -803,7 +788,6 @@ describe("deriveMessagesTimelineRows", () => {
       status: "ready" as const,
       files: [{ path: "src/index.ts", kind: "modified", additions: 3, deletions: 1 }],
     };
-
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
         {
@@ -3872,7 +3856,29 @@ describe("failed turn transcript", () => {
       );
       expect(work.at(-1)?.detail).toBe("The provider stopped this turn.\nRetry later.");
       expect(work.at(-1)?.createdAt).toBe("2026-09-20T12:00:00.000Z");
-      if (isLatest) return;
+      if (isLatest) {
+        // The recovery notice hides the failure row; the run's work stays grouped.
+        const noticeRows = deriveMessagesTimelineRows({
+          timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+            visibleTurnItems: items.filter((row) => row.item.type !== "error"),
+            optimisticMessages: [],
+          }),
+          latestRun: {
+            runId,
+            status: "failed",
+            startedAt: DateTime.formatIso(at),
+            completedAt: DateTime.formatIso(at),
+          },
+          usageLimitRunId: runId,
+          isWorking: false,
+          turnDiffSummaries: [],
+          supportsConversationRollback: false,
+        });
+        expect(noticeRows.find((row) => row.kind === "work-toggle")).toEqual(
+          expect.objectContaining({ hiddenCount: 3, expanded: false }),
+        );
+        return;
+      }
       const entriesWithoutTools = deriveTimelineEntriesFromVisibleTurnItems({
         visibleTurnItems: items.filter((row) => row.item.type !== "command_execution"),
         optimisticMessages: [],

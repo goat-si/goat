@@ -189,11 +189,11 @@ interface MessagesTimelineProps {
   /** Which request is waiting, so a second one of the same kind is announced too. */
   awaitingRequestId?: string | null;
   footer?: ReactNode;
-
   listRef: React.RefObject<LegendListRef | null>;
   onScrollableNodeChange?: (node: HTMLElement | null) => void;
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun: TimelineLatestRun | null;
+  usageLimitRunId?: RunId | null;
   /** The run the screen reader announcer follows; see announcedRun. */
   announcedRun?: { readonly runId: RunId; readonly status: TimelineLatestRun["status"] } | null;
   /** See isDetailBehindShell. */
@@ -306,6 +306,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   activeFindMatch = null,
   findNavigationId = 0,
   latestRun,
+  usageLimitRunId = null,
   announcedRun = null,
   detailBehindShell = false,
   runningRunId = null,
@@ -418,9 +419,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const findActive = findExpanded;
-
   const disclosureCollapsedRef = useRef(false);
-
   const scheduleDisclosureSettle = () => {
     if (disclosureSettleFrameRef.current !== null) {
       cancelAnimationFrame(disclosureSettleFrameRef.current);
@@ -443,7 +442,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
       });
     });
   };
-
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
     disclosureAnchorKeyRef.current = anchorKey;
     disclosureCollapsedRef.current = collapsed;
@@ -644,6 +642,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const rawRows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, {
     timelineEntries,
     latestRun,
+    usageLimitRunId,
     runningRunId,
     expandedRunIds: visibleExpandedRunIds,
     expandedAttemptIds: visibleExpandedAttemptIds,
