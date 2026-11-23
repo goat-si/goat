@@ -48,6 +48,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     });
   let loadPromise: Promise<boolean> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
+  const pendingMutations = new Set<Promise<unknown>>();
   const revisions = new Map<MessageId, number>();
   const bumpRevision = (messageId: MessageId): void => {
     revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
@@ -55,6 +56,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
 
   const serialize = <A>(mutation: () => Promise<A>): Promise<A> => {
     const result = mutationQueue.then(mutation, mutation);
+    pendingMutations.add(result);
+    void result.then(
+      () => pendingMutations.delete(result),
+      () => pendingMutations.delete(result),
+    );
     mutationQueue = result.then(
       () => undefined,
       () => undefined,
@@ -390,6 +396,13 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   return {
     queuedMessagesByThreadKeyAtom,
     serialize,
+    flush: async () => {
+      const results = await Promise.allSettled(pendingMutations);
+      const failure = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failure) throw failure.reason;
+    },
     load,
     enqueue,
     confirmQueued,

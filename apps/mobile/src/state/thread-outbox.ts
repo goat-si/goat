@@ -12,8 +12,14 @@ export const threadOutboxManager = createThreadOutboxManager({
 
 /** Drain queued mutations too; optimistic publication precedes the durable file write. */
 export async function flushThreadOutbox(): Promise<void> {
-  await threadOutboxManager.serialize(async () => {});
-  await flushThreadOutboxWrites();
+  const results = await Promise.allSettled([
+    threadOutboxManager.flush(),
+    flushThreadOutboxWrites(),
+  ]);
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure) throw failure.reason;
 }
 
 export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
