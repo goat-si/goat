@@ -1,3 +1,4 @@
+import { openCodeVariant } from "./variant.ts";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { declareMemoryGeneration } from "@goat/shared/memoryGenerationCapabilities";
@@ -393,7 +394,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
           const selectedVariant = yield* resolveOpenCodeVariant(
             client,
             parsedModel,
-            getModelSelectionStringOptionValue(input.modelSelection, "variant"),
+            openCodeVariant(input.modelSelection),
           );
           const promptContext = {
             operation: input.operation,

@@ -67,6 +67,7 @@ export {
   openCodePermissionRules,
 } from "./permissionRules.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { openCodeVariant } from "./variant.ts";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -3236,10 +3237,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const agent =
                 getModelSelectionStringOptionValue(turnInput.modelSelection, "agent") ??
                 (turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : undefined);
-              const variant = getModelSelectionStringOptionValue(
-                turnInput.modelSelection,
-                "variant",
-              );
+              const variant = openCodeVariant(turnInput.modelSelection);
               turn.promptOptions = {
                 ...(agent === undefined ? {} : { agent }),
                 ...(variant === undefined ? {} : { variant }),

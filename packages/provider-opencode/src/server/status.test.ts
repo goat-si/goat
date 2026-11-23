@@ -370,6 +370,35 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
     }),
   );
 
+  it.effect("offers Default for a custom provider with no inferable reasoning default", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.inventory = {
+        providerList: {
+          connected: ["acme"],
+          all: [
+            {
+              id: "acme",
+              name: "Acme",
+              models: { chat: { id: "chat", name: "Chat", variants: { low: {}, high: {} } } },
+            },
+          ],
+          default: {},
+        },
+        agents: [],
+      };
+      const snapshot = yield* checkProvider(makeOpenCodeSettings());
+      const descriptor = snapshot.models
+        .find((model) => model.slug === "acme/chat")
+        ?.capabilities?.optionDescriptors?.find((entry) => entry.id === "variant");
+      NodeAssert.ok(descriptor?.type === "select");
+      NodeAssert.equal(descriptor.currentValue, "goat:default");
+      NodeAssert.deepEqual(
+        descriptor.options.map((entry) => entry.id),
+        ["goat:default", "low", "high"],
+      );
+    }),
+  );
+
   it.effect("keeps Agent without inventing Reasoning for models with no variants", () =>
     Effect.gen(function* () {
       runtimeMock.state.inventory = {

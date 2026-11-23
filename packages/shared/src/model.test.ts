@@ -221,6 +221,21 @@ describe("provider-reported option display", () => {
     ).toBe("Unknown");
   });
 
+  it("shows Default when no explicit variant is chosen", () => {
+    const withDefault = {
+      ...descriptor,
+      options: [{ id: "goat:default", label: "Default" }, ...descriptor.options],
+      currentValue: "goat:default",
+    };
+    expect(getProviderOptionCurrentLabel(withDefault, selection)).toBe("Default");
+    expect(
+      getProviderOptionCurrentLabel(withDefault, selection, {
+        ...reported,
+        options: [{ id: "variant", value: "thinking" }],
+      }),
+    ).toBe("Thinking");
+  });
+
   it.each([
     { ...selection, model: "other" },
     { ...selection, instanceId: ProviderInstanceId.make("other") },

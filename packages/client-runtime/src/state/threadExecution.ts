@@ -29,6 +29,7 @@ import {
   derivePendingBackgroundWork,
 } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import {
+  DEFAULT_VARIANT_CHOICE_ID,
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentLabel,
   getProviderOptionStatedValue,
@@ -37,7 +38,6 @@ import {
 } from "@goat/shared/model";
 import { formatDuration } from "@goat/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
-
 import {
   threadRuntimeIsActive,
   type ThreadRunSummary,
@@ -313,7 +313,7 @@ export function formatSubagentEffort(input: {
   }
   return (
     REASONING_EFFORT_OPTION_IDS.map((id) => getModelSelectionStringOptionValue(selection, id)).find(
-      Boolean,
+      (value) => Boolean(value && value !== DEFAULT_VARIANT_CHOICE_ID),
     ) ?? null
   );
 }
