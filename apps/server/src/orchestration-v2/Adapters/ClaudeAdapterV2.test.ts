@@ -15701,6 +15701,7 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
   nativeSessionId: string,
   currentMemoryPolicy: McpSessionRegistry.McpSessionRegistry["Service"]["currentMemoryPolicy"] = () =>
     Effect.succeed(undefined),
+  interruptCloses = false,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -15740,7 +15741,7 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
             setPermissionMode: () => Effect.void,
             backgroundTasks: () => Effect.succeed(false),
             stopTask: () => Effect.void,
-            interrupt: Effect.void,
+            interrupt: interruptCloses ? Queue.shutdown(sdkMessages) : Effect.void,
             close: Effect.sync(() => void closes++),
           } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
         }),
@@ -15771,8 +15772,11 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
   });
   const terminals = yield* Queue.unbounded<void>();
   const approvalRequested = yield* Deferred.make<void>();
+  const toolStarted = yield* Deferred.make<void>();
   yield* runtime.events.pipe(
     Stream.runForEach((event) => {
+      if (event.type === "turn_item.updated" && event.turnItem.type === "command_execution")
+        return Deferred.succeed(toolStarted, undefined);
       if (event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending")
         return Deferred.succeed(approvalRequested, undefined);
       return event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void;
@@ -15829,6 +15833,8 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
     providerThread,
     terminals,
     approvalRequested,
+    toolStarted,
+    emit: (message: SDKMessage) => Queue.offer(sdkMessages, message),
     finish,
     get closes() {
       return closes;
@@ -15837,6 +15843,86 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
 });
 
 describe("Claude WP4 memory delivery", () => {
+  it.effect("does not record an unread steer when stopped behind a tool (#3801)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("receipt-stop");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "receipt-stop-native",
+          () => Effect.succeed(undefined),
+          true,
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const input = {
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make("receipt-stop"),
+            text: "hello",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+        };
+        const providerTurnId = allocator.derive.providerTurn({
+          driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${input.attemptId}`,
+        });
+        yield* fixture.runtime.startTurn(input);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "assistant",
+            session_id: "receipt-stop-native",
+            uuid: "00000000-0000-4000-8000-000000000124",
+            parent_tool_use_id: null,
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "message-tool",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "tool-held",
+                  name: "Bash",
+                  input: { command: "echo fixture" },
+                },
+              ],
+            },
+          }),
+        );
+        yield* Deferred.await(fixture.toolStarted);
+        yield* fixture.runtime.steerTurn({
+          runId: input.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId,
+          message: { ...input.message, text: "unread" },
+        });
+        yield* fixture.runtime.interruptTurn({
+          providerThread: fixture.providerThread,
+          providerTurnId,
+        });
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 1);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
   it.effect("records a steer only after Claude accepts it (#3801)", () =>
     Effect.scoped(
       Effect.gen(function* () {

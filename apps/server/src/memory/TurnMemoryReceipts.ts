@@ -15,6 +15,7 @@ const encodeRefs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.TurnMe
 const decodeRefs = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(M.TurnMemoryRef)));
 const decodeToolInput = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
 const digest = (query: string) => NodeCrypto.createHash("sha256").update(query).digest("hex");
+// A database-wide failure can also prevent the per-turn failure marker from being written.
 let untrackedWriteFailure = false;
 const eventLimit = 32;
 const responseByteLimit = 60 * 1024;
