@@ -3170,7 +3170,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   };
           return {
             ...(command.historyArchive === null ? withoutHistoryArchive(thread) : thread),
-            ...(command.title === undefined ? {} : { title: command.title }),
+            ...(command.title === undefined ? {} : { title: command.title, titleRenamed: true }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&
@@ -3458,7 +3458,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.type === "thread.title.regeneration.complete.internal" ? command.outcome : null;
           return {
             ...thread,
-            ...(command.title === undefined ? {} : { title: command.title }),
+            ...(command.title === undefined ? {} : { title: command.title, titleRenamed: false }),
             ...(outcome && {
               lastTitleRegeneration: { ...outcome, requestId: command.requestId, completedAt: now },
             }),
