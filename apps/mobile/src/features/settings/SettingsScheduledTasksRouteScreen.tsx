@@ -313,12 +313,12 @@ export function SettingsScheduledTaskEditRouteScreen() {
 }
 
 function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }) {
+  const taskEditor = useScheduledTaskEditor();
   const { editor, voiceOwnerKey, readEditor, setEditor, hasChanges, draftForEnvironment } =
-    useScheduledTaskEditor();
+    taskEditor;
   const { availableTargets } = useSettingsEnvironmentFilter();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const [saving, setSaving] = useState(false);
   // Set once the save lands, so the removal guard lets the editor close.
   const saved = useRef(false);
   const ownerKey = editor ? `${voiceOwnerKey}:${editor.environmentId}` : null;
@@ -358,15 +358,15 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
     onChangeDraftMessage: (text) => {
       if (readEditor()?.environmentId === editor?.environmentId) setPrompt(text);
     },
-    disabled: saving,
+    disabled: taskEditor.saving,
   });
-  const preventRemove = hasChanges || saving;
+  const preventRemove = hasChanges || taskEditor.saving;
   usePreventRemove(preventRemove, ({ data }) => {
     if (saved.current) {
       navigation.dispatch(data.action);
       return;
     }
-    if (saving) {
+    if (taskEditor.saving) {
       Dialog.alert("Saving task", "Wait for the task to finish saving before leaving.");
       return;
     }
@@ -422,8 +422,8 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
             }
             availableTargets={availableTargets}
             draft={editor.draft}
-            saving={saving}
-            setSaving={setSaving}
+            saving={taskEditor.saving}
+            setSaving={taskEditor.setSaving}
             dictationPending={voiceInput.blocksSubmission}
             promptField={
               <ScheduledTaskPromptField
@@ -431,12 +431,12 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
                 onChange={setPrompt}
                 selection={selection}
                 onChangeSelection={setSelection}
-                disabled={saving}
+                disabled={taskEditor.saving}
                 voiceInput={voiceInput}
               />
             }
             setDraft={(draft) => {
-              if (!saving) setEditor({ ...editor, draft });
+              if (!taskEditor.saving) setEditor({ ...editor, draft });
             }}
             onSaved={() => {
               saved.current = true;
