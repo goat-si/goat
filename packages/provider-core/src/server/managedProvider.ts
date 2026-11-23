@@ -4,6 +4,7 @@ import {
   ServerSettingsError,
 } from "@goat/contracts";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -43,6 +44,13 @@ function withUsageLimits(
 }
 
 const FAILED_CHECK_RECHECK_DELAY = "30 seconds";
+
+export const DeferringFailedCheck = Context.Reference<boolean>(
+  "goat/provider/DeferringFailedCheck",
+  {
+    defaultValue: () => false,
+  },
+);
 
 export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(function* <
   Settings,
@@ -227,7 +235,9 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
     // A probe without usage must not erase a report published while its I/O was in flight.
     const usageBeforeProbe = (yield* Ref.get(snapshotStateRef)).snapshot.usageLimits;
-    const probedSnapshot = yield* input.checkProvider;
+    const probedSnapshot = yield* input.checkProvider.pipe(
+      Effect.provideService(DeferringFailedCheck, options?.deferFailure === true),
+    );
     // One failed periodic check over a ready provider is often transient; recheck before showing it.
     if (
       options?.deferFailure === true &&

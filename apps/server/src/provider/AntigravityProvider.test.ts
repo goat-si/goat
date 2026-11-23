@@ -115,25 +115,27 @@ const expectedCommands = [
   { name: "logout", description: "Sign out of Google" },
 ];
 
-const layerTest = ProviderHostLive.layer.pipe(
-  Layer.provide(
-    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-      getEnvironmentId: Effect.succeed(EnvironmentId.make("memory-host-fixture")),
-    }),
-  ),
-  Layer.provideMerge(
-    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-      shouldRunScopeWork: () => Effect.succeed(false),
-    }),
-  ),
-  Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provide(
-    ServerConfig.layerTest(process.cwd(), { prefix: "goat-antigravity-provider-test-" }).pipe(
-      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+const makeLayerTest = (background: boolean) =>
+  ProviderHostLive.layer.pipe(
+    Layer.provide(
+      Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("memory-host-fixture")),
+      }),
     ),
-  ),
-);
+    Layer.provideMerge(
+      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+        shouldRunScopeWork: () => Effect.succeed(background),
+      }),
+    ),
+    Layer.provideMerge(ServerSettings.layerTest()),
+    Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-antigravity-provider-test-" }).pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  );
+const layerTest = makeLayerTest(false);
 
 type ProbeError = EffectAcpErrors.AcpError | ProviderSetupError;
 
@@ -303,6 +305,33 @@ describe("Antigravity model catalog", () => {
   });
 });
 
+it.layer(makeLayerTest(true))("Antigravity periodic checks", (it) => {
+  it.effect("keeps a ready snapshot during a transient failed check and accepts sign-out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, "/workspace");
+        const checked = yield* Deferred.make<void>();
+        yield* Ref.set(
+          harness.probe,
+          Deferred.succeed(checked, undefined).pipe(
+            Effect.andThen(
+              Effect.fail(EffectAcpErrors.AcpRequestError.internalError("probe failed")),
+            ),
+          ),
+        );
+        yield* TestClock.adjust("5 minutes");
+        yield* Deferred.await(checked);
+        expect((yield* harness.provider.snapshot.getSnapshot).status).toBe("ready");
+        yield* harness.provider.onSignedOut();
+        yield* TestClock.adjust("30 seconds");
+        expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
+      }),
+    ),
+  );
+});
+
 it.layer(layerTest)("Antigravity provider snapshots", (it) => {
   it.effect("does not probe or run helper safety checks while disabled", () =>
     Effect.scoped(
@@ -325,7 +354,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("treats initialize as installation proof, not account or model discovery", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -361,7 +389,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("does not offer Auto, so Auto threads fall back to Supervised", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -376,7 +403,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("publishes session metadata and native commands without another health probe", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -407,7 +433,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect(
     "a sign-out from another home clears the current profile, since every home shares the credentials",
     () =>
@@ -429,7 +454,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         }),
       ),
   );
-
   it.effect("old session events cannot replace the current profile catalog", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -463,7 +487,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("a sign-out is not lost when the home changes while it is applied", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -488,7 +511,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("shows a thread session's native commands in that workspace's snapshot", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -502,7 +524,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       );
     }),
   );
-
   it.effect("clears all account metadata on sign-out and authentication failure", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -542,7 +563,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("replaces live model choices and accepts an empty catalog", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -24,7 +24,10 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import { acpProviderOptionDescriptors } from "@goat/provider-acp/server/sessionConfig";
-import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
+import {
+  DeferringFailedCheck,
+  makeManagedServerProvider,
+} from "@goat/provider-core/server/managedProvider";
 import {
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilities,
@@ -331,7 +334,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       initialized !== undefined ? yield* options.supportsTextGeneration : false;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* reconcileProfile();
-    const next = yield* SubscriptionRef.updateAndGet(metadata, (state) => {
+    const applyCheck = (state: AntigravityProviderState) => {
       if (state.authRevision !== before.authRevision) return state;
       const { message: _previousMessage, ...draft } = state.draft;
       const authenticated = draft.auth.status === "authenticated";
@@ -370,6 +373,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           ...(message ? { message } : {}),
         },
       } satisfies AntigravityProviderState;
+    };
+    const deferFailure = errorMessage !== undefined && (yield* DeferringFailedCheck);
+    const next = yield* SubscriptionRef.modifySome(metadata, (state) => {
+      const checked = applyCheck(state);
+      const stored = deferFailure && state.draft.status === "ready" ? state : checked;
+      return [checked, stored === state ? Option.none() : Option.some(stored)];
     });
     if (
       initialized !== undefined &&

@@ -37,6 +37,17 @@ const baseProviderSnapshot = {
 };
 
 describe("ServerProvider", () => {
+  it("accepts retained catalogs across old and new provider codecs", () => {
+    const { modelsRetained: _retained, ...legacyFields } = ServerProvider.fields;
+    const legacy = Schema.Struct(legacyFields);
+    const decodeLegacy = Schema.decodeUnknownSync(legacy);
+    const encode = Schema.encodeSync(ServerProvider);
+    const older = decodeServerProvider(baseProviderSnapshot);
+    const current = decodeServerProvider({ ...baseProviderSnapshot, modelsRetained: true });
+    expect(older.modelsRetained).toBeUndefined();
+    expect(decodeServerProvider(encode(current)).modelsRetained).toBe(true);
+    expect(decodeLegacy(encode(current))).toEqual(older);
+  });
   it("older full and delta provider codecs keep rows with generation readiness fields", () => {
     const {
       awaitingFirstCheck: _checking,
