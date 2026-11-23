@@ -5,6 +5,7 @@ import * as M from "@goat/contracts";
 import { CodexSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
+import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -43,6 +44,25 @@ export const layerAdapterTest = Layer.mergeAll(
   NodeServices.layer,
   NodeCrypto.layer,
 );
+export const wp4Memory = () => {
+  const snapshot = MemoryContext.packMemoryContext({
+    memorySpaceId: M.MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
+    projectionWatermark: 1,
+    items: [
+      {
+        memoryId: M.MemoryId.make("00000000-0000-4000-8000-000000000001"),
+        revisionId: M.MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
+        scope: { kind: "user" },
+        provenance: { environmentId: M.EnvironmentId.make("fixture") },
+        assertionKind: "fact",
+        text: "& <untrusted> 'quoted' \"data\"",
+      },
+    ],
+  });
+  if (snapshot === undefined) throw new Error("Expected a replay memory snapshot.");
+  return snapshot;
+};
+
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 // Every memory tool by the name /mcp lists, which is what Codex disables.
 export const GOAT_MEMORY_TOOLS = [
