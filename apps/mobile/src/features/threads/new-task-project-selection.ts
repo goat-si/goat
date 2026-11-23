@@ -134,7 +134,18 @@ export function resolveDraftProjectSelection(
             project.archivedAt == null,
         )
       : undefined;
-  if (last) return { kind: "select", project: last };
+  const lastScope = last && projectScopes.find((scope) => scope.projects.includes(last));
+  if (last) {
+    // Prefer the remembered copy, but not over a connected copy of the same project.
+    const project = lastScope
+      ? getProjectScopeSelectionTarget(
+          { ...lastScope, projects: lastScope.projects.filter((p) => p.archivedAt == null) },
+          last.environmentId,
+          draft.connectedEnvironmentIds,
+        )
+      : last;
+    return { kind: "select", project };
+  }
   const onlyScope =
     draft.incomingShareId !== undefined && projectScopes.length === 1 ? projectScopes[0] : null;
   return onlyScope

@@ -223,6 +223,24 @@ describe("new task project choice", () => {
     ).toEqual({ kind: "pick" });
   });
 
+  it("starts an incoming share in a connected copy when the remembered copy is offline", () => {
+    const offline = makeProject("offline-copy", "offline");
+    const online = makeProject("online-copy", "online");
+    const other = makeProject("other");
+    const projects = [offline, online, other];
+    const draft = {
+      incomingShareId: "share",
+      pickerClosed: false,
+      connectedEnvironmentIds: new Set([online.environmentId, other.environmentId]),
+      lastProject: { environmentId: offline.environmentId, projectId: offline.id },
+    };
+    const scopes = [makeScope([offline, online]), makeScope([other])];
+    expect(resolveDraftProjectSelection(null, projects, scopes, draft)).toEqual({
+      kind: "select",
+      project: online,
+    });
+  });
+
   // regression: #1971 a cancelled multi-project share picker must leave a way out.
   it("keeps a shared draft unlocked after picker cancellation until a destination is chosen", async () => {
     const first = makeProject("first");
