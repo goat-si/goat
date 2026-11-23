@@ -1768,6 +1768,7 @@ interface ActiveClaudeTurnContext {
       readonly messageId: MessageId;
       readonly text: string;
       readonly liveQuery: ClaudeLiveQueryContext;
+      readonly receipt: Effect.Effect<void>;
     }
   >;
   // Claude may settle a turn with a result that echoes only a steer's uuid.
@@ -5355,6 +5356,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const steer = context.pendingSteers.get(uuid);
             if (steer === undefined) continue;
             context.pendingSteers.delete(uuid);
+            yield* steer.receipt;
             yield* emitSteerStatus(context, steer.messageId, "completed");
           }
         });
@@ -10039,6 +10041,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               messageId,
               text: turnInput.message.text,
               liveQuery: existing,
+              receipt: admitted.receipt,
             });
             yield* emitSteerStatus(currentTurn, messageId, "pending");
             // The PDF budget is spent once the message is queued, even if the steer is later refused.
@@ -10048,7 +10051,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   pdfReservation.commit();
                 }),
               ).pipe(
-                Effect.tap(() => admitted.receipt),
                 Effect.tap(() =>
                   Effect.sync(() => {
                     pdfReservation.commit();
