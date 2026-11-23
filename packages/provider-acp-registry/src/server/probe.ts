@@ -1,3 +1,4 @@
+import { isolateDeepSeekProbeHistory } from "./deepSeekProbeHistory.ts";
 import { boundedAgentVersion } from "./agentVersion.ts";
 import {
   AcpRegistryListProvidersResult,
@@ -15,8 +16,10 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -413,6 +416,8 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
     AcpRegistryOperationError,
     | AcpRegistrySupport.AcpRegistryCatalog
     | ChildProcessSpawner.ChildProcessSpawner
+    | FileSystem.FileSystem
+    | Path.Path
     | SecureRandom.SecureRandom
   > {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
@@ -430,6 +435,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       const resolved = yield* catalog
         .resolve(input.settings, input.cwd, input.environment, { allowInstall: false })
         .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+      const spawn = yield* isolateDeepSeekProbeHistory(input.settings.commandPath, resolved.spawn);
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
       const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
       const runtimeCoordinator = yield* Effect.serviceOption(
@@ -438,8 +444,8 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       const runtimeContext = yield* Layer.build(
         AcpSessionRuntime.layer({
           spawn: {
-            ...resolved.spawn,
-            env: providerProbeEnvironment(resolved.spawn.env ?? input.environment),
+            ...spawn,
+            env: providerProbeEnvironment(spawn.env ?? input.environment),
           },
           cwd: input.cwd,
           clientCapabilities: {
