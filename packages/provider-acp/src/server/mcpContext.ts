@@ -24,6 +24,7 @@ export function acpMcpContext(
   session: McpProviderSession.McpProviderSessionConfig | undefined,
   self: SelfInvocation,
   preferHttp = false,
+  callLauncher?: string,
 ): AcpMcpContext {
   if (session === undefined) {
     return {
@@ -87,6 +88,7 @@ export function acpMcpContext(
         GOAT_THREAD_ID: session.threadId,
         T3CODE_THREAD_ID: session.threadId, // goat-rename: legacy
         GOAT_ACP_MCP_NODE: self.command,
+        GOAT_ACP_MCP_CALL: callLauncher,
         ...(self.entrypoint === undefined ? {} : { GOAT_ACP_MCP_ENTRYPOINT: self.entrypoint }),
       },
       session,

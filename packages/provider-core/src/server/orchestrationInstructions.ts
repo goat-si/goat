@@ -48,7 +48,7 @@ export const goatBrowserInstructions = (browser: boolean | undefined): string =>
   browser === true ? GOAT_BROWSER_TOOL_INSTRUCTIONS : "";
 
 /** Only an ACP agent can be missing GOAT's tools while GOAT runs it, so only it gets the fallback. */
-const GOAT_ACP_TOOL_FALLBACK = `If your harness hides MCP tools behind its own search (Grok), find \`goat_describe\` and \`goat_call\` with \`search_tool\`. If GOAT's tools are missing, run them through \`ELECTRON_RUN_AS_NODE=1 "$GOAT_ACP_MCP_NODE" \${GOAT_ACP_MCP_ENTRYPOINT:+"$GOAT_ACP_MCP_ENTRYPOINT"} acp-mcp-call <path> '<json args>'\`.`;
+const GOAT_ACP_TOOL_FALLBACK = `If your harness hides MCP tools behind its own search (Grok), find \`goat_describe\` and \`goat_call\` with \`search_tool\`. If GOAT's tools are missing, run them through \`ELECTRON_RUN_AS_NODE=1 "$GOAT_ACP_MCP_NODE" \${GOAT_ACP_MCP_ENTRYPOINT:+"$GOAT_ACP_MCP_ENTRYPOINT"} acp-mcp-call <path> '<json args>'\`. On Windows PowerShell, use \`'{}' | & $env:GOAT_ACP_MCP_CALL <path> -\` and escape non-ASCII characters as \`\\uXXXX\`.`;
 
 const GOAT_ACP_DEFAULT_MODE_INSTRUCTIONS = `## GOAT interaction mode: Default
 

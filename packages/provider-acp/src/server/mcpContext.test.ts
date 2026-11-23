@@ -8,6 +8,28 @@ import { acpMcpContext } from "./mcpContext.ts";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 
 describe("ACP GOAT MCP context", () => {
+  it("passes the optional Windows launcher only to a connected session", () => {
+    const session = {
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      providerSessionId: "session",
+      providerInstanceId: ProviderInstanceId.make("acp"),
+      endpoint: "http://localhost/mcp",
+      authorizationHeader: "fixture",
+      browserToolsAvailable: false,
+    };
+    const self = { command: "node", entrypoint: undefined };
+    expect(
+      acpMcpContext(session, self, false, "C:\\state\\goat.cmd").processEnvironment
+        ?.GOAT_ACP_MCP_CALL,
+    ).toBe("C:\\state\\goat.cmd");
+    expect(acpMcpContext(session, self).processEnvironment?.GOAT_ACP_MCP_CALL).toBeUndefined();
+    const prompt = goatAcpPromptWithInstructions({
+      prompt: "test",
+      state: { interactionMode: "default", hasGoatMcp: true },
+    });
+    expect(prompt).toContain("'{}' | & $env:GOAT_ACP_MCP_CALL <path> -");
+  });
   it("Grok, Antigravity and acpRegistry receive the attached screen guide with both MCP transports", () => {
     const context = acpMcpContext(
       {
