@@ -691,7 +691,9 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const profile = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-agy-pre-settle-" });
+        const profile = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-agy-pre-settle-",
+        });
         const generated = (kind: string) =>
           path.join(
             profile,
@@ -762,7 +764,7 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
   );
 
   // agy names its background commands `<session>/task-<n>`; the agent passes that to
-  // t3_background_wait, which must not fail since the adapter already holds the run open.
+  // goat_background_wait, which must not fail since the adapter already holds the run open.
   it.effect("accepts goat_background_wait for a command it already tracks", () =>
     Effect.gen(function* () {
       const { session, providerThread, startTurn, throughPromptSettled } =
