@@ -1,5 +1,6 @@
+import { readStatusPaths } from "./gitStatusPaths.ts";
 import { awaitStatusFetch } from "./awaitStatusFetch.ts";
-import { makeRefEpochs } from "./gitRefEpochs.ts";
+import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import {
   branchNameFromHeadRef,
@@ -888,7 +889,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
-    const commonDirOutput = commonDirResult.stdout.trim();
+    const commonDirOutput = commonDirResult.stdout.replace(/\n$/, "");
     const physicalCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
     const resolvedGitCommonDir = path.isAbsolute(commonDirOutput)
       ? path.normalize(commonDirOutput)
@@ -1028,7 +1029,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   );
   const invalidateStatusStaticCaches = Effect.fn("GitVcsDriverCore.invalidateStatusStaticCaches")(
     function* (cwd: string) {
-      const repositoryPaths = yield* resolveRepositoryPaths(cwd).pipe(
+      const repositoryPaths = yield* resolveRepositoryPathsUncached(cwd).pipe(
         Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
       );
       const cacheKey = repositoryPaths?.gitCommonDir ?? normalizeRepositoryPathsCacheKey(cwd);
@@ -1567,46 +1568,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ...(hidden ? ["--untracked-files=normal"] : []),
       ...(includeDivergence ? [] : ["--no-ahead-behind"]),
     ];
-    const indexResult = yield* executeGitWithStableDiagnostics(
-      "GitVcsDriver.statusDetails.indexPath",
+    const statusPaths = yield* readStatusPaths(
       cwd,
-      ["rev-parse", "--git-path", "index"],
-      { allowNonZeroExit: true },
-    ).pipe(
-      Effect.catchTags({
-        GitCommandError: (error) =>
-          isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
-      }),
+      path,
+      fileSystem,
+      executeGitWithStableDiagnostics,
     );
-    if (indexResult === null) return NON_REPOSITORY_STATUS_DETAILS;
-    if (indexResult.exitCode === 0) {
-      const lockPath = `${path.resolve(cwd, indexResult.stdout.trim())}.lock`;
-      const lockError = new GitCommandError({
-        operation: "GitVcsDriver.statusDetails.indexPath",
-        command: "git",
-        cwd,
-        detail: "Git index is locked. Status will resume when the index lock is removed.",
-      });
-      // Status can succeed while locked, repeatedly running LFS clean filters without caching.
-      if (
-        yield* fileSystem.exists(lockPath).pipe(
-          Effect.mapError(
-            (cause) =>
-              new GitCommandError({
-                ...lockError,
-                detail: "Failed to check the Git index lock.",
-                cause,
-              }),
-          ),
-        )
-      ) {
-        return yield* lockError;
-      }
-    }
-    const repositoryPaths = yield* resolveRepositoryPaths(cwd).pipe(
-      Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
-    );
+    if (statusPaths === undefined) return NON_REPOSITORY_STATUS_DETAILS;
+    const { index, commonDir, root } = statusPaths;
+    const repositoryPaths =
+      commonDir && root
+        ? {
+            gitCommonDir: yield* fileSystem
+              .realPath(commonDir)
+              .pipe(Effect.orElseSucceed(() => path.normalize(commonDir))),
+            worktreeRoot: path.normalize(root),
+          }
+        : yield* resolveRepositoryPaths(cwd).pipe(
+            Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
+          );
     const statusCacheKey = repositoryPaths?.gitCommonDir;
+    const refsGeneration =
+      statusCacheKey === undefined ? undefined : currentListRefsGeneration(statusCacheKey);
     const readStatus = executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
@@ -1741,6 +1724,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
+    if (commonDir && root && repositoryPaths?.worktreeRoot) {
+      const { gitCommonDir, worktreeRoot } = repositoryPaths;
+      const cacheKey = normalizeRepositoryPathsCacheKey(cwd);
+      if (!(yield* Cache.has(repositoryPathsCache, cacheKey))) {
+        const isAtRepositoryRoot = yield* fileSystem.realPath(cwd).pipe(
+          Effect.map((physicalCwd) => path.relative(worktreeRoot, physicalCwd) === ""),
+          Effect.orElseSucceed(() => undefined),
+        );
+        if (
+          currentListRefsGeneration(gitCommonDir) === refsGeneration &&
+          !(yield* Cache.has(repositoryPathsCache, cacheKey))
+        ) {
+          yield* Cache.set(repositoryPathsCache, cacheKey, {
+            gitCommonDir,
+            worktreeRoot,
+            isAtRepositoryRoot,
+            currentBranch: refName,
+          });
+        }
+      }
+    }
+
     upstreamRef = liveUpstreamRef(statusStdout, upstreamRef);
     const isDefaultBranch =
       refName !== null &&
@@ -1760,6 +1765,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               knownOriginDefaultBranch: defaultBranch,
               untrackedRoots,
               headOid,
+              ...(index ? { indexPath: index } : {}),
             }).pipe(Effect.orElseSucceed(() => undefined))
           : Effect.undefined,
       ],
@@ -2604,6 +2610,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     untrackedPaths: ReadonlyArray<string>,
     includeStagedDeletions = false,
     allowPartial = true,
+    knownIndexPath?: string,
   ) {
     const [stagedDeletionsStdout, indexValue] = yield* Effect.all(
       [
@@ -2622,11 +2629,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ],
           { allowNonZeroExit: true, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
         ),
-        runGitStdout("GitVcsDriver.readUnifiedWorkingTreeReviewDiff.indexPath", cwd, [
-          "rev-parse",
-          "--git-path",
-          "index",
-        ]),
+        knownIndexPath === undefined
+          ? runGitStdout("GitVcsDriver.readUnifiedWorkingTreeReviewDiff.indexPath", cwd, [
+              "rev-parse",
+              "--git-path",
+              "index",
+            ])
+          : Effect.succeed(knownIndexPath),
       ],
       { concurrency: 2 },
     );
@@ -2649,9 +2658,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const { selected: pathsToAdd, omitted } = yield* selectUntrackedWithinLimit(cwd, candidates);
     if (pathsToAdd.length === 0 || (omitted && !allowPartial)) return { env: undefined, omitted };
 
-    const indexPath = path.isAbsolute(indexValue.trim())
-      ? indexValue.trim()
-      : path.resolve(cwd, indexValue.trim());
+    const indexPath = knownIndexPath ?? path.resolve(cwd, indexValue.replace(/\n$/, ""));
     const tempIndexPath = yield* fileSystem.makeTempFileScoped({
       prefix: `goat-review-index-${process.pid}-`,
     });
@@ -2719,6 +2726,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     onlyPath?: string,
     includeStagedDeletions = false,
     allowPartial = true,
+    knownIndexPath?: string,
   ) {
     const untracked = yield* executeGit(
       "GitVcsDriver.review.listUntracked",
@@ -2734,7 +2742,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (paths.length === 0) return { env: undefined, omitted: false };
     if (paths.length > REVIEW_UNTRACKED_MAX_FILES)
       return { unavailable: "Too many untracked files to count." };
-    const index = yield* prepareReviewIndex(cwd, paths, includeStagedDeletions, allowPartial).pipe(
+    const index = yield* prepareReviewIndex(
+      cwd,
+      paths,
+      includeStagedDeletions,
+      allowPartial,
+      knownIndexPath,
+    ).pipe(
       Effect.catchTags({
         PlatformError: (cause) =>
           Effect.fail(
@@ -2817,6 +2831,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       readonly knownOriginDefaultBranch: string | null;
       readonly untrackedRoots: ReadonlyArray<string>;
       readonly headOid: string | null;
+      readonly indexPath?: string;
     },
   ) {
     const resolved = yield* resolveReviewMergeBase(
@@ -2840,7 +2855,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const untracked = yield* untrackedTotalsBackoff(
       cwd,
       roots,
-      prepareUntrackedReviewIndexOrReason(cwd, pathspecs, undefined, false, false),
+      prepareUntrackedReviewIndexOrReason(
+        cwd,
+        pathspecs,
+        undefined,
+        false,
+        false,
+        options?.indexPath,
+      ),
     );
     const readNumstat = (ref: string) =>
       executeGit(
@@ -3438,27 +3460,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const { epochs: listRefsEpochByCommonDir, advance: advanceEpoch } = makeRefEpochs(
     LIST_REFS_SNAPSHOT_CACHE_CAPACITY,
   );
-  const listRefsGenerationByCommonDir = new Map<string, number>();
-  let listRefsGenerationSequence = 0;
-  const setListRefsGeneration = (gitCommonDir: string, generation: number): number => {
-    listRefsGenerationByCommonDir.delete(gitCommonDir);
-    listRefsGenerationByCommonDir.set(gitCommonDir, generation);
-    if (listRefsGenerationByCommonDir.size > LIST_REFS_SNAPSHOT_CACHE_CAPACITY) {
-      const oldestKey = listRefsGenerationByCommonDir.keys().next().value;
-      if (oldestKey !== undefined) {
-        listRefsGenerationByCommonDir.delete(oldestKey);
-      }
-    }
-    return generation;
-  };
-  const currentListRefsGeneration = (gitCommonDir: string): number => {
-    const current = listRefsGenerationByCommonDir.get(gitCommonDir);
-    return current === undefined
-      ? setListRefsGeneration(gitCommonDir, ++listRefsGenerationSequence)
-      : setListRefsGeneration(gitCommonDir, current);
-  };
-  const bumpListRefsGeneration = (gitCommonDir: string): number =>
-    setListRefsGeneration(gitCommonDir, ++listRefsGenerationSequence);
+  const { current: currentListRefsGeneration, bump: bumpListRefsGeneration } = makeRefGenerations(
+    LIST_REFS_SNAPSHOT_CACHE_CAPACITY,
+  );
   const listRefsSnapshotCache = yield* Cache.makeWith(
     (cacheKey: GitRefsSnapshotCacheKey) => readGitRefsSnapshot(cacheKey.gitCommonDir),
     {

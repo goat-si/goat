@@ -2816,7 +2816,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(cwd, "nested/untracked.txt", "one\ntwo\n");
         yield* writeTextFile(cwd, "new [1].txt", "literal\n");
 
-        const status = yield* driver.statusDetailsLocal(pathService.join(cwd, "nested"), {
+        const nested = pathService.join(cwd, "nested");
+        const alias = pathService.join(yield* makeTmpDir(), "alias");
+        const platform = yield* HostProcess.Platform;
+        yield* Effect.promise(() =>
+          NodeFS.promises.symlink(nested, alias, platform === "win32" ? "junction" : "dir"),
+        );
+        const status = yield* driver.statusDetailsLocal(alias, {
           includeBranchChanges: true,
         });
         assert.deepStrictEqual(status.branchChanges, {
@@ -2824,6 +2830,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           insertions: 4,
           deletions: 0,
         });
+        yield* driver.ensureRemote({ cwd: alias, preferredName: "origin", url: cwd });
+        assert.isTrue((yield* driver.statusDetailsLocal(alias)).hasOriginRemote);
         assert.isUndefined((yield* driver.statusDetailsLocal(cwd)).branchChanges);
       }),
     );
