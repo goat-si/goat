@@ -1,5 +1,6 @@
 // @effect-diagnostics globalTimers:off - event-driven tracking belongs to the browser connection.
 import type { Page, Request } from "playwright-core";
+import { appLinkUrl } from "@goat/shared/appLinks";
 
 const trackers = new WeakMap<Page, ReturnType<typeof makeTracker>>();
 
@@ -10,6 +11,23 @@ export const isMainNavigation = (page: Page, request: Request) => {
     return false;
   }
 };
+
+export const isAppLinkRequest = (request: Request) => appLinkUrl(request.url()) !== null;
+
+export function trackNavigation<T>(
+  page: Page,
+  request: Request,
+  generations: WeakMap<object, number>,
+  tab: T,
+  settle: (tab: T, generation: number, url: string, download: undefined) => void,
+): boolean {
+  if (!isMainNavigation(page, request)) return false;
+  if (appLinkUrl(request.url()) === null) return true;
+  const previous = request.redirectedFrom();
+  const generation = previous && generations.get(previous);
+  if (generation) settle(tab, generation, request.url(), undefined);
+  return false;
+}
 
 const makeTracker = (page: Page) => {
   const requests = new Set<Request>();
