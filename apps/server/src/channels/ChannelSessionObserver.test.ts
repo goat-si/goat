@@ -18,7 +18,7 @@ import { goatInput, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 
 it.effect(
-  "the domain event observer delivers a streaming first line while ordinary passes are blocked",
+  "the domain event observer delivers the first message while ordinary passes are blocked",
   () => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {
