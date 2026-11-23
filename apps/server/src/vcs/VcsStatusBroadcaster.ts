@@ -37,7 +37,6 @@ import type {
   GitManagerServiceError,
   VcsBranchStatus,
   VcsStatusLocalResult,
-  VcsStatusRemoteResult,
   VcsRefreshStatusResult,
   VcsStatusStreamEvent,
 } from "@goat/contracts";
@@ -48,39 +47,22 @@ import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import {
+  fingerprintStatusPart,
+  type CachedRemoteStatus,
+  type CachedVcsStatus,
+} from "./vcsCachedStatus.ts";
 
 const MAX_STATUS_REFRESH_WORKERS = 16;
-interface CachedValue<T> {
-  readonly fingerprint: string;
-  readonly value: T;
-}
-
-interface CachedRemoteStatus extends CachedValue<VcsStatusRemoteResult | null> {
-  readonly branch: string | null;
-}
-
 interface VcsStatusChange {
   readonly cwd: string;
   readonly events: Arr.NonEmptyReadonlyArray<VcsStatusStreamEvent>;
-}
-
-interface CachedLocalStatus extends CachedValue<VcsStatusLocalResult> {
-  readonly includesBranchChanges: boolean;
-}
-
-interface CachedVcsStatus {
-  readonly local: CachedLocalStatus | null;
-  readonly remote: CachedRemoteStatus | null;
 }
 
 interface ActiveRemotePoller {
   readonly fiber: Fiber.Fiber<void, never>;
   readonly subscriberCount: number;
   readonly demandCwds: Ref.Ref<ReadonlyMap<string, number>>;
-}
-
-function fingerprintStatusPart(status: unknown): string {
-  return JSON.stringify(status);
 }
 
 const normalizeCwd = (cwd: string) =>
