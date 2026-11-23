@@ -1,6 +1,6 @@
 import { makeStatusCacheWithRemoteLock } from "./vcsStatusCache.ts";
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
-import { VcsRefSnapshot } from "./VcsRefSnapshot.ts";
+import { VcsRefSnapshot, refreshMovedRefs } from "./VcsRefSnapshot.ts";
 export { layer as layerRefSnapshot } from "./VcsRefSnapshot.ts";
 export {
   VcsAutomaticFetchInterval,
@@ -132,11 +132,9 @@ export const make = Effect.gen(function* () {
     (cwd) => localRefreshResults.delete(cwd),
   );
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
-
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")((cwd: string) =>
     Effect.sync(() => cache.get(cwd) ?? null),
   );
-
   const { wantsBranchChanges, acquireBranchChangesDemand } = makeBranchChangesDemand();
 
   const readLocalStatus = Effect.fn("VcsStatusBroadcaster.readLocalStatus")(function* (
@@ -449,6 +447,7 @@ export const make = Effect.gen(function* () {
     options?: {
       readonly refreshUpstream?: boolean;
       readonly policyCwds?: ReadonlyArray<string>;
+      readonly refs?: Ref.Ref<string | null>;
     },
   ) {
     return yield* withRemoteWriteLock(
@@ -461,7 +460,7 @@ export const make = Effect.gen(function* () {
             : yield* maybeAutoPull(cwd, remoteRead, options?.policyCwds ?? [cwd]);
         if (pulled !== null) return pulled.remote;
         // Base refs and merge bases can move without changing divergence counts.
-        yield* refreshLocalStatusCore(cwd);
+        yield* refreshMovedRefs(cwd, options?.refs, readRefSnapshot, refreshLocalStatusCore);
         return yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
       }),
     );
@@ -611,6 +610,7 @@ export const make = Effect.gen(function* () {
   ) {
     const consecutiveFailuresRef = yield* Ref.make(0);
     const needsInitialRefreshRef = yield* Ref.make(refreshImmediately);
+    const refsRef = yield* Ref.make<string | null>(null);
     const refreshRemoteStatusIfEnabled = Effect.gen(function* () {
       const configuredInterval = yield* automaticFetchInterval;
       const activeInterval = Duration.isZero(configuredInterval)
@@ -640,6 +640,7 @@ export const make = Effect.gen(function* () {
       const exit = yield* refreshRemoteStatus(cwd, {
         refreshUpstream: !Duration.isZero(configuredInterval),
         policyCwds: [...demandCwds.keys()],
+        refs: refsRef,
       }).pipe(Effect.exit);
       if (Exit.isSuccess(exit)) {
         yield* Ref.set(needsInitialRefreshRef, false);

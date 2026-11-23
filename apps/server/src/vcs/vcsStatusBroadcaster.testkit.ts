@@ -12,6 +12,7 @@ import type { BackgroundScope, VcsStatusLocalResult, VcsStatusRemoteResult } fro
 import { GitManagerError } from "@goat/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
+import { VcsRefSnapshot } from "./VcsRefSnapshot.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 
@@ -53,6 +54,7 @@ export const remoteStatusWithPr: VcsStatusRemoteResult = {
 export function layerTestFor(state: {
   currentLocalStatus: VcsStatusLocalResult;
   currentRemoteStatus: VcsStatusRemoteResult | null;
+  refSnapshot?: string | null;
   currentDivergence?: Pick<VcsStatusRemoteResult, "aheadCount" | "behindCount">;
   localStatusCalls: number;
   remoteStatusCalls: number;
@@ -76,6 +78,9 @@ export function layerTestFor(state: {
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
   return VcsStatusBroadcaster.layer.pipe(
+    Layer.provide(
+      Layer.succeed(VcsRefSnapshot, () => Effect.sync(() => state.refSnapshot ?? null)),
+    ),
     Layer.provideMerge(
       state.fileSystem
         ? Layer.merge(Layer.succeed(FileSystem.FileSystem, state.fileSystem), Path.layer)
