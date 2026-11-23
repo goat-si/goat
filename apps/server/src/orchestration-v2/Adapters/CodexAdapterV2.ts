@@ -1,3 +1,11 @@
+import { toProtocolError } from "./CodexProtocolError.ts";
+import { codexTimestamp, codexSkillMentionText } from "./CodexTextHelpers.ts";
+export { codexTimestamp } from "./CodexTextHelpers.ts";
+import {
+  decodeCodexBackgroundTerminalTerminateResponse,
+  decodeCodexBackgroundTerminalsListResponse,
+  type CodexBackgroundTerminalsListPage,
+} from "./CodexBackgroundTerminalSchemas.ts";
 import { providerSession } from "./CodexSessionProjection.ts";
 import {
   codexItemStatus,
@@ -24,7 +32,7 @@ import {
   normalizeCodexThreadLoadModelSelection,
 } from "./CodexCapabilities.ts";
 export { CodexProviderCapabilitiesV2 } from "./CodexCapabilities.ts";
-import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
+import { makeCodexMcpConfigReader, codexGoatServerConfig } from "./goatCodexMcpServers.ts";
 import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
 import * as Meta from "./CodexThreadMetadata.ts";
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
@@ -86,7 +94,6 @@ import {
   ProviderDriverKind,
   ProviderSetupError,
 } from "@goat/contracts";
-import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import {
   appendGeneratedImageMarkdown,
   type CodexImageGenerationItem,
@@ -274,64 +281,18 @@ type CodexFileChangeKinds = Readonly<
   Record<string, CodexSchema.V2ItemStartedNotification__PatchChangeKind>
 >;
 
-import { canReuseCodexContextUsage } from "./CodexTokenUsage.ts";
-export { canReuseCodexContextUsage } from "./CodexTokenUsage.ts";
-import { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
-export { codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
+import { canReuseCodexContextUsage, codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
+export { canReuseCodexContextUsage, codexProviderTurnTokenUsage } from "./CodexTokenUsage.ts";
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 
-// Each plan flush stores the whole plan three times (node, plan, turn item), so
-// flush at the cadence clients already see for assistant text.
+// A plan flush stores three copies; use the visible assistant-text cadence.
 const CODEX_PLAN_DELTA_FLUSH_INTERVAL_MS = 400;
-const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
-  terminated: Schema.Boolean,
-});
-const CodexBackgroundTerminalsListResponse = Schema.Struct({
-  data: Schema.Array(
-    Schema.Struct({
-      processId: Schema.String,
-    }),
-  ),
-  nextCursor: Schema.NullOr(Schema.String),
-});
-type CodexBackgroundTerminalsListPage = typeof CodexBackgroundTerminalsListResponse.Type;
-const decodeCodexBackgroundTerminalTerminateResponse = Schema.decodeUnknownEffect(
-  CodexBackgroundTerminalTerminateResponse,
-);
-const decodeCodexBackgroundTerminalsListResponse = Schema.decodeUnknownEffect(
-  CodexBackgroundTerminalsListResponse,
-);
 const CODEX_CLIENT_CAPABILITIES = {
   experimentalApi: true,
   optOutNotificationMethods: ["turn/diff/updated"],
   extensions: { [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] } },
 } as const;
-
-function toProtocolError(
-  detail: string,
-  payload?: unknown,
-): ProviderAdapter.ProviderAdapterProtocolError {
-  return new ProviderAdapter.ProviderAdapterProtocolError({
-    driver: CODEX_PROVIDER,
-    detail,
-    ...(payload === undefined ? {} : { payload }),
-  });
-}
-
-export function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
-  return seconds === null || seconds === undefined
-    ? DateTime.nowUnsafe()
-    : DateTime.makeUnsafe(seconds * 1000);
-}
-
-/**
- * The composers let a skill be typed with any currency sigil (`€review`), but
- * Codex only parses `$name` as a skill mention.
- */
-function codexSkillMentionText(text: string): string {
-  return text.replace(SKILL_MENTION_PATTERN, "$1$$$2");
-}
 
 export interface CodexDynamicToolProjection extends McpToolPresentation {
   readonly toolName: string;
@@ -586,8 +547,7 @@ export const CODEX_THREAD_CONFIG = {
   ...codexThreadMcpEnvironment(undefined),
   "tools.update_plan.enabled": true,
   mcp_optional_startup_grace_ms: 10_000,
-  // Tool calls stop waiting on the reasoning summary. Codex applies it only to its
-  // built-in OpenAI provider and sends each summary section whole, not as token deltas.
+  // Codex applies concurrent summaries only to its built-in provider and sends whole sections.
   "features.concurrent_reasoning_summaries": true,
 } as const;
 
@@ -599,6 +559,7 @@ export { codexNativeSubagentConfig };
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly threadId?: ThreadId;
+  readonly stdioEnvironment?: Readonly<Record<string, string>>;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   /** From `initialize`; unknown omits the subagent keys older Codex rejects. */
@@ -616,8 +577,7 @@ export function codexThreadRuntimeParams(input: {
   const memory = McpProviderSession.memoryToolAvailability(mcpSession);
   const disabledMemoryTools = goatMemoryToolsWithout(memory);
   const cuaDriver = codexManagedCuaDriver(mcpSession, input.userCuaDriver === true);
-  // Codex merges a dotted thread-config entry over the user's own `cua-driver`; disabling the
-  // whole entry keeps theirs from running for an unattended turn without a lease.
+  // Disable the entire dotted cua-driver entry for unattended work without a lease.
   const cuaServer =
     cuaDriver !== undefined
       ? McpProviderSession.cuaCodexMcpServer(cuaDriver)
@@ -643,7 +603,14 @@ export function codexThreadRuntimeParams(input: {
           { "features.default_mode_request_user_input": false, "features.hooks": false }
         : {}),
       ...codexThreadMcpEnvironment(mcpSession),
-      ...McpProviderSession.goatCodexServers(mcpSession?.goatMcpServers, {}),
+      ...(input.threadId === undefined
+        ? {}
+        : {
+            "shell_environment_policy.set.GOAT_THREAD_ID": input.threadId,
+            "shell_environment_policy.set.T3CODE_THREAD_ID": input.threadId,
+          }),
+      ...input.stdioEnvironment,
+      ...codexGoatServerConfig(mcpSession?.goatMcpServers, input.threadId),
       ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
         ? {}
@@ -664,8 +631,7 @@ export function codexThreadRuntimeParams(input: {
               enabled_tools: ["goat_thread_wait", "goat_task_create"],
               omit_tools_from: ["code_mode", "deferred"],
             },
-            // Its own path too: a dotted override replaces only this server,
-            // including a user's `cua-driver` when the decision overrides it.
+            // A dotted override replaces only this cua-driver server.
             ...(cuaServer === undefined
               ? {}
               : { [`mcp_servers.${McpProviderSession.CUA_MCP_SERVER_NAME}`]: cuaServer }),
@@ -1103,11 +1069,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* Ref.set(initialized, true);
           }),
         );
-        const { userCuaDriver, filterGoatServers } = makeCodexMcpConfigReader((cwd) =>
-          ensureInitialized.pipe(
-            Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
-            Effect.map((response) => ({ config: { mcp_servers: response.config.mcp_servers } })),
-          ),
+        const { userCuaDriver, filterGoatServers, stdioEnvironment } = makeCodexMcpConfigReader(
+          (cwd) =>
+            ensureInitialized.pipe(
+              Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
+              Effect.map((response) => ({ config: { mcp_servers: response.config.mcp_servers } })),
+            ),
         );
         const withoutConfiguredBrowser = makeCodexConfiguredBrowser((cwd) =>
           ensureInitialized.pipe(
@@ -1118,6 +1085,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const sessionThreadId = input.threadId;
         const threadRuntimeParams = (input: {
           readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
+          readonly appThreadId?: ThreadId | null;
+          readonly includeStdio?: boolean;
+          readonly stdioCwd?: string | undefined;
           readonly modelSelection?: { readonly model: string } | undefined;
           readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy | undefined;
           readonly nativeThreadId?: string;
@@ -1139,11 +1109,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 { codexVersion: codexVersion ?? "unknown", omitted: subagents.omitted },
               );
             }
+            const appThreadId =
+              input.appThreadId === undefined
+                ? (input.mcpSession?.threadId ?? sessionThreadId)
+                : input.appThreadId;
+            const savedCwd =
+              input.includeStdio &&
+              appThreadId != null &&
+              (input.stdioCwd ?? input.runtimePolicy?.cwd) == null &&
+              input.nativeThreadId !== undefined
+                ? yield* Meta.readCodexThreadCwd(client.raw, input.nativeThreadId)
+                : (input.stdioCwd ?? input.runtimePolicy?.cwd);
+            const stdio = input.includeStdio ? yield* stdioEnvironment(appThreadId, savedCwd) : {};
             return {
               params: mergeCodexHomeThreadParams(
                 launchSettings,
                 codexThreadRuntimeParams({
-                  threadId: input.mcpSession?.threadId ?? sessionThreadId,
+                  ...(appThreadId == null ? {} : { threadId: appThreadId }),
+                  stdioEnvironment: stdio,
                   mcpSession: yield* withoutConfiguredBrowser(
                     yield* filterGoatServers(input.mcpSession, input.runtimePolicy?.cwd),
                     input.runtimePolicy?.cwd,
@@ -6533,6 +6516,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const mcpSession = yield* readMcpSession(turnInput.threadId);
             const runtime = yield* threadRuntimeParams({
               mcpSession,
+              appThreadId: turnInput.threadId,
               modelSelection: turnInput.modelSelection,
               runtimePolicy: turnInput.runtimePolicy,
               nativeThreadId: threadId,
@@ -6580,11 +6564,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               };
               // The unsubscribe can stop terminals even when the resume that follows fails.
               if (foreign) restartNotices.add(threadId);
+              const stdio = yield* stdioEnvironment(
+                turnInput.threadId,
+                turnInput.runtimePolicy.cwd,
+              );
               yield* threadStatuses.reload(client, threadId, threadClosings, resumeNativeThread, {
                 ...runtime.params,
+                config: { ...runtime.params.config, ...stdio },
                 ...(mcpSession || (applied === undefined && !foreign)
                   ? {}
-                  : { config: { ...runtime.params.config, mcp_servers: detached } }),
+                  : { config: { ...runtime.params.config, ...stdio, mcp_servers: detached } }),
               });
               recordLoaded(threadId, runtime, mcpSession);
             }
@@ -7037,6 +7026,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               Effect.flatMap((mcpSession) =>
                 threadRuntimeParams({
                   mcpSession,
+                  appThreadId: threadInput.threadId,
+                  includeStdio: true,
                   modelSelection: threadInput.modelSelection,
                   runtimePolicy: threadInput.runtimePolicy,
                 }).pipe(
@@ -7093,6 +7084,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 (yield* Meta.codexThreadHeld(client.raw, nativeThreadId));
               const resumedRuntime = yield* threadRuntimeParams({
                 mcpSession: resumedMcp,
+                appThreadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
+                includeStdio: !heldElsewhere,
                 modelSelection: threadInput.modelSelection,
                 runtimePolicy: threadInput.runtimePolicy,
                 nativeThreadId,
@@ -8059,7 +8052,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   runtimeRequests: [],
                 };
               }
-              const { historyMode, loaded } = yield* ensureInitialized.pipe(
+              const {
+                historyMode,
+                loaded,
+                cwd: savedCwd,
+              } = yield* ensureInitialized.pipe(
                 Effect.andThen(Meta.readCodexThreadHistoryMetadata(client.raw, threadId)),
               );
               if (historyMode !== "paginated") {
@@ -8074,6 +8071,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const loadMcp = yield* readMcpSession(threadInput.providerThread.appThreadId);
                 const loadRuntime = yield* threadRuntimeParams({
                   mcpSession: loadMcp,
+                  appThreadId: threadInput.providerThread.appThreadId,
+                  includeStdio: true,
+                  nativeThreadId: threadId,
+                  stdioCwd: savedCwd,
                 });
                 yield* resumeNativeThread(threadId, {
                   excludeTurns: true,
@@ -8122,6 +8123,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const forkMcp = yield* mcpSessions.read(threadInput.targetThreadId);
               const forkRuntime = yield* threadRuntimeParams({
                 mcpSession: forkMcp,
+                appThreadId: threadInput.targetThreadId,
+                includeStdio: true,
                 modelSelection: threadInput.modelSelection,
                 runtimePolicy: threadInput.runtimePolicy,
               });

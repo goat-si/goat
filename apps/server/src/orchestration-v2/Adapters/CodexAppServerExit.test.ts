@@ -503,7 +503,11 @@ it.effect.each([
             request: (method, payload) =>
               (method === "thread/start" && spawn === 1
                 ? Deferred.succeed(entered, undefined)
-                : method === "config/read" && spawn === 1
+                : method === "config/read" &&
+                    spawn === 1 &&
+                    payload != null &&
+                    "cwd" in payload &&
+                    payload.cwd === null
                   ? Deferred.succeed(probed, undefined)
                   : Effect.succeed(false)
               ).pipe(Effect.andThen(client.request(method, payload))),

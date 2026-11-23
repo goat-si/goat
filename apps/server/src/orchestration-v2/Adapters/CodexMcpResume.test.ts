@@ -23,6 +23,7 @@ it.effect.each([true, false])(
         const request = { threadId: nativeThreadId, server: "weather", uri: "ui://weather" };
         const contents = [{ uri: "ui://weather", text: "weather" }];
         const resumes: unknown[] = [];
+        const configReads: unknown[] = [];
         const harness = yield* makeCodexReplayHarness(
           makeCodexReplayTranscript({
             scenario: "mcp-recovery",
@@ -43,10 +44,52 @@ it.effect.each([true, false])(
                   error: { code: -32600, message: `thread not found: ${nativeThreadId}` },
                 },
               },
+              ...(resolved
+                ? []
+                : [
+                    {
+                      type: "expect_outbound" as const,
+                      frame: {
+                        id: 4,
+                        method: "thread/read",
+                        params: { threadId: nativeThreadId, includeTurns: false },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      frame: {
+                        id: 4,
+                        result: {
+                          thread: { cwd: "/saved-worktree", status: { type: "notLoaded" } },
+                        },
+                      },
+                    },
+                  ]),
               {
                 type: "expect_outbound",
                 frame: {
-                  id: 4,
+                  id: resolved ? 4 : 5,
+                  method: "config/read",
+                  params: {
+                    cwd: resolved ? "/current-worktree" : "/saved-worktree",
+                    includeLayers: false,
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  id: resolved ? 4 : 5,
+                  result: {
+                    config: { mcp_servers: { weather: { command: "node" } } },
+                    origins: {},
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                frame: {
+                  id: resolved ? 5 : 6,
                   method: "thread/resume",
                   params: {
                     threadId: nativeThreadId,
@@ -58,19 +101,23 @@ it.effect.each([true, false])(
               },
               {
                 type: "emit_inbound",
-                frame: { id: 4, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
+                frame: {
+                  id: resolved ? 5 : 6,
+                  result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } },
+                },
               },
               {
                 type: "expect_outbound",
-                frame: { id: 5, method: "mcpServer/resource/read", params: request },
+                frame: { id: resolved ? 6 : 7, method: "mcpServer/resource/read", params: request },
               },
-              { type: "emit_inbound", frame: { id: 5, result: { contents } } },
+              { type: "emit_inbound", frame: { id: resolved ? 6 : 7, result: { contents } } },
             ],
           }),
           undefined,
           (method, params) =>
             Effect.sync(() => {
               if (method === "thread/resume") resumes.push(params);
+              if (method === "config/read") configReads.push(params);
             }),
         );
         assert.ok(harness.runtime.mcpApps);
@@ -99,7 +146,21 @@ it.effect.each([true, false])(
         if (Predicate.isObject(resumes[0])) {
           assert.equal(resumes[0].model, resolved ? "gpt-current" : undefined);
           assert.equal(resumes[0].cwd, resolved ? "/current-worktree" : undefined);
+          assert.isTrue(Predicate.isObject(resumes[0].config));
+          if (Predicate.isObject(resumes[0].config)) {
+            assert.equal(
+              resumes[0].config["mcp_servers.weather.env.GOAT_THREAD_ID"],
+              harness.threadId,
+            );
+            assert.equal(
+              resumes[0].config["mcp_servers.weather.env.T3CODE_THREAD_ID"],
+              harness.threadId,
+            );
+          }
         }
+        assert.deepInclude(configReads.at(-1), {
+          cwd: resolved ? "/current-worktree" : "/saved-worktree",
+        });
       }),
     ).pipe(
       Effect.provide(

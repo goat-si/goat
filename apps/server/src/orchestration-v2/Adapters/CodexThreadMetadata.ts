@@ -9,6 +9,7 @@ const CodexThreadHistoryMetadata = Schema.Struct({
   thread: Schema.Struct({
     historyMode: Schema.optionalKey(Schema.Literals(["legacy", "paginated"])),
     status: Schema.optionalKey(Schema.Struct({ type: Schema.String })),
+    cwd: Schema.optionalKey(Schema.String),
   }),
 });
 const decodeCodexThreadHistoryMetadata = Schema.decodeUnknownEffect(CodexThreadHistoryMetadata);
@@ -31,9 +32,24 @@ export const readCodexThreadHistoryMetadata = Effect.fn("CodexAdapterV2.readThre
     return {
       historyMode: metadata.thread.historyMode,
       loaded: metadata.thread.status?.type !== "notLoaded",
+      cwd: metadata.thread.cwd,
     };
   },
 );
+
+export const readCodexThreadCwd = Effect.fn("CodexAdapterV2.readThreadCwd")(function* (
+  raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">,
+  threadId: string,
+) {
+  const metadata = yield* readCodexThreadHistoryMetadata(raw, threadId);
+  if (metadata.cwd === undefined)
+    return yield* new CodexErrors.CodexAppServerRequestError({
+      code: -32602,
+      errorMessage: "The saved Codex thread has no workspace path.",
+      method: "thread/read",
+    });
+  return metadata.cwd;
+});
 
 /**
  * Whether Codex holds this thread loaded already. Codex keeps a held thread's configuration through
