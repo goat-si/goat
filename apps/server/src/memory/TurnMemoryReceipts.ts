@@ -10,6 +10,7 @@ import * as Store from "./MemoryStore.ts";
 import type * as Service from "./MemoryService.ts";
 
 type Ref = typeof M.TurnMemoryRef.Type;
+const encodeResult = Schema.encodeSync(Schema.fromJsonString(M.TurnMemoryResult));
 const encodeRefs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.TurnMemoryRef)));
 const decodeRefs = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(M.TurnMemoryRef)));
 const decodeToolInput = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
@@ -145,7 +146,7 @@ const inspectTurnMemory = Effect.fn("TurnMemory.inspect")(function* (
   yield* authorize;
   let truncated = rows.length > eventLimit;
   while (
-    Buffer.byteLength(JSON.stringify({ events, truncated: true, incomplete }), "utf8") >
+    Buffer.byteLength(encodeResult({ events, truncated: true, incomplete }), "utf8") >
     responseByteLimit
   ) {
     events.pop();
