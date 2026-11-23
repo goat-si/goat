@@ -1,6 +1,5 @@
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
-import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import {
   type ChannelBotArtifact,
@@ -63,7 +62,7 @@ import { GoatBotRemovedNotice } from "./GoatBotRemovedNotice";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import {
   goatBotDraftDestination,
-  useActivateGoatBotRouteDraft,
+  useGoatBotDraftSeed,
   useGoatBotDraftReply,
 } from "./GoatBotRouteDrafts";
 import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
@@ -426,26 +425,11 @@ function GoatBotChatViewContent({
         title: `Folders can't be attached to ${title}. Drop the files instead.`,
       }),
   });
-  const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(() => {
-    const text = readBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-    return text === undefined ? null : { text, nonce: 0 };
-  });
-  // A draft belongs to the bot it was written for: another bot, or this one on another computer,
-  // gets an empty box. A bot that is only briefly unavailable keeps it.
-  const [draftFor, setDraftFor] = useState({ destination, generation: 0 });
-  if (destination !== null && destination !== draftFor.destination) {
-    const changed = draftFor.destination !== null;
-    setDraftFor({ destination, generation: draftFor.generation + (changed ? 1 : 0) });
-    {
-      const text = readBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-      if (changed || text !== undefined) setSeed(text === undefined ? null : { text, nonce: 0 });
-    }
-  }
-  const routeDraft = useActivateGoatBotRouteDraft(destination, seed?.text);
-  // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the destination commits.
-  useEffect(() => {
-    clearBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-  }, [member?.environmentId, member?.sessionThreadId]);
+  const { seed, setSeed, draftFor, routeDraft } = useGoatBotDraftSeed(
+    destination,
+    member?.environmentId,
+    member?.sessionThreadId,
+  );
   const working = useContext(GoatBotActivityContext);
   const reading = useGoatBotReading(replyingSince);
   const headerStatus =

@@ -1,11 +1,38 @@
 import {
   createContext,
   use,
+  useEffect,
   useLayoutEffect,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
+
+export function useGoatBotDraftSeed(
+  destination: string | null,
+  environmentId: EnvironmentId | undefined,
+  threadId: ThreadId | undefined,
+) {
+  const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(() => {
+    const text = readBotTemplateDraft(environmentId, threadId);
+    return text === undefined ? null : { text, nonce: 0 };
+  });
+  const [draftFor, setDraftFor] = useState({ destination, generation: 0 });
+  if (destination !== null && destination !== draftFor.destination) {
+    const changed = draftFor.destination !== null;
+    setDraftFor({ destination, generation: draftFor.generation + (changed ? 1 : 0) });
+    const text = readBotTemplateDraft(environmentId, threadId);
+    if (changed || text !== undefined) setSeed(text === undefined ? null : { text, nonce: 0 });
+  }
+  const routeDraft = useActivateGoatBotRouteDraft(destination, seed?.text);
+  // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the destination commits.
+  useEffect(() => {
+    clearBotTemplateDraft(environmentId, threadId);
+  }, [environmentId, threadId]);
+  return { seed, setSeed, draftFor, routeDraft };
+}
 
 export interface GoatBotTypedAnswer {
   readonly text: string;
@@ -73,7 +100,7 @@ export function goatBotDraftDestination(environmentId: string, threadId: string)
 }
 
 /** A confirmed chat selects the one owner; reconnects never pick a new owner. */
-export function useActivateGoatBotRouteDraft(destination: string | null, seed?: string) {
+function useActivateGoatBotRouteDraft(destination: string | null, seed?: string) {
   const store = use(RouteDraftContext);
   // oxlint-disable-next-line goat/react-effect-budget -- Publish the confirmed owner to sibling route consumers after commit.
   useLayoutEffect(() => {
