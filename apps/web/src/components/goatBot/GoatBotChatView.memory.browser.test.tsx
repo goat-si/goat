@@ -23,6 +23,7 @@ import "~/index.css";
 const state = vi.hoisted(() => ({
   narrow: false,
   privateNotes: false,
+  connecting: false,
   threads: [] as ReadonlyArray<unknown>,
   toasts: [] as string[],
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
@@ -162,6 +163,7 @@ const environmentId = EnvironmentId.make("local");
 function setup(narrow = false) {
   state.narrow = narrow;
   state.privateNotes = false;
+  state.connecting = false;
   state.threads = [];
   state.toasts = [];
   state.notes = [note];
@@ -185,7 +187,11 @@ function setup(narrow = false) {
           <GoatBotChatView
             openHome={openHome}
             onHomeHandled={onHomeHandled}
-            availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
+            availability={
+              state.connecting
+                ? { kind: "connecting", environmentId }
+                : { kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }
+            }
             canOperate
             rows={rows}
             onSend={onSend}
@@ -481,6 +487,24 @@ it("a notes capability change clears retained wording and releases navigation", 
   await screen.rerender(view());
   await expect.element(screen.getByRole("button", { name: "Ask to change" })).toBeVisible();
   expect(screen.getByRole("textbox", { name: "New wording" }).query()).toBeNull();
+});
+
+it("a reconnect keeps retained wording for per-bot notes", async () => {
+  const { view } = setup();
+  state.privateNotes = true;
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }).first());
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  state.connecting = true;
+  await screen.rerender(view());
+  state.connecting = false;
+  await screen.rerender(view());
+  expect(navigationBlocked()).toBe(true);
+  await userEvent.click(page.getByRole("tab", { name: "Library" }));
+  await expect
+    .element(screen.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
 });
 
 it("a changed note does not resurrect its old wording when the snapshot returns", async () => {

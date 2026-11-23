@@ -1,5 +1,4 @@
 import { HoldsNavigation } from "~/lib/navigationHolds";
-import { useServerConfigs } from "~/state/entities";
 import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
@@ -32,6 +31,7 @@ import {
 } from "./goatBotRunRow";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
+import { useRetainedNoteWordings } from "./useRetainedNoteWordings";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
@@ -203,18 +203,11 @@ function GoatBotChatViewContent({
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
-  const noteWordings = useState<ReadonlyMap<string, string>>(() => new Map());
-  const notesEnvironmentId = availability.kind === "ready" ? availability.bot.environmentId : null;
-  const configs = useServerConfigs();
-  const scopedNotes =
-    notesEnvironmentId !== null &&
-    configs.get(notesEnvironmentId)?.environment.capabilities?.goatBotPrivateNotes === true;
-  const wordingOwner = JSON.stringify([environmentId, member?.botId ?? null, scopedNotes]);
-  const [previousWordingOwner, setPreviousWordingOwner] = useState(wordingOwner);
-  if (previousWordingOwner !== wordingOwner) {
-    setPreviousWordingOwner(wordingOwner);
-    noteWordings[1](new Map());
-  }
+  const noteWordings = useRetainedNoteWordings(
+    environmentId,
+    member?.botId ?? null,
+    availability.kind === "ready" ? availability.bot.environmentId : null,
+  );
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
