@@ -66,6 +66,7 @@ export interface ActiveAcpTurn {
   consumedPromptMessageId?: string;
   readonly user: ActiveTextStream;
   readonly assistant: ActiveTextStream;
+  backgroundReportMessage?: { messageId: string | null; text: string } | undefined;
   readonly reasoning: ActiveTextStream;
   providerRetry?:
     | {

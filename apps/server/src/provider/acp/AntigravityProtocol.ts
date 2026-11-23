@@ -66,6 +66,45 @@ export function antigravityCommandOutlivesPrompt(toolCall: AcpToolCallState): bo
   return toolCall.kind === "execute" && !(Predicate.isObject(input) && input.IsDaemon === true);
 }
 
+export function antigravityBackgroundToolMessageStatus(
+  toolCall: AcpToolCallState,
+  text: string,
+): "completed" | "failed" | undefined {
+  if (!/Task id/i.test(text) || !antigravityCommandOutlivesPrompt(toolCall)) return undefined;
+  const parts: string[] = [];
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 4 || parts.length >= 32) return;
+    if (typeof value === "string") {
+      parts.push(value.slice(0, TOOL_TEXT_LIMIT));
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value.slice(0, 32)) visit(entry, depth + 1);
+      return;
+    }
+    if (!Predicate.isObject(value)) return;
+    for (const [key, entry] of Object.entries(value).slice(0, 32)) {
+      if (
+        ["text", "content", "output", "combinedOutput", "combined_output", "rawOutput"].includes(
+          key,
+        )
+      )
+        visit(entry, depth + 1);
+    }
+  };
+  visit(toolCall.data.content, 0);
+  visit(toolCall.data.rawOutput, 0);
+  const id = parts
+    .join("\n")
+    .match(/Tool is running as a background task with task id:\s*([\w-]+\/task-\d+)/i)?.[1];
+  if (id === undefined) return undefined;
+  const match = text.match(
+    /^Task id[ \t]+"([\w-]+\/task-\d+)"[ \t]+(?:(finished)[ \t]+with[ \t]+result|failed[ \t]+with[ \t]+error):/i,
+  );
+  if (match?.[1] !== id) return undefined;
+  return match[2] === undefined ? "failed" : "completed";
+}
+
 /** Native questions share the permission method, but their choices are not approvals. */
 export function isAntigravityUserInputRequest(
   request: EffectAcpSchema.RequestPermissionRequest,

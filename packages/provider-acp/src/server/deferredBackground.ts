@@ -220,3 +220,59 @@ export function makePostSettleHoldExpiry(input: {
     }).pipe(Effect.forkIn(input.sessionScope), Effect.asVoid);
   });
 }
+
+// Provider events include streaming deltas; avoid a span for each update.
+export const makeRearmDeferredFinalize = (
+  enabled: () => boolean,
+  hasWork: (context: ActiveAcpTurn) => boolean,
+  schedule: (context: ActiveAcpTurn) => Effect.Effect<void>,
+) =>
+  Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+    if (!enabled() || !context.promptSettled || context.finalized || hasWork(context)) return;
+    yield* schedule(context);
+  });
+
+// Provider text arrives in streaming chunks; avoid a span for each chunk.
+export const settleMessageBackgroundTools = Effect.fnUntraced(function* (
+  context: ActiveAcpTurn,
+  flavor: AcpAdapterV2Flavor,
+  text: string,
+  emitTool: (context: ActiveAcpTurn, tool: AcpToolCallState) => Effect.Effect<void>,
+) {
+  if (!context.promptSettled || flavor.backgroundToolMessageStatus === undefined) return;
+  const reply = `${text.slice(0, 8_000)}\n${text.slice(-8_000)}`;
+  for (const tool of context.tools.values()) {
+    if (toolStatus(tool.status) !== "running") continue;
+    const status = flavor.backgroundToolMessageStatus(tool, reply);
+    if (status !== undefined) yield* emitTool(context, { ...tool, status });
+  }
+});
+
+export function appendBackgroundReportChunk(
+  context: ActiveAcpTurn,
+  flavor: AcpAdapterV2Flavor,
+  text: string,
+  messageId: string | null | undefined,
+): string {
+  if (!context.promptSettled || flavor.backgroundToolMessageStatus === undefined) return "";
+  const id = messageId || null;
+  const previous = context.backgroundReportMessage;
+  const prefix =
+    previous !== undefined &&
+    (id === null || previous.messageId === null || previous.messageId === id)
+      ? previous.text
+      : "";
+  const next = (prefix + text.slice(0, 8_000)).slice(0, 8_000);
+  context.backgroundReportMessage = { messageId: id ?? previous?.messageId ?? null, text: next };
+  return next;
+}
+
+export const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
+  [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {
+    const tool = context.tools.get(toolCallId);
+    const status = tool === undefined ? undefined : toolStatus(tool.status);
+    return status === "pending" || status === "running";
+  }) ||
+  [...context.subagents.values()].some((subagent) =>
+    acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
+  );

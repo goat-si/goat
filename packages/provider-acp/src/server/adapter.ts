@@ -10,6 +10,10 @@ import {
   acpTiming,
   makeDeferredFinalizeScheduler,
   makePostSettleHoldExpiry,
+  makeRearmDeferredFinalize,
+  settleMessageBackgroundTools,
+  hasSurvivingBackgroundWork,
+  appendBackgroundReportChunk,
 } from "./deferredBackground.ts";
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError } from "./adapterErrors.ts";
@@ -2348,24 +2352,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           ignoreTool?: (tool: AcpToolCallState) => boolean,
         ) => hasAcpDeferredBackgroundWork(context, flavor, agentRequests.size, ignoreTool);
 
-        const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
-          [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {
-            const tool = context.tools.get(toolCallId);
-            const status = tool === undefined ? undefined : toolStatus(tool.status);
-            return status === "pending" || status === "running";
-          }) ||
-          [...context.subagents.values()].some((subagent) =>
-            acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
-          );
-
-        const rearmDeferredFinalize =
-          /* Provider events include streaming deltas; avoid a span for each update. */
-          Effect.fnUntraced(function* (context: ActiveAcpTurn) {
-            if (!defersFinalizeForBackgroundWork) return;
-            if (!context.promptSettled || context.finalized) return;
-            if (hasDeferredBackgroundWork(context)) return;
-            yield* scheduleDeferredFinalize(context);
-          });
+        const rearmDeferredFinalize = makeRearmDeferredFinalize(
+          () => defersFinalizeForBackgroundWork,
+          hasDeferredBackgroundWork,
+          (context) => scheduleDeferredFinalize(context),
+        );
 
         // let breaks circular inference from monitor hydration re-entry.
         let emitTool: (
@@ -3692,6 +3683,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
             } else if (context.nativeThreadId === notification.sessionId) {
               if (update.sessionUpdate === "usage_update") {
+                context.backgroundReportMessage = undefined;
                 context.replyOpen = false;
                 if (context.promptSettled)
                   yield* idleReportedSubagents(context, flavor, emitSubagent);
@@ -4079,6 +4071,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   context.earlyInjectedReportObserved = true;
                 }
                 yield* appendText(context, "assistant", text, update.messageId);
+                yield* settleMessageBackgroundTools(
+                  context,
+                  flavor,
+                  appendBackgroundReportChunk(context, flavor, text, update.messageId),
+                  emitTool,
+                );
               }
               break;
             }
@@ -4109,6 +4107,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 text,
                 update.messageId,
               );
+              if (update.sessionUpdate === "agent_message")
+                yield* settleMessageBackgroundTools(context, flavor, text, emitTool);
               break;
             }
             case "tool_call_content_chunk": {

@@ -289,6 +289,10 @@ export interface AcpAdapterV2Flavor {
     session?: { readonly environment: NodeJS.ProcessEnv | undefined; readonly launch: unknown },
   ) => string | undefined;
   readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
+  readonly backgroundToolMessageStatus?: (
+    toolCall: AcpToolCallState,
+    text: string,
+  ) => "completed" | "failed" | undefined;
   /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
   readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
   readonly extractBackgroundToolMutation?: (text: string) => ReadonlyArray<{
