@@ -416,7 +416,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 image jobs", (it) => {
             event("session.execution.succeeded", { sessionID: SESSION }),
             { type: "runtime_exit", status: "success" },
           ],
-          { borrowers },
+          // A live owned server is retried until it answers; a server GOAT does not own gets
+          // bounded reconnect attempts, so these can run out.
+          { borrowers, external: true },
         );
         const events = yield* runtime.events.pipe(Stream.runCollect, Effect.forkScoped);
         yield* runtime.startTurn(withLineage(thread));
