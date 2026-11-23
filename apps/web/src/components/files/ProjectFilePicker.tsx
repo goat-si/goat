@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { fileBasename, isWindowsAbsolutePath } from "@goat/shared/path";
+import { useGT } from "gt-react";
 import { useState, type ReactNode } from "react";
 
 import { useActiveProjectTarget, type ActiveProjectTarget } from "~/hooks/useActiveProjectTarget";
@@ -51,26 +52,20 @@ function HighlightedFuzzyText(props: {
   return <span className="text-muted-foreground">{parts}</span>;
 }
 
-function getEmptyStateMessage(query: string, error: string | null, isPending: boolean): string {
-  if (error) return error;
-  const isSearching = query.trim().length > 0;
-  if (isPending) return isSearching ? "Searching workspace entries…" : "Indexing workspace files…";
-  return isSearching ? "No matching files or folders." : "No files found.";
-}
-
 function EmptyProjectFilePicker() {
+  const gt = useGT();
   return (
     <CommandPaletteContent
-      aria-label="File picker"
-      escapeLabel="Back"
-      footerActionLabel="Open file"
-      inputProps={{ disabled: true, placeholder: "Search files…" }}
+      aria-label={gt("File picker")}
+      escapeLabel={gt("Back")}
+      footerActionLabel={gt("Open file")}
+      inputProps={{ disabled: true, placeholder: gt("Search files…") }}
       mode="none"
       testId="project-file-picker"
       value=""
     >
       <div className="py-10 text-center text-sm text-muted-foreground">
-        Open a project to search its files.
+        {gt("Open a project to search its files.")}
       </div>
     </CommandPaletteContent>
   );
@@ -92,6 +87,7 @@ function FilePickerResults(
     readonly line?: number;
   },
 ) {
+  const gt = useGT();
   const { target } = props;
   const { resolvedTheme } = useTheme();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -100,15 +96,18 @@ function FilePickerResults(
     kind: "action",
     value: `${match.kind}:${match.path}`,
     searchTerms: [match.name, match.path],
-    title: (
-      <>
-        {props.direct ? `Open ${match.kind === "directory" ? "folder" : "file"}: ` : null}
-        <HighlightedFuzzyText
-          active={hasMatchedQuery}
-          value={match.name}
-          indices={match.nameMatchIndices}
-        />
-      </>
+    title: props.direct ? (
+      match.kind === "directory" ? (
+        gt("Open folder: {name}", { name: match.name })
+      ) : (
+        gt("Open file: {name}", { name: match.name })
+      )
+    ) : (
+      <HighlightedFuzzyText
+        active={hasMatchedQuery}
+        value={match.name}
+        indices={match.nameMatchIndices}
+      />
     ),
     description: (
       <HighlightedFuzzyText
@@ -145,6 +144,7 @@ function FilePickerResults(
 }
 
 function SearchFilePickerResults(props: PickerResultsProps) {
+  const gt = useGT();
   const result = useProjectFilePickerQuery(
     props.target.environmentId,
     props.target.cwd,
@@ -153,17 +153,28 @@ function SearchFilePickerResults(props: PickerResultsProps) {
     { includeDirectories: true },
   );
   const matches = getProjectFilePickerMatches(result.entries, result.matchedQuery);
+  const isSearching = props.query.trim().length > 0;
+  const emptyStateMessage =
+    result.error ??
+    (result.isPending
+      ? isSearching
+        ? gt("Searching workspace entries…")
+        : gt("Indexing workspace files…")
+      : isSearching
+        ? gt("No matching files or folders.")
+        : gt("No files found."));
   return (
     <FilePickerResults
       {...props}
       matches={matches}
       matchedQuery={result.matchedQuery}
-      emptyStateMessage={getEmptyStateMessage(props.query, result.error, result.isPending)}
+      emptyStateMessage={emptyStateMessage}
     />
   );
 }
 
 function DirectFilePickerResults(props: PickerResultsProps & { readonly platform: string }) {
+  const gt = useGT();
   const { environmentId } = props.target;
   const fileAccess = useFilesystemReadAccess(environmentId);
   const homeRelative = props.query.trim().startsWith("~");
@@ -208,7 +219,7 @@ function DirectFilePickerResults(props: PickerResultsProps & { readonly platform
   const error =
     fileAccess.error ??
     (!fileAccess.canReadFiles && !fileAccess.isPending
-      ? "This connection cannot read host files."
+      ? gt("This connection cannot read host files.")
       : null) ??
     home.error ??
     metadata.error ??
@@ -242,18 +253,19 @@ function DirectFilePickerResults(props: PickerResultsProps & { readonly platform
       emptyStateMessage={
         error ??
         (isPending
-          ? "Checking path…"
+          ? gt("Checking path…")
           : path?.directoryOnly && kind === "file"
-            ? "The path is a file, not a folder."
+            ? gt("The path is a file, not a folder.")
             : kind === "other"
-              ? "This path is not a regular file or folder."
-              : "Path not found or permission denied.")
+              ? gt("This path is not a regular file or folder.")
+              : gt("Path not found or permission denied."))
       }
     />
   );
 }
 
 function OpenProjectFilePicker(props: ProjectFilePickerProps & { target: ActiveProjectTarget }) {
+  const gt = useGT();
   const [query, setQuery] = useState("");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const config = useAtomValue(serverEnvironment.configValueAtom(props.target.environmentId));
@@ -264,11 +276,11 @@ function OpenProjectFilePicker(props: ProjectFilePickerProps & { target: ActiveP
 
   return (
     <CommandPaletteContent
-      aria-label="File picker"
+      aria-label={gt("File picker")}
       autoHighlight="always"
-      escapeLabel="Back"
-      footerActionLabel="Open"
-      inputProps={{ placeholder: "Search files and folders or enter a path…" }}
+      escapeLabel={gt("Back")}
+      footerActionLabel={gt("Open")}
+      inputProps={{ placeholder: gt("Search files and folders or enter a path…") }}
       mode="none"
       onItemHighlighted={(value) => {
         setHighlightedItemValue(typeof value === "string" ? value : null);
