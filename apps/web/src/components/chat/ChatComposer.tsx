@@ -2487,6 +2487,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingIsResponding ||
       (pendingUserInputs.length > 0 && !activePendingProgress?.activeQuestion) ||
       projectSelectionRequired ||
+      voice.isVoiceActive ||
       (options?.citationCommentAnchor && !composerEditorRef.current)
     ) {
       return false;
@@ -2518,7 +2519,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const insertComposerTextStable = useStableCallback(insertComposerText);
-
   const insertAttachmentReferences = (
     references: ReadonlyArray<ComposerContextReference>,
     selection?: { start: number; end: number },
@@ -2549,7 +2549,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
     });
   };
-
   const { addComposerAttachments, removeComposerImage, foldPastedText } =
     useComposerAttachmentIntake({
       activeThreadId,
@@ -2939,6 +2938,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pendingDraftWork.has(attachmentTargetKey),
       insertTextAtEnd: insertComposerTextAtEndStable,
       pasteTextAtEnd: (text: string, options) => {
+        if (voice.isVoiceActive) return false;
         const shortcutArmed = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
         const bypassAutoAttachment = options?.bypassAutoAttachment === true || shortcutArmed;
         const promptLength = promptRef.current.length;
@@ -3177,6 +3177,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       pendingUserInputs.length,
       projectSelectionRequired,
       setComposerDraftReplyTo,
+      voice.isVoiceActive,
       applyPromptReplacementStable,
       isComposerModelPickerOpen,
       openModelPickerStable,
