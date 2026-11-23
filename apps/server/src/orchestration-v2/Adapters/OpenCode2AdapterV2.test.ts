@@ -115,6 +115,37 @@ const nativeGoal = (status: "active" | "paused" | "complete") => ({
 });
 
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
+  it.effect("records memory only when an OpenCode inbox prompt is delivered (#3836)", () =>
+    Effect.gen(function* () {
+      const gate = makeProviderReplayGate(["deliver-memory"]);
+      const attempt = turnInput(providerThread).attemptId;
+      const inboxID = `msg_t3_turn_${SESSION}:${attempt}`;
+      const { runtime, thread } = yield* resumed(
+        [
+          out("session.prompt", { sessionID: SESSION, text: "hi" }),
+          promptAccepted,
+          event("session.inbox.delivered", { sessionID: SESSION, inboxID }, "deliver-memory"),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ],
+        { replayGate: gate, memoryInstructions: () => new Response(null, { status: 204 }) },
+      );
+      const delivered: Array<unknown> = [];
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      yield* runtime.startTurn({
+        ...turnInput(thread),
+        memoryContext: memoryFixture(),
+        onMemoryDelivered: (snapshot) =>
+          Effect.sync(() => {
+            delivered.push(snapshot);
+          }),
+      });
+      assert.isTrue(yield* Effect.promise(() => gate.waitForReached("deliver-memory")));
+      assert.isEmpty(delivered);
+      gate.release("deliver-memory");
+      yield* Fiber.join(terminal);
+      assert.lengthOf(delivered, 1);
+    }).pipe(Effect.scoped),
+  );
   it.effect.each([false, true])(
     "WP4 OpenCode v2 framed instruction refresh and clear external=%s",
     (external) =>

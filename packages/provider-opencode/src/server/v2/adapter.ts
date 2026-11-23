@@ -2236,6 +2236,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const external = state.externalPrompts.get(event.data.inboxID);
         state.externalPrompts.delete(event.data.inboxID);
         const turn = state.active;
+        if (turn?.pendingMemoryReceipt?.inboxId === event.data.inboxID) {
+          const pending = turn.pendingMemoryReceipt;
+          turn.pendingMemoryReceipt = undefined;
+          if (event.type === "session.inbox.delivered") yield* pending.receipt;
+        }
         if (turn !== undefined && turn.steers.delete(event.data.inboxID)) {
           turn.settledInbox.add(event.data.inboxID);
           if (event.type === "session.inbox.cancelled") yield* endIfSettled(state, turn);
@@ -3400,6 +3405,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
       if (!(yield* sending())) return;
+      turn.pendingMemoryReceipt = { inboxId: id, receipt };
       return yield* client.session
         .prompt({
           sessionID,
@@ -3411,7 +3417,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
         })
         .pipe(
-          Effect.andThen(receipt),
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              if (turn.pendingMemoryReceipt?.inboxId === id) turn.pendingMemoryReceipt = undefined;
+            }),
+          ),
           Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void),
         );
     });
