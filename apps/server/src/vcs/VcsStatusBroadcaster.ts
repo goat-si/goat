@@ -1,4 +1,7 @@
 import { makeStatusCacheWithRemoteLock } from "./vcsStatusCache.ts";
+import { remoteRefreshFailureDelay } from "./remoteRefreshFailureDelay.ts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Digest the ref snapshot already in memory.
+import * as NodeCrypto from "node:crypto";
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
 import { VcsRefSnapshot, refreshMovedRefs } from "./VcsRefSnapshot.ts";
 export { layer as layerRefSnapshot } from "./VcsRefSnapshot.ts";
@@ -35,7 +38,7 @@ import type {
   VcsBranchStatus,
   VcsStatusLocalResult,
   VcsStatusRemoteResult,
-  VcsStatusResult,
+  VcsRefreshStatusResult,
   VcsStatusStreamEvent,
 } from "@goat/contracts";
 import { DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL, GitManagerError } from "@goat/contracts";
@@ -46,8 +49,6 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 
-const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
-const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
 const MAX_STATUS_REFRESH_WORKERS = 16;
 interface CachedValue<T> {
   readonly fingerprint: string;
@@ -76,20 +77,6 @@ interface ActiveRemotePoller {
   readonly fiber: Fiber.Fiber<void, never>;
   readonly subscriberCount: number;
   readonly demandCwds: Ref.Ref<ReadonlyMap<string, number>>;
-}
-
-function remoteRefreshFailureDelay(
-  consecutiveFailures: number,
-  configuredInterval: Duration.Duration,
-) {
-  const exponent = Math.max(0, consecutiveFailures - 1);
-  const backoffMs =
-    Duration.toMillis(VCS_STATUS_REFRESH_FAILURE_BASE_DELAY) * Math.pow(2, exponent);
-  const cappedBackoff = Duration.min(
-    Duration.millis(backoffMs),
-    VCS_STATUS_REFRESH_FAILURE_MAX_DELAY,
-  );
-  return Duration.max(configuredInterval, cappedBackoff);
 }
 
 function fingerprintStatusPart(status: unknown): string {
@@ -479,12 +466,13 @@ export const make = Effect.gen(function* () {
           const pulled = refreshUpstream
             ? yield* maybeAutoPull(cwd, remoteRead, [policyCwd])
             : null;
-          if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
+          if (pulled !== null)
+            return { status: mergeGitStatusParts(pulled.local, pulled.remote), refs: null };
           yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
-          if (refsBeforeLocalRead === null || (yield* readRefSnapshot(cwd)) !== refsBeforeLocalRead)
-            yield* refreshLocalStatusCore(cwd);
+          const refs = refsBeforeLocalRead === null ? null : yield* readRefSnapshot(cwd);
+          if (refs === null || refs !== refsBeforeLocalRead) yield* refreshLocalStatusCore(cwd);
           const parts = yield* getStatusParts(cwd);
-          return mergeGitStatusParts(parts.local, parts.remote);
+          return { status: mergeGitStatusParts(parts.local, parts.remote), refs };
         }),
       );
     },
@@ -502,10 +490,16 @@ export const make = Effect.gen(function* () {
       const parts = yield* getStatusParts(cwd);
       return mergeGitStatusParts(parts.local, parts.remote);
     }
-    return yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
+    const { status, refs } = yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
+    return refs === null
+      ? status
+      : {
+          ...status,
+          refsDigest: NodeCrypto.createHash("sha256").update(refs).digest("hex").slice(0, 32),
+        };
   }, Effect.scoped);
 
-  type RefreshReply = Deferred.Deferred<VcsStatusResult, GitManagerServiceError>;
+  type RefreshReply = Deferred.Deferred<VcsRefreshStatusResult, GitManagerServiceError>;
   interface QueuedRefresh {
     current: RefreshReply;
     followUp: RefreshReply | null;
@@ -539,7 +533,7 @@ export const make = Effect.gen(function* () {
     Effect.uninterruptible(
       Effect.gen(function* () {
         if (broadcasterScope.state._tag === "Closed") return yield* Effect.interrupt;
-        const requested = yield* Deferred.make<VcsStatusResult, GitManagerServiceError>();
+        const requested = yield* Deferred.make<VcsRefreshStatusResult, GitManagerServiceError>();
         const queued = queuedRefreshes.get(rawCwd);
         if (queued) {
           queued.followUp ??= requested;

@@ -74,6 +74,7 @@ export function layerTestFor(state: {
   failLocalStatus?: boolean;
   onLocalStatusFailure?: Effect.Effect<void>;
   beforeInvalidate?: Effect.Effect<void>;
+  refSnapshot?: string | null;
   fileSystem?: FileSystem.FileSystem;
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
