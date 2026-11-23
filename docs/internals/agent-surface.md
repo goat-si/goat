@@ -427,8 +427,11 @@ client-only, read-only client, not served, and for a GOAT thread the goatclaw ca
 effective profile lacks, judged as the call gate judges it. A profile that does not resolve
 reports its reason on every write that needs a capability. What depends on the call's
 arguments or the moment, such as a host allowlist and lanes left, is still judged
-only when the call is made. At detail `full` it adds the worked `examples` a registry entry
-declares; related paths are not in it yet. `query` returns up to 20 paths whose path,
+only when the call is made. A path asked for by `path` or `paths` comes with its guide, the
+worked `examples` its registry entry declares and its arguments a level deep; the JSON input
+and output schemas come only at detail `full`, because Antigravity keeps about 10 KB of a tool
+result and cut them out of the middle of larger answers. Related paths are not in it yet.
+`query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
@@ -442,8 +445,12 @@ turn context ([harness test](../../apps/server/src/mcp/harnessListing.test.ts)).
 tools only when its tool search exists, and keeps core tools active
 ([Pi extension](../../packages/provider-pi/src/server/mcpExtensionSource.ts)).
 Codex also compacts an MCP input schema above 5,000 bytes, which the two launch tools exceed in
-the full listing. The core listing avoids that: `goat_describe` returns their schemas whole as
-result data. `context-budget.ts` names the tools over the limit.
+the full listing. The core listing avoids that: `goat_describe` at detail `full` returns their
+schemas whole as result data. `context-budget.ts` names the tools over the limit.
+Antigravity turns each listed schema into a Gemini declaration that keeps no type for an `anyOf`,
+so a served schema advertises an optional key by its type alone, keeps `null` only where the
+input accepts it, and shows an input decoded from untyped fields by the shape it decodes to
+([advertisedShapes.ts](../../apps/server/src/mcp/advertisedShapes.ts)).
 
 **Now.** The D8 turns left after [#1065](https://github.com/goat-si/goat/pull/1065) come from
 asking `goat_describe` before a first call, so the core listing carries the arguments of about 25

@@ -41,6 +41,8 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
       id: Schema.String,
       /** Omitted when it only restates the id. A host on an older GOAT sends null. */
       label: Schema.optional(Schema.NullOr(Schema.String)),
+      /** A model the user added to this instance; it runs there even when its id names another vendor. */
+      custom: Schema.optional(Schema.Literal(true)),
       // A host on an older GOAT advertises full option descriptors. Remote delegation
       // still reads its capabilities, so both shapes decode.
       options: Schema.optional(

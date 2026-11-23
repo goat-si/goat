@@ -1928,6 +1928,7 @@ const make = Effect.gen(function* () {
                   ...(model.name.toLowerCase() === model.slug.toLowerCase()
                     ? {}
                     : { label: model.name }),
+                  ...(model.isCustom ? { custom: true as const } : {}),
                   ...(options.length === 0 ? {} : { options: options.map(capabilityModelOption) }),
                 };
               }),
