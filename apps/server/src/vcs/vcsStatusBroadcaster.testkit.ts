@@ -61,6 +61,7 @@ export function layerTestFor(state: {
   localInvalidationCalls: number;
   remoteInvalidationCalls: number;
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
+  remoteStatusReusedDetails?: Array<boolean>;
   localStatusBranchChanges?: Array<boolean>;
   remoteStatusError?: GitManagerError;
   backgroundWorkEnabled?: boolean;
@@ -131,15 +132,29 @@ export function layerTestFor(state: {
             () => state.branchRead?.() ?? Effect.succeed(state.currentLocalStatus.refName),
           ),
         upstreamDivergence: () =>
-          Effect.sync(() =>
-            state.currentRemoteStatus?.hasUpstream && state.currentLocalStatus.refName !== null
-              ? {
-                  refName: state.currentLocalStatus.refName,
-                  aheadCount: (state.currentDivergence ?? state.currentRemoteStatus).aheadCount,
-                  behindCount: (state.currentDivergence ?? state.currentRemoteStatus).behindCount,
-                }
-              : null,
-          ),
+          Effect.sync(() => {
+            const branch = state.currentLocalStatus.refName;
+            if (!state.currentRemoteStatus?.hasUpstream || branch === null) return null;
+            const { aheadCount, behindCount } =
+              state.currentDivergence ?? state.currentRemoteStatus;
+            return {
+              refName: branch,
+              aheadCount,
+              behindCount,
+              details: {
+                isRepo: true,
+                hasPrimaryRemote: true,
+                defaultBranch: "main",
+                isDefaultBranch: false,
+                branch,
+                upstreamRef: `origin/${branch}`,
+                hasUpstream: true,
+                aheadCount,
+                behindCount,
+                aheadOfDefaultCount: aheadCount,
+              },
+            };
+          }),
         remoteStatus: (input, options) =>
           Effect.suspend(() => {
             return (state.beforeRemoteStatus ?? Effect.void).pipe(
@@ -147,6 +162,7 @@ export function layerTestFor(state: {
                 Effect.sync(() => {
                   state.remoteStatusCalls += 1;
                   state.remoteStatusRefreshUpstreamValues?.push(options?.refreshUpstream);
+                  state.remoteStatusReusedDetails?.push(options?.statusDetails !== undefined);
                   return state.currentRemoteStatus;
                 }),
               ),

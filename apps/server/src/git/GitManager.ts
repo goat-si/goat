@@ -141,14 +141,8 @@ export interface GitRunStackedActionOptions {
   readonly progressReporter?: GitActionProgressReporter;
 }
 
-export interface GitLocalStatusOptions {
-  /** Defaults to true. The branch-wide totals cost about half of a local status read. */
-  readonly includeBranchChanges?: boolean;
-}
-
-export interface GitRemoteStatusOptions extends GitVcsDriver.GitRemoteStatusOptions {
-  readonly refreshMissingPullRequest?: boolean;
-}
+import type { GitLocalStatusOptions, GitRemoteStatusOptions } from "./gitRemoteStatusOptions.ts";
+export type { GitLocalStatusOptions, GitRemoteStatusOptions } from "./gitRemoteStatusOptions.ts";
 
 import type { GitBranchPullRequest } from "./gitBranchPullRequest.ts";
 export type { GitBranchPullRequest } from "./gitBranchPullRequest.ts";
@@ -1051,9 +1045,11 @@ export const make = Effect.gen(function* () {
     cwd: string,
     options?: GitRemoteStatusOptions,
   ) {
-    const details = yield* gitCore
-      .statusDetailsRemote(cwd, options)
-      .pipe(Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(null)));
+    const details =
+      options?.statusDetails ??
+      (yield* gitCore
+        .statusDetailsRemote(cwd, options)
+        .pipe(Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(null))));
     if (details === null || !details.isRepo) {
       return null;
     }
