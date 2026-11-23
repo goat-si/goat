@@ -1,6 +1,6 @@
 import { GTProvider } from "gt-react";
 import chinese from "~/i18n/translations/zh.json";
-import { fakeTimers } from "../../../test/render";
+import { act as screenAct, fakeTimers, render as renderScreen } from "../../../test/render";
 import {
   EnvironmentId,
   ProjectReadFileError,
@@ -118,81 +118,81 @@ let timers: Disposable;
 let container: HTMLDivElement;
 const setOpen = vi.fn();
 
-beforeEach(() => {
-  timers = fakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-  Object.defineProperty(Element.prototype, "getAnimations", {
-    configurable: true,
-    value: () => [],
-  });
-  Element.prototype.scrollIntoView = vi.fn();
-  state.platform = "linux";
-  state.cwd = "/work/repo";
-  state.home = "/srv/remote-user";
-  state.canReadFiles = true;
-  state.pending = false;
-  state.error = null;
-  state.readError = null;
-  state.readPending = false;
-  state.entries.clear();
-  vi.clearAllMocks();
-  useRightPanelStore.setState({ byThreadKey: {} });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(() => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-  timers[Symbol.dispose]();
-});
-
-async function render(locale = "en") {
-  await act(() =>
-    root.render(
-      <GTProvider locale={locale} translations={{ zh: chinese }}>
-        <ProjectFilePicker setOpen={setOpen} />
-      </GTProvider>,
-    ),
-  );
-  await act(() => vi.advanceTimersByTimeAsync(0));
-}
-
-async function type(query: string) {
-  const input = container.querySelector("input")!;
-  await act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, query);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(() => vi.advanceTimersByTimeAsync(0));
-  return input;
-}
-
-async function enter() {
-  await act(() =>
-    container
-      .querySelector("input")!
-      .dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-      ),
-  );
-}
-
-function selectedSurface() {
-  return selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef);
-}
-
 describe("file picker keyboard flow", () => {
+  beforeEach(() => {
+    timers = fakeTimers();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    Object.defineProperty(Element.prototype, "getAnimations", {
+      configurable: true,
+      value: () => [],
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    state.platform = "linux";
+    state.cwd = "/work/repo";
+    state.home = "/srv/remote-user";
+    state.canReadFiles = true;
+    state.pending = false;
+    state.error = null;
+    state.readError = null;
+    state.readPending = false;
+    state.entries.clear();
+    vi.clearAllMocks();
+    useRightPanelStore.setState({ byThreadKey: {} });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+    timers[Symbol.dispose]();
+  });
+
+  async function render(locale = "en") {
+    await act(() =>
+      root.render(
+        <GTProvider locale={locale} translations={{ zh: chinese }}>
+          <ProjectFilePicker setOpen={setOpen} />
+        </GTProvider>,
+      ),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  async function type(query: string) {
+    const input = container.querySelector("input")!;
+    await act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, query);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    return input;
+  }
+
+  async function enter() {
+    await act(() =>
+      container
+        .querySelector("input")!
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+        ),
+    );
+  }
+
+  function selectedSurface() {
+    return selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef);
+  }
+
   it("keeps Enter auto-selection for recents and directory search results", async () => {
     await render();
     await enter();
@@ -200,16 +200,6 @@ describe("file picker keyboard flow", () => {
     await type("src");
     await enter();
     expect(selectedSurface()).toMatchObject({ kind: "file", relativePath: "src" });
-  });
-
-  it("localizes the search field and direct path actions without changing file names", async () => {
-    state.entries.set("/work/repo/src/app.ts", { kind: "file" });
-    await render("zh");
-    expect(container.querySelector("input")?.placeholder).toBe("搜索文件和文件夹，或输入路径…");
-    await type("/work/repo/src/app.ts");
-    expect(container.textContent).toContain("打开文件：app.ts");
-    await enter();
-    expect(selectedSurface()).toMatchObject({ kind: "file" });
   });
 
   it("opens an absolute path at its line without fuzzy searching it", async () => {
@@ -336,4 +326,41 @@ describe("file picker keyboard flow", () => {
     expect(selectedSurface()).toBeNull();
     expect(setOpen).not.toHaveBeenCalled();
   });
+});
+
+it("localizes the search field and direct path actions without changing file names", async () => {
+  state.entries.clear();
+  state.entries.set("/work/repo/src/app.ts", { kind: "file" });
+  state.canReadFiles = true;
+  state.pending = false;
+  state.error = null;
+  state.readError = null;
+  state.readPending = false;
+  state.cwd = "/work/repo";
+  useRightPanelStore.setState({ byThreadKey: {} });
+  await using screen = await renderScreen(
+    <GTProvider locale="zh" translations={{ zh: chinese }}>
+      <ProjectFilePicker setOpen={vi.fn()} />
+    </GTProvider>,
+  );
+  using _timers = fakeTimers();
+  const input = screen.container.querySelector("input")!;
+  expect(input.placeholder).toBe("搜索文件和文件夹，或输入路径…");
+  await screenAct(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "/work/repo/src/app.ts",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await screenAct(() => vi.advanceTimersByTimeAsync(0));
+  expect(screen.container.textContent).toContain("打开文件：app.ts");
+  await screenAct(() =>
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    ),
+  );
+  expect(
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef),
+  ).toMatchObject({ kind: "file" });
 });
