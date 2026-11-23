@@ -8,16 +8,18 @@ import {
   type ComposerPromptEditorProps,
 } from "./ComposerPromptEditor";
 
-function Composer({
+export function Composer({
   value,
   richTextEnabled,
   skills,
+  disabled = false,
   onChange,
   onCommandKeyDown = () => false,
 }: {
   value: string;
   richTextEnabled: boolean;
   skills: ReadonlyArray<ServerProviderSkill>;
+  disabled?: boolean;
   onChange?: ComposerPromptEditorProps["onChange"] | undefined;
   onCommandKeyDown?: ComposerPromptEditorProps["onCommandKeyDown"] | undefined;
 }) {
@@ -30,7 +32,7 @@ function Composer({
       richTextEnabled={richTextEnabled}
       contextRecords={new Map()}
       skills={skills}
-      disabled={false}
+      disabled={disabled}
       placeholder=""
       onChange={(...args) => {
         setPrompt({ value: args[0], cursor: args[1] });
