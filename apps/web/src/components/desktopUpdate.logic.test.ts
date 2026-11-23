@@ -10,12 +10,64 @@ import {
   type DesktopUpdateTranslate,
   getDesktopUpdateCheckError,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateInstallError,
+  installDesktopUpdate,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
   resolveDesktopUpdateButtonAction,
 } from "./desktopUpdate.logic";
+
+it("shows a refused install as failed when the updater returns to downloaded", () => {
+  const state: DesktopUpdateState = {
+    ...baseState,
+    status: "downloaded",
+    availableVersion: "1.1.0",
+    downloadedVersion: "1.1.0",
+    message: "Install refused",
+    errorContext: "install",
+    canRetry: true,
+  };
+  expect(getDesktopUpdateButtonTooltip(state)).toBe("Install failed for 1.1.0. Click to retry.");
+});
+
+it("reports an install refused after the desktop accepts it", async () => {
+  const downloaded: DesktopUpdateState = {
+    ...baseState,
+    status: "downloaded",
+    downloadedVersion: "1.1.0",
+  };
+  const failed: DesktopUpdateState = {
+    ...downloaded,
+    message: "OSStatus error -60006.",
+    errorContext: "install",
+  };
+  const listeners = new Set<(state: DesktopUpdateState) => void>();
+  const emit = (state: DesktopUpdateState) => listeners.forEach((listener) => listener(state));
+  const install = installDesktopUpdate({
+    onUpdateState: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    installUpdate: async () => {
+      emit(failed);
+      return { accepted: true, completed: false, state: downloaded };
+    },
+  });
+  let settled = false;
+  void install.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  emit(failed);
+  expect(getDesktopUpdateInstallError(await install)).toBe("OSStatus error -60006.");
+  expect(listeners.size).toBe(0);
+});
 
 const baseState: DesktopUpdateState = {
   installPolicy: "restart-when-idle",

@@ -104,6 +104,7 @@ describe("SidebarUpdatePill release notes", () => {
 it("reports a refused install refresh timeout as an error", async () => {
   const message = "Desktop update check on channel nightly did not finish within 2 minutes.";
   const bridge = {
+    onUpdateState: () => () => {},
     installUpdate: async () => ({
       accepted: false,
       completed: false,
@@ -116,8 +117,10 @@ it("reports a refused install refresh timeout as an error", async () => {
         message,
       },
     }),
-  } satisfies Pick<DesktopBridge, "installUpdate">;
+  } satisfies Pick<DesktopBridge, "installUpdate" | "onUpdateState">;
   const reportError = vi.fn();
-  expect(await installLocalUpdate(bridge as DesktopBridge, gtFallback, reportError)).toBe(false);
+  expect(
+    await installLocalUpdate(bridge as unknown as DesktopBridge, gtFallback, reportError),
+  ).toBe(false);
   expect(reportError).toHaveBeenCalledExactlyOnceWith("Could not install update", message);
 });

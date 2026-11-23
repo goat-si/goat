@@ -17,6 +17,7 @@ import {
   type DesktopUpdateTranslate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateInstallError,
+  installDesktopUpdate,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
@@ -198,7 +199,7 @@ export async function installLocalUpdate(
   reportError: ReportLocalUpdateError = toastUpdateError,
 ): Promise<boolean> {
   try {
-    const result = await bridge.installUpdate();
+    const result = await installDesktopUpdate(bridge);
     const actionError = getDesktopUpdateInstallError(result);
     if (actionError) {
       reportError(gt("Could not install update"), actionError);
