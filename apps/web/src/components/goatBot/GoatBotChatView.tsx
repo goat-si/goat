@@ -201,6 +201,7 @@ function GoatBotChatViewContent({
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
+  const noteWordings = useState<ReadonlyMap<string, string>>(() => new Map());
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -717,6 +718,7 @@ function GoatBotChatViewContent({
               environmentId={bot.environmentId}
               threadId={bot.threadId}
               onDraft={onDraft}
+              noteWordings={noteWordings}
               notesRefreshKey={notesRefreshKey}
               onClose={() => {
                 setHomeReturn(null);
@@ -757,6 +759,7 @@ function GoatBotChatViewContent({
                 environmentId={bot.environmentId}
                 threadId={bot.threadId}
                 onDraft={onDraft}
+                noteWordings={noteWordings}
                 notesRefreshKey={notesRefreshKey}
                 onShowChat={() => {
                   setHomeReturn(null);

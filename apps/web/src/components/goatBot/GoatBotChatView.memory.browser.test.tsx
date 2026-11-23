@@ -428,6 +428,32 @@ it("Ask to change fills the composer with the quoted change", async () => {
   expect(onSend).not.toHaveBeenCalled();
 });
 
+it("#3824 keeps refused note wording through closing and reopening the narrow sheet", async () => {
+  const { view } = setup(true);
+  await using screen = await render(view());
+  await userEvent.type(composer(screen), "My own question");
+  await openMemory(screen);
+  await userEvent.click(page.getByRole("button", { name: "Ask to change" }));
+  await userEvent.clear(page.getByRole("textbox", { name: "New wording" }));
+  await userEvent.type(page.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  await userEvent.click(page.getByRole("button", { name: "Fill message" }));
+  await expect
+    .element(page.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
+  await userEvent.click(page.getByRole("button", { name: "Back to chat", exact: true }));
+  await expect.element(homeSheet()).not.toBeInTheDocument();
+  await userEvent.clear(composer(screen));
+  await openMemory(screen);
+  await expect
+    .element(page.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
+  await userEvent.click(page.getByRole("button", { name: "Fill message" }));
+  await expect
+    .element(composer(screen))
+    .toHaveValue(goatBotChangeNoteMessage(note.text, "Reply in English"));
+  await expect.element(homeSheet()).not.toBeInTheDocument();
+});
+
 it("a draft action never replaces the person's typed message or rides on their staged files", async () => {
   const { view, onSend } = setup();
   await using screen = await render(view());

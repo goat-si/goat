@@ -13,7 +13,7 @@ import {
   noteDateLabel,
 } from "@goat/client-runtime/goatBot";
 import type { BotId, ChannelBotNote, ChannelBotNoteScope, EnvironmentId } from "@goat/contracts";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type Dispatch, type SetStateAction } from "react";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { channelEnvironment } from "~/state/channels";
 import { useNowMinute } from "~/hooks/useNowMinute";
@@ -25,14 +25,22 @@ import { useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
 import { GoatBotPanelEmpty } from "./GoatBotPanelEmpty";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 
+export type NoteWordings = [
+  ReadonlyMap<string, string>,
+  Dispatch<SetStateAction<ReadonlyMap<string, string>>>,
+];
+
 /** GOAT Bot's notes, read only; changing or forgetting one is a message the person sends. */
 interface MemoryProps {
   readonly environmentId: EnvironmentId;
   readonly onDraft?: ((text: string) => boolean) | undefined;
   readonly refreshKey?: string | null | undefined;
+  readonly wordings?: NoteWordings | undefined;
 }
 
 export function GoatBotMemory(props: MemoryProps) {
+  const localWordings = useState<ReadonlyMap<string, string>>(() => new Map());
+  const wordings = props.wordings ?? localWordings;
   const member = useGoatBotMember();
   const capabilities = useServerConfigs().get(props.environmentId)?.environment.capabilities;
   const scoped = capabilities?.goatBotPrivateNotes === true;
@@ -44,12 +52,13 @@ export function GoatBotMemory(props: MemoryProps) {
             <NotesSection
               key={member.botId}
               {...props}
+              wordings={wordings}
               supported
               title="This bot"
               botId={member.botId}
             />
           )}
-          <NotesSection {...props} supported title="All bots" shared />
+          <NotesSection {...props} wordings={wordings} supported title="All bots" shared />
         </>
       ) : (
         <>
@@ -57,7 +66,11 @@ export function GoatBotMemory(props: MemoryProps) {
           {member === null ? null : (
             <p className="text-xs text-muted-foreground">{GOAT_BOT_NOTES_SHARED_COPY}</p>
           )}
-          <NotesSection {...props} supported={capabilities?.goatBotNotes === true} />
+          <NotesSection
+            {...props}
+            wordings={wordings}
+            supported={capabilities?.goatBotNotes === true}
+          />
         </>
       )}
     </div>
@@ -72,13 +85,16 @@ function NotesSection({
   title,
   botId,
   shared = false,
+  wordings,
 }: MemoryProps & {
+  readonly wordings: NoteWordings;
   readonly supported: boolean;
   readonly title?: string;
   readonly botId?: BotId;
   readonly shared?: boolean;
 }) {
   const botName = useGoatBotName();
+  const member = useGoatBotMember();
   const notes = useEnvironmentQuery(
     supported
       ? channelEnvironment.listBotNotes({
@@ -113,6 +129,8 @@ function NotesSection({
         <p className="text-muted-foreground">Loading notes…</p>
       ) : (
         <NoteList
+          wordings={wordings}
+          identity={JSON.stringify([environmentId, member?.botId ?? null, botId ?? null, shared])}
           revision={notes.data.revision}
           notes={notes.data.notes}
           truncated={notes.data.truncated}
@@ -125,12 +143,16 @@ function NotesSection({
 }
 
 function NoteList({
+  wordings,
+  identity,
   revision,
   notes,
   truncated,
   onDraft,
   scope,
 }: {
+  wordings: NoteWordings;
+  identity: string;
   revision: string | null;
   notes: ReadonlyArray<ChannelBotNote>;
   truncated: boolean;
@@ -168,6 +190,8 @@ function NoteList({
             // An index is a line's place in this read only, so a new read starts every row over.
             <NoteRow
               key={`${revision}:${note.index}`}
+              wordingKey={JSON.stringify([identity, revision, note.index, note.text])}
+              wordings={wordings}
               note={note}
               heldBack={heldBack.get(note.index)}
               source={goatBotNoteSourceLabel(note.source, { now })}
@@ -218,12 +242,16 @@ function NoteList({
 }
 
 function NoteRow({
+  wordingKey,
+  wordings,
   note,
   heldBack,
   source,
   onDraft,
   scope,
 }: {
+  wordingKey: string;
+  wordings: NoteWordings;
   scope: ChannelBotNoteScope | undefined;
   note: ChannelBotNote;
   /** Why a request naming this note by its words could reach another note, if it could. */
@@ -231,7 +259,14 @@ function NoteRow({
   source: string | null;
   onDraft: ((text: string) => boolean) | undefined;
 }) {
-  const [wording, setWording] = useState<string | null>(null);
+  const wording = wordings[0].get(wordingKey) ?? null;
+  const setWording = (value: string | null) =>
+    wordings[1]((previous) => {
+      const next = new Map(previous);
+      if (value === null) next.delete(wordingKey);
+      else next.set(wordingKey, value);
+      return next;
+    });
   const [forgetting, setForgetting] = useState(false);
   const textId = useId();
   const draft = wording === null ? null : changeNoteDraft(note, wording, scope);
