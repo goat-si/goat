@@ -172,6 +172,7 @@ export function goatBotObservationThreadKeys(input: {
   };
   const seeds = new Set<string>();
   const childrenByParent = new Map<string, string[]>();
+  const loaded = new Set(input.threads.map((thread) => keyOf(thread.environmentId, thread.id)));
   for (const thread of input.threads) {
     const key = keyOf(thread.environmentId, thread.id);
     if (
@@ -185,8 +186,9 @@ export function goatBotObservationThreadKeys(input: {
     if (isVisibleWork(thread)) continue;
     for (const parent of observedParents(thread)) {
       const parentKey = keyOf(parent.environmentId, parent.threadId);
-      // A conversation or worker parent is known by its id even when its shell is not loaded here.
-      if (isGoatBotThreadId(parent.threadId)) seeds.add(parentKey);
+      // A conversation or worker parent not loaded here is known by its id; a loaded one decides
+      // for itself, so a worker the user promoted keeps its children.
+      if (!loaded.has(parentKey) && isGoatBotThreadId(parent.threadId)) seeds.add(parentKey);
       const siblings = childrenByParent.get(parentKey);
       if (siblings === undefined) childrenByParent.set(parentKey, [key]);
       else siblings.push(key);

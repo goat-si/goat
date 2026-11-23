@@ -169,8 +169,8 @@ describe("railPreferencesForHydration", () => {
 });
 
 describe("railShowsBot", () => {
-  it("lets the rail switch to GOAT Bot unless the person hid it there, even before settings load", () => {
-    expect(railShowsBot(null)).toBe(true);
+  it("lets the rail switch to GOAT Bot once its items load, unless the person hid it there", () => {
+    expect(railShowsBot(null)).toBe(false);
     expect(railShowsBot(DEFAULT_RAIL_PREFERENCES)).toBe(true);
     expect(railShowsBot(setRailItemShown(DEFAULT_RAIL_PREFERENCES, "bot", false))).toBe(false);
     expect(railShowsBot(setRailItemShown(DEFAULT_RAIL_PREFERENCES, "bot", true))).toBe(true);

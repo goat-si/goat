@@ -206,6 +206,11 @@ describe("goatBotObservationThreadKeys", () => {
   it("keeps a worker or chore the user promoted to top level visible", () => {
     const threads = [
       thread("channel-worker:promoted", { launchedBy: SESSION, promoted: true }),
+      thread("promoted-worker-task", {
+        launchedBy: "channel-worker:promoted",
+        via: "delegate_task",
+      }),
+      thread("promoted-worker-subagent", { subagentOf: "channel-worker:promoted" }),
       thread("channel-child-work:promoted", { launchedBy: SESSION, promoted: true }),
     ];
     expect(hidden(threads)).toEqual([]);

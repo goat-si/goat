@@ -137,8 +137,9 @@ worktree, such as restarting a server, stay out of Threads after that too; codin
 worktree comes back once Home no longer links it. Some coding stays in Threads, such as launches
 from an older chat, some of a long task's threads, and work on a machine this device can't open; on an older server
 everything stays as it was. This holds for the computer the bot runs on in this app, while this
-device can open that bot's Home; threads a bot started on your other computers are listed in
-Threads as before. The unread badge on a bot's row counts recent work only; older work may be
+device can open that bot's Home; coding a bot started on your other computers is listed in
+Threads as before, while its workers and work outside a worktree stay out there too. The unread
+badge on a bot's row counts recent work only; older work may be
 missing. An unavailable mark means its unread or waiting count could not be read; the mark names
 which.
 
