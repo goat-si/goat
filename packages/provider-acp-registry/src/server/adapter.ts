@@ -143,7 +143,10 @@ export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
   });
 }
 
-function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
+function makeAcpRegistryRuntime(
+  options: AcpRegistryAdapterV2Options,
+  catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
+) {
   return (
     input: AcpAdapterV2RuntimeInput,
   ): Effect.Effect<
@@ -154,18 +157,30 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
     Effect.gen(function* () {
       const { processEnvironment, sessionEnvironment, sessionLaunch, ...runtimeInput } = input;
       const resolved = sessionLaunch as AcpRegistrySupport.ResolvedAcpRegistryAgent;
-      const spawn = { ...resolved.spawn, cwd: input.cwd };
+      const spawnEnvironment =
+        processEnvironment === undefined
+          ? resolved.spawn.env
+          : McpProviderSession.mergeThreadEnvironment(resolved.spawn.env, processEnvironment);
+      const prepared = yield* catalog
+        .prepareRuntimeSpawn({
+          ...resolved,
+          spawn: {
+            ...resolved.spawn,
+            ...(spawnEnvironment === undefined ? {} : { env: spawnEnvironment }),
+          },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EffectAcpErrors.AcpSpawnError({ command: options.settings.agentId, cause }),
+          ),
+        );
+      const spawn = { ...prepared, cwd: input.cwd };
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
           sessionEnvironment,
-          spawn:
-            processEnvironment === undefined
-              ? spawn
-              : {
-                  ...spawn,
-                  env: McpProviderSession.mergeThreadEnvironment(spawn.env, processEnvironment),
-                },
+          spawn,
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
           customModels: readCustomModelEntries(options.settings.customModels).map(
             (entry) => entry.slug,
@@ -352,7 +367,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
               ),
         }
       : {}),
-    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
+    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options, catalog),
     ...(runtimeCoordinator === undefined
       ? {}
       : {

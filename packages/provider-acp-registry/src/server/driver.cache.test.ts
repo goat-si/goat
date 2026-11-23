@@ -43,6 +43,7 @@ it.live("refreshes the successful readiness probe when the effective profile cha
         }),
       search: () => Effect.die("unused"),
       prepare: () => Effect.die("unused"),
+      prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
       uninstallManagedBinary: () => Effect.die("unused"),
     };
     const instance = yield* AcpRegistryDriver.create({

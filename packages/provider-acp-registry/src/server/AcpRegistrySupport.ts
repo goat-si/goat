@@ -1,5 +1,12 @@
+import { makeRegistryRuntimeTemp, prepareRegistryRuntimeSpawn } from "./registryRuntimeTemp.ts";
+import type * as Scope from "effect/Scope";
 import { withoutNpmPrefix, withPreferredPath } from "./managedCommandPath.ts";
 import { parseNpxPackageSpec, parseUvxPackageSpec } from "./registryPackageSpec.ts";
+import {
+  PackageCommandName,
+  packageCommandCandidates,
+  packageManagerFor,
+} from "./registryPackageCommand.ts";
 import {
   normalizeRegistryCommandPath,
   validateArchiveEntries,
@@ -90,11 +97,6 @@ const BoundedVersion = TrimmedNonEmptyString.check(
 const BoundedDescription = Schema.String.check(Schema.isMaxLength(1_024));
 const BoundedMetadata = Schema.String.check(Schema.isMaxLength(256));
 const BoundedArgument = Schema.String.check(Schema.isMaxLength(1_024));
-const PackageCommandName = Schema.String.check(
-  Schema.isMaxLength(128),
-  Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/iu),
-);
-const isPackageCommandName = Schema.is(PackageCommandName);
 const EXACT_RUNNER_VERSION = "v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?";
 const EXACT_NPX_PACKAGE = new RegExp(
   `^(?:@[^/@\\s]+/[^@\\s]+|[a-z0-9][a-z0-9._-]*)@${EXACT_RUNNER_VERSION}$`,
@@ -220,24 +222,6 @@ export function toAcpRegistryOperationError(error: AcpRegistryError): AcpRegistr
 }
 
 const isAcpRegistryError = Schema.is(AcpRegistryError);
-
-function packageManagerFor(distribution: AcpRegistryDistributionKind): "npm" | "uv" | undefined {
-  return distribution === "npx" ? "npm" : distribution === "uvx" ? "uv" : undefined;
-}
-
-function packageCommandCandidates(
-  agent: AcpRegistryAgent,
-  packageName: string,
-): ReadonlyArray<string> {
-  const unscopedPackageName = packageName.split("/").pop() ?? packageName;
-  return Array.from(
-    new Set(
-      [agent.id, unscopedPackageName, unscopedPackageName.replace(/-acp$/u, "")].filter(
-        isPackageCommandName,
-      ),
-    ),
-  );
-}
 
 export const acpRegistryManagedBinaryDirectories = Effect.fn("acpRegistryManagedBinaryDirectories")(
   function* (input: {
@@ -438,6 +422,9 @@ export class AcpRegistryCatalog extends Context.Service<
       environment?: NodeJS.ProcessEnv,
       options?: { readonly allowInstall?: boolean; readonly spawnEnvironment?: NodeJS.ProcessEnv },
     ) => Effect.Effect<ResolvedAcpRegistryAgent, AcpRegistryError>;
+    readonly prepareRuntimeSpawn: (
+      resolved: ResolvedAcpRegistryAgent,
+    ) => Effect.Effect<AcpSessionRuntime.AcpSpawnInput, AcpRegistryError, Scope.Scope>;
     readonly uninstallManagedBinary: (
       input: AcpRegistryManagedBinaryUninstallInput,
     ) => Effect.Effect<AcpRegistryManagedBinaryUninstallResult, AcpRegistryError>;
@@ -455,6 +442,7 @@ export const layerFromHost = Layer.merge(
       return layer({
         cacheDir: paths.providerStatusCacheDir,
         toolsDir: path.join(paths.baseDir, "tools"),
+        runtimeTempDir: path.join(paths.stateDir, "antigravity-tmp", "acp-registry"),
       });
     }),
   ),
@@ -465,6 +453,7 @@ export interface AcpRegistryCatalogOptions {
   readonly cacheDir: string;
   readonly toolsDir: string;
   readonly registryUrl?: string;
+  readonly runtimeTempDir?: string;
 }
 
 const INSTALL_LOCK_RETRY_COUNT = 300;
@@ -534,6 +523,10 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     return permit.withPermits(1);
   };
   const preparedBinaryReservations = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+  const acquireRuntimeTemp =
+    input.runtimeTempDir === undefined
+      ? undefined
+      : yield* makeRegistryRuntimeTemp(input.runtimeTempDir, platform);
 
   const managerBinDirectory = Effect.fn("AcpRegistryCatalog.managerBinDirectory")(function* (
     runner: string,
@@ -1056,7 +1049,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
       const managedBinEnvironment = { ...environment, PATH: binDirectory };
       let executablePath: string | undefined;
-      for (const candidate of packageCommandCandidates(agent, packageIdentity.name)) {
+      for (const candidate of packageCommandCandidates(agent.id, packageIdentity.name)) {
         executablePath = yield* resolveExecutable(candidate, platform, managedBinEnvironment);
         if (executablePath !== undefined) break;
       }
@@ -1972,6 +1965,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     prepare,
     inspect,
     resolve,
+    prepareRuntimeSpawn: prepareRegistryRuntimeSpawn(acquireRuntimeTemp),
     uninstallManagedBinary,
   });
 });

@@ -1,4 +1,5 @@
 import { isolateDeepSeekProbeHistory } from "./deepSeekProbeHistory.ts";
+import { shellDisplayToken } from "./shellDisplayToken.ts";
 import { boundedAgentVersion } from "./agentVersion.ts";
 import {
   AcpRegistryListProvidersResult,
@@ -144,12 +145,6 @@ function normalizeModels(
 export interface AcpRegistryAuthSpawnContext {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
-}
-
-const SHELL_SAFE_TOKEN = /^[A-Za-z0-9_@%+=:,./-]+$/u;
-
-function shellDisplayToken(token: string): string {
-  return SHELL_SAFE_TOKEN.test(token) ? token : `'${token.replaceAll("'", `'\\''`)}'`;
 }
 
 function terminalAuthCommand(
@@ -438,7 +433,10 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       const resolved = yield* catalog
         .resolve(input.settings, input.cwd, input.environment, { allowInstall: false })
         .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
-      const spawn = yield* isolateDeepSeekProbeHistory(input.settings.commandPath, resolved.spawn);
+      const prepared = yield* catalog
+        .prepareRuntimeSpawn(resolved)
+        .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+      const spawn = yield* isolateDeepSeekProbeHistory(input.settings.commandPath, prepared);
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
       const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
       const runtimeCoordinator = yield* Effect.serviceOption(
@@ -631,9 +629,12 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
     const resolved = yield* catalog
       .resolve(input.settings, input.cwd, input.environment)
       .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+    const spawn = yield* catalog
+      .prepareRuntimeSpawn(resolved)
+      .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
     const runtimeContext = yield* Layer.build(
       AcpSessionRuntime.layer({
-        spawn: resolved.spawn,
+        spawn,
         cwd: input.cwd,
         clientCapabilities: {
           auth: { terminal: false },

@@ -116,6 +116,7 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
       search: () => Effect.die("No registry search"),
       prepare: () => Effect.die("No install"),
       uninstallManagedBinary: () => Effect.die("No uninstall"),
+      prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
       inspect: (selected) =>
         Effect.succeed(
           executables[selected.commandPath]

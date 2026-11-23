@@ -136,6 +136,7 @@ function catalogWithInspection(
     prepare: () => Effect.die("unused prepare"),
     inspect: () => Effect.succeed(inspection),
     resolve: () => Effect.die("unused resolve"),
+    prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
     uninstallManagedBinary: () => Effect.die("unused uninstall"),
   };
 }
