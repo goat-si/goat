@@ -7,7 +7,6 @@ import {
   FILE_SURFACE_SUBHEADER_CLASS,
 } from "./fileSurfaceChrome";
 import { OFFICE_PREVIEW_MAX_BYTES, type OfficeWorkerResult } from "./officePreviewProtocol";
-const WordDocument = lazy(() => import("./office/WordDocument"));
 const Spreadsheet = lazy(() => import("./office/Spreadsheet"));
 const Presentation = lazy(() => import("./office/Presentation"));
 async function readOfficeFile(src: string, signal: AbortSignal) {
@@ -39,6 +38,8 @@ export default function OfficeViewer(props: {
   readonly kind: Extract<OfficePreviewKind, "docx" | "xlsx" | "pptx">;
   readonly sizeBytes?: number;
 }) {
+  const [WordDocument, setWordDocument] =
+    useState<typeof import("./office/WordDocument").default>();
   const [error, setError] = useState<string | null>(null);
   const [prepared, setPrepared] = useState<Extract<OfficeWorkerResult, { bytes: ArrayBuffer }>>();
   const [details, setDetails] = useState("");
@@ -79,6 +80,13 @@ export default function OfficeViewer(props: {
         worker.terminate();
       }
     });
+    if (props.kind === "docx") {
+      void import("./office/WordDocument")
+        .then(({ default: Viewer }) => {
+          if (!controller.signal.aborted) setWordDocument(() => Viewer);
+        })
+        .catch(failure);
+    }
     void readOfficeFile(props.src, controller.signal)
       .then((bytes) => {
         if (!controller.signal.aborted)
@@ -103,8 +111,8 @@ export default function OfficeViewer(props: {
         </p>
       </div>
     );
-  if (!prepared) return <FileSurfaceLoading />;
   const Viewer = props.kind === "docx" ? WordDocument : Presentation;
+  if (!prepared || !Viewer) return <FileSurfaceLoading />;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {details ? (
