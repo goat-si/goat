@@ -1531,3 +1531,13 @@ export const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
 export const noopHeldRevert = (_targetTurnCount: number) => {};
 export const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
 export const ignoreComposerFocus = () => {};
+
+/** The run a usage-limit failure paused; its tool calls stay grouped in the timeline. */
+export function usageLimitPausedRunId(
+  runtime: { readonly status: string; readonly lastErrorClass?: string | null } | null,
+  latestRun: { readonly runId: RunId } | null,
+): RunId | null {
+  return runtime?.status === "failed" && runtime.lastErrorClass === "usage_limit"
+    ? (latestRun?.runId ?? null)
+    : null;
+}

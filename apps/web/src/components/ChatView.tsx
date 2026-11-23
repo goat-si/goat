@@ -41,7 +41,7 @@ import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
-import { resolveDraftHeroState } from "./ChatView.logic";
+import { resolveDraftHeroState, usageLimitPausedRunId } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import {
   isPaintOnlyThreadTimeline,
@@ -957,10 +957,7 @@ export default function ChatView(props: ChatViewProps) {
   };
   const limitRecoveryRun = limitRecoveryRunFor(activeThreadShell, serverRuntime);
   const recoveryHoldsSnooze = limitRecoveryHoldsSnooze(activeThreadShell, serverRuntime);
-  const usageLimitRunId =
-    serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
-      ? (serverLatestRun?.runId ?? null)
-      : null;
+  const usageLimitRunId = usageLimitPausedRunId(serverRuntime, serverLatestRun);
   const timelineThreadError =
     limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
       ? null
@@ -3559,7 +3556,6 @@ export default function ChatView(props: ChatViewProps) {
                   turnDiffSummaries={
                     paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
                   }
-
                   activeThreadEnvironmentId={
                     displayedThreadRef?.environmentId ?? activeThread.environmentId
                   }
