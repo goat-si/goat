@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { refusedBeforePrompt } from "../PromptRefusal.ts";
+import type { ProviderDriverKind } from "@goat/contracts";
 
 export const makeDeliverySession = (
   session: ProviderAdapter.ProviderAdapterV2SessionRuntime,
@@ -47,6 +48,7 @@ export const submitWithContextHandoff = Effect.fn(
     readonly unsent: Effect.Effect<void, PersistError>;
   },
   context: string,
+  driver?: ProviderDriverKind,
 ) {
   const text = input.message.text;
   const prefix = context === "" ? "" : `${context}\n\nUser message:\n`;
@@ -77,7 +79,14 @@ export const submitWithContextHandoff = Effect.fn(
             begin: () =>
               witness.begin().pipe(Effect.tap((began) => (began ? Effect.void : unsent))),
             skipped: () => witness.skipped().pipe(Effect.andThen(unsent)),
-            submitted: () => witness.submitted().pipe(Effect.andThen(delivered)),
+            submitted: () =>
+              witness
+                .submitted()
+                .pipe(Effect.andThen(driver === "cursor" ? Effect.void : delivered)),
+            accepted: () =>
+              witness
+                .accepted()
+                .pipe(Effect.andThen(driver === "cursor" ? delivered : Effect.void)),
           },
         }),
     message: { ...input.message, text: prefix + text },

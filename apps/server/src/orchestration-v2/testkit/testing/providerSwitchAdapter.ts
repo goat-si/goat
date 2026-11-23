@@ -67,6 +67,7 @@ export function makeTestAdapter(input: {
   >;
   readonly failure?: ReturnType<typeof makeProviderFailure>;
   readonly failedRunOrdinals?: ReadonlySet<number>;
+  readonly unacceptedRunOrdinals?: ReadonlySet<number>;
   readonly interruptedRunOrdinals?: ReadonlySet<number>;
   readonly cancelledRunOrdinals?: ReadonlySet<number>;
   readonly holdRunOrdinal?: number;
@@ -235,7 +236,8 @@ export function makeTestAdapter(input: {
           if (input.skipAfterFenceOnOrdinal === turnInput.runOrdinal)
             return yield* turnInput.inputDelivery?.skipped() ?? Effect.void;
           yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
-          yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
+          if (!input.unacceptedRunOrdinals?.has(turnInput.runOrdinal))
+            yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
           yield* Effect.yieldNow;
           yield* Ref.update(input.capturedTurns, (turns) => [
             ...turns,

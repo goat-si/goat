@@ -953,6 +953,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          if (input.context.prompt !== undefined) {
+            const checkpointed =
+              input.status === "completed" ||
+              (yield* (
+                input.context.session.runCheckpointed?.(input.context.run.runId) ??
+                Effect.succeed(false)
+              ).pipe(Effect.orElseSucceed(() => false)));
+            if (checkpointed) yield* input.context.input.inputDelivery?.accepted() ?? Effect.void;
+          }
           const delivered = input.context.runtimeInstructions.value;
           if (input.context.compacted) deliveredRuntime = undefined;
           else if (delivered !== undefined) {
