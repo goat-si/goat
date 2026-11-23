@@ -17,13 +17,19 @@ import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
 
+const StoredThreadRef = Schema.Struct({
+  environmentId: Schema.NonEmptyString,
+  threadId: Schema.NonEmptyString,
+});
+
 const HomeReturnThread = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("server"), ...StoredThreadRef.fields }),
+  // `sentTo` is the thread a send is creating; only its listed shell proves the send landed.
   Schema.Struct({
-    kind: Schema.Literal("server"),
-    environmentId: Schema.NonEmptyString,
-    threadId: Schema.NonEmptyString,
+    kind: Schema.Literal("draft"),
+    draftId: Schema.NonEmptyString,
+    sentTo: Schema.optionalKey(StoredThreadRef),
   }),
-  Schema.Struct({ kind: Schema.Literal("draft"), draftId: Schema.NonEmptyString }),
 ]);
 type HomeReturnThread = typeof HomeReturnThread.Type;
 
@@ -98,10 +104,9 @@ const isBotTarget = (target: HomeReturnThread | null, botRef: ChannelBotRef | nu
   isGoatBotThread({ environmentId: target.environmentId, id: target.threadId }, botRef);
 
 /**
- * Remembers the last thread or draft for Home. A remembered draft becomes its thread only
- * once its send succeeds and finalizing drops the draft; a failed send restores the draft.
- * GOAT can learn its main bot's thread after it opened, so the target it replaced is kept
- * to return to once that thread turns out to be the bot's.
+ * Remembers the last thread or draft for Home. A draft notes the thread its send is creating
+ * until a failed send restores it. GOAT can learn its main bot's thread after opening it, so
+ * the replaced target is kept to return to.
  */
 export function startHomeReturnMemory(): {
   readonly record: (params: RouteParams) => void;
@@ -110,19 +115,22 @@ export function startHomeReturnMemory(): {
   const stored = readStored();
   remember(isBotTarget(stored, useGlobalAgentStore.getState().botRef) ? null : stored);
   let replaced: HomeReturnThread | null = null;
-  // Where each kept draft is being sent, until its session is dropped or the send fails.
-  const sending = new Map<string, ScopedThreadRef>();
   const settle = (target: HomeReturnThread | null): HomeReturnThread | null => {
     if (target?.kind !== "draft") return target;
     const session = useComposerDraftStore.getState().getDraftSession(target.draftId as DraftId);
-    const sentTo = sending.get(target.draftId);
-    if (session === null) {
-      sending.delete(target.draftId);
-      return sentTo ? serverTarget(sentTo) : target;
+    if (session === null) return target;
+    const sentTo = session.promotedTo
+      ? { environmentId: session.promotedTo.environmentId, threadId: session.promotedTo.threadId }
+      : undefined;
+    if (
+      sentTo?.environmentId === target.sentTo?.environmentId &&
+      sentTo?.threadId === target.sentTo?.threadId
+    ) {
+      return target;
     }
-    if (session.promotedTo) sending.set(target.draftId, session.promotedTo);
-    else sending.delete(target.draftId);
-    return target;
+    return sentTo
+      ? { kind: "draft", draftId: target.draftId, sentTo }
+      : { kind: "draft", draftId: target.draftId };
   };
   const followSentDrafts = () => {
     replaced = settle(replaced);
@@ -180,10 +188,12 @@ export function useHomeRailDestination(): HomeRailDestination {
   const draft = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
   );
+  const sentTo = target?.kind === "draft" && draft === null ? target.sentTo : undefined;
+  const storedRef = target?.kind === "server" ? target : sentTo;
   const threadRef =
-    target?.kind === "server"
-      ? scopeThreadRef(target.environmentId as EnvironmentId, target.threadId as ThreadId)
-      : null;
+    storedRef === undefined
+      ? null
+      : scopeThreadRef(storedRef.environmentId as EnvironmentId, storedRef.threadId as ThreadId);
   const shell = useQuietThreadShell(threadRef);
   const { isReady, environments } = useEnvironments();
 
@@ -192,7 +202,8 @@ export function useHomeRailDestination(): HomeRailDestination {
   if (isReady && !environments.some((entry) => entry.environmentId === environmentId)) {
     return LANDING;
   }
-  if (draftId !== null) return { kind: "draft", draftId };
+  if (draftId !== null && draft !== null) return { kind: "draft", draftId };
   if (threadRef === null || shell?.archivedAt != null || shell?.deletedAt != null) return LANDING;
+  if (sentTo !== undefined && shell === null) return LANDING;
   return { kind: "thread", ...threadRef };
 }
