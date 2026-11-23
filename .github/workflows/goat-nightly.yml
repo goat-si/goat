@@ -649,6 +649,16 @@ jobs:
             for manifest in release-publish/*-mac.yml; do mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"; done
           fi
 
+      - name: Summarize macOS package sizes
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -f .github/scripts/macos-package-sizes.py ]; then
+            python3 .github/scripts/macos-package-sizes.py release-publish >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::This build predates the macOS package size summary."
+          fi
+
       - name: Stage desktop assets and verification reports
         env:
           GOAT_RELEASES_TOKEN: ${{ github.token }}

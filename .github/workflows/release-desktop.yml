@@ -687,12 +687,6 @@ jobs:
             done
           fi
 
-      - name: Summarize macOS package sizes
-        if: inputs.platform == 'mac'
-        continue-on-error: true
-        shell: bash
-        run: python3 .github/scripts/macos-package-sizes.py release-publish >> "$GITHUB_STEP_SUMMARY"
-
       - name: Collect resource monitor
         shell: bash
         run: |
