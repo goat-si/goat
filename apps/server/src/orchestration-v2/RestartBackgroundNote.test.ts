@@ -15,12 +15,21 @@ import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
   restartContinuationNote,
+  restartCancelledBackgroundWorkNote,
   mergeRestartCancelledBackgroundWork,
 } from "./RestartBackgroundNote.ts";
 
 const claudeThread = ProviderThreadId.make("provider-thread:claude");
 const codexThread = ProviderThreadId.make("provider-thread:codex");
 const lost = [{ kind: "subagent" as const, label: "Background subagent test" }];
+
+it("tells the agent when the provider process, rather than the server, stopped background work", () => {
+  assert.include(
+    restartCancelledBackgroundWorkNote(lost, "provider_exit"),
+    "agent runtime process exited",
+  );
+  assert.include(restartCancelledBackgroundWorkNote(lost), "GOAT server restarted");
+});
 
 function run(
   ordinal: number,

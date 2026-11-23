@@ -34,10 +34,10 @@ export function resolveStaleBackgroundItemProviderInstanceId(
 }
 
 export function latestStartedRun(
-  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
+  runs: ReadonlyArray<OrchestrationV2ThreadProjection["runs"][number]>,
   providerThreadId: ProviderThreadId,
 ) {
-  return projection.runs.reduce<OrchestrationV2ThreadProjection["runs"][number] | undefined>(
+  return runs.reduce<OrchestrationV2ThreadProjection["runs"][number] | undefined>(
     (latest, run) =>
       run.providerThreadId === providerThreadId &&
       run.status !== "queued" &&
