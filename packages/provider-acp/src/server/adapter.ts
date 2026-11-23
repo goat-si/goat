@@ -7831,8 +7831,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             (effect, turnInput) =>
               effect.pipe(
                 Effect.mapError((cause) =>
-                  cause._tag === "ProviderAdapterSteerRunUnsupportedError" ||
-                  cause._tag === "ProviderAdapterSteerDeclinedError"
+                  cause._tag === "ProviderAdapterSteerRunUnsupportedError"
                     ? cause
                     : new ProviderAdapter.ProviderAdapterSteerRunError({
                         driver,
