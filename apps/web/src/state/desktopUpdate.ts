@@ -11,6 +11,12 @@ type DesktopUpdateBridge = Pick<DesktopBridge, "getUpdateState" | "onUpdateState
 
 const INITIAL_STATE_READ_ATTEMPT_COUNT = 3;
 
+export function clearDismissedDownloadFailure(state: DesktopUpdateState) {
+  if (typeof window !== "undefined" && state.errorContext !== "download") {
+    window.sessionStorage.removeItem("desktop-update-failure-dismissed");
+  }
+}
+
 export class DesktopUpdateStateReadError extends Schema.TaggedError<DesktopUpdateStateReadError>()(
   "DesktopUpdateStateReadError",
   {
@@ -40,6 +46,7 @@ export function createDesktopUpdateStateAtom(getBridge: () => DesktopUpdateBridg
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           bridge.onUpdateState((state) => {
+            clearDismissedDownloadFailure(state);
             receivedUpdate = true;
             Queue.offerUnsafe(queue, state);
           }),
@@ -66,6 +73,7 @@ export function createDesktopUpdateStateAtom(getBridge: () => DesktopUpdateBridg
         }),
       );
       if (!receivedUpdate && initialState !== null) {
+        clearDismissedDownloadFailure(initialState);
         Queue.offerUnsafe(queue, initialState);
       }
 

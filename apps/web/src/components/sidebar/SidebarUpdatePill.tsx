@@ -343,7 +343,9 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   const noticeVersion = state?.downloadedVersion ?? state?.availableVersion;
   const noticeKey = noticeVersion && state ? JSON.stringify([state.channel, noticeVersion]) : null;
   const isDownloadFailure = state?.errorContext === "download";
-  const [failureDismissed, setFailureDismissed] = useState(false);
+  const [failureDismissed, setFailureDismissed] = useState(
+    () => window.sessionStorage.getItem("desktop-update-failure-dismissed") === noticeKey,
+  );
   const [previousFailure, setPreviousFailure] = useState(isDownloadFailure);
   if (previousFailure !== isDownloadFailure) {
     setPreviousFailure(isDownloadFailure);
@@ -730,7 +732,10 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
                 onClick={() => {
                   window.sessionStorage.setItem("desktop-update-notice", noticeKey);
                   setDismissedNotice(noticeKey);
-                  if (isDownloadFailure) setFailureDismissed(true);
+                  if (isDownloadFailure) {
+                    window.sessionStorage.setItem("desktop-update-failure-dismissed", noticeKey);
+                    setFailureDismissed(true);
+                  }
                 }}
               >
                 ×

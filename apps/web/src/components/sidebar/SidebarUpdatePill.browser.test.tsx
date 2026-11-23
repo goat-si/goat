@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
+import { clearDismissedDownloadFailure } from "../../state/desktopUpdate";
 import { installLocalUpdate, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 const mocks = vi.hoisted(() => {
@@ -72,6 +73,7 @@ function setup(update: DesktopUpdateState | null) {
 
 function publish(update: DesktopUpdateState | null) {
   return act(() => {
+    if (update) clearDismissedDownloadFailure(update);
     mocks.update = update;
     mocks.notify();
   });
@@ -116,6 +118,37 @@ describe("SidebarUpdatePill release notes", () => {
     await publish(failure);
     expect(notice()?.textContent).toContain("Retry");
     sessionStorage.removeItem("desktop-update-notice");
+  });
+
+  it("keeps a dismissed failure hidden across remounts until a new failure", async () => {
+    sessionStorage.removeItem("desktop-update-notice");
+    sessionStorage.removeItem("desktop-update-failure-dismissed");
+    const update = nightlyUpdate([]);
+    const failure = { ...update, errorContext: "download" as const, canRetry: true };
+    setup(failure);
+    const notice = () => document.querySelector('aside[aria-label="Update available"]');
+    {
+      await using _screen = await render(<SidebarUpdatePill />);
+      expect(notice()?.textContent).toContain("Retry");
+      await userEvent.click(notice()!.querySelector('button[aria-label="Close"]')!);
+      expect(notice()).toBeNull();
+    }
+    {
+      await using _screen = await render(<SidebarUpdatePill />);
+      expect(notice()).toBeNull();
+      await publish({ ...update, status: "downloading", downloadPercent: 20 });
+      await publish(failure);
+      expect(notice()?.textContent).toContain("Retry");
+      await userEvent.click(notice()!.querySelector('button[aria-label="Close"]')!);
+    }
+    await publish({ ...update, status: "downloading", downloadPercent: 20 });
+    await publish(failure);
+    {
+      await using _screen = await render(<SidebarUpdatePill />);
+      expect(notice()?.textContent).toContain("Retry");
+    }
+    sessionStorage.removeItem("desktop-update-notice");
+    sessionStorage.removeItem("desktop-update-failure-dismissed");
   });
 
   it("closes when the release notes stop applying", async () => {
