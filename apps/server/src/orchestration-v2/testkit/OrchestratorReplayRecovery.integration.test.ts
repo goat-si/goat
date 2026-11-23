@@ -20,7 +20,7 @@ import {
 } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "../Adapters/CodexAdapterV2.testkit.ts";
-import { withThreadNames } from "../Adapters/CodexReplay.testkit.ts";
+import { withThreadNames, withThreadSetupReads } from "../Adapters/CodexReplay.testkit.ts";
 import {
   type CursorAgentSdkReplayTranscript,
   CursorOrchestratorReplayHarness,
@@ -292,8 +292,11 @@ describe("orchestrator replay recovery", () => {
           );
           yield* fs.makeDirectory(tempDir, { recursive: true });
           const dbPath = path.join(tempDir, "state.sqlite");
+          // The frames the shared harness adds: setup config reads and the thread's name.
           const driver = yield* CodexReplay.makeReplayDriver(
-            withThreadNames(transcript, ["Replay fixture: provider_thread_resume"]),
+            withThreadSetupReads(
+              withThreadNames(transcript, ["Replay fixture: provider_thread_resume"]),
+            ),
           );
           const materialized = yield* materializeFixtureInput({
             scenario: "provider_thread_resume",
