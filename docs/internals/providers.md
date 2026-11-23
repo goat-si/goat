@@ -37,8 +37,8 @@ session's cwd. Provider switches still use portable handoff summaries.
 See the [adapter](../../packages/provider-pi/src/server/adapter.ts).
 
 Antigravity separates account profiles per instance while sharing installed executables across the
-environment. It forces file-based credential storage because the native macOS keychain entry would
-otherwise be shared across instances. The launch environment removes ambient Google credentials,
+environment. Google account instances set `SSH_CONNECTION` so the native CLI stores sign-in in
+the instance profile instead of its shared keyring entry. The launch environment removes ambient Google credentials,
 so an instance cannot silently use another account or billing project. The agent also resolves
 its user-global skills and rule files under that profile, so these follow the user's real
 `~/.gemini`; MCP servers and hooks there stay out of the profile.
