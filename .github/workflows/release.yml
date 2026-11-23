@@ -641,7 +641,6 @@ jobs:
       rust_target: aarch64-apple-darwin
       resource_key: darwin-arm64
       cli_archive: true
-      ssh_runtime_bundle: true
 
   desktop_mac_x64:
     name: Desktop macOS x64
@@ -668,7 +667,6 @@ jobs:
       # (the SEA docs list macOS as arm64 only) and the built binary segfaults
       # on start. The x64 desktop app is Electron and unaffected.
       cli_archive: false
-      ssh_runtime_bundle: true
 
   desktop_linux_x64:
     name: Desktop Linux x64
@@ -692,7 +690,6 @@ jobs:
       rust_target: x86_64-unknown-linux-gnu
       resource_key: linux-x64
       cli_archive: true
-      ssh_runtime_bundle: true
 
   # node-pty has no Linux prebuild and compiles from source, so the arm64 app
   # and archive are built on arm64 hardware rather than cross-built.
@@ -718,7 +715,6 @@ jobs:
       rust_target: aarch64-unknown-linux-gnu
       resource_key: linux-arm64
       cli_archive: true
-      ssh_runtime_bundle: true
 
   # GOAT Computer Use is C# compiled by the in-box csc.exe, so a Windows target
   # builds its helper here, on Windows, and the Linux packaging job signs and
@@ -899,7 +895,6 @@ jobs:
       rust_target: x86_64-pc-windows-msvc
       resource_key: win32-x64
       cli_archive: true
-      ssh_runtime_bundle: true
       computer_use_helper_artifact: ${{ needs.computer_use_helper_win_x64.outputs.built == 'true' && 'computer-use-helper-win-x64' || '' }}
       windows_signed: ${{ needs.preflight.outputs.windows_signed }}
 
@@ -926,7 +921,6 @@ jobs:
       rust_target: aarch64-pc-windows-msvc
       resource_key: win32-arm64
       cli_archive: true
-      ssh_runtime_bundle: true
       computer_use_helper_artifact: ${{ needs.computer_use_helper_win_arm64.outputs.built == 'true' && 'computer-use-helper-win-arm64' || '' }}
       windows_signed: ${{ needs.preflight.outputs.windows_signed }}
 
