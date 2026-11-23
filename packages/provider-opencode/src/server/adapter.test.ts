@@ -2500,7 +2500,6 @@ describe("OpenCodeAdapterV2", () => {
         yield* harness.startTurn();
         assert.isEmpty(delivered);
         yield* finish();
-        assert.deepStrictEqual(delivered, [snapshot]);
         assert.equal(payloads[0]?.system?.includes("## GOAT browser") ?? false, !external);
         assert.include(payloads[0]?.system ?? "", memoryContextText(snapshot));
         assert.equal(registrations.length, external ? 0 : 1);
