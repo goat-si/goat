@@ -1,6 +1,10 @@
+import { GTProvider } from "gt-react";
+import chinese from "~/i18n/translations/zh.json";
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
+  type DesktopPreviewFindInput,
+  type DesktopPreviewFindResult,
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
   EnvironmentId,
@@ -21,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   adjust: vi.fn(),
   stopLoading: vi.fn(async (_tabId: string) => undefined),
   zoomIn: vi.fn(async () => undefined),
+  findInPage: vi.fn(async (_input: DesktopPreviewFindInput) => undefined),
+  onFindResult: vi.fn((_listener: (result: DesktopPreviewFindResult) => void) => () => undefined),
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
@@ -80,9 +86,9 @@ vi.mock(import("./previewBridge"), async (original) => ({
     zoomIn: mocks.zoomIn,
     zoomOut: vi.fn(async () => undefined),
     resetZoom: vi.fn(async () => undefined),
-    findInPage: vi.fn(async () => undefined),
+    findInPage: mocks.findInPage,
     stopFindInPage: vi.fn(async () => undefined),
-    onFindResult: vi.fn(() => () => undefined),
+    onFindResult: mocks.onFindResult,
     clearCookies: vi.fn(async () => undefined),
     clearCache: vi.fn(async () => undefined),
     pictureInPicture: {
@@ -243,14 +249,19 @@ function setPanelSurfaces(surfaces: ReadonlyArray<typeof BROWSER_SURFACE>) {
   });
 }
 
-function view(onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"]) {
+function view(
+  onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"],
+  locale = "en",
+) {
   return (
-    <PreviewView
-      threadRef={TEST_THREAD_REF}
-      tabId="tab-1"
-      visible
-      {...(onSendAnnotation ? { onSendAnnotation } : {})}
-    />
+    <GTProvider locale={locale} translations={{ zh: chinese }}>
+      <PreviewView
+        threadRef={TEST_THREAD_REF}
+        tabId="tab-1"
+        visible
+        {...(onSendAnnotation ? { onSendAnnotation } : {})}
+      />
+    </GTProvider>
   );
 }
 
@@ -429,6 +440,39 @@ describe("PreviewView", () => {
     await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Find in page" }));
     await expect.element(page.getByRole("searchbox", { name: "Find in page" })).toHaveFocus();
+  });
+
+  it("localizes the page search entry and controls", async () => {
+    setup();
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex;width:400px;height:200px";
+    await using _screen = await render(view(undefined, "zh"), { container });
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "在网页中查找" }));
+    const search = page.getByRole("searchbox", { name: "在网页中查找" });
+    await expect.element(search).toHaveFocus();
+    await expect.element(search).toHaveAttribute("placeholder", "在网页中查找");
+    await expect.element(page.getByRole("button", { name: "转到上一处匹配" })).toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "转到下一处匹配" })).toBeDisabled();
+    await userEvent.fill(search, "docs");
+    const input = mocks.findInPage.mock.lastCall?.[0];
+    expect(input).toMatchObject({ text: "docs", forward: true, newSession: true });
+    await act(() => {
+      mocks.onFindResult.mock.lastCall?.[0]({
+        tabId: input!.tabId,
+        activeMatchOrdinal: 1,
+        matches: 1200,
+      });
+    });
+    await expect.element(page.getByText("1/1,200", { exact: true })).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "转到下一处匹配" }));
+    expect(mocks.findInPage).toHaveBeenLastCalledWith({
+      tabId: input!.tabId,
+      text: "docs",
+      forward: true,
+      newSession: false,
+    });
+    await expect.element(page.getByRole("button", { name: "关闭网页查找" })).toBeEnabled();
   });
 
   it("zooms the active browser tab when its guest forwards Zoom in", async () => {
