@@ -21,10 +21,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient } from "effect/http";
 import * as AcpErrors from "effect-acp/errors";
@@ -233,10 +236,14 @@ export const AntigravityDriver: ProviderDriver<
         ),
       );
     });
-    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
+    const prepareSpawn = Effect.fn("AntigravityDriver.prepareSpawn")(function* (
       input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
     ): Effect.fn.Return<
-      AcpSessionRuntime.AcpSessionRuntime["Service"],
+      {
+        executable: AntigravityInstallation.AntigravityExecutable;
+        spawn: AcpSessionRuntime.AcpSpawnInput;
+        userHome: string;
+      },
       AcpErrors.AcpError | ProviderSetupError,
       Scope.Scope
     > {
@@ -293,11 +300,9 @@ export const AntigravityDriver: ProviderDriver<
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
-      const runtime = yield* makeAntigravityAcpRuntime({
-        ...input,
-        runtimeVersion: executable.version,
-        authMethod: auth.authMethod,
-        childProcessSpawner: spawner,
+      return {
+        executable,
+        userHome,
         spawn: buildAntigravityAcpSpawnInput({
           installation: executable,
           profile: runtimeProfile,
@@ -309,6 +314,19 @@ export const AntigravityDriver: ProviderDriver<
           auth,
           runtimeTempDirectory,
         }),
+      };
+    });
+
+    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
+      input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
+    ) {
+      const { executable, spawn, userHome } = yield* prepareSpawn(input);
+      const runtime = yield* makeAntigravityAcpRuntime({
+        ...input,
+        runtimeVersion: executable.version,
+        authMethod: auth.authMethod,
+        childProcessSpawner: spawner,
+        spawn,
       }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
       const startCompatible = Effect.fn("AntigravityDriver.startCompatible")(function* () {
         const version = (yield* runtime.initialize()).agentInfo?.version;
@@ -411,6 +429,107 @@ export const AntigravityDriver: ProviderDriver<
       };
     });
 
+    const codeLogin = Effect.fn("AntigravityDriver.codeLogin")(function* (input: {
+      readonly onAuthorizationUrl: (url: string) => Effect.Effect<void, AcpErrors.AcpError>;
+    }) {
+      if (auth.authMethod !== "oauth-personal") return undefined;
+      const environment = yield* currentEnvironment;
+      const resolved = yield* installation
+        .resolve(settings.binaryPath, environment)
+        .pipe(Effect.option);
+      if (Option.isSome(resolved) && resolved.value.harnessPath !== null) return undefined;
+      const cwd = yield* fileSystem
+        .makeTempDirectoryScoped({ prefix: "goat-antigravity-login-" })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderSetupError({
+                instanceId,
+                operation: "start",
+                detail: "Could not create an Antigravity setup workspace.",
+                cause,
+              }),
+          ),
+        );
+      const { executable, spawn } = yield* prepareSpawn({
+        cwd,
+        mcpServers: [],
+        sessionEnvironment: environment,
+      });
+      if (executable.harnessPath !== null) return undefined;
+      const failed = (detail: string, cause?: unknown) =>
+        new ProviderSetupError({ instanceId, operation: "start", detail, cause });
+      const { DISPLAY: _display, WAYLAND_DISPLAY: _wayland, ...env } = spawn.env ?? {};
+      const child = yield* spawner
+        .spawn(
+          ChildProcess.make(spawn.command, [...spawn.args, "--login"], {
+            cwd,
+            env,
+            extendEnv: false,
+            shell: false,
+          }),
+        )
+        .pipe(Effect.mapError((cause) => failed("Could not start Antigravity sign-in.", cause)));
+      const code = yield* Deferred.make<string>();
+      let submitted = false;
+      const stdin = yield* Stream.fromEffect(Deferred.await(code)).pipe(
+        Stream.map((response) => `${response}\n`),
+        Stream.encodeText,
+        Stream.run(child.stdin),
+        Effect.forkScoped,
+      );
+      let pending = "";
+      const handleLine = (line: string) =>
+        line.trim().startsWith("https://accounts.google.com/")
+          ? input.onAuthorizationUrl(line.trim())
+          : Effect.void;
+      const output = yield* child.stdout.pipe(
+        Stream.decodeText(),
+        Stream.runForEach((chunk) =>
+          Effect.gen(function* () {
+            const lines = `${pending}${chunk}`.split("\n");
+            pending = lines.pop() ?? "";
+            if (pending.length > 16384 || lines.some((line) => line.length > 16384)) {
+              return yield* new AcpErrors.AcpTransportError({
+                detail: "Antigravity sign-in output is too large.",
+                cause: undefined,
+              });
+            }
+            yield* Effect.forEach(lines, handleLine, { discard: true });
+          }),
+        ),
+        Effect.andThen(Effect.suspend(() => handleLine(pending))),
+        Effect.forkScoped,
+      );
+      const stderr = yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+      return {
+        submit: (response: string) =>
+          Effect.sync(() => {
+            submitted = true;
+          }).pipe(Effect.andThen(Deferred.succeed(code, response)), Effect.asVoid),
+        completed: Effect.gen(function* () {
+          yield* Fiber.join(output).pipe(
+            Effect.mapError((cause) =>
+              failed("Antigravity returned an invalid Google sign-in link.", cause),
+            ),
+          );
+          const exitCode = yield* child.exitCode.pipe(
+            Effect.mapError((cause) => failed("Antigravity sign-in stopped unexpectedly.", cause)),
+          );
+          if (Number(exitCode) !== 0 || !submitted)
+            return yield* failed(
+              "Antigravity could not finish Google sign-in. Start sign-in again.",
+            );
+          yield* Fiber.join(stdin).pipe(
+            Effect.mapError((cause) => failed("Could not deliver the sign-in code.", cause)),
+          );
+          yield* Fiber.join(stderr).pipe(
+            Effect.mapError((cause) => failed("Antigravity sign-in stopped unexpectedly.", cause)),
+          );
+        }),
+      };
+    });
+
     const publishCatalog = Effect.fn("AntigravityDriver.publishCatalog")(function* (
       started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
       runtime: Pick<
@@ -456,6 +575,7 @@ export const AntigravityDriver: ProviderDriver<
         ),
       onSignedOut: (runtime) => provider.onSignedOut(runtime.userHome),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
+      codeLogin,
     });
 
     // The probe must not spawn. The agent is a PyInstaller one-file bundle
