@@ -54,6 +54,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import {
   asSession,
+  framelessNavigationRequest,
   scope,
   fileChooserElement,
   makeFrame,
@@ -345,7 +346,6 @@ it.live.each([
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.live("a snapshot that cannot capture times out on the request's own deadline (#1084)", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -370,7 +370,6 @@ it.live("a snapshot that cannot capture times out on the request's own deadline 
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live("logs read filtered diagnostics without page capture or invalidating snapshot refs", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -419,7 +418,6 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.effect("tells the desktop once per thread when its agent turns start and end", () =>
   Effect.gen(function* () {
     yield* ServerBrowser.ServerBrowser;
@@ -440,7 +438,6 @@ it.effect("tells the desktop once per thread when its agent turns start and end"
     expect(yield* Queue.size(turns)).toBe(0);
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
-
 it.effect("preview_open reports its navigation timeout instead of the request budget", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -467,7 +464,6 @@ it.effect("preview_open reports its navigation timeout instead of the request bu
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.effect.each(["desktop" as const, undefined])(
   "explicit desktop targets ($0 runtime) fail without creating a server tab",
   (runtime) =>
@@ -503,7 +499,6 @@ it.effect.each(["desktop" as const, undefined])(
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.effect("a desktop page that loaded before the server attached reports its loaded title", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -530,7 +525,6 @@ it.effect("a desktop page that loaded before the server attached reports its loa
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.effect.each([
   { method: "goto" as const, message: { type: "navigate", url: "http://10.255.255.1/" } },
   { method: "goBack" as const, message: { type: "history", delta: -1 } },
@@ -577,7 +571,6 @@ it.effect.each([
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live.each(["back", "forward"] as const)(
   "agents %s target the exact tab's history and return its observed URL",
   (operation) =>
@@ -620,7 +613,6 @@ it.live.each(["back", "forward"] as const)(
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.live.each(["back", "forward"] as const)("refuses %s with no history entry", (operation) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -637,7 +629,6 @@ it.live.each(["back", "forward"] as const)("refuses %s with no history entry", (
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live.each([false, true])(
   "reload cache bypass is opt-in (%s) and waits for commit",
   (ignoreCache) =>
@@ -688,7 +679,6 @@ it.live.each([false, true])(
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.live.each(["back", "forward", "reload"] as const)(
   "refuses %s while a human or another agent owns control",
   (operation) =>
@@ -715,7 +705,6 @@ it.live.each(["back", "forward", "reload"] as const)(
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.live("does not treat a hard reload acknowledgement as a committed navigation", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -739,7 +728,6 @@ it.live("does not treat a hard reload acknowledgement as a committed navigation"
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live("a takeover during history lookup prevents navigation from being sent", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -778,7 +766,6 @@ it.live("a takeover during history lookup prevents navigation from being sent", 
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live("reports interrupted reload after a human takes control during navigation", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -843,7 +830,6 @@ it.effect.each([
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.effect("enforces provider ownership and explicit targets when a session has multiple tabs", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -918,7 +904,6 @@ it.effect("enforces provider ownership and explicit targets when a session has m
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.effect(
   "streams to a read-only viewer without allowing takeover, input, or viewport changes",
   () =>
@@ -959,7 +944,6 @@ it.effect(
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.effect(
   "takeover waits for the running agent and revokes snapshot refs before returning control",
   () =>
@@ -1020,7 +1004,6 @@ it.effect(
       }),
     ).pipe(Effect.provide(layer)),
 );
-
 it.live("interrupts an active wait on takeover and frees the queue for human input", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1065,7 +1048,6 @@ it.live("interrupts an active wait on takeover and frees the queue for human inp
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live.each([
   { reader: "another agent", session: "observing-agent" },
   { reader: "the agent that opened it", session: scope.thread.providerSessionId },
@@ -1103,7 +1085,6 @@ it.live.each([
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.effect("reports a pending dialog without evaluating the page and resolves it explicitly", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1347,18 +1328,14 @@ it.effect("a request whose frame is not available yet is not a main navigation",
     Effect.gen(function* () {
       const { broker, tabId } = yield* ready;
       const page = contexts[0]!.page;
-      const frameless = {
-        redirectedFrom: () => null,
-        url: () => "https://example.com/early",
-        method: () => "GET",
-        isNavigationRequest: () => true,
-        frame: () => { throw new Error("Frame unavailable"); },
-        failure: () => ({ errorText: "net::ERR_CONNECTION_REFUSED" }),
-      };
-      expect(() => page.emit("request", frameless)).not.toThrow();
-      expect(() => page.emit("requestfailed", frameless)).not.toThrow();
+      const request = framelessNavigationRequest();
+      expect(() => page.emit("request", request)).not.toThrow();
+      expect(() => page.emit("requestfailed", request)).not.toThrow();
       const status = yield* broker.invoke<PreviewAutomationStatus>({
-        scope, tabId, operation: "status", input: {},
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
       });
       expect(status.loading).toBe(false);
     }),
