@@ -800,6 +800,31 @@ describe("a simple question gets one reply", () => {
     },
   );
 
+  it.effect("a streaming first message is sealed whole once a tool call follows it", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const input = yield* gateway.ingest(
+        goatInput("How full is the disk?", "boundary"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      const step = "Checking the disk now.\nI'll start with the home folder.";
+      harness.assistant(task, step, true);
+      yield* runtime.runPass;
+      assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+      harness.tool(task, "du -sh ~", 1);
+      yield* runtime.runPass;
+      yield* runtime.settle([input.inputId]);
+      yield* runtime.drain;
+      assert.deepStrictEqual(yield* replies(input.inputId), [step]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("a session whose thread cannot be read still gets its acknowledgment", () => {
     const harness = makeSessionHarness();
     const modes: string[] = [];
