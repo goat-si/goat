@@ -334,6 +334,13 @@ export interface AcpAdapterV2Flavor {
   readonly restartRuntimeOnEveryInterrupt?: boolean;
   readonly terminateRuntimeProcessGroupOnInterrupt?: boolean;
   readonly preserveRuntimeOnSettledInterrupt?: boolean;
+  /**
+   * Steers with another `session/prompt` while one runs: the agent answers the running prompt
+   * `end_turn` and carries the turn on under the new one, leaving its tools and subagents alone.
+   */
+  readonly steersWithPrompt?: (
+    initializeResult: AcpSessionRuntime.AcpSessionRuntimeStartResult["initializeResult"],
+  ) => boolean;
   readonly enablePostSettleContinuation?: AcpNegotiatedFlag;
   readonly requireForegroundWakeTransition?: boolean;
   /** Settle on native idle after the accepted user echo, only on negotiated ACP v2. */

@@ -117,7 +117,10 @@ export interface ActiveAcpTurn {
   promptSettled: boolean;
   promptSettledStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
   workAccepted: boolean;
-  readonly promptWireSettled: Deferred.Deferred<void, never>;
+  /** Settles with the turn's latest prompt; a prompt-steer replaces a settled one. */
+  promptWireSettled: Deferred.Deferred<void, never>;
+  /** Counts the turn's prompts; only the latest one settles the turn. */
+  promptSequence: number;
   promptUsage: EffectAcpSchema.Usage | undefined;
   backgroundFinalizeGeneration: number;
   replyOpen: boolean;
@@ -125,7 +128,7 @@ export interface ActiveAcpTurn {
   inactivityWatchdog: Fiber.Fiber<void> | undefined;
   readonly promptDispatched: Deferred.Deferred<void>;
   /** Frees the runtime for the next prompt while the agent still holds this one's response. */
-  readonly foregroundIdle: Deferred.Deferred<void>;
+  foregroundIdle: Deferred.Deferred<void>;
 }
 
 export type AcpRuntimeTeardownState =
