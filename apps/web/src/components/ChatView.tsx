@@ -1,3 +1,9 @@
+import {
+  isComposerEmpty,
+  useComposerHasAttachments,
+  useComposerHasSshAttachments,
+  useComposerNonPromptContent,
+} from "./chat/composerEmpty";
 import { threadHasStarted } from "../lib/chatThreadActions";
 import { useComposerDraftModelState } from "../composerModelState";
 import { isThreadEnvironmentLocked } from "./chat/threadEnvironmentLock";
@@ -223,7 +229,6 @@ import {
   useSidebarPendingFileDropStore,
 } from "../sidebarPendingFileDropStore";
 import {
-  composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -576,20 +581,8 @@ export default function ChatView(props: ChatViewProps) {
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
   );
-  const composerHasAttachments = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
-  });
-  const composerHasSshAttachments = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return (
-      draft != null &&
-      (draft.images.length > 0 ||
-        draft.files.length > 0 ||
-        draft.nonPersistedImageIds.length > 0 ||
-        draft.persistedAttachments.length > 0)
-    );
-  });
+  const composerHasAttachments = useComposerHasAttachments(composerDraftTarget);
+  const composerHasSshAttachments = useComposerHasSshAttachments(composerDraftTarget);
   const referencedThreadContexts = useComposerDraftStore(
     useShallow((store) => {
       const draft = store.getComposerDraft(composerDraftTarget);
@@ -599,10 +592,7 @@ export default function ChatView(props: ChatViewProps) {
       return draft.threadContexts.filter((record) => referenced.has(record.contextId));
     }),
   );
-  const composerHasNonPromptContent = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
-  });
+  const composerHasNonPromptContent = useComposerNonPromptContent(composerDraftTarget);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
@@ -2770,6 +2760,12 @@ export default function ChatView(props: ChatViewProps) {
     composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
     draftThreadRoute: routeKind === "draft",
     turnRunning: phase === "running",
+    composerEmpty: isComposerEmpty(
+      queuedRunEdit.isEditing,
+      pendingUserInputs.length,
+      composerHasNonPromptContent,
+      promptRef.current,
+    ),
     composerRequiresModifier: composerRequiresModifier(settings.sendShortcut, promptRef.current),
     isWeb: !isElectron,
     isDesktop: isElectron,
