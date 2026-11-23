@@ -1,3 +1,8 @@
+import {
+  brokenVersionDetail,
+  type ProviderCompatibilityLookup,
+} from "@goat/provider-core/server/ProviderHost";
+import { ProviderDriverKind } from "@goat/contracts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { compareSemverVersions } from "@goat/shared/semver";
 import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
@@ -35,6 +40,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   environment: NodeJS.ProcessEnv = process.env,
   profile: PiRuntimeProfile = PI_PROFILE,
   currentEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed(environment),
+  compatibility: ProviderCompatibilityLookup = () => Effect.undefined,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -55,7 +61,21 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           ),
           Effect.orElseSucceed(() => null),
         );
-        supportsThinking = version !== null && compareSemverVersions(version, "0.84.3") >= 0;
+        if (version === null)
+          return yield* new TextGenerationError({
+            operation,
+            detail: "GOAT could not determine the Pi version. Update Pi and try again.",
+          });
+        {
+          const broken = brokenVersionDetail({
+            name: profile.displayName,
+            version,
+            advisory: yield* compatibility(ProviderDriverKind.make(profile.driver), version),
+          });
+          if (broken !== undefined)
+            return yield* new TextGenerationError({ operation, detail: broken });
+        }
+        supportsThinking = compareSemverVersions(version, "0.84.3") >= 0;
       }
 
       const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs, profile);

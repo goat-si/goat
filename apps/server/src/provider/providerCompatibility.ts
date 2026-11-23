@@ -67,13 +67,15 @@ export function resolveProviderCompatibility(
   const unprefixed = version?.replace(/^v/, "");
   // Normalize known provider release tags; other prereleases stay unknown.
   const stable =
-    driver === "cursor"
-      ? unprefixed?.replace(/^(\d{4}\.\d{2}\.\d{2})-[a-f0-9]+$/, "$1")
-      : driver === "antigravity"
-        ? unprefixed?.replace(/^(?:agy_acp_server_)?(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$/, "$1")
-        : driver === "muse"
-          ? unprefixed?.replace(/^(\d+\.\d+\.\d+)-R\d+(?:\.\d+)?$/, "$1")
-          : unprefixed;
+    driver === "opencode"
+      ? unprefixed?.replace(/^(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/, "$1")
+      : driver === "cursor"
+        ? unprefixed?.replace(/^(\d{4}\.\d{2}\.\d{2})-[a-f0-9]+$/, "$1")
+        : driver === "antigravity"
+          ? unprefixed?.replace(/^(?:agy_acp_server_)?(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$/, "$1")
+          : driver === "muse"
+            ? unprefixed?.replace(/^(\d+\.\d+\.\d+)-R\d+(?:\.\d+)?$/, "$1")
+            : unprefixed;
   // GOAT versions differ from upstream, so an older cached policy cannot permit 1.4.
   const refusesLegacyAntigravity =
     driver === "antigravity" &&

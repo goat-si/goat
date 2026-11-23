@@ -36,6 +36,7 @@ import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import { makeShellJobs } from "./shellJobs.ts";
+import { validateOpenCodeCompatibility } from "../validateCompatibility.ts";
 import { deliver, finishIdleCommand } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
@@ -377,7 +378,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         }),
       );
     });
-
     const setSessionStatus =
       /* Provider events include streaming deltas; avoid a span for each update. */
       Effect.fnUntraced(function* (
@@ -390,7 +390,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({ type: "provider_session.updated", driver, providerSession: session });
       });
-
     const ordinalOf = (turn: ActiveTurn, nativeId: string) => {
       const known = turn.ordinals.get(nativeId);
       if (known !== undefined) return known;
@@ -4196,6 +4195,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const connection = yield* borrowConnection(server, launch).pipe(
           Effect.provideService(Scope.Scope, scope),
         );
+        yield* validateOpenCodeCompatibility(host, instanceId, connection.version);
         return yield* openSession(input, {
           connection,
           scope,

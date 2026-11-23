@@ -101,7 +101,7 @@
       "recommendedRange": ">=1.0.0",
       "ranges": [
         { "range": ">=0.80.5", "status": "supported" },
-        { "range": "<0.80.5", "status": "unsupported" }
+        { "range": "<0.80.5", "status": "broken" }
       ]
     },
     {

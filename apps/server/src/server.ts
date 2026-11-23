@@ -278,7 +278,6 @@ import * as PenServer from "./pen/PenServerLayers.ts";
 const HTTP_ROUTER_CONFIG = {
   maxParamLength: 512,
 } as const;
-
 // Skip Effect's default 20 s grace; WebSocket scope finalizers already close connections gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
@@ -805,6 +804,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       application,
       ProviderInstanceRegistryHydration.layerWithProviderHome.pipe(
         Layer.provide(layerPortScanner),
+        Layer.provide(ModelManifest.layer),
         Layer.provide(
           layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
         ),

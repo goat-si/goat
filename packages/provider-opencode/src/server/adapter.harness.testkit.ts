@@ -147,6 +147,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
       connectToOpenCodeServer: () =>
         Effect.succeed({
           url: "http://test.invalid",
+          version: "1.14.19",
           external: options.external ?? true,
           exitCode: null,
         }),
@@ -154,6 +155,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
     } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
     Effect.provideService(ProviderHost.ProviderHost, {
       paths: { cwd: "/workspace" },
+      compatibility: () => Effect.undefined,
       resolveAttachmentPath: () => null,
       ...host,
     } as unknown as ProviderHost.ProviderHost["Service"]),

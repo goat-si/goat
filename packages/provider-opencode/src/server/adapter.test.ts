@@ -136,7 +136,6 @@ describe("OpenCodeAdapterV2", () => {
       Effect.scoped,
     ),
   );
-
   it.effect("classifies APIError 429 as a usage limit", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -181,7 +180,6 @@ describe("OpenCodeAdapterV2", () => {
       Effect.scoped,
     ),
   );
-
   it.effect.each(["completed", "failed", "unavailable"] as const)(
     "normalizes OpenCode step usage for %s turns",
     (ending) =>
@@ -1290,11 +1288,12 @@ describe("OpenCodeAdapterV2", () => {
       }).pipe(
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
           connectToOpenCodeServer: () =>
-            Effect.succeed({ url: "http://test.invalid", external: true }),
+            Effect.succeed({ url: "http://test.invalid", version: "1.14.19", external: true }),
           createOpenCodeSdkClient: () => client,
         } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
         Effect.provideService(ProviderHost.ProviderHost, {
           paths: { cwd: "/workspace" },
+          compatibility: () => Effect.undefined,
           resolveAttachmentPath: () => null,
         } as unknown as ProviderHost.ProviderHost["Service"]),
       );
@@ -1834,11 +1833,12 @@ describe("OpenCodeAdapterV2", () => {
       }).pipe(
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
           connectToOpenCodeServer: () =>
-            Effect.succeed({ url: "http://test.invalid", external: true }),
+            Effect.succeed({ url: "http://test.invalid", version: "1.14.19", external: true }),
           createOpenCodeSdkClient: () => client,
         } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
         Effect.provideService(ProviderHost.ProviderHost, {
           paths: { cwd: "/workspace" },
+          compatibility: () => Effect.undefined,
           resolveAttachmentPath: () => null,
         } as unknown as ProviderHost.ProviderHost["Service"]),
       );

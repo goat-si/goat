@@ -680,6 +680,7 @@ export const OpenCodeDriver: ProviderDriver<
               loadOpenCode2Models,
               loadOpenCode2Skills,
               environment,
+              host.compatibility,
             ).pipe(
               Effect.annotateLogs({ providerInstanceId: instanceId }),
               Effect.annotateSpans({ providerInstanceId: instanceId }),

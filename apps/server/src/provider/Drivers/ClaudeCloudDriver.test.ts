@@ -51,6 +51,7 @@ const harness = Effect.fnUntraced(function* (
   let ptySpawns = 0;
   const directories: string[] = [];
   const host = ProviderHost.ProviderHost.of({
+    compatibility: () => Effect.undefined,
     paths: {
       cwd: "/fixture/repo",
       baseDir: "/fixture/goat",

@@ -1,3 +1,4 @@
+import { validateOpenCodeCompatibility } from "./validateCompatibility.ts";
 import { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
 export { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
 import {
@@ -287,6 +288,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             : {}),
           environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
         });
+        yield* validateOpenCodeCompatibility(host, options.instanceId, connection.version);
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,
           directory: cwd,
@@ -392,7 +394,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         let hasConnected = false;
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
-
         const logProtocolEvent = makeOpenCodeProtocolLogger({
           nativeEventLogger: options.nativeEventLogger,
           idAllocator,
@@ -400,7 +401,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           providerSessionId: input.providerSessionId,
           threadId: input.threadId,
         });
-
         const sdkCall = <A>(
           method: string,
           payload: unknown,

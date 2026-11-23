@@ -50,18 +50,17 @@ describe("verifyOpenCodeServerVersion", () => {
           makeHealthClient(() => Promise.resolve({ data })),
         ).pipe(Effect.flip);
         expect(error).toBeInstanceOf(OpenCodeRuntime.OpenCodeRuntimeError);
-        expect(error.detail).toContain("requires OpenCode v1.14.19 or newer");
+        expect(error.detail).toContain("OpenCode server returned an invalid");
       }),
     );
   }
 
-  effectIt.effect("rejects a server below the supported version", () =>
+  effectIt.effect("reports an old valid server version for manifest classification", () =>
     Effect.gen(function* () {
-      const error = yield* OpenCodeRuntime.verifyOpenCodeServerVersion(
+      const version = yield* OpenCodeRuntime.verifyOpenCodeServerVersion(
         makeHealthClient(() => Promise.resolve({ data: { healthy: true, version: "1.14.18" } })),
-      ).pipe(Effect.flip);
-      expect(error).toBeInstanceOf(OpenCodeRuntime.OpenCodeRuntimeError);
-      expect(error.detail).toContain("v1.14.18 is too old");
+      );
+      expect(version).toBe("1.14.18");
     }),
   );
 });

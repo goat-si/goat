@@ -147,6 +147,16 @@ describe("provider compatibility", () => {
     );
   });
 
+  it("classifies OpenCode prerelease builds using the manifest's stable version", () => {
+    const advisory = resolveProviderCompatibility(
+      ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+      ProviderDriverKind.make("opencode"),
+      "1.14.18-beta.1",
+      "0.1.2",
+    );
+    assert.strictEqual(advisory?.status, "broken");
+  });
+
   it("compares Cursor build dates without treating semver prereleases as stable", () => {
     const cursor = ProviderDriverKind.make("cursor");
     const cursorPolicy: ProviderCompatibilityPolicy = {

@@ -1,3 +1,4 @@
+import type { ProviderCompatibilityLookup } from "@goat/provider-core/server/ProviderHost";
 import { settingsSecretLiteral } from "@goat/contracts";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -185,6 +186,7 @@ const checkProvider = Effect.fn("checkProvider")(function* (
     ReadonlyArray<OpenCode2Model>,
     OpenCodeRuntime.OpenCodeRuntimeError
   > = Effect.succeed([]),
+  compatibility: ProviderCompatibilityLookup = () => Effect.undefined,
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -203,9 +205,15 @@ const checkProvider = Effect.fn("checkProvider")(function* (
         Effect.provideService(HttpClient.HttpClient, server),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, OpenCodeRuntimeTestDouble),
       );
-      return yield* checkOpenCodeProviderStatus(settings, cwd, probe, openCode2Models).pipe(
-        Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
-      );
+      return yield* checkOpenCodeProviderStatus(
+        settings,
+        cwd,
+        probe,
+        openCode2Models,
+        Effect.succeed([]),
+        environment,
+        compatibility,
+      ).pipe(Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner));
     }),
   );
 });
@@ -396,6 +404,40 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
         descriptor.options.map((entry) => entry.id),
         ["goat:default", "low", "high"],
       );
+    }),
+  );
+
+  it.effect("uses the current compatibility policy before inventory discovery", () =>
+    Effect.gen(function* () {
+      let refused = true;
+      const policy: ProviderCompatibilityLookup = () =>
+        Effect.succeed({
+          status: refused ? "broken" : "supported",
+          message: null,
+          recommendedVersion: null,
+          recommendedRange: ">=1.14.20",
+        });
+      const blocked = yield* checkProvider(
+        makeOpenCodeSettings(),
+        process.cwd(),
+        undefined,
+        undefined,
+        Effect.succeed([]),
+        policy,
+      );
+      NodeAssert.equal(blocked.status, "error");
+      NodeAssert.match(blocked.message ?? "", />=1\.14\.20/);
+      NodeAssert.equal(runtimeMock.state.startCalls, 0);
+      refused = false;
+      const allowed = yield* checkProvider(
+        makeOpenCodeSettings(),
+        process.cwd(),
+        undefined,
+        undefined,
+        Effect.succeed([]),
+        policy,
+      );
+      NodeAssert.notEqual(allowed.status, "error");
     }),
   );
 

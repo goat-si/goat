@@ -15,6 +15,8 @@ import * as PortScanner from "../preview/PortScanner.ts";
 import { ServerActivation } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DocumentText from "./DocumentText.ts";
+import * as ModelManifest from "./ModelManifest.ts";
+import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 
 export const layer = Layer.effect(
@@ -29,6 +31,7 @@ export const layer = Layer.effect(
     const digest = yield* Digest.Digest;
     const fileSystem = yield* FileSystem.FileSystem;
     const awaitServerReady = yield* ServerActivation;
+    const manifest = yield* Effect.serviceOption(ModelManifest.ModelManifest);
     const portDiscovery = yield* Effect.serviceOption(PortScanner.PortDiscovery);
     return ProviderHost.ProviderHost.of({
       ...(awaitServerReady === undefined ? {} : { awaitServerReady }),
@@ -36,6 +39,22 @@ export const layer = Layer.effect(
         ? { retainAgentPortDiscovery: portDiscovery.value.retainAgent }
         : {}),
       environmentId,
+      compatibility: Effect.fn("ProviderHost.compatibility")((driver, version) =>
+        (Option.isSome(manifest)
+          ? manifest.value.current
+          : Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST)
+        ).pipe(
+          Effect.map(
+            (current) =>
+              resolveProviderCompatibility(current.compatibility, driver, version) ??
+              resolveProviderCompatibility(
+                ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+                driver,
+                version,
+              ),
+          ),
+        ),
+      ),
       paths: {
         cwd: config.cwd,
         baseDir: config.baseDir,
