@@ -280,7 +280,7 @@ function formatClaudeUsageLimitWait(waitMs: number): string {
 
 export function claudeResetTimes(
   times: ReadonlyMap<string, string | null>,
-  result: { readonly class: string; readonly resetAt?: string | null } | null,
+  result: { readonly class: string; readonly resetAt?: string | null | undefined } | null,
 ): Array<string | null> {
   const hasResultReset = result?.class === "usage_limit" && result.resetAt != null;
   return Array.from(times)

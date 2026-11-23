@@ -2036,7 +2036,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             },
           ),
         );
-        assert.equal(removal.behavior, "deny");
+        assert.equal(removal?.behavior, "deny");
         // Forwarded asks (including ask rules and settings fallback) still need a decision
         // before queued init/status frames arrive.
         for (const { phase, frame } of [
