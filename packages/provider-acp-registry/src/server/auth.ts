@@ -221,6 +221,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       );
     yield* runProviderLoginTerminal({
       pty: pty.value,
+      retainFailureOutput: true,
       command: spawn.command,
       args: [...spawn.args, ...(method.args ?? [])],
       cwd: options.cwd,

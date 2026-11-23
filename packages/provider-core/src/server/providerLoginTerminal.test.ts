@@ -31,6 +31,7 @@ it.effect.each([0, 1])("terminal exit %s publishes only safe completion state", 
       ]),
       authenticate: (_, context) =>
         runProviderLoginTerminal({
+          retainFailureOutput: true,
           pty: {
             spawn: (input) =>
               Effect.sync(() => {
@@ -96,11 +97,23 @@ it.effect.each([0, 1])("terminal exit %s publishes only safe completion state", 
     });
     assert.strictEqual(written, "answer");
     assert.deepEqual(size, [100, 30]);
+    if (exitCode !== 0) data!("\r\nSign-in failed: check the VPN.");
     exit!({ exitCode, signal: null });
     const finished = yield* state(
       (state) => state.phase === (exitCode === 0 ? "succeeded" : "failed"),
     );
-    assert.isNull(finished.interaction);
+    if (exitCode === 0) assert.isNull(finished.interaction);
+    else {
+      assert.strictEqual(finished.interaction?.type, "terminal");
+      if (finished.interaction?.type === "terminal")
+        assert.strictEqual(
+          finished.interaction.output,
+          `${privateOutput}\r\nSign-in failed: check the VPN.`,
+        );
+      const other = yield* state((state) => state.phase === "failed", "other");
+      assert.isNull(other.interaction);
+      assert.notInclude(other.message ?? "", privateOutput);
+    }
     assert.notInclude(finished.message ?? "", privateOutput);
     if (exitCode !== 0)
       assert.strictEqual(
