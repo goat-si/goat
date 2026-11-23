@@ -652,7 +652,10 @@ export const make = Effect.gen(function* () {
               }
 
               return resolveSourceProjectPaths(input.cwd, [decoded.success], new Map()).pipe(
-                Effect.map(([record]) => toSummaryWithOptionalUpdatedAt(record!)),
+                Effect.map(([record]) => {
+                  if (record === undefined) throw new Error("Missing resolved merge request");
+                  return toSummaryWithOptionalUpdatedAt(record);
+                }),
               );
             }),
           ),
