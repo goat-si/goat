@@ -7,7 +7,15 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
+import type { OrchestrationV2ProviderFailure } from "@goat/contracts";
 import { watchAntigravityPromptOutcome } from "./AntigravityTurnOutcome.ts";
+
+const failureOf = (
+  outcome:
+    | OrchestrationV2ProviderFailure
+    | { readonly failure: OrchestrationV2ProviderFailure }
+    | undefined,
+) => (outcome !== undefined && "failure" in outcome ? outcome.failure : outcome);
 
 const USER_INPUT = 14;
 const PLANNER_RESPONSE = 15;
@@ -32,6 +40,16 @@ const RATE_LIMIT_ERROR = errorPayload(
 const INVALID_ARGUMENT_ERROR = errorPayload(
   "Error 400, Message: Request contains an invalid argument., Status: INVALID_ARGUMENT, Details: []",
 );
+const NOT_FOUND_ERROR = errorPayload(
+  "Error 404, Message: Requested entity was not found., Status: NOT_FOUND, Details: []",
+);
+// Antigravity 1.5 with a Google account writes "STATUS (code NNN): message", then the HTTP body.
+const STATUS_NOT_FOUND_ERROR = Buffer.concat([
+  Buffer.from([0x12, 0x37]),
+  Buffer.from(
+    'NOT_FOUND (code 404): Requested entity was not found.\u001a\u0080\u0001HTTP 404 Not Found\n\n{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}',
+  ),
+]);
 // The model's reply quoting the agent's quota notice is an ordinary planner response.
 const QUOTED_NOTICE = Buffer.from(
   "Usage Limit Reached\n\nYou have reached your current quota for this period. Your limit will reset in 1 hour.",
@@ -130,6 +148,33 @@ describe("watchAntigravityPromptOutcome", () => {
           retryable: false,
         },
       );
+      // A 404 after the turn already reached the model is a transient edge error, not a bad model.
+      for (const error of [NOT_FOUND_ERROR, STATUS_NOT_FOUND_ERROR]) {
+        assert.deepEqual(
+          yield* turn([
+            [USER_INPUT, input],
+            [PLANNER_RESPONSE, reply],
+            [TOOL, reply],
+            [ERROR_MESSAGE, error],
+          ]),
+          {
+            failure: {
+              class: "provider_error",
+              message: "Requested entity was not found.",
+              code: "NOT_FOUND",
+              retryable: true,
+            },
+            resumeWith: "continue",
+          },
+        );
+      }
+      // A 404 before the model answered is an unknown or unentitled model.
+      const unknownModel = yield* turn([
+        [USER_INPUT, input],
+        [ERROR_MESSAGE, STATUS_NOT_FOUND_ERROR],
+      ]);
+      assert.isFalse(unknownModel !== undefined && "resumeWith" in unknownModel);
+      assert.equal(failureOf(unknownModel)?.retryable, false);
       for (const error of [
         "messages.0.content.1.thinking.signature: Field required",
         "messages.0.content.1: Invalid `signature` in `thinking` block",
@@ -138,7 +183,7 @@ describe("watchAntigravityPromptOutcome", () => {
           [USER_INPUT, input],
           [ERROR_MESSAGE, errorPayload(error)],
         ]);
-        assert.equal(outcome?.code, "INVALID_THINKING_SIGNATURE");
+        assert.equal(failureOf(outcome)?.code, "INVALID_THINKING_SIGNATURE");
       }
       const gateway = errorPayload(
         "Error 502, Message: Bad Gateway: Failed to connect to backend API, Status: 502 Bad Gateway, Details: []",
@@ -155,43 +200,49 @@ describe("watchAntigravityPromptOutcome", () => {
         },
       );
       assert.isUndefined(
-        (yield* turn(
-          [
-            [USER_INPUT, input],
-            [ERROR_MESSAGE, RATE_LIMIT_ERROR],
-          ],
-          undefined,
-          { retired: true },
-        ))?.resetAt,
+        failureOf(
+          yield* turn(
+            [
+              [USER_INPUT, input],
+              [ERROR_MESSAGE, RATE_LIMIT_ERROR],
+            ],
+            undefined,
+            { retired: true },
+          ),
+        )?.resetAt,
       );
       const absoluteQuota = errorPayload(
         "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [reason:QUOTA_EXHAUSTED quotaResetTimeStamp:2026-11-09T01:05:00Z quotaResetDelay:3600s]",
       );
       assert.equal(
-        (yield* turn(
-          [
-            [USER_INPUT, input],
-            [ERROR_MESSAGE, absoluteQuota],
-          ],
-          undefined,
-          { retired: true },
-        ))?.resetAt,
+        failureOf(
+          yield* turn(
+            [
+              [USER_INPUT, input],
+              [ERROR_MESSAGE, absoluteQuota],
+            ],
+            undefined,
+            { retired: true },
+          ),
+        )?.resetAt,
         "2026-11-09T01:05:00.000Z",
       );
       // A completed tool keeps its usage, and the turn still fails.
       assert.equal(
-        (yield* turn(
-          [
-            [USER_INPUT, input],
-            [PLANNER_RESPONSE, reply],
-            [TOOL, reply],
-            [ERROR_MESSAGE, QUOTA_ERROR],
-          ],
-          {
-            stopReason: "end_turn",
-            usage: { inputTokens: 40, outputTokens: 5, totalTokens: 45 },
-          },
-        ))?.class,
+        failureOf(
+          yield* turn(
+            [
+              [USER_INPUT, input],
+              [PLANNER_RESPONSE, reply],
+              [TOOL, reply],
+              [ERROR_MESSAGE, QUOTA_ERROR],
+            ],
+            {
+              stopReason: "end_turn",
+              usage: { inputTokens: 40, outputTokens: 5, totalTokens: 45 },
+            },
+          ),
+        )?.class,
         "usage_limit",
       );
       assert.isUndefined(
@@ -242,7 +293,7 @@ describe("watchAntigravityPromptOutcome", () => {
       const linked = yield* watchAntigravityPromptOutcome(profileDirectory, own);
       append(peer, ERROR_MESSAGE, QUOTA_ERROR);
       assert.isUndefined(yield* linked({ stopReason: "end_turn" }));
-      assert.equal((yield* linked({ stopReason: "refusal" }))?.class, "usage_limit");
+      assert.equal(failureOf(yield* linked({ stopReason: "refusal" }))?.class, "usage_limit");
 
       // An unreadable log gives no evidence, but the agent's typed refusal still fails the turn.
       yield* fs.remove(path.join(conversations, `${own}.db`));

@@ -1,5 +1,6 @@
 import { makeRecordWakeReport } from "./recordWakeReport.ts";
-import { readRetiredPromptOutcome, type PromptOutcomeCheck } from "./retiredPromptOutcome.ts";
+import { promptOutcomeFailure, readRetiredPromptOutcome } from "./retiredPromptOutcome.ts";
+import type { PromptOutcomeCheck } from "./retiredPromptOutcome.ts";
 import {
   hasAcpDeferredBackgroundWork,
   idleReportedSubagents,
@@ -76,6 +77,7 @@ import type {
 } from "./adapterFlavor.ts";
 export type {
   AcpAdapterV2RuntimeInput,
+  AcpResumablePromptFailure,
   AcpAdapterV2NativeLogging,
   AcpAdapterV2UserInputRequest,
   AcpAdapterV2ExtensionContext,
@@ -6943,14 +6945,46 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   const nativeFailure = context.interrupted
                     ? undefined
                     : stopReasonFailure(result.stopReason, result.error);
-                  const hiddenFailure =
+                  const { failure: hiddenFailure, resumeWith } = promptOutcomeFailure(
                     nativeFailure !== undefined ||
-                    settle.checkPromptOutcome === undefined ||
-                    context.interrupted ||
-                    result.stopReason === "error" ||
-                    result.stopReason === "cancelled"
+                      settle.checkPromptOutcome === undefined ||
+                      context.interrupted ||
+                      result.stopReason === "error" ||
+                      result.stopReason === "cancelled"
                       ? undefined
-                      : yield* settle.checkPromptOutcome(result);
+                      : yield* settle.checkPromptOutcome(result),
+                  );
+                  if (
+                    hiddenFailure !== undefined &&
+                    resumeWith !== undefined &&
+                    steersWithPrompt &&
+                    !context.outcomeResumed
+                  ) {
+                    context.outcomeResumed = true;
+                    yield* reportProviderRetry({
+                      sessionId: context.nativeThreadId,
+                      failure: hiddenFailure,
+                    });
+                    const failResume = Effect.gen(function* () {
+                      if (context.finalized || context.interrupted) return;
+                      yield* Ref.set(runtimeRestartRequired, true);
+                      yield* terminalizeOpenForegroundTools(context, "failed");
+                      yield* finalizeTurn(context, "failed", hiddenFailure, {
+                        childTurnsContinue: hasSurvivingBackgroundWork(context),
+                      });
+                    });
+                    yield* steerWithPrompt({
+                      ...context.input,
+                      providerTurnId: context.providerTurnId,
+                      message: { ...context.input.message, text: resumeWith, attachments: [] },
+                    }).pipe(
+                      Effect.catchCause(() =>
+                        runRuntimeCallbackAtGeneration(settle.generation, failResume),
+                      ),
+                      Effect.forkIn(sessionScope),
+                    );
+                    return;
+                  }
                   if (hiddenFailure !== undefined) {
                     yield* Ref.set(runtimeRestartRequired, true);
                   }
@@ -7029,7 +7063,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       error.success._tag === "AcpRequestError" &&
                       error.success.code === -32800);
                   const failure = Cause.squash(cause);
-                  if (!interrupted && flavor.restartRuntimeAfterPromptError?.(failure) === true) {
+                  // A resumed prompt stands in for an outcome failure, which always restarts.
+                  if (
+                    !interrupted &&
+                    (context.outcomeResumed ||
+                      flavor.restartRuntimeAfterPromptError?.(failure) === true)
+                  ) {
                     yield* Ref.set(runtimeRestartRequired, true);
                   }
                   const agentAnswered =
@@ -7273,6 +7312,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               workAccepted: false,
               promptWireSettled,
               promptSequence: 0,
+              outcomeResumed: false,
               promptUsage: undefined,
               backgroundFinalizeGeneration: 0,
               replyOpen: false,

@@ -121,6 +121,8 @@ export interface ActiveAcpTurn {
   promptWireSettled: Deferred.Deferred<void, never>;
   /** Counts the turn's prompts; only the latest one settles the turn. */
   promptSequence: number;
+  /** The turn already resent a prompt after a resumable outcome failure. */
+  outcomeResumed: boolean;
   promptUsage: EffectAcpSchema.Usage | undefined;
   backgroundFinalizeGeneration: number;
   replyOpen: boolean;
