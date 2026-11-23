@@ -48,7 +48,6 @@ vi.mock("../updates/app-updates", () => ({
   isAppUpdateCheckAvailable: () => mocks.available,
   runAppUpdateCheck: mocks.check,
 }));
-import { SettingsAboutRouteScreen } from "./SettingsAboutRouteScreen";
 
 describe("About update actions (#3810)", () => {
   it.each([
@@ -58,6 +57,8 @@ describe("About update actions (#3810)", () => {
     "checks updates and opens the %s beta destination, reporting link failures",
     async (platform, url) => {
       mocks.platform = platform;
+      vi.resetModules();
+      const { SettingsAboutRouteScreen } = await import("./SettingsAboutRouteScreen");
       mocks.available = true;
       mocks.check
         .mockReset()
@@ -84,6 +85,7 @@ describe("About update actions (#3810)", () => {
     },
   );
   it("hides the manual check when updates are unavailable", async () => {
+    const { SettingsAboutRouteScreen } = await import("./SettingsAboutRouteScreen");
     mocks.available = false;
     const container = document.createElement("div");
     const root = createRoot(container);

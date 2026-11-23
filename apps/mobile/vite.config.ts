@@ -213,6 +213,7 @@ const reactTests = [
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
 // Their tests vary Platform.OS or __DEV__, which production inlining would erase.
 const devCompiledSources = [
+  "/features/settings/SettingsAboutRouteScreen.tsx",
   "/features/files/FileSourceSurface.tsx",
   "/lib/useNotificationPermissionStatus.ts",
   "/features/connection/ConnectionsNewRouteScreen.tsx",
