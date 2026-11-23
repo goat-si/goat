@@ -7,14 +7,16 @@ import {
   FILE_SURFACE_SUBHEADER_CLASS,
 } from "./fileSurfaceChrome";
 import { OFFICE_PREVIEW_MAX_BYTES, type OfficeWorkerResult } from "./officePreviewProtocol";
-const loadWordDocument = () => import("./office/WordDocument");
+import { loadWordDocument } from "./office/loadWordDocument";
 const Spreadsheet = lazy(() => import("./office/Spreadsheet"));
 const Presentation = lazy(() => import("./office/Presentation"));
-async function readOfficeFile(src: string, signal: AbortSignal) {
+async function readOfficeFile(src: string, signal: AbortSignal, onValidated: () => void) {
   const response = await fetch(src, { signal });
   if (!response.ok) throw new Error("The file could not be loaded. Close it and try again.");
   if (Number(response.headers.get("content-length")) > OFFICE_PREVIEW_MAX_BYTES)
     throw new Error("Preview limited to files under 50 MB.");
+  if (signal.aborted) return;
+  onValidated();
   const reader = response.body?.getReader();
   if (!reader) throw new Error("The file is unavailable.");
   const chunks: Uint8Array<ArrayBuffer>[] = [];
@@ -63,6 +65,7 @@ export default function OfficeViewer(props: {
       if (!controller.signal.aborted) fail(cause);
       controller.abort();
       worker.terminate();
+      clearTimeout(timer);
     };
     const timer = setTimeout(
       () => failure(new Error("This document took too long to preview. Open it in another app.")),
@@ -81,16 +84,17 @@ export default function OfficeViewer(props: {
         worker.terminate();
       }
     });
-    if (props.kind === "docx") {
-      void loadWordDocument()
-        .then(({ default: Viewer }) => {
-          if (!controller.signal.aborted) setWordDocument(() => Viewer);
-        })
-        .catch(failure);
-    }
-    void readOfficeFile(props.src, controller.signal)
+    void readOfficeFile(props.src, controller.signal, () => {
+      if (props.kind === "docx") {
+        void loadWordDocument()
+          .then(({ default: Viewer }) => {
+            if (!controller.signal.aborted) setWordDocument(() => Viewer);
+          })
+          .catch(failure);
+      }
+    })
       .then((bytes) => {
-        if (!controller.signal.aborted)
+        if (bytes && !controller.signal.aborted)
           worker.postMessage({ type: "open", kind: props.kind, bytes }, [bytes]);
       })
       .catch(failure);
