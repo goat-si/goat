@@ -183,12 +183,17 @@ export const SETTINGS_PICKER_TRIGGER_CLASSNAME =
   "min-w-0 max-w-none shrink-0 border-input bg-background font-normal text-foreground shadow-xs/5 hover:bg-accent/50 dark:bg-input/32 [&_svg[data-composer-control-chevron]]:stroke-[1.75] [&_svg[data-composer-control-chevron]]:opacity-70";
 
 export function PolicyTooltip({ children }: { readonly children: string }) {
+  const gt = useGT();
   return (
     <Tooltip>
       <TooltipTrigger
         delay={200}
         render={
-          <Button size="icon-micro" variant="ghost-muted" aria-label="Background policy details">
+          <Button
+            size="icon-micro"
+            variant="ghost-muted"
+            aria-label={gt("Background policy details")}
+          >
             <InfoIcon className="size-3.5" />
           </Button>
         }
