@@ -771,5 +771,9 @@
   "65d6260964ea1eda": "Isolierte Erinnerungen sind von der Suche ausgeschlossen. Lösche die Suche, um sie anzusehen.",
   "5c5a53ae73e4dc51": "Erinnerungen prüfen, die Aufmerksamkeit benötigen.",
   "45ea728edcbbc5eb": "Isolierte Erinnerungen einbeziehen",
-  "86d287aa1993a091": "Schließen"
+  "86d287aa1993a091": "Schließen",
+  "943a2587b62ac8a3": "Bei gesperrtem Host pausieren",
+  "ee0c5a67bcf4a637": "Im Energiesparmodus des Hosts pausieren",
+  "bd391a005bf1172e": "Im Energiesparmodus des Clients pausieren",
+  "2ed182d6338b4a7d": "Im Akkubetrieb pausieren"
 }

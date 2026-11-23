@@ -771,5 +771,9 @@
   "65d6260964ea1eda": "Quarantined memories are excluded from search. Clear search to review them.",
   "5c5a53ae73e4dc51": "Review memories that need attention.",
   "45ea728edcbbc5eb": "Include quarantined memories",
-  "86d287aa1993a091": "Close"
+  "86d287aa1993a091": "Close",
+  "943a2587b62ac8a3": "Pause when host is locked",
+  "ee0c5a67bcf4a637": "Pause on host low power",
+  "bd391a005bf1172e": "Pause on client low power",
+  "2ed182d6338b4a7d": "Pause on battery"
 }
