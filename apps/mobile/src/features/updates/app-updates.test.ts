@@ -75,6 +75,36 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
 }
 
 describe("runAppUpdateCheck", () => {
+  it("a manual check joining while rollback flushes prevents restart (#3830)", async () => {
+    const flushing = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const client = makeUpdateClient({
+      checkForUpdateAsync: async () => ({ isAvailable: false, isRollBackToEmbedded: true }),
+      fetchUpdateAsync: async () => ({ isNew: false, isRollBackToEmbedded: true }),
+    });
+    const { environment } = makeUpdateEnvironment({
+      flushPendingWrites: () => {
+        started.resolve();
+        return flushing.promise;
+      },
+    });
+    const deferral = createAppUpdateDeferral();
+    const background = runAppUpdateCheck({ client, environment, deferral });
+    await started.promise;
+    const states: AppUpdateCheckState[] = [];
+    const manual = runAppUpdateCheck({
+      client,
+      environment,
+      deferral,
+      applyMode: "manual",
+      onStateChange: (state) => states.push(state),
+    });
+    flushing.resolve();
+    await Promise.all([background, manual]);
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("ready");
+    expect(deferral.pendingInstall).toBe(true);
+  });
   it("a manual check joining a background rollback does not restart (#3810)", async () => {
     const check = Promise.withResolvers<{ isAvailable: boolean; isRollBackToEmbedded: boolean }>();
     const client = makeUpdateClient({

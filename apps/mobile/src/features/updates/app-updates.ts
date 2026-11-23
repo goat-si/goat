@@ -248,6 +248,7 @@ async function performAppUpdateCheck(
       deferral,
       options,
       options.applyMode === "immediate",
+      manualRequested,
     );
     if (outcome === "flush-failed") {
       setState("ready");
@@ -260,7 +261,7 @@ async function performAppUpdateCheck(
   armDeferredAppUpdateInstall(client, environment, deferral);
 }
 
-type AppUpdateInstallOutcome = "installed" | "flush-failed" | "restart-failed";
+type AppUpdateInstallOutcome = "installed" | "flush-failed" | "restart-failed" | "deferred";
 
 /** Flush persistence and wait for backgrounding before restarting mounted native surfaces. */
 async function installAppUpdate(
@@ -269,6 +270,7 @@ async function installAppUpdate(
   deferral: AppUpdateDeferral,
   options: AppUpdateCheckOptions,
   userRequested: boolean,
+  manualRequested: () => boolean = () => false,
 ): Promise<AppUpdateInstallOutcome> {
   if (deferral.installInProgress) return "installed";
   deferral.installInProgress = true;
@@ -283,6 +285,12 @@ async function installAppUpdate(
     );
     deferral.installInProgress = false;
     return "flush-failed";
+  }
+  if (!userRequested && manualRequested()) {
+    deferral.installInProgress = false;
+    deferral.pendingInstall = true;
+    setState("ready");
+    return "deferred";
   }
   const reloaded = await settlePromise(() => client.reloadAsync());
   if (reloaded._tag === "Failure") {
