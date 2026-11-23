@@ -249,14 +249,19 @@ function setPanelSurfaces(surfaces: ReadonlyArray<typeof BROWSER_SURFACE>) {
   });
 }
 
-function view(onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"]) {
+function view(
+  onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"],
+  locale = "en",
+) {
   return (
-    <PreviewView
-      threadRef={TEST_THREAD_REF}
-      tabId="tab-1"
-      visible
-      {...(onSendAnnotation ? { onSendAnnotation } : {})}
-    />
+    <GTProvider locale={locale} translations={{ zh: chinese }}>
+      <PreviewView
+        threadRef={TEST_THREAD_REF}
+        tabId="tab-1"
+        visible
+        {...(onSendAnnotation ? { onSendAnnotation } : {})}
+      />
+    </GTProvider>
   );
 }
 
@@ -441,12 +446,7 @@ describe("PreviewView", () => {
     setup();
     const container = document.createElement("div");
     container.style.cssText = "display:flex;width:400px;height:200px";
-    await using _screen = await render(
-      <GTProvider locale="zh" translations={{ zh: chinese }}>
-        {view()}
-      </GTProvider>,
-      { container },
-    );
+    await using _screen = await render(view(undefined, "zh"), { container });
     await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
     await userEvent.click(page.getByRole("menuitem", { name: "在网页中查找" }));
     const search = page.getByRole("searchbox", { name: "在网页中查找" });
