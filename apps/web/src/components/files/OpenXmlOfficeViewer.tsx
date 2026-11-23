@@ -7,6 +7,7 @@ import {
   FILE_SURFACE_SUBHEADER_CLASS,
 } from "./fileSurfaceChrome";
 import { OFFICE_PREVIEW_MAX_BYTES, type OfficeWorkerResult } from "./officePreviewProtocol";
+const loadWordDocument = () => import("./office/WordDocument");
 const Spreadsheet = lazy(() => import("./office/Spreadsheet"));
 const Presentation = lazy(() => import("./office/Presentation"));
 async function readOfficeFile(src: string, signal: AbortSignal) {
@@ -81,7 +82,7 @@ export default function OfficeViewer(props: {
       }
     });
     if (props.kind === "docx") {
-      void import("./office/WordDocument")
+      void loadWordDocument()
         .then(({ default: Viewer }) => {
           if (!controller.signal.aborted) setWordDocument(() => Viewer);
         })
