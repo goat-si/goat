@@ -99,7 +99,7 @@ if (
 }
 
 if (
-  process.env.GOAT_FAKE_CLAUDE_REJECTS_IMAGES === "1" &&
+  ["1", "reverse"].includes(process.env.GOAT_FAKE_CLAUDE_REJECTS_IMAGES) &&
   stdinContent.includes('"type":"image"')
 ) {
   process.stdout.write(
@@ -108,7 +108,10 @@ if (
       subtype: "success",
       is_error: true,
       api_error_status: 400,
-      result: "API Error: 400 Image inputs are not supported by this model",
+      result:
+        process.env.GOAT_FAKE_CLAUDE_REJECTS_IMAGES === "reverse"
+          ? "API Error: 400 This model does not support images"
+          : "API Error: 400 Image inputs are not supported by this model",
     }) + "\n",
   );
   process.exit(1);

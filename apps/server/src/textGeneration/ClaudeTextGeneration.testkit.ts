@@ -85,7 +85,7 @@ export function withFakeClaudeEnv<A, E, R>(
     settingsTempRoot?: string;
     argsMustNotContain?: string;
     stdinMustContain?: string;
-    rejectsImages?: boolean | "auth";
+    rejectsImages?: boolean | "auth" | "reverse";
     configDirMustBe?: string;
     cwdMustNotBe?: string;
     claudeConfig?: Partial<ClaudeSettings>;
@@ -123,7 +123,11 @@ export function withFakeClaudeEnv<A, E, R>(
       GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN: input.argsMustNotContain,
       GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN: input.stdinMustContain,
       GOAT_FAKE_CLAUDE_REJECTS_IMAGES:
-        input.rejectsImages === "auth" ? "auth" : input.rejectsImages ? "1" : undefined,
+        input.rejectsImages === "auth" || input.rejectsImages === "reverse"
+          ? input.rejectsImages
+          : input.rejectsImages
+            ? "1"
+            : undefined,
       GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE: input.cwdMustNotBe,
       GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE: input.configDirMustBe,
     };

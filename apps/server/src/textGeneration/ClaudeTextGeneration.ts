@@ -537,7 +537,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         (result) =>
           result.exitCode === 0 ||
           imageStdin === undefined ||
-          !/image (?:inputs? (?:are |is )?)?(?:not supported|unsupported)/i.test(
+          !/\bimages?\b[^\n]{0,80}\b(?:not support(?:ed)?|unsupported)\b|\b(?:not support(?:ed)?|unsupported)\b[^\n]{0,80}\bimages?\b/i.test(
             `${result.stderr}\n${claudeErrorResult(result.stdout) ?? ""}`,
           ),
         () =>
