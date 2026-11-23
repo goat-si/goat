@@ -42,6 +42,7 @@ const sessionListCatalog = (count: number, scenario?: string) =>
     prepare: () => Effect.die("unused prepare"),
     inspect: () => Effect.die("unused inspect"),
     uninstallManagedBinary: () => Effect.die("unused uninstall"),
+    prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
     resolve: () =>
       Effect.succeed({
         agent: {
@@ -663,6 +664,7 @@ describe("ACP Registry probe", () => {
           prepare: () => Effect.die("unused prepare"),
           inspect: () => Effect.die("unused inspect"),
           uninstallManagedBinary: () => Effect.die("unused uninstall"),
+          prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
           resolve: () =>
             Effect.succeed({
               agent: {
@@ -734,6 +736,7 @@ await import(pathToFileURL(agentPath).href);
         prepare: () => Effect.die("unused prepare"),
         inspect: () => Effect.die("unused inspect"),
         uninstallManagedBinary: () => Effect.die("unused uninstall"),
+        prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
         resolve: () =>
           Effect.succeed({
             distribution: "local",

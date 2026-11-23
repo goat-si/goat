@@ -1,3 +1,5 @@
+import { makeRegistryRuntimeTemp, prepareRegistryRuntimeSpawn } from "./registryRuntimeTemp.ts";
+import type * as Scope from "effect/Scope";
 import { withPreferredPath } from "./managedCommandPath.ts";
 import { parseNpxPackageSpec, parseUvxPackageSpec } from "./registryPackageSpec.ts";
 import {
@@ -448,6 +450,9 @@ export class AcpRegistryCatalog extends Context.Service<
       environment?: NodeJS.ProcessEnv,
       options?: { readonly allowInstall?: boolean; readonly spawnEnvironment?: NodeJS.ProcessEnv },
     ) => Effect.Effect<ResolvedAcpRegistryAgent, AcpRegistryError>;
+    readonly prepareRuntimeSpawn: (
+      resolved: ResolvedAcpRegistryAgent,
+    ) => Effect.Effect<AcpSessionRuntime.AcpSpawnInput, AcpRegistryError, Scope.Scope>;
     readonly uninstallManagedBinary: (
       input: AcpRegistryManagedBinaryUninstallInput,
     ) => Effect.Effect<AcpRegistryManagedBinaryUninstallResult, AcpRegistryError>;
@@ -465,6 +470,7 @@ export const layerFromHost = Layer.merge(
       return layer({
         cacheDir: paths.providerStatusCacheDir,
         toolsDir: path.join(paths.baseDir, "tools"),
+        runtimeTempDir: path.join(paths.stateDir, "antigravity-tmp", "acp-registry"),
       });
     }),
   ),
@@ -475,6 +481,7 @@ export interface AcpRegistryCatalogOptions {
   readonly cacheDir: string;
   readonly toolsDir: string;
   readonly registryUrl?: string;
+  readonly runtimeTempDir?: string;
 }
 
 const INSTALL_LOCK_RETRY_COUNT = 300;
@@ -539,6 +546,10 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     return permit.withPermits(1);
   };
   const preparedBinaryReservations = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+  const acquireRuntimeTemp =
+    input.runtimeTempDir === undefined
+      ? undefined
+      : yield* makeRegistryRuntimeTemp(input.runtimeTempDir, platform);
 
   const managerBinDirectory = Effect.fn("AcpRegistryCatalog.managerBinDirectory")(function* (
     runner: string,
@@ -1957,6 +1968,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     prepare,
     inspect,
     resolve,
+    prepareRuntimeSpawn: prepareRegistryRuntimeSpawn(acquireRuntimeTemp),
     uninstallManagedBinary,
   });
 });
