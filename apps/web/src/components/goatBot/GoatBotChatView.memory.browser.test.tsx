@@ -16,6 +16,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import { dismissContextMenu } from "~/contextMenuFallback";
 import { observeResize } from "~/lib/observeResize";
+import { navigationBlocked } from "~/lib/navigationHolds";
 
 import "~/index.css";
 
@@ -443,6 +444,7 @@ it("#3824 keeps refused note wording through closing and reopening the narrow sh
   await userEvent.click(page.getByRole("button", { name: "Back to chat", exact: true }));
   await expect.element(homeSheet()).not.toBeInTheDocument();
   await userEvent.clear(composer(screen));
+  expect(navigationBlocked()).toBe(true);
   await openMemory(screen);
   await expect
     .element(page.getByRole("textbox", { name: "New wording" }))
@@ -452,6 +454,21 @@ it("#3824 keeps refused note wording through closing and reopening the narrow sh
     .element(composer(screen))
     .toHaveValue(goatBotChangeNoteMessage(note.text, "Reply in English"));
   await expect.element(homeSheet()).not.toBeInTheDocument();
+});
+
+it("a changed note does not resurrect its old wording when the snapshot returns", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  state.notes = [{ ...note, text: "A changed note" }];
+  await screen.rerender(view());
+  await expect.element(screen.getByText("A changed note")).toBeVisible();
+  state.notes = [note];
+  await screen.rerender(view());
+  await expect.element(screen.getByRole("button", { name: "Ask to change" })).toBeVisible();
+  expect(navigationBlocked()).toBe(false);
 });
 
 it("a draft action never replaces the person's typed message or rides on their staged files", async () => {

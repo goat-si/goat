@@ -110,6 +110,26 @@ function NotesSection({
   useEffect(() => {
     if (trigger !== null) refresh();
   }, [trigger, refresh]);
+  const identity = JSON.stringify([environmentId, member?.botId ?? null, botId ?? null, shared]);
+  const setWordings = wordings[1];
+  // oxlint-disable-next-line goat/react-effect-budget -- A fresh server snapshot invalidates drafts for older note identities.
+  useEffect(() => {
+    if (!supported || notes.data === null) return;
+    const snapshot = notes.data;
+    const current = new Set(
+      goatBotNotesView({ notes: snapshot.notes, truncated: snapshot.truncated }).current.map(
+        (note) => JSON.stringify([identity, snapshot.revision, note.index, note.text]),
+      ),
+    );
+    setWordings((previous) => {
+      const next = new Map(previous);
+      for (const key of previous.keys()) {
+        const [keyIdentity] = JSON.parse(key) as [string];
+        if (keyIdentity === identity && !current.has(key)) next.delete(key);
+      }
+      return next.size === previous.size ? previous : next;
+    });
+  }, [identity, notes.data, setWordings, supported]);
   const failure = notes.failure === null ? null : botNotesFailure(notes.failure, botName);
   return (
     <div className="space-y-3">
@@ -130,7 +150,7 @@ function NotesSection({
       ) : (
         <NoteList
           wordings={wordings}
-          identity={JSON.stringify([environmentId, member?.botId ?? null, botId ?? null, shared])}
+          identity={identity}
           revision={notes.data.revision}
           notes={notes.data.notes}
           truncated={notes.data.truncated}

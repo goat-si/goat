@@ -1,3 +1,4 @@
+import { HoldsNavigation } from "~/lib/navigationHolds";
 import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
 import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
@@ -202,6 +203,12 @@ function GoatBotChatViewContent({
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
   const noteWordings = useState<ReadonlyMap<string, string>>(() => new Map());
+  const wordingOwner = JSON.stringify([environmentId, member?.botId ?? null]);
+  const [previousWordingOwner, setPreviousWordingOwner] = useState(wordingOwner);
+  if (previousWordingOwner !== wordingOwner) {
+    setPreviousWordingOwner(wordingOwner);
+    noteWordings[1](new Map());
+  }
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -450,6 +457,7 @@ function GoatBotChatViewContent({
   const refusalStep = goatBotRefusalStep(availability);
   return (
     <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
+      {noteWordings[0].size > 0 ? <HoldsNavigation /> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
