@@ -4,6 +4,7 @@ import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
 import { type GoatMcpToolDefinition, tool } from "./goatMcpToolDefinition.ts";
+import { normalizeGoatMcpToolLabel } from "./goatMcpToolLabel.ts";
 
 export type { GoatMcpToolDefinition, GoatMcpToolSummaryAction } from "./goatMcpToolDefinition.ts";
 
@@ -869,10 +870,6 @@ export const GOAT_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(GOAT_MCP_LEGACY_TOOL_ALIASES),
   ...Object.keys(GOAT_MCP_CANONICAL_TOOL_ALIASES),
 ]);
-
-function normalizeGoatMcpToolLabel(value: string): string {
-  return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
-}
 
 // Provider prefixes vary; only names in the GOAT inventory reach a tool renderer.
 const toolNameCache = new Map<string, string | null>();
