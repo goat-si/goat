@@ -57,5 +57,10 @@
   "8a79ebeceb89b809": "Esto elimina las vistas guardadas que no se pueden leer.",
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
   "00ad8aeed0a6c461": "Cancelar",
-  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo."
+  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
+  "1472b8664ddbb128": "Buscar actualizaciones de la aplicación",
+  "7ebd9f61d1766c38": "Instalar actualización de la aplicación",
+  "a840ff60c35b919d": "Ver versiones beta",
+  "5df0a7f15501c3d9": "No se pudieron abrir las versiones beta",
+  "78a04e0e625c0990": "Error de actualización"
 }

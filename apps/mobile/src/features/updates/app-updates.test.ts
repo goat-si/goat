@@ -75,6 +75,127 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
 }
 
 describe("runAppUpdateCheck", () => {
+  it("reports a failed rollback flush to a joining manual check without scheduling restart (#3830)", async () => {
+    using _report = vi.spyOn(console, "error").mockImplementation(() => {});
+    const flushing = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const client = makeUpdateClient({
+      checkForUpdateAsync: async () => ({ isAvailable: false, isRollBackToEmbedded: true }),
+      fetchUpdateAsync: async () => ({ isNew: false, isRollBackToEmbedded: true }),
+    });
+    const { environment, backgroundCallbacks } = makeUpdateEnvironment({
+      flushPendingWrites: () => {
+        started.resolve();
+        return flushing.promise;
+      },
+    });
+    const deferral = createAppUpdateDeferral();
+    const background = runAppUpdateCheck({ client, environment, deferral });
+    await started.promise;
+    const failures: string[] = [];
+    const manual = runAppUpdateCheck({
+      client,
+      environment,
+      deferral,
+      applyMode: "manual",
+      onFailure: (message) => failures.push(message),
+    });
+    flushing.reject(new Error("disk failed"));
+    await Promise.all([background, manual]);
+    expect(failures).toEqual(["disk failed"]);
+    expect(deferral.pendingInstall).toBe(true);
+    expect(backgroundCallbacks).toHaveLength(0);
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it.each(["current", "check failure", "fetch current", "fetch failure"])(
+    "keeps a pending update ready after %s (#3830)",
+    async (outcome) => {
+      using _report = vi.spyOn(console, "error").mockImplementation(() => {});
+      const client = makeUpdateClient({
+        checkForUpdateAsync: async () => {
+          if (outcome === "check failure") throw new Error("check failed");
+          return { isAvailable: outcome.startsWith("fetch"), isRollBackToEmbedded: false };
+        },
+        fetchUpdateAsync: async () => {
+          if (outcome === "fetch failure") throw new Error("fetch failed");
+          return { isNew: false, isRollBackToEmbedded: false };
+        },
+      });
+      const deferral = createAppUpdateDeferral();
+      deferral.pendingInstall = true;
+      const states: AppUpdateCheckState[] = [];
+      await runAppUpdateCheck({
+        client,
+        deferral,
+        applyMode: "manual",
+        onStateChange: (state) => states.push(state),
+      });
+      expect(states.at(-1)).toBe("ready");
+    },
+  );
+
+  it("a manual check joining while rollback flushes prevents restart (#3830)", async () => {
+    const flushing = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const client = makeUpdateClient({
+      checkForUpdateAsync: async () => ({ isAvailable: false, isRollBackToEmbedded: true }),
+      fetchUpdateAsync: async () => ({ isNew: false, isRollBackToEmbedded: true }),
+    });
+    const { environment } = makeUpdateEnvironment({
+      flushPendingWrites: () => {
+        started.resolve();
+        return flushing.promise;
+      },
+    });
+    const deferral = createAppUpdateDeferral();
+    const background = runAppUpdateCheck({ client, environment, deferral });
+    await started.promise;
+    const states: AppUpdateCheckState[] = [];
+    const manual = runAppUpdateCheck({
+      client,
+      environment,
+      deferral,
+      applyMode: "manual",
+      onStateChange: (state) => states.push(state),
+    });
+    flushing.resolve();
+    await Promise.all([background, manual]);
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("ready");
+    expect(deferral.pendingInstall).toBe(true);
+  });
+  it("a manual check joining a background rollback does not restart (#3810)", async () => {
+    const check = Promise.withResolvers<{ isAvailable: boolean; isRollBackToEmbedded: boolean }>();
+    const client = makeUpdateClient({
+      checkForUpdateAsync: () => check.promise,
+      fetchUpdateAsync: async () => ({ isNew: false, isRollBackToEmbedded: true }),
+    });
+    const { environment } = makeUpdateEnvironment();
+    const deferral = createAppUpdateDeferral();
+    const background = runAppUpdateCheck({ client, environment, deferral });
+    const manual = runAppUpdateCheck({ client, environment, deferral, applyMode: "manual" });
+    check.resolve({ isAvailable: false, isRollBackToEmbedded: true });
+    await Promise.all([background, manual]);
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+  });
+  it("downloads a manual check without restarting until the user installs (#3810)", async () => {
+    const client = makeAvailableUpdateClient();
+    const { environment } = makeUpdateEnvironment();
+    const deferral = createAppUpdateDeferral();
+    const states: AppUpdateCheckState[] = [];
+    await runAppUpdateCheck({
+      applyMode: "manual",
+      client,
+      environment,
+      deferral,
+      onStateChange: (state) => states.push(state),
+    });
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("ready");
+    await runAppUpdateCheck({ applyMode: "immediate", client, environment, deferral });
+    expect(client.reloadAsync).toHaveBeenCalledOnce();
+  });
   it("flushes pending writes before restarting", async () => {
     const client = makeAvailableUpdateClient();
     const { environment } = makeUpdateEnvironment();
@@ -154,7 +275,7 @@ describe("runAppUpdateCheck", () => {
     reportError.mockRestore();
   });
 
-  it("still restarts a user-requested install when the flush fails", async () => {
+  it("reports a failed flush without restarting a user-requested install (#3810)", async () => {
     const reportError = vi.spyOn(console, "error").mockImplementation(() => {});
     const client = makeAvailableUpdateClient();
     const { environment } = makeUpdateEnvironment({
@@ -163,14 +284,17 @@ describe("runAppUpdateCheck", () => {
       }),
     });
 
+    const failures: string[] = [];
     await runAppUpdateCheck({
       applyMode: "immediate",
       client,
       deferral: createAppUpdateDeferral(),
       environment,
+      onFailure: (message) => failures.push(message),
     });
 
-    expect(client.reloadAsync).toHaveBeenCalledOnce();
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+    expect(failures).toEqual(["storage unavailable"]);
     reportError.mockRestore();
   });
 
