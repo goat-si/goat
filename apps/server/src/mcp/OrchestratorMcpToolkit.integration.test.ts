@@ -80,10 +80,8 @@ const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(layerThreadStartMocks),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
-
 // Effect returns a declared tool failure as `isError` with its encoded payload
 // as JSON text, never as `structuredContent`.
-
 const parentThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
 const projectId = ProjectId.make("project:mcp-orchestrator");
 const codexInstanceId = ProviderInstanceId.make("codex");
@@ -95,23 +93,18 @@ const cancellationPrompt = "Remain active until the parent cancels this delegate
 const queuedFollowupPrompt = "Complete the queued follow-up and return the final result.";
 const queuedFollowupResult = "Queued delegated follow-up completed.";
 const longFollowupResult = "Long delegated follow-up line. ".repeat(1_500);
-
 const decodeDelegateTaskResult = Schema.decodeUnknownEffect(OrchestratorMcpDelegateTaskResult);
-
 // Sends within one environment are always delivered here, never relayed.
 const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendDelivered);
 const decodeThreadWaitResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
-
 const codexSelection = {
   instanceId: codexInstanceId,
   model: codexModel,
 } satisfies ModelSelection;
-
 const delegatedTaskStatusTranscriptFile = new URL(
   "../orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson",
   import.meta.url,
 );
-
 const readDelegatedTaskStatusTranscript = Effect.fn("readDelegatedTaskStatusTranscript")(
   function* (followupResult: string) {
     const fs = yield* FileSystem.FileSystem;
@@ -119,11 +112,19 @@ const readDelegatedTaskStatusTranscript = Effect.fn("readDelegatedTaskStatusTran
     const text = yield* fs.readFileString(
       yield* path.fromFileUrl(delegatedTaskStatusTranscriptFile),
     );
-    return yield* decodeProviderReplayNdjson(text.replaceAll(queuedFollowupResult, followupResult));
+    const transcript = yield* decodeProviderReplayNdjson(
+      text.replaceAll(queuedFollowupResult, followupResult),
+    );
+    return {
+      ...transcript,
+      metadata: {
+        ...transcript.metadata,
+        goatReplayTitles: ["MCP replay parent", delegatedPrompt],
+      },
+    };
   },
   Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
-
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -136,7 +137,6 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
-
 const layerUnusedScheduledTaskStub = Layer.succeed(
   ScheduledTaskService.ScheduledTaskService,
   ScheduledTaskService.ScheduledTaskService.of({
