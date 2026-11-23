@@ -802,5 +802,17 @@
   "568556fb7ba81f65": "Aumentar el intervalo: {label}",
   "726b70e60ea3bfdd": "Intervalo de comprobación del estado del proveedor",
   "5602db67733bdfd7": "Comprobado {time}",
-  "348ae20f5bc603cb": "Hora de comprobación no disponible"
+  "348ae20f5bc603cb": "Hora de comprobación no disponible",
+  "04bbcc29a55e564a": "Actualizar archivos del espacio de trabajo",
+  "a2bded0a93096ada": "Actualizando…",
+  "d01b4e0c6eb73eed": "Actualizar archivos",
+  "67e51fb7f3d0c0c0": "Buscar archivos",
+  "69858f722a57708c": "Buscar archivos de {projectName}",
+  "ec9e0be8ec693302": "Contraer todas las carpetas",
+  "b791dd86f7991cc0": "Expandir todas las carpetas",
+  "e1e1094e43a5f3d7": "{error} Haz clic para reintentar.",
+  "fdf309c643382f9a": "Hay más coincidencias. Acota la búsqueda.",
+  "3603184704a873fc": "Cargando archivos…",
+  "01cdd37750608ba0": "No hay archivos que coincidan.",
+  "ddb58ada5516a46d": "Archivos de {projectName}"
 }

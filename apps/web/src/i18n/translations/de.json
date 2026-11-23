@@ -802,5 +802,17 @@
   "568556fb7ba81f65": "{label} verlängern",
   "726b70e60ea3bfdd": "Intervall für die Anbieterstatusprüfung",
   "5602db67733bdfd7": "{time} überprüft",
-  "348ae20f5bc603cb": "Überprüfungszeit unbekannt"
+  "348ae20f5bc603cb": "Überprüfungszeit unbekannt",
+  "04bbcc29a55e564a": "Arbeitsbereichsdateien aktualisieren",
+  "a2bded0a93096ada": "Wird aktualisiert…",
+  "d01b4e0c6eb73eed": "Dateien aktualisieren",
+  "67e51fb7f3d0c0c0": "Dateien suchen",
+  "69858f722a57708c": "Dateien in {projectName} suchen",
+  "ec9e0be8ec693302": "Alle Ordner einklappen",
+  "b791dd86f7991cc0": "Alle Ordner ausklappen",
+  "e1e1094e43a5f3d7": "{error} Klicken, um es erneut zu versuchen.",
+  "fdf309c643382f9a": "Weitere Treffer verfügbar. Schränke deine Suche ein.",
+  "3603184704a873fc": "Dateien werden geladen…",
+  "01cdd37750608ba0": "Keine passenden Dateien.",
+  "ddb58ada5516a46d": "Dateien in {projectName}"
 }

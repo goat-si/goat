@@ -802,5 +802,17 @@
   "568556fb7ba81f65": "Aumentar o intervalo: {label}",
   "726b70e60ea3bfdd": "Intervalo de verificação do estado do provedor",
   "5602db67733bdfd7": "Verificado {time}",
-  "348ae20f5bc603cb": "Horário da verificação indisponível"
+  "348ae20f5bc603cb": "Horário da verificação indisponível",
+  "04bbcc29a55e564a": "Atualizar arquivos do espaço de trabalho",
+  "a2bded0a93096ada": "Atualizando…",
+  "d01b4e0c6eb73eed": "Atualizar arquivos",
+  "67e51fb7f3d0c0c0": "Buscar arquivos",
+  "69858f722a57708c": "Buscar arquivos de {projectName}",
+  "ec9e0be8ec693302": "Recolher todas as pastas",
+  "b791dd86f7991cc0": "Expandir todas as pastas",
+  "e1e1094e43a5f3d7": "{error} Clique para tentar novamente.",
+  "fdf309c643382f9a": "Há mais resultados. Refine sua busca.",
+  "3603184704a873fc": "Carregando arquivos…",
+  "01cdd37750608ba0": "Nenhum arquivo correspondente.",
+  "ddb58ada5516a46d": "Arquivos de {projectName}"
 }
