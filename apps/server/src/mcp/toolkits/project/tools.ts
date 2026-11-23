@@ -137,6 +137,7 @@ export const ThreadLaunchParameters = Schema.Struct({
     }),
   ),
   title: TrimmedNonEmptyString,
+  generateTitle: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   memoryGrantCeiling: Schema.optional(MemoryTaskGrantCeiling),
   permissionProfileCeiling: Schema.optional(PermissionProfile),
