@@ -120,7 +120,7 @@ import {
 import { markdownFileEditorTarget, resolveMarkdownFileHostPath } from "../markdownFileHostPath";
 import { normalizeMarkdownLinkHrefKey } from "./chatMarkdownLinkHref";
 import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
-import { contextMenuForEvent } from "../contextMenuSource";
+import { contextMenuForEvent, openContextMenuFromKeyboard } from "../contextMenuSource";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -1068,6 +1068,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
           onAuxClick={(event) => {
             props.onAuxClick?.(event);
             handleMarkdownLinkAuxClick(event, environmentId, href);
+          }}
+          onKeyDown={(event) => {
+            if (href && faviconHost) openContextMenuFromKeyboard(event);
           }}
           onContextMenu={(event) => {
             if (!href || !faviconHost) return;

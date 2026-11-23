@@ -8,7 +8,7 @@ import {
 import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { memo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 
-import { contextMenuSourceOf } from "../../contextMenuSource";
+import { contextMenuSourceOf, openContextMenuFromKeyboard } from "../../contextMenuSource";
 import { useNativeFileDrag } from "../../useNativeFileDrag";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
@@ -380,6 +380,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
                 handleOpenInFilePreview();
               }}
               onContextMenu={handleContextMenu}
+              onKeyDown={openContextMenuFromKeyboard}
             >
               <FileTagChipContent
                 icon={
@@ -406,6 +407,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               data-markdown-copy={copyMarkdown}
               onClick={handleContextMenu}
               onContextMenu={handleContextMenu}
+              onKeyDown={openContextMenuFromKeyboard}
             >
               <FileTagChipContent
                 icon={
