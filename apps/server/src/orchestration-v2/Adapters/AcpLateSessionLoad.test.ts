@@ -441,6 +441,8 @@ describe("late ACP session load", () => {
       // With no run left to receive it, only a session-scoped update reaches the projection.
       assert.isTrue(late.sessionScoped);
       assert.equal(late.providerThread.status, "idle");
+      const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+      assert.deepEqual(snapshot.providerTurns, []);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });
