@@ -4,6 +4,13 @@ import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
+import { branchBaseConfigKey, legacyBranchBaseConfigKey } from "./gitBranchBaseKeys.ts";
+import {
+  PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES,
+  RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES,
+  RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES,
+  RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES,
+} from "./gitContextLimits.ts";
 import {
   WORKTREE_ADD_STALL_TIMEOUT_MS,
   WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS,
@@ -73,7 +80,11 @@ import {
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Data from "effect/Data";
+import {
+  StatusRemoteRefreshCacheKey,
+  GitRefsSnapshotCacheKey,
+  GitRefsRefreshCacheKey,
+} from "./gitCacheKeys.ts";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -163,20 +174,9 @@ import { classifyGitFailure, gitFailureDetail } from "./gitFailureClassification
 import { localTrackingDestination } from "./localTrackingDestination.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-/** GOAT's record of the branch, named as on the host, that a branch was cut from. */
-const branchBaseConfigKey = (branch: string) => `branch.${branch}.t3-merge-base`;
-/**
- * Where GOAT kept that record before it had a key of its own, for every host alike: the GitHub
- * CLI's key, which branches cut before then still carry instead.
- */
-const legacyBranchBaseConfigKey = (branch: string) => `branch.${branch}.gh-merge-base`;
 const gitProcesses = Semaphore.makeUnsafe(8);
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
-const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
-const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
-const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
-const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_FETCH_TIMEOUT = Duration.minutes(5);
@@ -195,21 +195,6 @@ const STATUS_DEFAULT_BRANCH_CACHE_TTL = Duration.minutes(5);
 const STATUS_ORIGIN_EXISTS_CACHE_TTL = Duration.minutes(5);
 
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
-
-class StatusRemoteRefreshCacheKey extends Data.Class<{
-  gitCommonDir: string;
-  remoteName: string;
-}> {}
-
-class GitRefsSnapshotCacheKey extends Data.Class<{
-  gitCommonDir: string;
-  epoch: number;
-}> {}
-
-class GitRefsRefreshCacheKey extends Data.Class<{
-  gitCommonDir: string;
-  generation: number;
-}> {}
 
 interface GitRepositoryPaths {
   readonly gitCommonDir: string;
@@ -1419,6 +1404,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const readStatusDetailsRemote = Effect.fn("readStatusDetailsRemote")(function* (
     cwd: string,
     refreshUpstream: boolean,
+    includeAheadOfDefault = true,
   ) {
     const branchResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetailsRemote.branch",
@@ -1518,7 +1504,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       (branch === defaultBranch ||
         (defaultBranch === null && (branch === "main" || branch === "master")));
     const aheadOfDefaultCount =
-      branch && !isDefaultBranch
+      branch && !isDefaultBranch && includeAheadOfDefault
         ? upstreamRef === null
           ? aheadCount
           : yield* computeAheadCountAgainstBase(cwd, branch, {
@@ -1822,22 +1808,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return yield* readStatusDetailsLocal(cwd, options);
   });
 
-  const statusDetails: GitVcsDriver.GitVcsDriver["Service"]["statusDetails"] = Effect.fn(
-    "statusDetails",
-  )(function* (cwd) {
-    yield* refreshStatusUpstreamIfStale(cwd).pipe(
+  const refreshStatusUpstream = (cwd: string) =>
+    refreshStatusUpstreamIfStale(cwd).pipe(
       Effect.catchTags({
         GitCommandError: (error) =>
           isMissingGitCwdError(error) ? Effect.void : Effect.fail(error),
       }),
       Effect.ignoreCause({ log: true }),
     );
+
+  const statusDetails: GitVcsDriver.GitVcsDriver["Service"]["statusDetails"] = Effect.fn(
+    "statusDetails",
+  )(function* (cwd) {
+    yield* refreshStatusUpstream(cwd);
     return yield* readStatusDetailsLocal(cwd);
   });
 
   const statusDetailsRemote: GitVcsDriver.GitVcsDriver["Service"]["statusDetailsRemote"] =
     Effect.fn("statusDetailsRemote")(function* (cwd, options) {
-      return yield* readStatusDetailsRemote(cwd, options?.refreshUpstream !== false);
+      return yield* readStatusDetailsRemote(
+        cwd,
+        options?.refreshUpstream !== false,
+        options?.includeAheadOfDefault !== false,
+      );
     });
 
   const status: GitVcsDriver.GitVcsDriver["Service"]["status"] = (input) =>
@@ -2225,7 +2218,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const pushCurrentBranch: GitVcsDriver.GitVcsDriver["Service"]["pushCurrentBranch"] = Effect.fn(
     "pushCurrentBranch",
   )(function* (cwd, fallbackBranch, options) {
-    const details = yield* statusDetails(cwd);
+    // Refresh first so the branch, upstream and divergence reads below stay close together.
+    yield* refreshStatusUpstream(cwd);
+    const details = yield* readStatusDetailsRemote(cwd, false, false);
     const branch = details.branch ?? fallbackBranch;
     if (!branch) {
       return yield* new GitCommandError({
