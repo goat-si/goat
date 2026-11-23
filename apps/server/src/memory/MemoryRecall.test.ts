@@ -319,6 +319,28 @@ it.effect(
     }).pipe(Effect.provide(live)),
 );
 
+it.effect("limits the encoded turn memory response with multibyte excerpts (#3801)", () =>
+  Effect.gen(function* () {
+    yield* setupThreads;
+    yield* save(14, { kind: "user" }, "memory " + "🦊".repeat(128));
+    const recall = yield* Recall.MemoryRecall;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_v2_events(thread_id TEXT, event_type TEXT)`;
+    yield* receiptsMigration;
+    const runId = M.RunId.make("byte-budget-run");
+    const result = yield* recall.recall({ query: "memory" }, Effect.void, caller);
+    const ref = result.items[0];
+    assert.isDefined(ref);
+    if (!ref) return;
+    for (let n = 0; n < 32; n++)
+      yield* recordTurnMemory(sql, caller.threadId, runId, Fixture.space, "automatic", Array(20).fill(ref));
+    const service = yield* Service.MemoryService;
+    const trace = yield* service.inspectTurn({ memorySpaceId: Fixture.space, threadId: caller.threadId, runId }, Effect.void);
+    assert.isAtMost(Buffer.byteLength(JSON.stringify(trace), "utf8"), 64 * 1024);
+    assert.isTrue(trace.truncated);
+  }).pipe(Effect.provide(live)),
+);
+
 it.effect("finds a topic after conversational question words", () =>
   Effect.gen(function* () {
     yield* save(100, { kind: "user" }, "deployment uses the nightly channel");

@@ -15,6 +15,7 @@ const decodeRefs = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array
 const decodeToolInput = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
 const digest = (query: string) => NodeCrypto.createHash("sha256").update(query).digest("hex");
 const eventLimit = 32;
+const responseByteLimit = 60 * 1024;
 
 export function recordTurnMemory(
   sql: SqlClient.SqlClient,
@@ -123,7 +124,12 @@ const inspectTurnMemory = Effect.fn("TurnMemory.inspect")(function* (
     });
   }
   yield* authorize;
-  return { events, truncated: rows.length > eventLimit };
+  let truncated = rows.length > eventLimit;
+  while (Buffer.byteLength(JSON.stringify({ events, truncated: true }), "utf8") > responseByteLimit) {
+    events.pop();
+    truncated = true;
+  }
+  return { events, truncated };
 });
 
 export const makeTurnMemoryReader =
