@@ -88,11 +88,16 @@ export function normalizeEventKey(key: string): string {
   return normalized;
 }
 
+export type ShortcutKeyboardLayoutMap = Pick<ReadonlyMap<string, string>, "get">;
+
 export function shortcutKeyFromEvent(
   event: Pick<ShortcutEventLike, "key" | "code" | "shiftKey" | "altKey">,
+  keyboardLayoutMap?: ShortcutKeyboardLayoutMap,
 ): string {
   const layoutKey = normalizeEventKey(event.key);
   if (/^[a-z]$/.test(layoutKey)) return layoutKey;
+  const mappedKey = event.code ? keyboardLayoutMap?.get(event.code)?.toLowerCase() : undefined;
+  if (mappedKey && /^[a-z]$/.test(mappedKey)) return mappedKey;
   const usOptionLetter = event.altKey ? US_MAC_OPTION_GLYPH_LETTERS.get(event.key) : undefined;
   if (usOptionLetter && event.code === `Key${usOptionLetter.toUpperCase()}`) return usOptionLetter;
   if (layoutKey === "+" && !event.shiftKey && !event.altKey && !event.code?.startsWith("Digit"))
@@ -101,13 +106,18 @@ export function shortcutKeyFromEvent(
   return physicalKey ?? layoutKey;
 }
 
-export function resolveEventKeys(event: ShortcutEventLike): Set<string> {
+export function resolveEventKeys(
+  event: ShortcutEventLike,
+  keyboardLayoutMap?: ShortcutKeyboardLayoutMap,
+): Set<string> {
   const layoutKey = normalizeEventKey(event.key);
   const keys = new Set([layoutKey]);
   const letterCode = event.code?.match(/^Key([A-Z])$/)?.[1];
-  if (letterCode && !/^[a-z]$/.test(layoutKey)) {
+  const shortcutKey = shortcutKeyFromEvent(event, keyboardLayoutMap);
+  if (letterCode && !/^[a-z]$/.test(shortcutKey)) {
     keys.add(letterCode.toLowerCase());
   }
+  keys.add(shortcutKey);
   keys.add(shortcutKeyFromEvent(event));
   return keys;
 }
@@ -132,6 +142,7 @@ export function matchesKeybindingShortcut(
   event: ShortcutEventLike,
   shortcut: KeybindingShortcut,
   platform: string,
+  keyboardLayoutMap?: ShortcutKeyboardLayoutMap,
 ): boolean {
   if (
     !isMacPlatform(platform) &&
@@ -140,7 +151,10 @@ export function matchesKeybindingShortcut(
   )
     return false;
   if (!matchesKeybindingShortcutModifiers(event, shortcut, platform)) return false;
-  return resolveEventKeys(event).has(shortcut.key);
+  return resolveEventKeys(
+    event,
+    isMacPlatform(platform) && event.altKey ? keyboardLayoutMap : undefined,
+  ).has(shortcut.key);
 }
 
 type WhenToken =

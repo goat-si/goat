@@ -18,15 +18,26 @@ import {
   resolveEventKeys,
   type ShortcutEventLike as SharedShortcutEventLike,
   type ShortcutModifierStateLike,
+  type ShortcutKeyboardLayoutMap,
+  shortcutKeyFromEvent as sharedShortcutKeyFromEvent,
 } from "@goat/shared/keybindings";
 import { isElectron } from "./env";
 import { isFileTreeFocused, isFileViewFocused } from "./lib/fileViewFocus";
 import { isNotesPageOpen } from "./notes/notesPageVisibility";
 import { isEditableFocused } from "./lib/editableFocus";
 import { projectScriptIdFromCommand } from "./projectScripts";
+import { getKeyboardLayoutMap } from "./keyboardLayout";
 
 export type { ShortcutModifierStateLike } from "@goat/shared/keybindings";
-export { shortcutKeyFromEvent } from "@goat/shared/keybindings";
+export function shortcutKeyFromEvent(
+  event: Pick<ShortcutEventLike, "key" | "code" | "shiftKey" | "altKey">,
+  platform: string,
+) {
+  return sharedShortcutKeyFromEvent(
+    event,
+    isMacPlatform(platform) && event.altKey ? getKeyboardLayoutMap() : undefined,
+  );
+}
 
 export interface ShortcutEventLike extends SharedShortcutEventLike {
   target?: EventTarget | null;
@@ -45,6 +56,7 @@ export interface ShortcutMatchContext {
 
 interface ShortcutMatchOptions {
   platform?: string;
+  keyboardLayoutMap?: ShortcutKeyboardLayoutMap;
   context?: Partial<ShortcutMatchContext>;
 }
 
@@ -199,7 +211,15 @@ export function resolveShortcutCommand(
     const binding = keybindings[index];
     if (!binding) continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
-    if (!matchesKeybindingShortcut(event, shortcutForContext(binding, context), platform)) continue;
+    if (
+      !matchesKeybindingShortcut(
+        event,
+        shortcutForContext(binding, context),
+        platform,
+        options?.keyboardLayoutMap ?? getKeyboardLayoutMap(),
+      )
+    )
+      continue;
     return binding.command;
   }
   return null;
