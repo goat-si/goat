@@ -760,7 +760,7 @@ private class DiffCanvasView(context: Context) : View(context) {
         rowHitAt(event.y)?.let { hit ->
           val target = if (
             hit.row.kind == "file" &&
-            drawing.fileHeaderCheckboxRect(
+            drawing.fileHeaderCheckboxHitRect(
               hit.top,
               hit.bottom,
               width,
