@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-const ruleFiles = ["AGENTS.md", "GEMINI.md"] as const;
+const ruleFiles = ["AGENTS.md", "GEMINI.md", "config/skills.json"] as const;
 
 const RuleCopiesJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const decodeRuleCopies = Schema.decodeUnknownOption(RuleCopiesJson);
@@ -40,6 +40,7 @@ export const copyAntigravityUserRuleFiles = Effect.fn("copyAntigravityUserRuleFi
           delete copies[name];
           return;
         }
+        yield* fs.makeDirectory(path.dirname(link), { recursive: true });
         yield* fs.writeFileString(link, source);
         copies[name] = source;
       }).pipe(
@@ -78,6 +79,7 @@ export const linkAntigravityUserRuleFiles = Effect.fn("linkAntigravityUserRuleFi
           return;
         }
         if ((yield* fs.exists(link)) || !(yield* fs.exists(target))) return;
+        yield* fs.makeDirectory(path.dirname(link), { recursive: true });
         yield* fs.symlink(target, link);
       }).pipe(
         Effect.catch(() =>
