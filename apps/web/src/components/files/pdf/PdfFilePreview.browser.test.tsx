@@ -1,7 +1,9 @@
+import { GTProvider } from "gt-react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import "~/index.css";
+import chinese from "~/i18n/translations/zh.json";
 import { BrowserDocumentFrame } from "../BrowserDocumentFrame";
 import { PdfPageInput } from "./PdfToolbar";
 import { isPdfFindShortcut } from "./pdfShortcuts";
@@ -86,9 +88,17 @@ async function type(input: HTMLInputElement, value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
-async function open(src = "https://remote.test/file.pdf", onRetry?: () => Promise<string | null>) {
+async function open(
+  src = "https://remote.test/file.pdf",
+  onRetry?: () => Promise<string | null>,
+  locale = "en",
+) {
   await act(async () => {
-    root.render(<BrowserDocumentFrame src={src} title="Fixture" pdf onRetry={onRetry} />);
+    root.render(
+      <GTProvider locale={locale} translations={{ zh: chinese }}>
+        <BrowserDocumentFrame src={src} title="Fixture" pdf onRetry={onRetry} />
+      </GTProvider>,
+    );
   });
   await act(async () => {
     await vi.dynamicImportSettled();
@@ -316,6 +326,27 @@ describe("integrated PDF surface", () => {
     await click("Next match");
     expect(host.querySelector('[aria-label="Page 1"]')).not.toBeNull();
     await click("Close find");
+    expect(host.querySelector('[role="search"]')).toBeNull();
+  });
+  it("localizes PDF find controls and both versions of the result count", async () => {
+    await open(undefined, undefined, "zh");
+    await click("查找");
+    const search = host.querySelector('[role="search"][aria-label="在 PDF 中查找"]');
+    expect(search).not.toBeNull();
+    const input = search!.querySelector<HTMLInputElement>('input[aria-label="在 PDF 中查找"]')!;
+    await type(input, "needle");
+    expect(search!.querySelector('[role="status"] [aria-hidden="true"]')?.textContent).toBe(
+      "1 / 2",
+    );
+    expect(search!.querySelector('[role="status"] .sr-only')?.textContent).toBe(
+      "第 1 项，共 2 项匹配",
+    );
+    expect(button("上一个匹配项")).toBeDefined();
+    await click("下一个匹配项");
+    expect(search!.querySelector('[role="status"] [aria-hidden="true"]')?.textContent).toBe(
+      "2 / 2",
+    );
+    await click("关闭查找");
     expect(host.querySelector('[role="search"]')).toBeNull();
   });
   it("reloads a failed PDF with a renewed signed URL", async () => {
