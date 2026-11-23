@@ -32,7 +32,9 @@ it("keeps historical turns without receipts distinguishable from an empty recall
   expect(inspect).not.toHaveBeenCalled();
   const button = screen.getByRole("button", { name: "Turn memory" });
   await button.click();
-  expect(screen.container.textContent).toContain("No memory activity was recorded for this turn.");
+  expect(screen.container.textContent).toContain(
+    "No memory activity is recorded; recording may be incomplete.",
+  );
   expect(screen.container.textContent).not.toContain("No visible entries.");
   registry.set(
     receipt,
@@ -43,6 +45,14 @@ it("keeps historical turns without receipts distinguishable from an empty recall
   );
   await expect.element(screen.getByText("Query: late result")).toBeVisible();
   await expect.element(button).toHaveAttribute("aria-expanded", "true");
+  registry.set(receipt, Option.some({ events: [], truncated: false, incomplete: true }));
+  await expect
+    .element(screen.getByText("Some memory activity could not be shown or recorded."))
+    .toBeVisible();
+  registry.set(receipt, Option.some({ events: [], truncated: true }));
+  await expect
+    .element(screen.getByText("Some memory activity could not be shown or recorded."))
+    .toBeVisible();
   await button.click();
   expect(screen.container.textContent).toBe("Turn memory");
 });

@@ -14,6 +14,7 @@ const encodeRefs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.TurnMe
 const decodeRefs = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(M.TurnMemoryRef)));
 const decodeToolInput = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
 const digest = (query: string) => NodeCrypto.createHash("sha256").update(query).digest("hex");
+let untrackedWriteFailure = false;
 const eventLimit = 32;
 const responseByteLimit = 60 * 1024;
 
@@ -35,7 +36,18 @@ export function recordTurnMemory(
       AND (SELECT COUNT(*) FROM turn_memory_receipts WHERE thread_id=${threadId}
            AND run_id=${runId} AND space=${space}) <= ${eventLimit}`.pipe(
     Effect.asVoid,
-    Effect.catch(() => Effect.logWarning("Could not record turn memory receipt")),
+    Effect.catch(() =>
+      sql`INSERT OR IGNORE INTO turn_memory_receipt_failures(thread_id, run_id, space)
+        VALUES (${threadId}, ${runId}, ${space})`.pipe(
+        Effect.asVoid,
+        Effect.catch(() =>
+          Effect.sync(() => {
+            untrackedWriteFailure = true;
+          }),
+        ),
+        Effect.andThen(Effect.logWarning("Could not record turn memory receipt")),
+      ),
+    ),
   );
 }
 
@@ -57,6 +69,13 @@ const inspectTurnMemory = Effect.fn("TurnMemory.inspect")(function* (
     ORDER BY id LIMIT ${eventLimit + 1}`.pipe(
     Effect.mapError((cause) => new Store.MemoryStorageError({ stage: "turn-receipts", cause })),
   );
+  const failures = yield* sql<{
+    count: number;
+  }>`SELECT COUNT(*) AS count FROM turn_memory_receipt_failures
+    WHERE thread_id=${input.threadId} AND run_id=${input.runId} AND space=${input.memorySpaceId}`.pipe(
+    Effect.mapError((cause) => new Store.MemoryStorageError({ stage: "turn-receipts", cause })),
+  );
+  const incomplete = untrackedWriteFailure || (failures[0]?.count ?? 0) > 0;
   // The receipt owns only a digest. Read query text from this run's existing transcript.
   const queries = new Map<string, string>();
   if (rows.some((row) => row.kind === "recall")) {
@@ -126,12 +145,13 @@ const inspectTurnMemory = Effect.fn("TurnMemory.inspect")(function* (
   yield* authorize;
   let truncated = rows.length > eventLimit;
   while (
-    Buffer.byteLength(JSON.stringify({ events, truncated: true }), "utf8") > responseByteLimit
+    Buffer.byteLength(JSON.stringify({ events, truncated: true, incomplete }), "utf8") >
+    responseByteLimit
   ) {
     events.pop();
     truncated = true;
   }
-  return { events, truncated };
+  return { events, truncated, incomplete };
 });
 
 export const makeTurnMemoryReader =

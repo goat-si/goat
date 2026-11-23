@@ -20,5 +20,6 @@ export const TurnMemoryEvent = Schema.Struct({
 export const TurnMemoryResult = Schema.Struct({
   events: Schema.Array(TurnMemoryEvent),
   truncated: Schema.Boolean,
+  incomplete: Schema.optional(Schema.Boolean),
 });
 export type TurnMemoryResult = typeof TurnMemoryResult.Type;

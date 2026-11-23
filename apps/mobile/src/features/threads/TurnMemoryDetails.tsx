@@ -37,7 +37,13 @@ function Receipts({ environmentId, threadId, runId }: Target) {
   if (result === null) return <AppText>Loading turn memory…</AppText>;
   if (Option.isNone(result)) return <AppText>Turn memory is unavailable.</AppText>;
   if (!result.value.events.length)
-    return <AppText>No memory activity was recorded for this turn.</AppText>;
+    return (
+      <AppText>
+        {result.value.truncated || result.value.incomplete
+          ? "Some memory activity could not be shown or recorded."
+          : "No memory activity is recorded; recording may be incomplete."}
+      </AppText>
+    );
   return (
     <View className="gap-2 rounded-md border border-border p-3">
       {result.value.events.map((event) => (
@@ -58,6 +64,11 @@ function Receipts({ environmentId, threadId, runId }: Target) {
         </View>
       ))}
       {result.value.truncated && <AppText>Only the first recorded events are shown.</AppText>}
+      <AppText>
+        {result.value.incomplete
+          ? "Some memory activity could not be recorded."
+          : "Recording may be incomplete."}
+      </AppText>
     </View>
   );
 }

@@ -333,11 +333,47 @@ it.effect("limits the encoded turn memory response with multibyte excerpts (#380
     assert.isDefined(ref);
     if (!ref) return;
     for (let n = 0; n < 32; n++)
-      yield* recordTurnMemory(sql, caller.threadId, runId, Fixture.space, "automatic", Array(20).fill(ref));
+      yield* recordTurnMemory(
+        sql,
+        caller.threadId,
+        runId,
+        Fixture.space,
+        "automatic",
+        Array(20).fill(ref),
+      );
     const service = yield* Service.MemoryService;
-    const trace = yield* service.inspectTurn({ memorySpaceId: Fixture.space, threadId: caller.threadId, runId }, Effect.void);
+    const trace = yield* service.inspectTurn(
+      { memorySpaceId: Fixture.space, threadId: caller.threadId, runId },
+      Effect.void,
+    );
     assert.isAtMost(Buffer.byteLength(JSON.stringify(trace), "utf8"), 64 * 1024);
     assert.isTrue(trace.truncated);
+  }).pipe(Effect.provide(live)),
+);
+
+it.effect("does not treat a failed receipt write as a complete empty history (#3801)", () =>
+  Effect.gen(function* () {
+    yield* setupThreads;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_v2_events(thread_id TEXT, event_type TEXT)`;
+    yield* receiptsMigration;
+    yield* sql`CREATE TRIGGER fail_receipt BEFORE INSERT ON turn_memory_receipts BEGIN SELECT RAISE(FAIL, 'injected receipt failure'); END`;
+    const runId = M.RunId.make("failed-receipt");
+    yield* recordTurnMemory(sql, caller.threadId, runId, Fixture.space, "automatic", []);
+    const service = yield* Service.MemoryService;
+    const result = yield* service.inspectTurn(
+      { memorySpaceId: Fixture.space, threadId: caller.threadId, runId },
+      Effect.void,
+    );
+    assert.isTrue(Reflect.get(result, "incomplete"));
+    yield* sql`CREATE TRIGGER fail_receipt_marker BEFORE INSERT ON turn_memory_receipt_failures BEGIN SELECT RAISE(FAIL, 'injected marker failure'); END`;
+    const fallbackRun = M.RunId.make("failed-marker");
+    yield* recordTurnMemory(sql, caller.threadId, fallbackRun, Fixture.space, "automatic", []);
+    const fallback = yield* service.inspectTurn(
+      { memorySpaceId: Fixture.space, threadId: caller.threadId, runId: fallbackRun },
+      Effect.void,
+    );
+    assert.isTrue(Reflect.get(fallback, "incomplete"));
   }).pipe(Effect.provide(live)),
 );
 
