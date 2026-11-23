@@ -38,7 +38,7 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 import { useGoatBotPreferred } from "../goatBot/GoatBotModeButton";
 import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
-import { useDestinationRailVisible } from "./DestinationRail";
+import { useDestinationRailVisible } from "./destinationRailVisibility";
 import {
   SidebarPriorityCountBadge,
   SidebarViewToggles,

@@ -5,6 +5,7 @@ import {
   moveRailItem,
   orderRailItems,
   railPreferencesForHydration,
+  railShowsBot,
   RAIL_ITEM_IDS,
   resolveActiveDestination,
   resolveRailItems,
@@ -164,5 +165,14 @@ describe("railPreferencesForHydration", () => {
     ["failed", DEFAULT_RAIL_PREFERENCES],
   ] as const)("uses %s settings as %o", (status, expected) => {
     expect(railPreferencesForHydration(status, saved)).toBe(expected);
+  });
+});
+
+describe("railShowsBot", () => {
+  it("lets the rail switch to GOAT Bot unless the person hid it there, even before settings load", () => {
+    expect(railShowsBot(null)).toBe(true);
+    expect(railShowsBot(DEFAULT_RAIL_PREFERENCES)).toBe(true);
+    expect(railShowsBot(setRailItemShown(DEFAULT_RAIL_PREFERENCES, "bot", false))).toBe(false);
+    expect(railShowsBot(setRailItemShown(DEFAULT_RAIL_PREFERENCES, "bot", true))).toBe(true);
   });
 });
