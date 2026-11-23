@@ -1262,6 +1262,15 @@ describe("buildThreadFeed", () => {
         startedAt,
       ),
     ).toMatchObject([{ type: "run-fold", label: "Working" }]);
+    const streamingReply = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected({ ...assistantMessage(), streaming: true }, 1),
+    ]);
+    expect(
+      deriveThreadFeedPresentation(streamingReply, run, new Set(), new Set(), startedAt).map(
+        (row) => row.type,
+      ),
+    ).toEqual(["message", "run-fold", "message"]);
   });
 
   it("pretty prints T3 MCP dynamic tool activities and attaches the product logo", () => {
