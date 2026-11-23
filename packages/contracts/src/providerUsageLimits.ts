@@ -165,6 +165,7 @@ export const UsageLimitSourceAccount = Schema.Struct({
   email: Schema.optional(TrimmedNonEmptyString),
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
+  models: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   label: Schema.optional(TrimmedNonEmptyString),
   /** OpenCodex's routing state; paused and reauth accounts are shown but not counted. */
   state: Schema.optional(
