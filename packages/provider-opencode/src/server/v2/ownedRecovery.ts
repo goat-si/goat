@@ -36,7 +36,7 @@ export const isPermanentRecoveryError = (error: unknown) => {
     Schema.isSchemaError(error.cause)
   );
 };
-export const OWNED_RECOVERY_RETRY = {
+const OWNED_RECOVERY_RETRY = {
   schedule: OWNED_RECONNECT_SCHEDULE,
   while: (error: unknown) => !isPermanentRecoveryError(error),
 };

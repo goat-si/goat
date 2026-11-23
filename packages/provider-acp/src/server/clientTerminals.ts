@@ -262,9 +262,9 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                 const key = name.toUpperCase();
                 return (
                   !key.startsWith("GOAT_ACP_MCP_") &&
-                  !key.startsWith("T3_ACP_MCP_") &&
+                  !key.startsWith("T3_ACP_MCP_") && // goat-rename: legacy
                   key !== "GOAT_THREAD_ID" &&
-                  key !== "T3CODE_THREAD_ID"
+                  key !== "T3CODE_THREAD_ID" // goat-rename: legacy
                 );
               },
             ),
