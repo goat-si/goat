@@ -48,6 +48,8 @@ export const stageComputerUseDriver = Effect.fn("stageComputerUseDriver")(functi
 ) {
   const fs = yield* FileSystem.FileSystem;
   if (arch === "universal") {
+    for (const slice of ["arm64", "x86_64"])
+      yield* requireReleaseCommand(runner, "lipo", [source, "-verify_arch", slice]);
     yield* fs.writeFile(destination, yield* fs.readFile(source));
   } else {
     yield* requireReleaseCommand(runner, "lipo", [
@@ -325,12 +327,13 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     if (!(yield* fs.exists(source)))
       return yield* fail("Cua Driver release is missing " + name + ".");
     // Select the executable slice before signing the driver and sealing the helper bundle.
-    yield* stageComputerUseDriver(
-      source,
-      path.join(driverDir, name),
-      name === release.executable ? (input.driverArch ?? "universal") : "universal",
-      runner,
-    );
+    const destination = path.join(driverDir, name);
+    if (name === release.executable) {
+      yield* stageComputerUseDriver(source, destination, input.driverArch ?? "universal", runner);
+    } else {
+      yield* fs.writeFile(destination, yield* fs.readFile(source));
+      yield* fs.chmod(destination, 0o755);
+    }
   }
 
   const sourceDir = path.join(input.repoRoot, "apps/desktop/native/computer-use-helper");
