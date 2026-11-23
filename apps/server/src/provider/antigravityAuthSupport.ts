@@ -1,3 +1,7 @@
+import {
+  copyAntigravityUserRuleFiles,
+  linkAntigravityUserRuleFiles,
+} from "./antigravityUserRules.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Effect's symlink has no type argument, and Windows needs a junction to link without elevation.
 import * as NodeFSP from "node:fs/promises";
 
@@ -321,6 +325,17 @@ export const prepareAntigravityRuntimeHome = Effect.fn("prepareAntigravityRuntim
       userHome: input.userHome,
       platform: input.profile.platform,
     });
+    if (input.profile.platform === "win32") {
+      yield* copyAntigravityUserRuleFiles({
+        profileDirectory: input.directory,
+        sourceDirectory: input.profile.geminiHome,
+      });
+    } else {
+      yield* linkAntigravityUserRuleFiles({
+        profileDirectory: input.directory,
+        sourceDirectory: input.profile.geminiHome,
+      });
+    }
     return { ...input.profile, geminiHome: input.directory };
   },
 );
@@ -474,6 +489,17 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
     );
   if (!input.skipUserSkills) {
     yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });
+  }
+  if (platform === "win32") {
+    yield* copyAntigravityUserRuleFiles({
+      profileDirectory: geminiHome,
+      sourceDirectory: path.join(userHome, ".gemini"),
+    });
+  } else {
+    yield* linkAntigravityUserRuleFiles({
+      profileDirectory: geminiHome,
+      sourceDirectory: path.join(userHome, ".gemini"),
+    });
   }
   return profile;
 });

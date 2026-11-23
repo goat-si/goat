@@ -32,6 +32,7 @@ import {
   makeAntigravityStdoutTransform,
   parseAntigravityAuthorizationUrl,
   prepareAntigravityProfile,
+  prepareAntigravityRuntimeHome,
   resolveAntigravityInstanceDirectories,
 } from "./antigravityAuthSupport.ts";
 
@@ -661,6 +662,50 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
         yield* prepareAntigravityProfile({ profileDirectory, userHome });
         expect(yield* isLink(cliLink)).toBe(false);
       }),
+  );
+
+  it.effect("copies the user's global rule files on Windows and keeps the profile's own", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryDirectory = yield* fs.makeTempDirectoryScoped();
+      const userHome = path.join(temporaryDirectory, "home");
+      const profileDirectory = path.join(temporaryDirectory, "profile");
+      const userGemini = path.join(userHome, ".gemini");
+      const prepare = prepareAntigravityProfile({
+        profileDirectory,
+        userHome,
+        platform: "win32",
+        skipUserSkills: true,
+      });
+      const profileAgents = path.join(profileDirectory, "AGENTS.md");
+      const profileGemini = path.join(profileDirectory, "GEMINI.md");
+      yield* fs.makeDirectory(userGemini, { recursive: true });
+      yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "global agents rule");
+      yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
+
+      yield* prepare;
+      expect(yield* fs.readFileString(profileAgents)).toBe("global agents rule");
+      expect(yield* fs.readFileString(profileGemini)).toBe("global gemini rule");
+
+      yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "edited agents rule");
+      yield* fs.remove(path.join(userGemini, "GEMINI.md"));
+      yield* prepare;
+      expect(yield* fs.readFileString(profileAgents)).toBe("edited agents rule");
+      expect(yield* fs.exists(profileGemini)).toBe(false);
+
+      yield* fs.writeFileString(profileGemini, "profile's own rule");
+      yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
+      yield* prepare;
+      expect(yield* fs.readFileString(profileGemini)).toBe("profile's own rule");
+      const profile = yield* prepare;
+      const runtimeDirectory = path.join(temporaryDirectory, "runtime");
+      yield* fs.makeDirectory(runtimeDirectory);
+      yield* prepareAntigravityRuntimeHome({ directory: runtimeDirectory, profile, userHome });
+      expect(yield* fs.readFileString(path.join(runtimeDirectory, "GEMINI.md"))).toBe(
+        "profile's own rule",
+      );
+    }),
   );
 
   it.effect("rewrites the GCP block on every launch and never stores the API key", () =>
