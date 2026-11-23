@@ -5,7 +5,7 @@ import type { GoatMcpServerLaunch, ThreadId } from "@goat/contracts";
 type Session = McpProviderSession.McpProviderSessionConfig | undefined;
 type Config = { readonly config: { readonly mcp_servers?: unknown } };
 
-export function codexGoatServersWithThreadId(
+function codexGoatServersWithThreadId(
   servers: ReadonlyArray<GoatMcpServerLaunch> | undefined,
   threadId: ThreadId | undefined,
 ) {
