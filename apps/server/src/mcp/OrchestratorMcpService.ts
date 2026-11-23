@@ -1,4 +1,5 @@
 import { waitingTaskId } from "./waitingTaskId.ts";
+import { missingDelegatedTask } from "./missingDelegatedTask.ts";
 import { DelegatedTaskCancellation } from "../orchestration-v2/goat/DelegatedTaskCancellation.ts";
 import { taskPrompt, threadTitle } from "./goat/ThreadCreationText.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
@@ -1031,6 +1032,12 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
             Effect.map((records) => runStop(runId, records.turnItems)),
           );
+  const taskNotFound = (scope: McpThreadInvocationScope, taskId: NodeId) =>
+    loadThreadRecords(scope.thread.threadId, ["subagents"], { omitSettledSubagents: true }).pipe(
+      Effect.flatMap(({ subagents }) =>
+        Effect.fail(missingDelegatedTask(scope.thread.threadId, taskId, subagents)),
+      ),
+    );
   // goat#2338: ownership of a remote task is decided in forceCancelTask, the rest by its host.
   const forceCancelRemoteTask = Effect.fn("OrchestratorMcpService.forceCancelRemoteTask")(
     function* (
@@ -1064,6 +1071,8 @@ const make = Effect.gen(function* () {
     const { subagents } = yield* threadManagement
       .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [taskId] })
       .pipe(Effect.mapError(threadManagementFailure));
+    if (!subagents.some((task) => task.id === taskId && task.origin === "app_owned"))
+      return yield* taskNotFound(scope, taskId);
     const remote = subagents.find(
       (task) => task.id === taskId && task.origin === "app_owned" && task.promotedAt === undefined,
     )?.remote;
@@ -1125,10 +1134,7 @@ const make = Effect.gen(function* () {
         candidate.threadId === scope.thread.threadId,
     );
     if (task === undefined) {
-      return yield* failure(
-        "task_not_found",
-        `Delegated task ${taskId} does not belong to thread ${scope.thread.threadId}.`,
-      );
+      return yield* taskNotFound(scope, taskId);
     }
     // Review rounds read the task this one continues; nothing else needs other tasks.
     const taskProjectionIds =
@@ -2543,8 +2549,6 @@ const make = Effect.gen(function* () {
       const scope = yield* requireThreadScope(callerScope, "task_status");
       const status = yield* readTask(scope, taskId, false, true);
       if (status.host === undefined || status.childThreadId === null) return status;
-      // Only explicit status reads enrich persisted SSH results. Launches,
-      // event-driven waits and cancellation must not wait for optional host I/O.
       const cloudTask = yield* readRemoteCloudTask(scope, status.host, status.childThreadId).pipe(
         Effect.catch(() => Effect.succeed(undefined)),
         Effect.timeoutOption("5 seconds"),
@@ -2683,7 +2687,6 @@ const make = Effect.gen(function* () {
       const parentProjection = yield* threadManagement
         .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [input.taskId] })
         .pipe(Effect.mapError(threadManagementFailure));
-      // The user promoted the child to a top-level thread: it is no longer this task's to stop.
       if (
         parentProjection.subagents.some(
           (task) => task.id === input.taskId && task.promotedAt !== undefined,
