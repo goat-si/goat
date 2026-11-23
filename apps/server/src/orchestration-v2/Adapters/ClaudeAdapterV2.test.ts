@@ -15678,6 +15678,55 @@ describe("ClaudeAdapterV2 query message stream", () => {
 });
 
 describe("Claude WP4 memory delivery", () => {
+  it.effect("does not record a root prompt stopped before Claude reads it (#3836)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("root-unread");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "fixture",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "root-unread-native",
+          () => Effect.undefined,
+          true,
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const input = {
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make("root-unread"),
+            text: "unread",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+        };
+        yield* fixture.runtime.startTurn(input);
+        yield* fixture.runtime.interruptTurn({
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${input.attemptId}`,
+          }),
+        });
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 0);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
   it.effect("does not record an unread steer when stopped behind a tool (#3801)", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -15723,6 +15772,7 @@ describe("Claude WP4 memory delivery", () => {
           claudeSdkFrame({
             type: "assistant",
             session_id: "receipt-stop-native",
+            user_message_uuid: fixture.offers[0]?.uuid,
             uuid: "00000000-0000-4000-8000-000000000124",
             parent_tool_use_id: null,
             message: {
@@ -15777,6 +15827,7 @@ describe("Claude WP4 memory delivery", () => {
         );
         const allocator = yield* IdAllocator.IdAllocatorV2;
         let receipts = 0;
+        const received = yield* Queue.unbounded<void>();
         const makeInput = (attempt: string) => ({
           ...makeClaudeTestTurnInput({
             threadId,
@@ -15790,10 +15841,18 @@ describe("Claude WP4 memory delivery", () => {
           onMemoryDelivered: () =>
             Effect.sync(() => {
               receipts++;
-            }),
+            }).pipe(Effect.andThen(Queue.offer(received, undefined)), Effect.asVoid),
         });
         const start = makeInput("receipt-first");
         yield* fixture.runtime.startTurn(start);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: fixture.offers[0]?.uuid,
+            state: "started",
+          }),
+        );
+        yield* Queue.take(received);
         yield* fixture.runtime.steerTurn({
           runId: start.runId,
           threadId,
@@ -15810,6 +15869,14 @@ describe("Claude WP4 memory delivery", () => {
         assert.equal(receipts, 1);
         const next = makeInput("receipt-second");
         yield* fixture.runtime.startTurn(next);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: fixture.offers[2]?.uuid,
+            state: "started",
+          }),
+        );
+        yield* Queue.take(received);
         yield* fixture.runtime.steerTurn({
           runId: next.runId,
           threadId,

@@ -1778,6 +1778,7 @@ interface ActiveClaudeTurnContext {
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
   readonly promptUuid: string | null;
+  rootMemoryReceipt?: Effect.Effect<void> | undefined;
   appContextOffered?: ReadonlyMap<string, string> | undefined;
   promptEcho: "pending" | "confirmed";
   promptStarted: boolean;
@@ -8211,6 +8212,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return;
           }
           if (claudeEchoedPromptUuids(message).includes(context.promptUuid)) {
+            const receipt = context.rootMemoryReceipt;
+            context.rootMemoryReceipt = undefined;
+            yield* receipt ?? Effect.void;
             yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             if (
               liveQuery.promptEchoMode === "unknown" ||
@@ -8232,6 +8236,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
             if (lifecycle.state === "started") {
               context.promptStarted = true;
+              const receipt = context.rootMemoryReceipt;
+              context.rootMemoryReceipt = undefined;
+              yield* receipt ?? Effect.void;
               yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             }
             // Previously recorded prompt uuids complete without starting a turn.
@@ -9583,10 +9590,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfReservation.commit();
               if (appContext !== undefined) context.appContextOffered = appContext.snapshot;
             };
-            const offerUserMessage = Effect.fnUntraced(function* (
-              message: SDKUserMessage,
-              receipt: Effect.Effect<void> = Effect.void,
-            ) {
+            const offerUserMessage = Effect.fnUntraced(function* (message: SDKUserMessage) {
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* startUserTurnForWakeReports(nativeThreadId).pipe(
                 Effect.andThen(
@@ -9604,7 +9608,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     ),
                   ),
                 ),
-                Effect.andThen(receipt),
                 Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void),
               );
             });
@@ -9626,8 +9629,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   })
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
               }
+              context.rootMemoryReceipt = admitted.receipt;
               yield* attachTurn;
-              yield* offerUserMessage(admittedMessage, admitted.receipt);
+              yield* offerUserMessage(admittedMessage);
               return;
             }
             // Transcript reads suspend replay; hold SDK frames until the buffer is applied to preserve order.
