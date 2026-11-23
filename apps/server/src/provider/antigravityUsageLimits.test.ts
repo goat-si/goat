@@ -111,7 +111,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
             : Response.json({}, { status: 403 }),
         );
       }
-      expect(JSON.parse(body)).toEqual({ project: "project-id" });
+      expect(JSON.parse(body)).toEqual(options.missingToken ? {} : { project: "project-id" });
       expect(request.headers["user-agent"]).toMatch(/^antigravity\/hub\/2\.24\.0 /);
       return HttpClientResponse.fromWeb(
         request,
@@ -651,6 +651,65 @@ describe("Antigravity subscription limits", () => {
       expect(limits.windows).toEqual([]);
       expect(limits.unavailable?.reason).toBe("probeFailed");
       expect(JSON.stringify(limits)).not.toMatch(/client-secret|refresh-a|access-token/);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect(
+    "reads the native CLI token only from its own profile and prefers the legacy token",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-09T12:00:00Z")),
+        );
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const first = yield* fixture({ missingToken: true, userId: "google-user-1" });
+        const second = yield* fixture({ missingToken: true });
+        const stored = JSON.stringify({
+          token: {
+            access_token: "access-token",
+            refresh_token: "r",
+            expiry: "2026-10-09T14:00:00.123456789+01:00",
+          },
+        });
+        yield* fs.writeFileString(
+          path.join(path.dirname(first.tokenPath), "antigravity-oauth-token"),
+          stored,
+        );
+        const limits = yield* first.probe;
+        expect(limits.unavailable).toBeUndefined();
+        expect(limits.windows).toHaveLength(4);
+        expect(first.requests.some((request) => request.url.endsWith("/token"))).toBe(false);
+        expect((yield* second.probe).unavailable?.reason).toBe("unsupported");
+        expect(second.requests).toEqual([]);
+
+        const legacy = yield* fixture();
+        yield* fs.writeFileString(
+          path.join(path.dirname(legacy.tokenPath), "antigravity-oauth-token"),
+          "invalid",
+        );
+        expect((yield* legacy.probe).unavailable).toBeUndefined();
+        expect(legacy.requests.some((request) => request.url.endsWith("/token"))).toBe(true);
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("reports an expired or invalid native CLI sign-in without making requests", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-09T12:00:00Z")));
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { probe, tokenPath, requests } = yield* fixture({ missingToken: true });
+      const cliPath = path.join(path.dirname(tokenPath), "antigravity-oauth-token");
+      yield* fs.writeFileString(
+        cliPath,
+        JSON.stringify({ token: { access_token: "access-token", expiry: "2026-10-09T12:00:30Z" } }),
+      );
+      const expired = yield* probe;
+      expect(expired.unavailable?.reason).toBe("probeFailed");
+      expect(expired.unavailable?.message).toMatch(/expired/);
+      yield* fs.writeFileString(cliPath, "invalid");
+      expect((yield* probe).unavailable?.reason).toBe("probeFailed");
+      expect(requests).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
