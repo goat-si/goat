@@ -155,10 +155,14 @@ thread itself would put each new message behind the running turn.
 - **First reply.** An idle per-run session receives ordinary input when the conversation has no
   open work, including undelivered results, and the requester passes current admission. Claiming
   the input and creating its turn task are atomic. Durable reception-id prefixes distinguish
-  the session claim from acknowledgment-only takeover at 20 seconds, so restart cannot route
-  either through ordinary reception. The first sealed root assistant line commits its receipt
-  and source together. An acknowledgment hang gets the session fixed line at 55 seconds, while
-  the task continues. Independent deadline and receipt-send fibers prevent model calls or hung
+  the session claim from acknowledgment-only takeover, so restart cannot route either through
+  ordinary reception. The first root assistant message, whole once it ends or a tool call follows
+  it, commits its receipt and source together, so a direct answer stays one message. From 20
+  seconds a check forked per input reads the session's runs once: a session still composing (run
+  started, no tool call) is left alone, and takeover is for one working without its message, a
+  queued run, or an unreadable thread. Takeover and the session receipt are both compare-and-set
+  on the claim, so the first to commit is the only receipt. An acknowledgment hang gets the
+  session fixed line at 55 seconds, while the task continues. Independent deadline and receipt-send fibers prevent model calls or hung
   transports from delaying another input. Each attempt gets min(4 seconds, remaining time);
   at acceptance plus 60 seconds the row is terminal and late attempt results cannot reopen it.
   Delivery settlement includes terminal ambiguous, which releases dependent actions without

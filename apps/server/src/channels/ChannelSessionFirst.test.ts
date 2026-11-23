@@ -159,7 +159,7 @@ describe("session first receipts", () => {
         { ...child, status: "completed", completedAt: yield* DateTime.now },
       ]);
       const answer = "A found line 129. B could not read its file.";
-      harness.assistant(task, "Checking.\n", true);
+      harness.assistant(task, "Checking.");
       yield* runtime.runPass;
       yield* runtime.settle([input.inputId]);
       let run = harness.world.latestRun(worker.threadId)!;
@@ -271,11 +271,17 @@ describe("session first receipts", () => {
         assert.isDefined(stored?.task.worker);
         const task = stored!.task;
         if (variant === "fallback") {
+          // Working with tools and no first line yet, so acknowledgment-only reception replies.
+          harness.tool(task, "date");
           yield* TestClock.adjust("20 seconds");
           yield* runtime.expireOverdue;
           yield* runtime.settle([input.inputId]);
         } else {
-          harness.assistant(task, variant === "same item" ? "Four." : "Checking.\n", true);
+          harness.assistant(
+            task,
+            variant === "same item" ? "Four." : "Checking.",
+            variant === "same item",
+          );
           if (variant === "same item") harness.assistant(task, "Four.");
           yield* runtime.runPass;
           yield* runtime.settle([input.inputId]);
@@ -442,28 +448,35 @@ describe("session first receipts", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("a silent session gets acknowledgment-only reception at 20 seconds", () => {
-    const harness = makeHarness({ botWorkspace: true });
-    const modes: string[] = [];
-    harness.script.current = (input) => {
-      modes.push(input.mode);
-      return defaultScript(input);
-    };
-    return Effect.gen(function* () {
-      yield* setupBot;
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const ledger = yield* ChannelLedger.ChannelLedger;
-      const input = yield* gateway.ingest(goatInput("Inspect this machine", "silent"), rpcContext);
-      yield* runtime.drain;
-      assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
-      yield* TestClock.adjust("20 seconds");
-      yield* runtime.expireOverdue;
-      yield* runtime.settle([input.inputId]);
-      assert.deepStrictEqual(modes, ["task_event"]);
-      assert.isDefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
-    }).pipe(Effect.provide(harness.layer));
-  });
+  it.effect(
+    "a session working without its first line gets acknowledgment-only reception at 20 seconds",
+    () => {
+      const harness = makeSessionHarness();
+      const modes: string[] = [];
+      harness.script.current = (input) => {
+        modes.push(input.mode);
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("Inspect this machine", "silent"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        harness.tool((yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task, "uname -a");
+        assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+        yield* TestClock.adjust("20 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(modes, ["task_event"]);
+        assert.isDefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("offers an idle per-run session the request without calling reception", () => {
     const harness = makeHarness({ botWorkspace: true });
@@ -506,7 +519,7 @@ describe("session first receipts", () => {
         assert.isDefined(readAt);
         assert.strictEqual(inbound?.channel?.readAt, readAt);
 
-        harness.assistant(task, "Checking the disks now.\n", true);
+        harness.assistant(task, "Checking the disks now.");
         yield* runtime.runPass;
         yield* runtime.settle([input.inputId]);
         yield* runtime.drain;
@@ -530,7 +543,7 @@ describe("session first receipts", () => {
   );
 
   it.effect("a silent session's acknowledgment names the task it started", () => {
-    const harness = makeHarness({ botWorkspace: true });
+    const harness = makeSessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
@@ -540,6 +553,8 @@ describe("session first receipts", () => {
         rpcContext,
       );
       yield* runtime.drain;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      harness.tool((yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task, "uname -a");
       yield* TestClock.adjust("20 seconds");
       yield* runtime.expireOverdue;
       yield* runtime.settle([input.inputId]);

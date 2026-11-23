@@ -66,7 +66,7 @@ it.effect(
         ),
       );
       yield* Deferred.await(blocked);
-      const item = harness.assistant(task, "Checking disk usage.\n", true);
+      const item = harness.assistant(task, "Checking disk usage.");
       yield* Queue.offer(events, {
         sequence: 1,
         commandId: null,
