@@ -36,6 +36,7 @@ import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import { makeShellJobs } from "./shellJobs.ts";
+import { deliver, finishIdleCommand } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
@@ -178,14 +179,6 @@ export const OPENCODE_2_STILL_STOPPING =
 const REQUEST_REPLY_TIMEOUT = "10 seconds";
 const MCP_TOOL_RELOAD_SETTLE = "250 millis";
 
-const deliver = <E>(answer: Effect.Effect<void, E>) =>
-  answer.pipe(
-    Effect.retry({ times: 1 }),
-    Effect.timeout(REQUEST_REPLY_TIMEOUT),
-    Effect.exit,
-    Effect.map(Exit.isSuccess),
-  );
-
 const isProviderAdapterError = Schema.is(ProviderAdapter.ProviderAdapterV2Error);
 
 export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: ProviderInstanceId) {
@@ -263,15 +256,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.unsettled = true;
       state.unsettledStarted = busy.has(state.sessionId);
     };
-
     const newThreadState = makeNewThreadState(input);
-
     const rootOf = (state: ThreadState): ThreadState => {
       let current = state;
       while (current.subagent !== undefined) current = current.subagent.call.state;
       return current;
     };
-
     const {
       directoryOf,
       windowOf,
@@ -288,7 +278,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       mcpServerNameFor,
       cuaServerNameFor,
     });
-
     const sessionsOf = (thread: ThreadState): ReadonlyArray<ThreadState> => [
       thread,
       ...[...threads.values()].filter((state) => {
@@ -3367,7 +3356,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (commands.some((entry) => entry.name === command.name)) {
           // session.command neither accepts nor returns our ID; record the preceding history boundary.
           const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
-          yield* markBefore(sessionId, newest.data[0]?.id ?? null);
+          const before = newest.data[0]?.id ?? null;
+          yield* markBefore(sessionId, before);
           if (state.active !== turn || turn.interrupted) return;
           yield* prepareMemory(sessionId, state, turnInput);
           if (!(yield* sending())) return;
@@ -3377,9 +3367,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          return yield* client.session
+          yield* client.session
             .command({ sessionID, ...command })
             .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
+          return yield* finishIdleCommand({
+            client,
+            sessionId,
+            before,
+            state,
+            turn,
+            busy,
+            lock,
+            end: endExecution,
+          });
         }
       }
       const mentions = skillMentions(text);

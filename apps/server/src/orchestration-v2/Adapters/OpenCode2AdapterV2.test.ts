@@ -321,7 +321,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         assert.equal(values.length, reason === "tampered" ? 1 : 2);
       }).pipe(Effect.scoped),
   );
-
   it.effect("switches the session's model and variant before a turn that changed them", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -350,7 +349,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       assert.equal((yield* Fiber.join(terminal))?.status, "completed");
     }).pipe(Effect.scoped),
   );
-
   it.effect("never sends a saved variant the catalog model does not list", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -2916,6 +2914,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         }),
         out("session.command", { sessionID: SESSION, name: "git/hello", text: "WORLD" }),
         reply("session.command", null),
+        out("session.active"),
+        replyData("session.active", { [SESSION]: { type: "running" } }),
         { type: "runtime_exit", status: "success" } as const,
         out("event.subscribe"),
         out("session.active"),
