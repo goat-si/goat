@@ -70,7 +70,7 @@ import {
 } from "./ProjectionShellThreadRows.ts";
 import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
-import { turnStartMessageIds } from "./manualContinuation.ts";
+import { turnStartMessageIds } from "@goat/shared/orchestrationV2ManualContinuation";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import {
   applyOrchestrationV2ThreadVisit,

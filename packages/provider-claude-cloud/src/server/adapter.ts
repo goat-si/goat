@@ -4,7 +4,6 @@ import {
   ProviderTurnId,
   type ProviderInstanceId,
   type ProjectId,
-  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
 } from "@goat/contracts";
@@ -22,6 +21,7 @@ import {
   makeProviderFailure,
   makeProviderFailureTurnItem,
 } from "@goat/provider-core/server/failure";
+import { CLAUDE_CLOUD_CAPABILITIES } from "./capabilities.ts";
 import * as Cli from "./cli.ts";
 import type { ClaudeCloudLogin } from "./cli.ts";
 import {
@@ -47,100 +47,6 @@ import {
 const DRIVER = ProviderDriverKind.make("claudeCloud");
 const CANCEL_REASON =
   "Claude Cloud has no supported CLI cancellation command. Open the cloud session to stop it.";
-export const CLAUDE_CLOUD_CAPABILITIES: OrchestrationV2ProviderCapabilities = {
-  sessions: {
-    executionLocation: "cloud",
-    sourceRestriction: "project-folder",
-    followUp: { supported: true },
-    supportsMultipleProviderThreadsPerSession: false,
-    supportsModelSwitchInSession: false,
-    supportsProviderSwitchingViaHandoff: false,
-    supportsRuntimeModeSwitchInSession: false,
-    pendingRequestsSurviveRestart: false,
-  },
-  threads: {
-    canCreateEmptyThread: true,
-    canReadThreadSnapshot: true,
-    canRollbackThread: false,
-    canForkThread: false,
-    canForkFromTurn: false,
-    canForkFromSubagentThread: false,
-    exposesNativeThreadId: true,
-  },
-  turns: {
-    exposesNativeTurnId: false,
-    emitsTurnStarted: true,
-    emitsTurnCompleted: true,
-    supportsInterrupt: false,
-    supportsActiveSteering: false,
-    supportsSteeringByInterruptRestart: false,
-    supportsQueuedMessages: true,
-    terminalStatusQuality: "none",
-  },
-  streaming: {
-    streamsAssistantText: false,
-    streamsReasoning: false,
-    streamsToolOutput: false,
-    streamsPlanText: false,
-    emitsMessageCompleted: false,
-  },
-  tools: {
-    exposesToolItemIds: false,
-    emitsToolStarted: false,
-    emitsToolCompleted: false,
-    emitsToolOutput: false,
-    supportsMcpTools: false,
-    supportsDynamicToolCallbacks: false,
-  },
-  approvals: {
-    supportsCommandApproval: false,
-    supportsFileReadApproval: false,
-    supportsFileChangeApproval: false,
-    supportsApplyPatchApproval: false,
-    approvalsHaveNativeRequestIds: false,
-    approvalCallbacksAreLiveOnly: false,
-    approvalsCanOriginateFromSubagents: false,
-  },
-  planning: {
-    emitsPlanUpdated: false,
-    emitsTodoList: false,
-    emitsProposedPlan: false,
-    supportsStructuredQuestions: false,
-    planDeltasHaveItemIds: false,
-  },
-  subagents: {
-    supportsSubagents: false,
-    exposesSubagentThreadIds: false,
-    emitsSubagentLifecycle: false,
-    canWaitForSubagents: false,
-    canCloseSubagents: false,
-    canForkSubagentThread: false,
-  },
-  context: {
-    acceptsSystemContext: false,
-    acceptsDeveloperContext: false,
-    acceptsSyntheticUserContext: false,
-    canGenerateSummaries: false,
-    canConsumeHandoffSummaries: false,
-    supportsDeltaHandoff: false,
-    supportsFullThreadHandoff: false,
-    maxRecommendedHandoffChars: null,
-  },
-  checkpointing: {
-    appCanCheckpointFilesystem: false,
-    supportsNestedCheckpointScopes: false,
-    providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
-    providerCanReadConversationSnapshot: false,
-  },
-  identity: {
-    nativeThreadIds: "strong",
-    nativeTurnIds: "none",
-    nativeItemIds: "none",
-    nativeRequestIds: "none",
-  },
-  runtimePolicy: { enforcement: "client-boundary" },
-};
 
 type Turn = Adapter.ProviderAdapterV2TurnInput;
 type Attach = Omit<Turn, "message" | "cloudLaunchSource"> & {

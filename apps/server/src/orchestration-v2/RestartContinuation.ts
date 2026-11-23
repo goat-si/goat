@@ -1,5 +1,5 @@
 import { parentTaskStopped } from "./goat/ParentTaskStop.ts";
-import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { MAX_CONTINUATION_CHAIN } from "@goat/shared/orchestrationV2ManualContinuation";
 import { hasPlannedContinuationAncestor } from "./goat/ContinuationCrashBudget.ts";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";

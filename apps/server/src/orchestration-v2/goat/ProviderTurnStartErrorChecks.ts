@@ -18,3 +18,6 @@ export function hasUnknownProviderOutcome(error: unknown): boolean {
   }
   return false;
 }
+
+export const AMBIGUOUS_RESUME_MESSAGE =
+  "GOAT could not confirm whether the provider received the previous message. Send a message to continue.";

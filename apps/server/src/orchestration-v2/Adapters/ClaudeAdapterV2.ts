@@ -446,6 +446,7 @@ export const ClaudeProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
+    supportsNativeResume: true,
     supportsActiveSteering: true,
     activeSteeringInterruptsTools: false,
     supportsSteeringByInterruptRestart: false,

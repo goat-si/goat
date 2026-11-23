@@ -3,9 +3,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
-
-/** Maximum automatic continuation ancestry resolved before requiring a new user turn. */
-export const MAX_CONTINUATION_CHAIN = 3;
+import { MAX_CONTINUATION_CHAIN } from "@goat/shared/orchestrationV2ManualContinuation";
 
 /**
  * The run and message a restart or usage-limit continuation chain started from, which is

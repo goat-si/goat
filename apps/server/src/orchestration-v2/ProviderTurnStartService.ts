@@ -10,8 +10,9 @@ import {
   isCloudTaskSourceError,
   isProviderAdapterOpenSessionError,
   hasUnknownProviderOutcome,
+  AMBIGUOUS_RESUME_MESSAGE,
 } from "./goat/ProviderTurnStartErrorChecks.ts";
-import { AMBIGUOUS_RESUME_MESSAGE, manualContinuationDelivery } from "./manualContinuation.ts";
+import { manualContinuationDelivery } from "@goat/shared/orchestrationV2ManualContinuation";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
 import { nativeSessionMissesKeptTurns } from "./goat/NativeSessionKeptTurns.ts";
