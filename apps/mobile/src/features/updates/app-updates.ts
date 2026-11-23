@@ -53,7 +53,7 @@ export function createAppUpdateDeferral(): AppUpdateDeferral {
 const appUpdateDeferral = createAppUpdateDeferral();
 
 interface AppUpdateCheckOptions {
-  readonly applyMode?: "background" | "immediate";
+  readonly applyMode?: "background" | "immediate" | "manual";
   readonly client?: AppUpdateClient;
   readonly deferral?: AppUpdateDeferral;
   readonly environment?: AppUpdateEnvironment;
@@ -228,6 +228,11 @@ async function performAppUpdateCheck(
     return;
   }
 
+  if (options.applyMode === "manual") {
+    deferral.pendingInstall = true;
+    setState("ready");
+    return;
+  }
   if (options.applyMode === "immediate" || fetched.value.isRollBackToEmbedded) {
     const outcome = await installAppUpdate(
       client,
@@ -263,11 +268,13 @@ async function installAppUpdate(
   setState("restarting");
   const flushed = await settlePromise(() => environment.flushPendingWrites());
   if (flushed._tag === "Failure") {
-    reportUpdateFailure(flushed, "Could not save pending state.", undefined);
-    if (!userRequested) {
-      deferral.installInProgress = false;
-      return "flush-failed";
-    }
+    reportUpdateFailure(
+      flushed,
+      "Could not save pending state.",
+      userRequested ? options.onFailure : undefined,
+    );
+    deferral.installInProgress = false;
+    return "flush-failed";
   }
   const reloaded = await settlePromise(() => client.reloadAsync());
   if (reloaded._tag === "Failure") {
@@ -286,6 +293,7 @@ async function installPendingAppUpdate(
   options: AppUpdateCheckOptions,
 ): Promise<void> {
   const outcome = await installAppUpdate(client, environment, deferral, options, true);
+  if (outcome === "flush-failed") options.onStateChange?.("ready");
   if (outcome === "restart-failed") {
     deferral.pendingInstall = false;
   }

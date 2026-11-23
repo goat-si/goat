@@ -75,6 +75,23 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
 }
 
 describe("runAppUpdateCheck", () => {
+  it("downloads a manual check without restarting until the user installs (#3810)", async () => {
+    const client = makeAvailableUpdateClient();
+    const { environment } = makeUpdateEnvironment();
+    const deferral = createAppUpdateDeferral();
+    const states: AppUpdateCheckState[] = [];
+    await runAppUpdateCheck({
+      applyMode: "manual",
+      client,
+      environment,
+      deferral,
+      onStateChange: (state) => states.push(state),
+    });
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe("ready");
+    await runAppUpdateCheck({ applyMode: "immediate", client, environment, deferral });
+    expect(client.reloadAsync).toHaveBeenCalledOnce();
+  });
   it("flushes pending writes before restarting", async () => {
     const client = makeAvailableUpdateClient();
     const { environment } = makeUpdateEnvironment();
@@ -154,7 +171,7 @@ describe("runAppUpdateCheck", () => {
     reportError.mockRestore();
   });
 
-  it("still restarts a user-requested install when the flush fails", async () => {
+  it("reports a failed flush without restarting a user-requested install (#3810)", async () => {
     const reportError = vi.spyOn(console, "error").mockImplementation(() => {});
     const client = makeAvailableUpdateClient();
     const { environment } = makeUpdateEnvironment({
@@ -163,14 +180,17 @@ describe("runAppUpdateCheck", () => {
       }),
     });
 
+    const failures: string[] = [];
     await runAppUpdateCheck({
       applyMode: "immediate",
       client,
       deferral: createAppUpdateDeferral(),
       environment,
+      onFailure: (message) => failures.push(message),
     });
 
-    expect(client.reloadAsync).toHaveBeenCalledOnce();
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+    expect(failures).toEqual(["storage unavailable"]);
     reportError.mockRestore();
   });
 
