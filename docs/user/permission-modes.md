@@ -35,7 +35,7 @@ under the new mode once the turn ends.
 Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
 runs in **Supervised**.
 
-GOAT offers no **Auto-accept edits** or **Full access** for fx. An fx thread already set to either runs in
+GOAT offers **Full access** when the installed fx advertises it, but no **Auto-accept edits**. An unsupported mode runs in
 **Supervised**.
 
 Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **Supervised**. Grok

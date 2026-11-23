@@ -77,6 +77,21 @@ const check = (statusJson: string, versionDelay: Duration.Input = 0) =>
   }).pipe(Effect.provide(NodeServices.layer));
 
 describe("checkFxProviderStatus", () => {
+  it.effect("offers Full access only when fx advertises it", () =>
+    Effect.gen(function* () {
+      const old = yield* check(JSON.stringify({ auth: "fx login" }));
+      const current = yield* check(
+        JSON.stringify({ auth: "fx login", modes: [{ id: "ask" }, { id: "full-access" }] }),
+      );
+      assert.deepEqual(old.draft.supportedRuntimeModes, ["approval-required", "auto"]);
+      assert.deepEqual(current.draft.supportedRuntimeModes, [
+        "approval-required",
+        "auto",
+        "full-access",
+      ]);
+    }),
+  );
+
   it.effect("does not let a missing mise shim install fx during a status probe", () =>
     Effect.gen(function* () {
       let installed = false;
