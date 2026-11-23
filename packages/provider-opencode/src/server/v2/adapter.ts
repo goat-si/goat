@@ -720,12 +720,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     const { emitCompaction, emitRetry, updateRetry } = makeTurnStatusItems({
+      emitProviderThread,
       driver,
       emit,
       ordinalOf,
       itemBase,
     });
-
     const retainedRequestsOf = (turn: ActiveTurn) => {
       const ids = [...pending.values()].flatMap((entry) =>
         entry.turn === turn ? [entry.request.id] : [],

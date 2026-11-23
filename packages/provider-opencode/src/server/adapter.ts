@@ -494,7 +494,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: state.providerThread,
             });
           });
-
         const itemOrdinal = (turn: ActiveOpenCodeTurn, nativeItemId: string): number => {
           const existing = turn.itemOrdinals.get(nativeItemId);
           if (existing !== undefined) return existing;
@@ -1901,13 +1900,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             },
           });
         });
-
         const emitCompactionItem = Effect.fn("OpenCodeAdapterV2.emitCompactionItem")(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
         ) {
           const nativeItemId = `${turn.providerTurnId}:compaction`;
           if (turn.itemOrdinals.has(nativeItemId)) return;
+          turn.usage.lastStep = null;
+          if (state.providerThread.contextUsage !== null)
+            yield* updateProviderThread(state, { contextUsage: null });
           const now = yield* DateTime.now;
           yield* emitProviderEvent({
             type: "turn_item.updated",
@@ -1935,7 +1936,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             },
           });
         });
-
         const handleMessageUpdated = Effect.fnUntraced(function* (
           event: Extract<OpenCodeEvent, { type: "message.updated" }>,
           historical = false,
