@@ -1345,7 +1345,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const trackedBase = yield* resolveTrackedRemoteBaseRef(cwd, configuredBaseBranch);
       if (trackedBase !== null) return trackedBase;
     }
-
     const primaryRemoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
       Effect.orElseSucceed(() => null),
     );
