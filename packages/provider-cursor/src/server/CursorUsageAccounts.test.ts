@@ -149,6 +149,81 @@ describe("CursorUsageAccounts", () => {
     },
   );
 
+  it.effect("retains partial history as large reads narrow and recover", () => {
+    const hour = 3_600_000;
+    const now = 100 * hour;
+    const timestamps = [now - 40 * hour, now - 3 * hour];
+    const calls: Array<{ since: number; until: number }> = [];
+    const reader = Layer.succeed(CursorAccountReader.CursorAccountReader, {
+      read: (_credential, since, until) =>
+        Effect.sync(() => {
+          calls.push({ since, until });
+          if (until - since > 12 * hour)
+            return { accountKey: "account", records: [], missing: false, error: "too large" };
+          const records: UsageRecord[] = timestamps
+            .filter((time) => time >= since && time <= until)
+            .map((time) => ({
+              provider: "cursor",
+              timestampMs: time,
+              model: "model",
+              sessionId: "session",
+              totals: {
+                uncachedInputTokens: 0,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens: 1,
+                reasoningTokens: 0,
+              },
+              speed: "standard",
+              reportedCostUsd: null,
+              dedupeKey: String(time),
+            }));
+          return { accountKey: "account", records, missing: false, error: null };
+        }),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(now);
+      const accounts = yield* CursorUsageAccounts.CursorUsageAccounts;
+      const input = {
+        instances: [
+          {
+            instanceId: ProviderInstanceId.make("cursor"),
+            config: {},
+            environment: [{ name: "CURSOR_API_KEY", value: "test-key", sensitive: true }],
+          },
+        ],
+        keychainUsageEnabled: false,
+        windowStartMs: now - 48 * hour,
+        retentionCutoffMs: now - 48 * hour,
+        awaitRefresh: true,
+      };
+      yield* accounts.scan(input);
+      yield* TestClock.adjust("2 minutes");
+      yield* accounts.scan(input);
+      yield* TestClock.adjust("2 minutes");
+      const result = yield* accounts.scan(input);
+      assert.deepEqual(
+        result[0]?.files
+          ?.flatMap((file) => file.records)
+          .map((record) => record.timestampMs)
+          .sort(),
+        timestamps.sort(),
+      );
+      assert.isAbove(calls.length, 3);
+      yield* accounts.awaitPersisted;
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          CursorUsageAccounts.layer.pipe(Layer.provide(reader)),
+          Layer.provideMerge(
+            TestProviderHost.layer(),
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.effect("does not refetch a bounded window when the clock advances during enrollment", () => {
     let requests = 0;
     const reader = Layer.succeed(CursorAccountReader.CursorAccountReader, {

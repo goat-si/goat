@@ -41,15 +41,23 @@ export function isCursorCacheFresh(
   );
 }
 
+export const CURSOR_MIN_FETCH_SPAN_MS = 60 * 1000;
+
 export function cursorFetchRange(
   cache: CursorAccountCache | undefined,
   retentionStartMs: number,
   nowMs: number,
+  maxSpanMs = Number.POSITIVE_INFINITY,
 ): CursorFetchRange {
   const floor = cursorFetchFloor(nowMs, retentionStartMs);
-  const overlap = cache === undefined ? floor : cache.untilMs - REFETCH_OVERLAP_MS;
-  const sinceMs = cache === undefined || cache.sinceMs > floor ? floor : Math.max(floor, overlap);
-  return { sinceMs, untilMs: nowMs };
+  if (cache === undefined || cache.untilMs - REFETCH_OVERLAP_MS < floor) {
+    return { sinceMs: Math.max(floor, nowMs - maxSpanMs), untilMs: nowMs };
+  }
+  if (cache.untilMs < nowMs || cache.sinceMs <= floor) {
+    const sinceMs = Math.max(floor, cache.untilMs - Math.min(REFETCH_OVERLAP_MS, maxSpanMs / 2));
+    return { sinceMs, untilMs: Math.min(nowMs, sinceMs + maxSpanMs) };
+  }
+  return { sinceMs: Math.max(floor, cache.sinceMs - maxSpanMs), untilMs: cache.sinceMs };
 }
 
 export function mergeCursorFetch(
@@ -63,7 +71,9 @@ export function mergeCursorFetch(
 ) {
   const cutoff = pruneAuthorized ? retentionStartMs : 0;
   const previousStart =
-    cache !== undefined && cache.untilMs >= range.sinceMs ? cache.sinceMs : range.sinceMs;
+    cache !== undefined && cache.untilMs >= range.sinceMs && cache.sinceMs <= range.untilMs
+      ? cache.sinceMs
+      : range.sinceMs;
   const sinceMs = Math.max(cutoff, Math.min(previousStart, range.sinceMs));
   const inRange = (record: UsageRecord) =>
     record.timestampMs >= range.sinceMs && record.timestampMs <= range.untilMs;
@@ -89,7 +99,8 @@ export function mergeCursorFetch(
     cache: {
       accountKey,
       sinceMs,
-      untilMs: range.untilMs,
+      untilMs:
+        cache !== undefined && range.untilMs === cache.sinceMs ? cache.untilMs : range.untilMs,
       fetchedAtMs: nowMs,
       records,
     } satisfies CursorAccountCache,
