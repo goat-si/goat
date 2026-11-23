@@ -140,6 +140,8 @@
   "93c5ba55de154a9b": "Consulta periódicamente el estado de energía del equipo anfitrión mientras haya clientes activos.",
   "3188bc3b3c4508bc": "Política de privacidad",
   "860666d17c54dd3a": "Proyectos y worktrees",
+  "6f12b76458e2ac1a": "Actualizar el estado de los proveedores",
+  "e58b52d05807b929": "Actualizando proveedores",
   "f8ba2ac54e8ca695": "Intervalo entre comprobaciones de proveedores",
   "d166a1c83e0fdfd7": "Comprobación de actualizaciones de proveedores",
   "91183562f4df6dea": "Seguimiento de pull requests",

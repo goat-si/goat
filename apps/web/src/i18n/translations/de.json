@@ -140,6 +140,8 @@
   "93c5ba55de154a9b": "Stromstatus des Hosts regelmäßig abfragen, solange Clients aktiv sind.",
   "3188bc3b3c4508bc": "Datenschutzerklärung",
   "860666d17c54dd3a": "Projekte und Worktrees",
+  "6f12b76458e2ac1a": "Anbieterstatus aktualisieren",
+  "e58b52d05807b929": "Anbieter werden aktualisiert",
   "f8ba2ac54e8ca695": "Intervall für Anbieterprüfungen",
   "d166a1c83e0fdfd7": "Updateprüfung für Anbieter",
   "91183562f4df6dea": "Pull Requests überwachen",

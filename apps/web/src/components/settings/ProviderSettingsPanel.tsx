@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isSecretsFeatureEnabled } from "../../env";
 import { SecretsSettingsPanel } from "./SecretsSettings";
@@ -582,6 +583,7 @@ export function EnvironmentProviderSettings({
   readonly projectIds?: readonly ProjectId[];
   readonly readOnly?: boolean;
 }) {
+  const gt = useGT();
   const settings = useEnvironmentSettings(environmentId);
   const threadShells = useThreadShells();
   const { environments: routeEnvironments } = useEnvironments();
@@ -1133,10 +1135,10 @@ export function EnvironmentProviderSettings({
                     onClick={() => void refreshProviders()}
                   >
                     <RefreshIcon refreshing={isRefreshingProviders} />
-                    <span className="sr-only">Refresh provider status</span>
+                    <span className="sr-only">{gt("Refresh provider status")}</span>
                     <span className="hidden min-w-0 truncate sm:inline">
                       {isRefreshingProviders ? (
-                        "Refreshing providers"
+                        gt("Refreshing providers")
                       ) : (
                         <ProviderLastChecked environmentId={environmentId} />
                       )}
@@ -1144,7 +1146,7 @@ export function EnvironmentProviderSettings({
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Refresh provider status</TooltipPopup>
+              <TooltipPopup side="top">{gt("Refresh provider status")}</TooltipPopup>
             </Tooltip>
           </div>
         }
