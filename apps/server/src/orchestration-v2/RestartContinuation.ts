@@ -51,6 +51,7 @@ export const makeRestartContinuation = Effect.fn("RestartContinuation.make")(fun
     readonly threadId: ThreadId;
     readonly sourceRunId: RunId;
     readonly processLossCount?: number;
+    readonly cause?: "provider_exit";
     readonly plannedRestart?: boolean;
   }) => {
     const continuation = continueRestartedRun(input).pipe(
@@ -216,6 +217,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
     readonly threadId: ThreadId;
     readonly sourceRunId: RunId;
     readonly processLossCount?: number;
+    readonly cause?: "provider_exit";
     readonly plannedRestart?: boolean;
   }) {
     const settings = yield* ServerSettings.ServerSettingsService;
@@ -390,7 +392,9 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       projection.attempts,
     );
     const noteText =
-      note.work.length === 0 ? undefined : restartCancelledBackgroundWorkNote(note.work);
+      note.work.length === 0
+        ? undefined
+        : restartCancelledBackgroundWorkNote(note.work, input.cause);
     const text =
       noteText === undefined
         ? CONTINUE_PROMPT
@@ -407,9 +411,12 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
         notification: {
           source: { kind: "system" },
           outcome: "updated",
-          summary: note.settled
-            ? "GOAT restarted and stopped background work"
-            : "GOAT restarted and resumed this turn",
+          summary:
+            input.cause === "provider_exit"
+              ? "The agent runtime exited and stopped background work"
+              : note.settled
+                ? "GOAT restarted and stopped background work"
+                : "GOAT restarted and resumed this turn",
           detail: text,
         },
         attachments: [],

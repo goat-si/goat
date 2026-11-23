@@ -104,6 +104,7 @@ export const layerExecutor: Layer.Layer<
             return continueRestartedRun({
               threadId: effect.threadId,
               sourceRunId,
+              ...(effect.request.cause === undefined ? {} : { cause: effect.request.cause }),
               ...(String(effect.commandId).startsWith("command:restart-prepare:")
                 ? { plannedRestart: true }
                 : {}),
