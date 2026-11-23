@@ -19,7 +19,8 @@ import * as Stream from "effect/Stream";
 
 import { signWithJsign } from "./lib/windows-jsign.ts";
 
-import { buildComputerUseHelper, type HelperDriverArch } from "./build-computer-use-helper.ts";
+import { buildComputerUseHelper } from "./build-computer-use-helper.ts";
+import type { HelperDriverArch } from "./lib/desktop-computer-use-helper.ts";
 import {
   buildWindowsComputerUseHelper,
   PINNED_DRIVER_FILES,

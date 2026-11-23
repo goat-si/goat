@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command, Flag } from "effect/cli";
 
+import type { HelperDriverArch } from "./lib/desktop-computer-use-helper.ts";
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import {
   hashBytes,
@@ -38,7 +39,6 @@ import {
 } from "./lib/release-verify.ts";
 
 export type HelperChannel = DesktopChannel;
-export type HelperDriverArch = "arm64" | "x64" | "universal";
 
 export const stageComputerUseDriver = Effect.fn("stageComputerUseDriver")(function* (
   source: string,

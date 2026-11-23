@@ -1,7 +1,8 @@
-import type { HelperDriverArch } from "../build-computer-use-helper.ts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { ReleaseVerificationError, runReleaseCommand } from "./release-verify.ts";
+
+export type HelperDriverArch = "arm64" | "x64" | "universal";
 
 /**
  * The helper channel a packaged app embeds. Never "dev": a dev helper skips its parent check
