@@ -19,7 +19,10 @@ import * as Layer from "effect/Layer";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
-import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
+import {
+  CodexOrchestratorReplayHarness,
+  withReplayTitles,
+} from "../Adapters/CodexAdapterV2.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import {
@@ -464,7 +467,11 @@ describe("orchestration V2 merge-back provider replay", () => {
                 {
                   ...scenario,
                   transcript: yield* CodexOrchestratorReplayHarness.decodeTranscript(
-                    materializeReplayTranscriptWorkspace(transcript, cwd),
+                    withReplayTitles(materializeReplayTranscriptWorkspace(transcript, cwd), [
+                      "Merge-back source",
+                      "First merge-back sibling",
+                      "Second merge-back sibling",
+                    ]),
                   ),
                 },
                 CodexHistoryReplayHarness,

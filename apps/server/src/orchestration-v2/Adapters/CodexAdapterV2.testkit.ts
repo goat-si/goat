@@ -271,6 +271,14 @@ const decodeCodexAppServerReplayTranscript = Schema.decodeUnknownEffect(
   CodexReplay.CodexAppServerReplayTranscript,
 );
 
+/** Names Codex receives through thread/name/set, one per thread in the order its first turn starts. */
+export function withReplayTitles<T extends ProviderReplayTranscript>(
+  transcript: T,
+  titles: ReadonlyArray<string>,
+): T {
+  return { ...transcript, metadata: { ...transcript.metadata, goatReplayTitles: titles } };
+}
+
 export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness<
   CodexReplay.CodexAppServerReplayTranscript,
   CodexOrchestratorReplayHarnessError
