@@ -67,3 +67,13 @@ export const webSearchFixtures = [
     status: "completed",
   },
 ] as const;
+
+export const imageReadFixture = {
+  sessionUpdate: "tool_call_update",
+  toolCallId: "structured-image-read",
+  title: "Read `mockup.png`",
+  kind: "read",
+  status: "completed",
+  rawInput: { file_path: "/workspace/mockup.png", start_line: 0, end_line: 799 },
+  rawOutput: "View mockup.png",
+} as const;

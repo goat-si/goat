@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { fileSearchFixtures, webSearchFixtures } from "./acp-search-fixtures.ts";
+import { fileSearchFixtures, imageReadFixture, webSearchFixtures } from "./acp-search-fixtures.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import { makeLoadReplayEmitter } from "./acp-mock-load-replay.ts";
 import * as NodeChildProcess from "node:child_process";
@@ -1280,6 +1280,7 @@ const program = Effect.gen(function* () {
             rawInput: { path: "src/env.ts" },
             locations: [{ path: "src/env.ts" }],
           },
+          imageReadFixture,
           {
             sessionUpdate: "tool_call_update",
             toolCallId: "structured-search",
@@ -1289,7 +1290,6 @@ const program = Effect.gen(function* () {
             rawInput: { query: "TODO", path: "apps/web" },
           },
           ...fileSearchFixtures,
-          // Grok backend searches: the query only arrives in the completed rawOutput.
           {
             sessionUpdate: "tool_call_update",
             toolCallId: "grok-x-search",
