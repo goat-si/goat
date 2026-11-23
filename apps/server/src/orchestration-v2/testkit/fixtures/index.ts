@@ -33,8 +33,8 @@ import { claudeNestedSubagentModelInput } from "./claude_nested_subagent_model/i
 import { assertClaudeNestedSubagentModelOutput } from "./claude_nested_subagent_model/output.ts";
 import { claudeMcpToolPresentationInput } from "./claude_mcp_tool_presentation/input.ts";
 import { assertClaudeMcpToolPresentationOutput } from "./claude_mcp_tool_presentation/output.ts";
-import { claudeResultIsErrorInput } from "./claude_result_is_error/input.ts";
-import { assertClaudeResultIsErrorOutput } from "./claude_result_is_error/output.ts";
+import { claudeResultIsErrorFixture } from "./claude_result_is_error/fixture.ts";
+import { usageLimitFixture } from "./usage_limit/fixture.ts";
 import { grokAutoBlockedCommandInput } from "./grok_auto_blocked_command/input.ts";
 import { assertGrokAutoBlockedCommandOutput } from "./grok_auto_blocked_command/output.ts";
 import { grokBackgroundBashInput } from "./grok_background_bash/input.ts";
@@ -458,21 +458,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
       },
     ],
   },
-  {
-    name: "claude_result_is_error",
-    buildInput: claudeResultIsErrorInput,
-    providers: [
-      {
-        driver: ProviderDriverKind.make("claudeAgent"),
-        transcriptFile: new URL(
-          "./claude_result_is_error/claude_transcript.ndjson",
-          import.meta.url,
-        ),
-        modelSelection: CLAUDE_MODEL_SELECTION,
-        assertOutput: assertClaudeResultIsErrorOutput,
-      },
-    ],
-  },
+  usageLimitFixture,
+  claudeResultIsErrorFixture,
   {
     name: "grok_auto_blocked_command",
     buildInput: grokAutoBlockedCommandInput,

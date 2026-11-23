@@ -1,3 +1,4 @@
+import { antigravityWindowLimitsModel, hubRoutes } from "@goat/shared/usageLimits";
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   UsageLimitSourceError,
@@ -103,7 +104,8 @@ function keepLastGoodReadings(
     }
     refusals.add(refusal.message ?? "An account's usage could not be read.");
     refusedAccountIds.add(account.id);
-    return { ...last, ...account, usageLimits: last.usageLimits };
+    const { models: _models, ...previous } = last;
+    return { ...previous, ...account, usageLimits: last.usageLimits };
   });
   return refusals.size > 0
     ? {
@@ -402,15 +404,19 @@ export function hubPoolResetAt(
   refusedAccounts?: RefusedAccounts,
 ): string | null {
   let earliest: number | null = null;
+  const routes = hubRoutes(sources, driver, model);
   for (const source of sources) {
     const refused = source.kind === "cliproxy" ? refusedAccounts?.get(source.id) : undefined;
     for (const account of source.accounts) {
-      if (account.driver !== driver) continue;
+      if (!routes(account)) continue;
       // An unread account may be the one still blocked, so its refill is unknown.
       if ((source.error && !refused) || refused?.has(account.id) || account.usageLimits.unavailable)
         return null;
       const spent = account.usageLimits.windows.filter(
-        (window) => window.usedPercent >= 100 && windowLimitsModel(window, model),
+        (window) =>
+          window.usedPercent >= 100 &&
+          windowLimitsModel(window, model) &&
+          (account.driver !== "antigravity" || antigravityWindowLimitsModel(window, model)),
       );
       if (spent.length === 0) return null;
       const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
