@@ -1,4 +1,4 @@
-import * as Data from "effect/Data";
+import { CodexContextRestoreError } from "@goat/provider-core/server/failure";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -13,14 +13,6 @@ const overflowKey = Symbol("codex-context-restore-overflow");
 type Context = Record<string, CodexSchema.V2TurnStartParams__AdditionalContextEntry> & {
   [overflowKey]?: object;
 };
-
-class CodexContextRestoreError extends Data.TaggedError("CodexContextRestoreError")<{
-  readonly detail: string;
-}> {
-  override get message() {
-    return this.detail;
-  }
-}
 
 type Restore = {
   readonly done: Deferred.Deferred<boolean>;
@@ -124,9 +116,7 @@ export function makeCodexContextRestores(
           );
           if (!byThread.get(threadId)?.has(restore)) return;
           if (!Exit.isSuccess(result) || !result.value)
-            return yield* new CodexContextRestoreError({
-              detail: "Codex could not restore context after compaction. Retry the turn.",
-            });
+            return yield* new CodexContextRestoreError({ reason: "failed" });
           yield* resetOverflow(threadId, restore.marker);
           remove(threadId, restore);
         }).pipe(retryPermit.withPermits(1));
@@ -134,10 +124,7 @@ export function makeCodexContextRestores(
       pending = byThread.get(threadId)?.values().next().value;
     }
     if ((yield* Ref.get(contexts)).get(threadId)?.[overflowKey])
-      return yield* new CodexContextRestoreError({
-        detail:
-          "Codex context restoration capacity exceeded; restart the provider session before retrying.",
-      });
+      return yield* new CodexContextRestoreError({ reason: "capacity" });
   });
   return { fork, wait, mark, take, clear };
 }
