@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import chinese from "~/i18n/translations/zh.json";
 import { fakeTimers } from "../../../test/render";
 import {
   EnvironmentId,
@@ -155,8 +157,14 @@ afterEach(async () => {
   timers[Symbol.dispose]();
 });
 
-async function render() {
-  await act(() => root.render(<ProjectFilePicker setOpen={setOpen} />));
+async function render(locale = "en") {
+  await act(() =>
+    root.render(
+      <GTProvider locale={locale} translations={{ zh: chinese }}>
+        <ProjectFilePicker setOpen={setOpen} />
+      </GTProvider>,
+    ),
+  );
   await act(() => vi.advanceTimersByTimeAsync(0));
 }
 
@@ -192,6 +200,16 @@ describe("file picker keyboard flow", () => {
     await type("src");
     await enter();
     expect(selectedSurface()).toMatchObject({ kind: "file", relativePath: "src" });
+  });
+
+  it("localizes the search field and direct path actions without changing file names", async () => {
+    state.entries.set("/work/repo/src/app.ts", { kind: "file" });
+    await render("zh");
+    expect(container.querySelector("input")?.placeholder).toBe("搜索文件和文件夹，或输入路径…");
+    await type("/work/repo/src/app.ts");
+    expect(container.textContent).toContain("打开文件：app.ts");
+    await enter();
+    expect(selectedSurface()).toMatchObject({ kind: "file" });
   });
 
   it("opens an absolute path at its line without fuzzy searching it", async () => {
