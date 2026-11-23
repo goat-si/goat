@@ -30,6 +30,8 @@
   "7fa9414ef5e9dd6c": "12-hour",
   "c286809ec2e3d9b2": "Add project base directory",
   "30aac12099fcaf53": "Add project starts in",
+  "0b08bebc02283ea0": "Advanced (one environment)",
+  "34ad6c0a10c3f941": "Uses custom intervals. Shared policy: {profile}.",
   "2757a250104b4b7e": "Advanced",
   "497eabc2e20d930f": "Agent memory limit",
   "24eb3db33511b24b": "Agent memory limit in GiB",
