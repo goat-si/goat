@@ -27,7 +27,6 @@ import {
   claudeFrameToolUseIds,
   isClaudeActiveSteeringAbortResult,
   isClaudeProviderContinuationTurn,
-  withoutMemoryBody,
   claudeEchoedPromptUuids,
   claudePromptLifecycle,
   answersClaudeRequest,
@@ -101,6 +100,7 @@ import {
 } from "./ClaudeToolFrames.ts";
 import {
   appendClaudeUserText,
+  withFreshMemory,
   handoffSkillOffset,
   makeClaudeUserMessage,
 } from "./ClaudeUserMessage.ts";
@@ -1768,6 +1768,7 @@ interface ActiveClaudeTurnContext {
       readonly messageId: MessageId;
       readonly text: string;
       readonly liveQuery: ClaudeLiveQueryContext;
+      readonly receipt: Effect.Effect<void>;
     }
   >;
   // Claude may settle a turn with a result that echoes only a steer's uuid.
@@ -1777,6 +1778,7 @@ interface ActiveClaudeTurnContext {
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
   readonly promptUuid: string | null;
+  rootMemoryReceipt?: Effect.Effect<void> | undefined;
   appContextOffered?: ReadonlyMap<string, string> | undefined;
   promptEcho: "pending" | "confirmed";
   promptStarted: boolean;
@@ -5355,6 +5357,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const steer = context.pendingSteers.get(uuid);
             if (steer === undefined) continue;
             context.pendingSteers.delete(uuid);
+            yield* steer.receipt;
             yield* emitSteerStatus(context, steer.messageId, "completed");
           }
         });
@@ -8209,6 +8212,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return;
           }
           if (claudeEchoedPromptUuids(message).includes(context.promptUuid)) {
+            const receipt = context.rootMemoryReceipt;
+            context.rootMemoryReceipt = undefined;
+            yield* receipt ?? Effect.void;
             yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             if (
               liveQuery.promptEchoMode === "unknown" ||
@@ -8230,6 +8236,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
             if (lifecycle.state === "started") {
               context.promptStarted = true;
+              const receipt = context.rootMemoryReceipt;
+              context.rootMemoryReceipt = undefined;
+              yield* receipt ?? Effect.void;
               yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             }
             // Previously recorded prompt uuids complete without starting a turn.
@@ -9269,18 +9278,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return context;
         });
 
-        const withFreshMemory = Effect.fnUntraced(function* (
-          message: SDKUserMessage,
-          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-        ) {
-          const snapshot = turnInput.refreshMemoryContext
-            ? yield* turnInput.refreshMemoryContext()
-            : turnInput.memoryContext;
-          if (snapshot === undefined) return message;
-          const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
-          return appendClaudeUserText(message, text);
-        });
-
         const withCuaNotice = (
           message: SDKUserMessage,
           query: ClaudeLiveQueryContext,
@@ -9461,7 +9458,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }),
               input:
                 turnInput.refreshMemoryContext || nativeControl || promptUuid === null
-                  ? withoutMemoryBody(turnInput)
+                  ? MemoryContext.withoutMemoryBody(turnInput)
                   : { ...turnInput },
               queryPolicy: querySession.queryPolicy,
               nativeThreadId,
@@ -9615,23 +9612,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               );
             });
             if (userMessage !== null && !turnInput.resume) {
+              const admitted = nativeControl
+                ? { message: userMessage, receipt: Effect.void, uncertain: Effect.void }
+                : yield* withFreshMemory(userMessage, turnInput);
               const admittedMessage = nativeControl
-                ? userMessage
-                : yield* withFreshMemory(userMessage, turnInput).pipe(
-                    Effect.flatMap((m) => withCuaNotice(m, querySession, turnInput.threadId)),
-                  );
+                ? admitted.message
+                : yield* withCuaNotice(admitted.message, querySession, turnInput.threadId);
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;
                 context.memoryRelease = yield* derivedCache
                   .retain({
                     bytes: new TextEncoder().encode(encodeMemorySnapshot(body)).length,
                     release: Effect.sync(() => {
-                      context.input = withoutMemoryBody(context.input);
+                      context.input = MemoryContext.withoutMemoryBody(context.input);
                     }),
                   })
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
               }
-              yield* attachTurn;
+              context.rootMemoryReceipt = admitted.receipt;
+              yield* admitted.uncertain.pipe(Effect.andThen(attachTurn));
               yield* offerUserMessage(admittedMessage);
               return;
             }
@@ -10031,6 +10030,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 else next.delete(turnInput.providerTurnId);
                 return next;
               });
+            yield* admitted.uncertain;
             if (currentTurn.steersClosed) {
               yield* settleSteer(false);
               return yield* new ProviderAdapter.ProviderAdapterProtocolError({
@@ -10046,12 +10046,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               messageId,
               text: turnInput.message.text,
               liveQuery: existing,
+              receipt: admitted.receipt,
             });
             yield* emitSteerStatus(currentTurn, messageId, "pending");
             // The PDF budget is spent once the message is queued, even if the steer is later refused.
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
-                existing.query.offer(admitted, () => {
+                existing.query.offer(admitted.message, () => {
                   pdfReservation.commit();
                 }),
               ).pipe(

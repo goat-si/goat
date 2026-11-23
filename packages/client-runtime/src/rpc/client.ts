@@ -920,6 +920,7 @@ export type MemoryBodyRpcTag =
   | typeof WS_METHODS.memoryList
   | typeof WS_METHODS.memorySearch
   | typeof WS_METHODS.memoryRead
+  | typeof WS_METHODS.memoryTurnInspect
   | typeof WS_METHODS.memoryHistory
   | typeof WS_METHODS.memoryReadSource
   | typeof WS_METHODS.memorySuggestionsList;

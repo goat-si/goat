@@ -218,6 +218,7 @@ import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
+import { GoatBotRouteDrafts } from "./GoatBotRouteDrafts";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { HoldsNavigation, NavigationHoldsPaused } from "~/lib/navigationHolds";
@@ -492,7 +493,10 @@ function MainAndTaskPane() {
     <div style={{ display: "flex", height: 400, width: 720 }}>
       <GoatBotChatView
         environmentId={environmentId}
-        availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
+        availability={{
+          kind: "ready",
+          bot: { environmentId, threadId: ThreadId.make("bot-thread") },
+        }}
         canOperate
         rows={shown}
         onSend={send}
@@ -510,6 +514,21 @@ function MainAndTaskPane() {
     </div>
   );
 }
+
+it("shares typed question words between the task pane and the bot chat (#3474)", async () => {
+  setup();
+  await using screen = await render(
+    <GoatBotRouteDrafts>
+      <MainAndTaskPane />
+    </GoatBotRouteDrafts>,
+  );
+  const fields = screen.getByRole("textbox", { name: "Something else" });
+  await userEvent.type(fields.nth(0), "Use the staging cache");
+  await expect.element(fields.nth(1)).toHaveValue("Use the staging cache");
+  await userEvent.type(fields.nth(1), "{End} today");
+  await expect.element(fields.nth(0)).toHaveValue("Use the staging cache today");
+  expect(state.send).not.toHaveBeenCalled();
+});
 
 it("failing-first: answering a task question in main chat leaves its task pane in place", async () => {
   state.realTimeline = true;

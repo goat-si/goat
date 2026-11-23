@@ -1,4 +1,6 @@
 import { copyMessageSnapshot } from "./copySnapshot";
+import { UserMessageTurnMemory } from "./TurnMemoryDetails";
+import { UserVideoAttachment } from "./UserVideoAttachment";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
 import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
@@ -17,12 +19,7 @@ import {
   createMessageAttachmentPreviewProjector,
   selectMessageImageResources,
 } from "../../session-logic";
-import {
-  type ChatFileAttachment,
-  isFileAttachment,
-  isImageAttachment,
-  isVideoAttachment,
-} from "../../types";
+import { isFileAttachment, isImageAttachment, isVideoAttachment } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   CalendarClockIcon,
@@ -36,14 +33,9 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { Button, InlineButton } from "../ui/button";
 import { ModelSwitchRow } from "./V2LifecycleRow";
 import { UserMessageIntentMarker } from "./UserMessageIntentMarker";
-import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
+import { useAssetUrls } from "../../assets/assetUrls";
 import { AttachmentImage } from "../media/AttachmentImage";
-import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
-import {
-  buildAttachmentVideoAsset,
-  buildAttachmentVideoPreview,
-  buildExpandedImagePreview,
-} from "./ExpandedImagePreview";
+import { buildAttachmentVideoPreview, buildExpandedImagePreview } from "./ExpandedImagePreview";
 import {
   SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
   SnapShotAttachmentDetails,
@@ -87,50 +79,6 @@ import {
   USER_MESSAGE_REMARK_PLUGINS,
 } from "./TimelineUserMessageRow.logic";
 
-function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
-  const ctx = use(TimelineRowCtx);
-  // Row updates rebuild attachment objects, so the asset follows only the
-  // fields it reads.
-  const { downloadable, id, mimeType, name } = file;
-  const environmentId = ctx.activeThreadEnvironmentId;
-  const asset =
-    downloadable === false
-      ? null
-      : buildAttachmentVideoAsset(environmentId, { id, mimeType, name });
-  const resource = asset?.resource ?? null;
-  const assetUrl = useAssetUrlState(ctx.activeThreadEnvironmentId, resource);
-  const refreshAssetUrl = useAssetUrlRefresh(ctx.activeThreadEnvironmentId, resource);
-  const src = assetUrl._tag === "Success" ? assetUrl.url : (file.previewUrl ?? null);
-
-  if (asset === null && src === null) {
-    return (
-      <div className="flex aspect-[4/3] w-full items-center justify-center rounded-lg border border-border/80 bg-black px-2 py-3 text-center text-2xs text-white/70">
-        {file.name}
-      </div>
-    );
-  }
-
-  return (
-    <MediaVideoPlayer
-      src={src}
-      sourceFailed={
-        file.previewUrl === undefined && resource !== null && assetUrl._tag === "Failure"
-      }
-      label={file.name}
-      preload="visible"
-      onOpen={() => {
-        const preview = buildAttachmentVideoPreview(ctx.activeThreadEnvironmentId, file);
-        if (preview) ctx.onImageExpand(preview);
-      }}
-      className="block aspect-[4/3] w-full"
-      videoClassName="aspect-auto size-full rounded-lg border border-border/80"
-      stateClassName="aspect-auto min-h-full rounded-lg border border-border/80 bg-black text-white"
-      onRetry={asset ? refreshAssetUrl : undefined}
-      actionsSource={asset ? { kind: "video", name: file.name, src, asset } : undefined}
-    />
-  );
-}
-
 export function UserMessageRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const item = row.projectedItem?.item;
@@ -141,6 +89,7 @@ export function UserMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mes
         <ModelSwitchRow environmentId={ctx.activeThreadEnvironmentId} modelSwitch={modelSwitch} />
       ) : null}
       <UserMessageContent row={row} />
+      <UserMessageTurnMemory row={row} />
     </>
   );
 }

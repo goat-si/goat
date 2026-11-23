@@ -1,3 +1,4 @@
+import { takeMemoryReceipt } from "./memoryReceipt.ts";
 import { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
 export { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
 import {
@@ -1545,6 +1546,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 lastError = turn.contextOverflow.message;
               }
               turn.finalized = true;
+              if (turn.pendingMemoryReceipt)
+                yield* takeMemoryReceipt(turn, turn.pendingMemoryReceipt.id, false);
               if (turn.priorWakeSettled !== undefined)
                 yield* Deferred.succeed(turn.priorWakeSettled, undefined);
               const completedAt = yield* DateTime.now;
@@ -1984,6 +1987,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const matchesAdmission =
             turn !== null &&
             (turn.admissionMessageId === null || turn.admissionMessageId === message.id);
+          if (turn !== null) yield* takeMemoryReceipt(turn, message.id, true);
           if (turn !== null && matchesAdmission) turn.usage.promptMessageIds.add(message.id);
           if (turn !== null && matchesAdmission && turn.nativeUserMessageId === null) {
             turn.nativeUserMessageId = message.id;
@@ -2704,23 +2708,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           // Native workspace commands accept file parts only, so snapshots stay on prompts.
           if (!command) {
-            const snapshot =
-              memoryInput === undefined
-                ? undefined
-                : memoryInput.refreshMemoryContext
-                  ? yield* memoryInput.refreshMemoryContext()
-                  : memoryInput.memoryContext;
-            const memory =
-              snapshot === undefined
-                ? undefined
-                : yield* Effect.try({
-                    try: () => MemoryContext.memoryContextText(snapshot),
-                    catch: () =>
-                      new ProviderAdapter.ProviderAdapterProtocolError({
-                        driver: OPENCODE_PROVIDER,
-                        detail: "Invalid memory context frame",
-                      }),
-                  });
+            const {
+              text: memory,
+              receipt,
+              uncertain,
+            } = yield* MemoryContext.promptMemory(memoryInput, OPENCODE_PROVIDER);
             const availability = McpProviderSession.memoryToolAvailability(
               !connection.external &&
                 currentMcp?.authorizationHeader === installedMcpSession?.authorizationHeader &&
@@ -2748,11 +2740,14 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .join("\n\n"),
                   };
             if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
+            yield* uncertain;
+            turn.pendingMemoryReceipt = { id: payload.messageID, receipt };
             return yield* sdkCall("session.promptAsync", prepared, (signal) =>
               client.session.promptAsync(prepared, {
                 signal: AbortSignal.any([signal, abortController.signal]),
               }),
             ).pipe(
+              Effect.tapError(() => takeMemoryReceipt(turn, payload.messageID, false)),
               Effect.andThen(delivery?.submitted() ?? Effect.void),
               Effect.andThen(delivery?.accepted() ?? Effect.void),
             );

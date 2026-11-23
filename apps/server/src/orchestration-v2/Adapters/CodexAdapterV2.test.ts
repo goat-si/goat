@@ -1,3 +1,4 @@
+import { queuedMemoryParams, wp4Memory } from "./CodexQueuedMemory.testkit.ts";
 import { assertSubagentProgress } from "./CodexSubagentProgress.testkit.ts";
 import { codexReceiptTranscript, verifyCodexReceipt } from "./CodexReceipt.testkit.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -7,7 +8,6 @@ import * as MemorySnapshot from "../../memory/MemorySnapshot.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as Exit from "effect/Exit";
 import * as M from "@goat/contracts";
-import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -114,22 +114,6 @@ const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJs
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
   ChildProcess.make("git", args, { cwd, env: isolatedGitEnv() });
 const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
-
-const wp4Memory = () =>
-  MemoryContext.packMemoryContext({
-    memorySpaceId: M.MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: M.MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: M.MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: M.EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <untrusted> 'quoted' \"data\"",
-      },
-    ],
-  })!;
 
 describe("CodexAdapterV2 computer use for unattended turns", () => {
   const session: McpProviderSession.McpProviderSessionConfig = {
@@ -1187,10 +1171,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const nativeTurnId = "early-stop-turn";
       const prompt = "Run a command.";
       const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
+      const snapshot = wp4Memory();
+      const params = yield* queuedMemoryParams(nativeThreadId, prompt, snapshot);
+      let receipts = 0;
+      let uncertain = 0;
       const transcript = makeCodexReplayTranscript({
         scenario: "early-stop-await-native-start",
         entries: [
-          ...preamble.slice(0, -2),
+          ...preamble.slice(0, 5),
+          { type: "expect_outbound", frame: { id: 3, method: "turn/start", params } },
           {
             type: "emit_inbound",
             label: "turn/start/queued",
@@ -1248,15 +1237,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             if (method === "turn/interrupt") interruptSent = true;
           }),
       );
-      yield* harness.runtime.startTurn(
-        makeCodexTestTurnInput({
+      yield* harness.runtime.startTurn({
+        ...makeCodexTestTurnInput({
           threadId: harness.threadId,
           providerThread: harness.providerThread,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make("early-stop-attempt"),
           text: prompt,
         }),
-      );
+        memoryContext: snapshot,
+        onMemoryDelivered: () =>
+          Effect.sync(() => {
+            receipts++;
+          }),
+        onMemoryDeliveryUncertain: () =>
+          Effect.sync(() => {
+            uncertain++;
+          }),
+      });
+      assert.equal(receipts, 0);
+      assert.equal(uncertain, 1);
       const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
         driver: CodexAdapterV2.CODEX_DRIVER_KIND,
         nativeTurnId,
@@ -1269,6 +1269,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       yield* TestClock.adjust("500 millis");
       yield* Fiber.join(interrupt);
       yield* harness.firstTerminal;
+      assert.equal(receipts, 1);
       assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
       assert.lengthOf(harness.terminalEvents(), 1);
       assert.isFalse(yield* harness.hasPendingBackgroundWork);

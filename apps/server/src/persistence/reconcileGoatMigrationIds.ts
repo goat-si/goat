@@ -170,6 +170,9 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ChannelBotTaskSnooze",
   BOT_ATTENTION_MIGRATION_NAME,
   "RemoteDispatchEnvironment",
+  "SlackConversationBot",
+  "ChannelInputSessionAuthority",
+  "TurnMemoryReceipts",
 ]);
 
 type MigrationEntry<E> = readonly [
