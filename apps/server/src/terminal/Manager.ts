@@ -1755,6 +1755,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               ),
               yield* mcpSessions.read(ThreadId.make(session.threadId)),
             );
+            terminalEnv.GOAT_THREAD_ID = session.threadId;
             // Append managed install directories so agent commands resolve without shadowing user/system tools.
             if (
               options.managedBinaryCacheDir !== undefined &&

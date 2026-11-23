@@ -136,7 +136,6 @@ it.layer(
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
     }),
   );
-
   it.effect("keeps attach streams live when a terminal id is closed and reopened", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -161,7 +160,6 @@ it.layer(
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
     }),
   );
-
   it.effect("resumed attaches after close never respawn until the terminal is reopened", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -183,7 +181,6 @@ it.layer(
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
     }),
   );
-
   it.effect("resumed attaches respect closes before this server has seen a terminal", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -207,7 +204,6 @@ it.layer(
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
     }),
   );
-
   it.effect("resumed attaches leave exited and evicted terminals stopped", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, {
@@ -249,7 +245,6 @@ it.layer(
       expect(ptyAdapter.spawnInputs).toHaveLength(2);
     }),
   );
-
   it.effect("resumed attaches recreate terminals this server has never seen", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -1445,6 +1440,7 @@ it.layer(
         env: {
           PORT: "5173",
           GOAT_PORT: "3773",
+          GOAT_THREAD_ID: "server-thread",
           VITE_DEV_SERVER_URL: "http://localhost:5173",
           TEST_TERMINAL_KEEP: "keep-me",
           TMUX: "/tmp/tmux-1000/default,1234,0",
@@ -1454,19 +1450,24 @@ it.layer(
         },
       });
       yield* manager.open(openInput());
-      yield* manager.open(openInput({ terminalId: "explicit", env: { TMUX_PANE: "%9" } }));
+      yield* manager.open(
+        openInput({
+          terminalId: "explicit",
+          env: { TMUX_PANE: "%9", GOAT_THREAD_ID: "client-thread" },
+        }),
+      );
       const spawnInput = ptyAdapter.spawnInputs[0];
       expect(spawnInput).toBeDefined();
       if (!spawnInput) return;
 
-      expect(spawnInput.env.PORT).toBeUndefined();
-      expect(spawnInput.env.GOAT_PORT).toBeUndefined();
-      expect(spawnInput.env.VITE_DEV_SERVER_URL).toBeUndefined();
+      for (const key of "PORT GOAT_PORT VITE_DEV_SERVER_URL TMUX TMUX_PANE ZELLIJ_SESSION_NAME".split(
+        " ",
+      ))
+        expect(spawnInput.env[key]).toBeUndefined();
+      expect(spawnInput.env.GOAT_THREAD_ID).toBe("thread-1");
       expect(spawnInput.env.TEST_TERMINAL_KEEP).toBe("keep-me");
-      expect(spawnInput.env.TMUX).toBeUndefined();
-      expect(spawnInput.env.TMUX_PANE).toBeUndefined();
-      expect(spawnInput.env.ZELLIJ_SESSION_NAME).toBeUndefined();
       expect(spawnInput.env.ZELLIJ_CONFIG_DIR).toBe("/home/user/.config/zellij");
+      expect(ptyAdapter.spawnInputs[1]?.env.GOAT_THREAD_ID).toBe("thread-1");
       expect(ptyAdapter.spawnInputs[1]?.env.TMUX_PANE).toBe("%9");
     }),
   );
@@ -1585,7 +1586,6 @@ it.layer(
         rawProviderInstanceId: "configured_home",
         env: undefined,
       });
-
       expect(environment[variable]).toBe(path.resolve(expectedHome));
     }).pipe(
       Effect.provide(
