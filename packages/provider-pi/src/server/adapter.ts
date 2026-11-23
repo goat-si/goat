@@ -110,11 +110,9 @@ export interface PiAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
-
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
 const PI_COMPACTING_PROMPT_REJECTION = "Cannot submit a prompt while compaction is in progress";
-
 export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   options: PiAdapterV2Options,
 ) {
@@ -132,9 +130,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
-
   const protocolError = makePiProtocolError(driver);
-
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver,
@@ -184,6 +180,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           profile,
           input,
           cwd,
+          host,
           agentScope,
           spawner,
           driver,

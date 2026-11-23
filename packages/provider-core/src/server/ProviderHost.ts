@@ -51,6 +51,7 @@ export class ProviderHost extends Context.Service<
     /** Absolute attachment path, or null if the ID does not resolve inside attachmentsDir. */
     readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
     readonly resolveExtractedTextPath?: (path: string) => Effect.Effect<string | undefined>;
+    readonly retainAgentPortDiscovery?: Effect.Effect<void, never, Scope.Scope>;
     readonly credentials: (
       namespace: string,
       bindingId: string,
