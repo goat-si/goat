@@ -345,6 +345,7 @@ describe("root reopen shortcut", () => {
         }),
         expect.objectContaining({ command: "rightPanel.toggle" }),
         expect.objectContaining({ command: "rightPanel.close" }),
+        expect.objectContaining({ command: "rightPanel.new" }),
       ]),
     );
   });
