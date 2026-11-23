@@ -30,7 +30,7 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
       const taskId = "664880dc-701a-4ab3-bd22-c00e2e605178/task-60";
       const report =
         status === "failed"
-          ? `Task id "${taskId}" failed with error: build failed.`
+          ? `Task id "${taskId}" failed with error: ${"build failed. ".repeat(800)}`
           : `Task id "${taskId}" finished with result:\nAll checks passed.`;
       const { command, usage, send, startTurn, throughPromptSettled, drain } =
         yield* openSessionWithRunningCommand({}, undefined, {

@@ -239,7 +239,7 @@ export const settleMessageBackgroundTools = Effect.fnUntraced(function* (
   emitTool: (context: ActiveAcpTurn, tool: AcpToolCallState) => Effect.Effect<void>,
 ) {
   if (!context.promptSettled || flavor.backgroundToolMessageStatus === undefined) return;
-  const reply = text.slice(-8_000);
+  const reply = `${text.slice(0, 8_000)}\n${text.slice(-8_000)}`;
   for (const tool of context.tools.values()) {
     if (toolStatus(tool.status) !== "running") continue;
     const status = flavor.backgroundToolMessageStatus(tool, reply);
