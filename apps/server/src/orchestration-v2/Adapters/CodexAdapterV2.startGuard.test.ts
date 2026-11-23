@@ -1,3 +1,8 @@
+import { wp4Memory } from "./CodexQueuedMemory.testkit.ts";
+import { buildCodexTurnStartParams } from "./CodexTurnStartParams.ts";
+import { makeCodexTestTurnInput } from "./CodexAdapterV2.testkit.ts";
+import { RunAttemptId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { assert, describe, it } from "@effect/vitest";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { MessageId, ProviderTurnId, RunId } from "@goat/contracts";
@@ -87,6 +92,64 @@ const busyThread = (f: Fixture, id: number): CodexAppServerReplayEntry => {
 };
 
 describe("Codex turn start on a busy native thread", () => {
+  it.effect("marks adopted steer memory uncertain until consumption can be proven (#3836)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "guard-memory-uncertain";
+        const f = yield* open(scenario);
+        yield* f.turnStart(3, 1, false);
+        f.turnCompleted(1);
+        codexStartsTurn(f, "native-turn");
+        fence(f);
+        const snapshot = wp4Memory();
+        const { additionalContext } = yield* buildCodexTurnStartParams({
+          nativeThreadId: f.nativeThreadId,
+          codexInput: text("turn-2"),
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          memoryContext: snapshot,
+          hasGoatMcp: true,
+          browserToolsAvailable: false,
+          computerUse: false,
+          computerUseDeferred: false,
+          screenCode: false,
+        });
+        expect(f, 4, "turn/steer", {
+          threadId: f.nativeThreadId,
+          expectedTurnId: "native-turn",
+          input: text("turn-2"),
+          additionalContext,
+        });
+        answer(f, 4, { turnId: "native-turn" });
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* replay.goalTokens;
+        let delivered = 0;
+        let uncertain = 0;
+        yield* replay.runtime.startTurn({
+          ...makeCodexTestTurnInput({
+            threadId: replay.threadId,
+            providerThread: replay.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`${scenario}-2`),
+            text: "turn-2",
+          }),
+          memoryContext: snapshot,
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              delivered++;
+            }),
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              uncertain++;
+            }),
+        });
+        assert.equal(delivered, 0);
+        assert.equal(uncertain, 1);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
   // Was: steer into the earlier run's turn. The maintainer chose to stop such a turn instead. The
   // likely incident path: a Stop Codex never confirmed ends the run in GOAT while Codex keeps the turn
   // running, and the next message used to send turn/start onto it. Such a Stop now keeps the run open

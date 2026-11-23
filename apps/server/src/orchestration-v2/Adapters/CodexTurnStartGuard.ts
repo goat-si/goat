@@ -140,6 +140,7 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
         | Record<string, CodexSchema.V2TurnSteerParams__AdditionalContextEntry>
         | undefined;
       readonly steer: boolean;
+      readonly beforeSteer?: Effect.Effect<void> | undefined;
       readonly reserve: () => {
         readonly failed: () => void;
         readonly answered: (turnId: string) => void;
@@ -160,6 +161,7 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
           ? {}
           : { additionalContext: input.additionalContext }),
       };
+      yield* input.beforeSteer ?? Effect.void;
       const steered = yield* deps.client.request("turn/steer", params).pipe(Effect.exit);
       if (Exit.isFailure(steered)) {
         adoptions.delete(busy.turnId);

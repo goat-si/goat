@@ -418,6 +418,7 @@ export interface ActiveCodexTurnContext {
     readonly failure: OrchestrationV2ProviderFailure;
   };
   readonly nativeStartReady?: Deferred.Deferred<void>;
+  pendingMemoryReceipt?: Effect.Effect<void> | undefined;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
   readonly projectionThreadId: ThreadId;
@@ -4106,6 +4107,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ).pipe(Effect.forkIn(scope));
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context !== undefined) {
+              const receipt = context.pendingMemoryReceipt;
+              context.pendingMemoryReceipt = undefined;
+              yield* receipt ?? Effect.void;
               if (context.nativeStartReady !== undefined) {
                 yield* Deferred.succeed(context.nativeStartReady, undefined);
               }
@@ -6205,6 +6209,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 updated.delete(input.nativeTurnId);
                 return updated;
               });
+              input.context.pendingMemoryReceipt = undefined;
               if (input.context.nativeStartReady !== undefined) {
                 yield* Deferred.succeed(input.context.nativeStartReady, undefined);
               }
@@ -6623,6 +6628,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               codexInput,
               additionalContext: turnStartParams.additionalContext,
               steer,
+              beforeSteer: validatedMemory
+                ? turnInput.onMemoryDeliveryUncertain?.(validatedMemory)
+                : undefined,
               reserve: () => threadStatuses.starting(threadId),
               adopt: (nativeTurnId) =>
                 Effect.flatMap(DateTime.now, (startedAt) =>
@@ -6637,7 +6645,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (dispatched.type === "adopted") {
               yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
               yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
-              yield* MemoryContext.deliveryReceipt(turnInput, validatedMemory);
               return void restartNotices.delete(threadId);
             }
             const start = dispatched.reservation;
@@ -6700,18 +6707,28 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `Codex continued native turn ${started.turn.id}, which still belongs to an earlier run. Stop that turn and retry.`,
               );
             }
-            yield* MemoryContext.deliveryReceipt(turnInput, validatedMemory);
-            if ((yield* Ref.get(pendingRootTurns)).get(threadId)?.attemptId !== turnInput.attemptId)
-              return;
-            yield* registerRootTurn({
-              turnInput,
-              nativeTurnId: started.turn.id,
-              startedAt: codexTimestamp(started.turn.startedAt),
-              // Codex folds input into a turn it already started and names that turn.
-              waitForNativeStart:
-                started.turn.startedAt === null &&
-                threadStatuses.lastStarted(threadId) !== started.turn.id,
-            }).pipe(turnTerminalizationPermit.withPermits(1));
+            const pending = (yield* Ref.get(pendingRootTurns)).get(threadId);
+            const context =
+              pending?.attemptId === turnInput.attemptId
+                ? yield* registerRootTurn({
+                    turnInput,
+                    nativeTurnId: started.turn.id,
+                    startedAt: codexTimestamp(started.turn.startedAt),
+                    waitForNativeStart:
+                      started.turn.startedAt === null &&
+                      threadStatuses.lastStarted(threadId) !== started.turn.id,
+                  }).pipe(turnTerminalizationPermit.withPermits(1))
+                : owner?.input.attemptId === turnInput.attemptId
+                  ? owner
+                  : undefined;
+            if (context === undefined) return;
+            const receipt = MemoryContext.deliveryReceipt(turnInput, validatedMemory);
+            if (
+              started.turn.startedAt !== null ||
+              threadStatuses.lastStarted(threadId) === started.turn.id
+            )
+              yield* receipt;
+            else context.pendingMemoryReceipt = receipt;
           },
           (effect, turnInput) =>
             effect.pipe(
