@@ -191,6 +191,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         } | null>(null);
         const warnedUnsupportedSandbox = yield* Ref.make(false);
         const activeTurn = yield* Ref.make<ActiveCursorTurn | null>(null);
+        let deliveredRuntime: { agent: string; instructions: string } | undefined;
         const planIds = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact["id"]>());
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
@@ -809,6 +810,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             context.turnEnded = false;
           }
           switch (update.type) {
+            case "summary-completed":
+              if (update.failed !== true) {
+                context.compacted = true;
+                deliveredRuntime = undefined;
+              }
+              return;
             case "text-delta":
               // Earlier commentary must not hide a later standalone transport dump.
               if (context.assistant.current === null) {
@@ -946,6 +953,14 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          const delivered = input.context.runtimeInstructions.value;
+          if (input.context.compacted) deliveredRuntime = undefined;
+          else if (delivered !== undefined) {
+            deliveredRuntime =
+              input.status === "completed"
+                ? { agent: input.context.run.agentId, instructions: delivered }
+                : undefined;
+          }
           yield* outputGate.wakeAll;
           const completedAt = yield* DateTime.now;
           for (const tool of input.context.tools.values()) {
@@ -1183,6 +1198,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           config: McpProviderSession.McpProviderSessionConfig | undefined,
           memoryClaim: { claimed: boolean },
           interrupted: CursorRunPrompt | undefined,
+          runtimeDelivery: { value: string | undefined },
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
@@ -1266,16 +1282,22 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             memoryClaim.claimed = true;
             memoryToolClaims.add(nativeId);
           } else memoryToolClaims.delete(nativeId);
+          const runtimeInstructions = buildCursorRuntimeInstructions(config, {
+            harness: "Cursor",
+            model: turnInput.modelSelection.model,
+            computerUse:
+              agent !== null &&
+              agent.cuaDriverKey !== "" &&
+              McpProviderSession.carriesComputerUseSkill(config),
+          });
+          runtimeDelivery.value =
+            deliveredRuntime?.agent === nativeId &&
+            deliveredRuntime.instructions === runtimeInstructions
+              ? undefined
+              : runtimeInstructions;
           const text = [
             userText,
-            buildCursorRuntimeInstructions(config, {
-              harness: "Cursor",
-              model: turnInput.modelSelection.model,
-              computerUse:
-                agent !== null &&
-                agent.cuaDriverKey !== "" &&
-                McpProviderSession.carriesComputerUseSkill(config),
-            }),
+            runtimeDelivery.value,
             announceMemoryTools
               ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
               : undefined,
@@ -1320,11 +1342,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const interrupted = yield* Ref.get(interruptedPrompt);
             const previous =
               interrupted?.agent === agent.nativeThreadId ? interrupted.prompt : undefined;
+            const runtimeDelivery: { value: string | undefined } = { value: undefined };
             const { message, prompt } = yield* resolveUserMessage(
               turnInput,
               mcpSession,
               memoryClaim,
               previous,
+              runtimeDelivery,
             );
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
@@ -1336,8 +1360,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   Effect.gen(function* () {
                     const config = yield* mcpSessions.read(turnInput.threadId);
                     return {
-                      message: (yield* resolveUserMessage(turnInput, config, memoryClaim, previous))
-                        .message,
+                      message: (yield* resolveUserMessage(
+                        turnInput,
+                        config,
+                        memoryClaim,
+                        previous,
+                        runtimeDelivery,
+                      )).message,
                       mcpServers: { ...workspaceMcpServers, ...cursorMcpServers(config) },
                     };
                   }).pipe(
@@ -1401,6 +1430,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 nextSegment: 0,
               },
               prompt,
+              runtimeInstructions: runtimeDelivery,
+              compacted: prompt === undefined,
               interrupted: false,
               finalized: false,
               turnEnded: false,

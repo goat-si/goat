@@ -1,7 +1,7 @@
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 
-/** Cursor resends the compact screen code guide on every turn whose MCP session carries the skill. */
+/** The compact screen code guide follows the session's tool availability. */
 export const buildCursorRuntimeInstructions = (
   config: McpProviderSession.McpProviderSessionConfig | undefined,
   runtime: Parameters<typeof buildRuntimeInstructions>[0],
