@@ -1,5 +1,5 @@
 import { Model, Provider } from "@opencode/client/effect";
-import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { openCodeVariant } from "../variant.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 export type ModelRef = ReturnType<typeof Model.Ref.make>;
@@ -10,7 +10,7 @@ export const modelRef = (
 ) => {
   const parsed = OpenCodeRuntime.parseOpenCodeModelSlug(selection.model);
   if (parsed === null) return undefined;
-  const selected = getModelSelectionStringOptionValue(selection, "variant");
+  const selected = openCodeVariant(selection);
   const variant =
     selected === undefined || listedVariants === undefined || listedVariants.has(selected)
       ? selected

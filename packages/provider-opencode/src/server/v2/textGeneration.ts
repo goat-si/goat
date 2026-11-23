@@ -17,7 +17,7 @@ import {
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import { requireOpenCodeMemoryIsolation } from "../memoryIsolation.ts";
-import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { openCodeVariant } from "../variant.ts";
 import * as NodeURL from "node:url";
 import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
@@ -99,7 +99,7 @@ const runOnServer = Effect.fn("Opencode2TextGeneration.runOnServer")(function* (
         cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
       });
   }
-  const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant");
+  const variant = openCodeVariant(input.modelSelection);
   const outcome = yield* Deferred.make<Outcome>();
   let sessionId: string | undefined;
   let rejected = false;
