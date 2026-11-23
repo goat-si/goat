@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limit erreicht, lösche zuerst eine Ansicht",
   "79c3a969207c8760": "Ein Feld dieser Ansicht überschreitet die zulässige Länge.",
   "856812e7e1fc445e": "Tool-Aufrufe im Chat",
-  "d24e3cd7bcf08490": "Wach halten, während Agenten arbeiten"
+  "d24e3cd7bcf08490": "Wach halten, während Agenten arbeiten",
+  "8711a1de99862971": "{label} verkürzen",
+  "7d45b094a7b5ab8f": "{label} in Sekunden",
+  "568556fb7ba81f65": "{label} verlängern",
+  "726b70e60ea3bfdd": "Intervall für die Anbieterstatusprüfung"
 }

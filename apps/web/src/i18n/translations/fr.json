@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limite atteinte, supprimez d’abord une vue",
   "79c3a969207c8760": "Cette vue dépasse la longueur autorisée pour un champ.",
   "856812e7e1fc445e": "Appels d’outils dans le chat",
-  "d24e3cd7bcf08490": "Rester éveillé pendant que les agents travaillent"
+  "d24e3cd7bcf08490": "Rester éveillé pendant que les agents travaillent",
+  "8711a1de99862971": "Réduire l’intervalle : {label}",
+  "7d45b094a7b5ab8f": "{label} (en secondes)",
+  "568556fb7ba81f65": "Augmenter l’intervalle : {label}",
+  "726b70e60ea3bfdd": "Intervalle de vérification de l’état du fournisseur"
 }

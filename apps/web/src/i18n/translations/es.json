@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
   "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
-  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes"
+  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes",
+  "8711a1de99862971": "Reducir el intervalo: {label}",
+  "7d45b094a7b5ab8f": "{label} (en segundos)",
+  "568556fb7ba81f65": "Aumentar el intervalo: {label}",
+  "726b70e60ea3bfdd": "Intervalo de comprobación del estado del proveedor"
 }
