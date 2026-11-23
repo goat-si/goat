@@ -25,6 +25,10 @@ import { makeHarness } from "./updatesTestHarness.ts";
 
 const decodeState = Schema.decodeSync(DesktopUpdateStateSchema);
 const version = "1.2.4";
+const interrupted = new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
+  channel: "latest",
+  cause: new Error("net::ERR_CONNECTION_RESET"),
+});
 const pending = { version, channel: "latest" as const, downloadedAt: "2026-10-12T00:00:00.000Z" };
 const observe = (
   updates: DesktopUpdates.DesktopUpdates["Service"],
@@ -142,6 +146,147 @@ describe("DesktopUpdates automatic coordinator", () => {
           }),
         ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
       }),
+  );
+
+  it.effect.each(["paused", "channel", "scope"])(
+    "%s cancels a pending automatic retry (#3809)",
+    (change) =>
+      Effect.gen(function* () {
+        const harness = makeHarness({
+          installPolicy: "install-on-quit",
+          downloadUpdate: Effect.fail(interrupted),
+        });
+        yield* Effect.gen(function* () {
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const updates = yield* DesktopUpdates.DesktopUpdates;
+              yield* updates.configure;
+              harness.emit("update-available", { version });
+              yield* observe(updates, (state) => state.errorContext === "download");
+              yield* TestClock.adjust("1 second");
+              if (change === "paused") yield* updates.setInstallPolicy("paused");
+              if (change === "channel") yield* updates.setChannel("nightly");
+              if (change !== "scope") yield* TestClock.adjust("2 seconds");
+            }),
+          ).pipe(Effect.provide(harness.layer));
+          yield* TestClock.adjust("1 minute");
+          assert.equal(harness.downloadCount(), 1);
+        }).pipe(Effect.provide(TestClock.layer()));
+      }),
+  );
+
+  it.effect("successfully retries an interrupted automatic download (#3809)", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const harness = makeHarness({
+        installPolicy: "install-on-quit",
+        downloadUpdate: Effect.suspend(() => {
+          attempts += 1;
+          if (attempts === 1) return Effect.fail(interrupted);
+          return Effect.sync(() => harness.emit("update-downloaded", { version }));
+        }),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-available", { version });
+          yield* observe(updates, (state) => state.errorContext === "download");
+          const ready = yield* observe(
+            updates,
+            (state) => state.downloadedVersion === version,
+          ).pipe(Effect.forkChild);
+          yield* TestClock.adjust("2 seconds");
+          yield* Fiber.join(ready);
+          assert.equal(harness.downloadCount(), 2);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    }),
+  );
+
+  it.effect("a replacement offer invalidates the older pending retry (#3809)", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        installPolicy: "install-on-quit",
+        downloadUpdate: Effect.fail(interrupted),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-available", { version });
+          yield* observe(updates, (state) => state.errorContext === "download");
+          yield* TestClock.adjust("1 second");
+          const replacement = yield* observe(
+            updates,
+            (state) => state.availableVersion === "1.2.5",
+          ).pipe(Effect.forkChild);
+          harness.emit("update-available", { version: "1.2.5" });
+          yield* Fiber.join(replacement);
+          yield* TestClock.adjust("1 second");
+          assert.equal(harness.downloadCount(), 2);
+          assert.equal((yield* updates.getState).availableVersion, "1.2.5");
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    }),
+  );
+
+  it.effect("a check owning the updater prevents a pending download retry (#3809)", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        installPolicy: "install-on-quit",
+        downloadUpdate: Effect.fail(interrupted),
+        checkForUpdates: Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        ),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-available", { version });
+          yield* observe(updates, (state) => state.errorContext === "download");
+          yield* TestClock.adjust("1 second");
+          const check = yield* updates.check("manual").pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          yield* TestClock.adjust("2 seconds");
+          assert.equal(harness.downloadCount(), 1);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(check);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    }),
+  );
+
+  it.effect("manual download recovers after automatic retries are exhausted (#3809)", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const harness = makeHarness({
+        installPolicy: "install-on-quit",
+        downloadUpdate: Effect.suspend(() => {
+          attempts += 1;
+          if (attempts <= 3) return Effect.fail(interrupted);
+          return Effect.sync(() => harness.emit("update-downloaded", { version }));
+        }),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-available", { version });
+          yield* observe(updates, (state) => state.errorContext === "download");
+          yield* TestClock.adjust("2 seconds");
+          yield* TestClock.adjust("8 seconds");
+          yield* TestClock.adjust("1 second");
+          const result = yield* updates.download;
+          assert.isTrue(result.completed);
+          assert.equal(result.state.downloadedVersion, version);
+          assert.equal(harness.downloadCount(), 4);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    }),
   );
 
   it.effect("failed automatic download waits for another check generation", () =>
