@@ -15,12 +15,20 @@ class MemorySnapshotBinding extends Context.Service<
 const layer = Layer.effectContext(
   Effect.gen(function* () {
     const current = yield* Ref.make(Option.none<Snapshot.MemorySnapshot["Service"]>());
-    const proxy = Snapshot.MemorySnapshot.of({
+    const proxy = {
       recordDelivery: (...args) =>
         Ref.get(current).pipe(
           Effect.flatMap((service) =>
             Option.isSome(service) && service.value.recordDelivery
               ? service.value.recordDelivery(...args)
+              : Effect.void,
+          ),
+        ),
+      recordDeliveryUncertain: (...args) =>
+        Ref.get(current).pipe(
+          Effect.flatMap((service) =>
+            Option.isSome(service) && service.value.recordDeliveryUncertain
+              ? service.value.recordDeliveryUncertain(...args)
               : Effect.void,
           ),
         ),
@@ -42,7 +50,7 @@ const layer = Layer.effectContext(
             Option.isSome(service) ? service.value.invalidate(...args) : Effect.void,
           ),
         ),
-    });
+    } satisfies Required<Snapshot.MemorySnapshot["Service"]>;
     return Context.make(Snapshot.MemorySnapshot, proxy).pipe(
       Context.add(MemorySnapshotBinding, {
         bind: (service) => Ref.set(current, Option.some(service)),

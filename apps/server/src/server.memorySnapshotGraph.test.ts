@@ -1,3 +1,6 @@
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as SqlClient from "effect/sql/SqlClient";
+import { markTurnMemoryIncomplete } from "./memory/TurnMemoryReceipts.ts";
 import { expect, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -48,6 +51,13 @@ const hydration = Layer.effect(
       expect(yield* captured.forThread(threadId, policy, currentPolicy)).toBeUndefined();
       expect(yield* captured.revalidate(body, execution, currentPolicy)).toBeUndefined();
       yield* captured.invalidate(threadId);
+      yield* (
+        captured.recordDelivery?.(threadId, execution.runId, body.memorySpaceId, []) ?? Effect.void
+      );
+      yield* (
+        captured.recordDeliveryUncertain?.(threadId, execution.runId, body.memorySpaceId) ??
+          Effect.void
+      );
     }
     // Construct the actual Codex adapter in this very context. Opening a CLI is forbidden.
     yield* Codex.makeCodexAdapterV2({
@@ -95,6 +105,16 @@ it.effect("hydration's Codex context and turn-start delegate to one installed Sn
         yield* Hydrated;
         builds++;
         return Snapshot.MemorySnapshot.of({
+          recordDelivery: (...args) =>
+            Effect.sync(() => {
+              expect(args).toEqual([threadId, execution.runId, body.memorySpaceId, []]);
+              calls.push("recordDelivery");
+            }),
+          recordDeliveryUncertain: (...args) =>
+            Effect.sync(() => {
+              expect(args).toEqual([threadId, execution.runId, body.memorySpaceId]);
+              calls.push("recordDeliveryUncertain");
+            }),
           forThread: (...args) =>
             Effect.sync(() => {
               expect(args).toEqual([threadId, policy, currentPolicy]);
@@ -130,7 +150,22 @@ it.effect("hydration's Codex context and turn-start delegate to one installed Sn
         expect(yield* snapshot.forThread(threadId, policy, currentPolicy)).toBe(body);
         expect(yield* snapshot.revalidate(body, execution, currentPolicy)).toBe(body);
         yield* adapterContext.snapshot!.invalidate(threadId);
-        expect(calls).toEqual(["forThread", "forThread", "revalidate", "invalidate"]);
+        yield* (
+          snapshot.recordDelivery?.(threadId, execution.runId, body.memorySpaceId, []) ??
+            Effect.void
+        );
+        yield* (
+          snapshot.recordDeliveryUncertain?.(threadId, execution.runId, body.memorySpaceId) ??
+            Effect.void
+        );
+        expect(calls).toEqual([
+          "forThread",
+          "forThread",
+          "revalidate",
+          "invalidate",
+          "recordDelivery",
+          "recordDeliveryUncertain",
+        ]);
       }),
     );
     yield* Effect.void.pipe(
@@ -170,4 +205,43 @@ it.effect("bound Snapshot failures propagate through both captured contexts", ()
       Effect.provide(compose(turnStart, hydration, actual).pipe(Layer.provide(prerequisites))),
     );
   }),
+);
+
+it.effect(
+  "the production Snapshot binding persists an uncertain delivery for inspection (#3836)",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TABLE turn_memory_receipt_failures(thread_id TEXT, run_id TEXT, space TEXT, PRIMARY KEY(thread_id, run_id, space))`;
+      const actual = Layer.effect(
+        Snapshot.MemorySnapshot,
+        Effect.gen(function* () {
+          yield* Hydrated;
+          return Snapshot.MemorySnapshot.of({
+            recordDeliveryUncertain: (thread, run, space) =>
+              markTurnMemoryIncomplete(sql, thread, run, space),
+            forThread: () => Effect.undefined,
+            revalidate: () => Effect.undefined,
+            invalidate: () => Effect.void,
+          });
+        }),
+      );
+      const turnStart = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const captured = (yield* Hydrated).snapshot;
+          expect(captured?.recordDeliveryUncertain).toBeDefined();
+          yield* (
+            captured?.recordDeliveryUncertain?.(threadId, execution.runId, body.memorySpaceId) ??
+              Effect.void
+          );
+        }),
+      );
+      yield* Effect.void.pipe(
+        Effect.provide(compose(turnStart, hydration, actual).pipe(Layer.provide(prerequisites))),
+      );
+      const rows = yield* sql`SELECT thread_id, run_id, space FROM turn_memory_receipt_failures`;
+      expect(rows).toEqual([
+        { thread_id: threadId, run_id: execution.runId, space: body.memorySpaceId },
+      ]);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
