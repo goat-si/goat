@@ -1,3 +1,4 @@
+import type { HelperDriverArch } from "../build-computer-use-helper.ts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { ReleaseVerificationError, runReleaseCommand } from "./release-verify.ts";
@@ -12,6 +13,7 @@ export const packagedHelperChannel = (updateChannel: "latest" | "nightly") =>
 export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseHelper")(
   function* (input: {
     readonly repoRoot: string;
+    readonly arch: HelperDriverArch;
     readonly output: string;
     readonly channel: "latest" | "nightly";
     readonly signed: boolean;
@@ -22,6 +24,8 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
       path.join(input.repoRoot, "scripts/build-computer-use-helper.ts"),
       "--channel",
       packagedHelperChannel(input.channel),
+      "--driver-arch",
+      input.arch,
       "--output",
       input.output,
     ];

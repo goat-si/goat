@@ -38,6 +38,28 @@ import {
 } from "./lib/release-verify.ts";
 
 export type HelperChannel = DesktopChannel;
+export type HelperDriverArch = "arm64" | "x64" | "universal";
+
+export const stageComputerUseDriver = Effect.fn("stageComputerUseDriver")(function* (
+  source: string,
+  destination: string,
+  arch: HelperDriverArch,
+  runner: ReleaseCommandRunner,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (arch === "universal") {
+    yield* fs.writeFile(destination, yield* fs.readFile(source));
+  } else {
+    yield* requireReleaseCommand(runner, "lipo", [
+      source,
+      "-thin",
+      arch === "x64" ? "x86_64" : arch,
+      "-output",
+      destination,
+    ]);
+  }
+  yield* fs.chmod(destination, 0o755);
+});
 
 export const helperBundleIdForChannel = computerUseHelperBundleIdForChannel;
 
@@ -230,6 +252,7 @@ export const signComputerUseHelper = Effect.fn("signComputerUseHelper")(function
 export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(function* (input: {
   readonly repoRoot: string;
   readonly output: string;
+  readonly driverArch?: HelperDriverArch;
   readonly channel: HelperChannel;
   readonly identity: string | undefined;
   readonly adHoc: boolean;
@@ -301,8 +324,13 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     const source = path.join(extracted, name);
     if (!(yield* fs.exists(source)))
       return yield* fail("Cua Driver release is missing " + name + ".");
-    yield* fs.writeFile(path.join(driverDir, name), yield* fs.readFile(source));
-    yield* fs.chmod(path.join(driverDir, name), 0o755);
+    // Select the executable slice before signing the driver and sealing the helper bundle.
+    yield* stageComputerUseDriver(
+      source,
+      path.join(driverDir, name),
+      name === release.executable ? (input.driverArch ?? "universal") : "universal",
+      runner,
+    );
   }
 
   const sourceDir = path.join(input.repoRoot, "apps/desktop/native/computer-use-helper");
@@ -411,6 +439,10 @@ export const buildComputerUseHelperCommand = Command.make(
   {
     channel: Flag.Literals("channel", ["dev", "nightly", "stable"]).pipe(Flag.withDefault("dev")),
     output: Flag.String("output").pipe(Flag.optional),
+    driverArch: Flag.Literals("driver-arch", ["arm64", "x64", "universal"]).pipe(
+      Flag.withDescription("Target architecture of the embedded Cua Driver."),
+      Flag.withDefault("universal"),
+    ),
     identity: Flag.String("identity").pipe(
       Flag.withDescription(
         "Developer ID Application identity (name or SHA-1); defaults to the keychain's first one.",
@@ -429,13 +461,14 @@ export const buildComputerUseHelperCommand = Command.make(
       Flag.optional,
     ),
   },
-  ({ channel, output, identity, adHoc, notaryProfile }) =>
+  ({ channel, output, driverArch, identity, adHoc, notaryProfile }) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const repoRoot = path.resolve(import.meta.dirname, "..");
       const built = yield* buildComputerUseHelper({
         repoRoot,
         channel,
+        driverArch,
         output: Option.getOrElse(output, () =>
           path.join(repoRoot, "apps/desktop/.computer-use-helper"),
         ),
