@@ -122,6 +122,7 @@ const CURSOR_POST_TURN_RETRY_ERRORS = new Set([
 
 interface CursorLiveAgent {
   readonly cwd: string | null;
+  readonly model: string;
   readonly mcpAuthorization: string | undefined;
   readonly mcpEndpoint: string | undefined;
   /** The Cua Driver the agent was opened with (`cuaDriverKey`); empty when none. */
@@ -1116,6 +1117,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             openInput.operation === "resume" &&
             existing.nativeThreadId === openInput.agentId &&
             existing.cwd === openInput.runtimePolicy.cwd &&
+            existing.model === openInput.modelSelection.model &&
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
             existing.mcpEndpoint === mcpSession?.endpoint &&
             existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver) &&
@@ -1163,6 +1165,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (openInput.operation === "create") memoryToolClaims.delete(sdkSession.agentId);
           const next = {
             cwd: openInput.runtimePolicy.cwd,
+            model: openInput.modelSelection.model,
             nativeThreadId: sdkSession.agentId,
             storeCwd,
             session: sdkSession,
