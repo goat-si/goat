@@ -898,7 +898,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
         const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
-        const contextRestores = makeCodexContextRestores(scope);
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
         /** Threads Codex held before this session resumed them, such as across a server restart. */
@@ -938,6 +937,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             NonNullable<CodexTurnStartParamsWithCollaborationMode["additionalContext"]>
           >(),
         );
+        const contextRestores = makeCodexContextRestores(scope, additionalContextByThread);
         const memoryDelivery = makeCodexMemoryDelivery({
           additionalContextByThread,
           derivedCache,
@@ -4353,6 +4353,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // their command items, while the shared provider session stays alive.
         yield* survivorHooks.handleNotification("thread/closed", (payload) =>
           Effect.gen(function* () {
+            yield* contextRestores.clear(payload.threadId);
             yield* threadClosings.close(payload.threadId);
             const completedAt = yield* DateTime.now;
             for (const context of (yield* Ref.get(settledTurns)).values()) {
@@ -4550,7 +4551,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const emitCompletedItem = (payload: CodexSchema.V2ItemCompletedNotification) =>
           Effect.gen(function* () {
             if (payload.item.type === "contextCompaction")
-              contextRestores.mark(payload.threadId, payload.item.id);
+              yield* contextRestores.mark(payload.threadId, payload.item.id);
             if (
               (payload.item.type === "subAgentActivity" ||
                 payload.item.type === "collabAgentToolCall") &&
@@ -7403,7 +7404,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return next;
               });
               sessionApprovals.delete(nativeThreadId);
-              contextRestores.take(nativeThreadId);
+              yield* contextRestores.clear(nativeThreadId);
               if (unloadInput.archive === true) {
                 // Archive also unloads, inline and without thread/closed; a resume unarchives it.
                 yield* client.request("thread/archive", { threadId: nativeThreadId });
