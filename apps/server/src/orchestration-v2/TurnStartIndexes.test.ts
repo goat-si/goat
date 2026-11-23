@@ -173,6 +173,7 @@ it.layer(layerTest)("turn-start indexed reads", (it) => {
           [
             "message:turn-start-commands:compact",
             "message:turn-start-commands:goal",
+            "message:turn-start-commands:later",
             "message:turn-start-commands:rolled-back",
           ],
         );

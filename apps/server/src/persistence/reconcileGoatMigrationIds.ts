@@ -175,6 +175,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ProviderTurnAttemptIndex",
   "ThreadItemCounts",
   "WorktreePathKeyIndex",
+  "DeferredSlashCommandIndex",
 ]);
 
 type MigrationEntry<E> = readonly [

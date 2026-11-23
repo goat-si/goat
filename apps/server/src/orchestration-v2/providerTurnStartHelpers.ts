@@ -1,6 +1,5 @@
+import { isSlashCommandMessage } from "./ContextHandoffDelivery.ts";
 import {
-  isCompactionCommandMessage,
-  parseGoalCommand,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
@@ -78,11 +77,10 @@ export function readyHandoffsForRun(
                 )) ||
                 (source.status === "completed" &&
                   handoff.delivery === undefined &&
-                  // Compaction and /goal turns defer history to the next turn.
+                  // Slash commands defer history to the next turn.
                   projection.messages.some(
                     (message) =>
-                      message.id === source.userMessageId &&
-                      (isCompactionCommandMessage(message) || parseGoalCommand(message) !== null),
+                      message.id === source.userMessageId && isSlashCommandMessage(message),
                   ))),
           ))),
   );

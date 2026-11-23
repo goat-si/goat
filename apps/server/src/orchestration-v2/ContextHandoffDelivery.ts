@@ -32,6 +32,13 @@ export interface ReplayedHandoffInput {
   readonly runOrdinal: number;
 }
 
+const SLASH_COMMAND = /^\s*\/[^\s/]+(?:\s|$)/u;
+
+export const isSlashCommandMessage = (message: {
+  readonly role: string;
+  readonly text: string;
+}): boolean => message.role === "user" && SLASH_COMMAND.test(message.text);
+
 /** Persist around injection; ambiguous delivery requires a fresh native thread. Call unsent if refused before prompt consumption. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(
   function* <InjectError = never, PersistError = never, BudgetError = never>(input: {

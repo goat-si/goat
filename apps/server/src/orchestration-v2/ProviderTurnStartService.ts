@@ -53,8 +53,6 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2TurnItem,
   isGoatBotSessionThreadId,
-  isCompactionCommandMessage,
-  parseGoalCommand,
   RunId,
   ThreadId,
 } from "@goat/contracts";
@@ -78,7 +76,7 @@ import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
-import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
+import { deliverContextHandoffs, isSlashCommandMessage } from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -771,19 +769,13 @@ export const layer: Layer.Layer<
           ? userText
           : yield* appendRemoteWorkerNotes(sql, projection.thread, providerMessage.id, userText);
       const goalDriver = hasNativeGoals(session);
-      const goalCommand = goalDriver && parseGoalCommand(turnMessage) !== null;
+      const slashCommand = isSlashCommandMessage(turnMessage);
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
         compactionMessageIds: () =>
           new Set(
-            projection.messages
-              .filter(
-                (candidate) =>
-                  isCompactionCommandMessage(candidate) ||
-                  (goalDriver && parseGoalCommand(candidate) !== null),
-              )
-              .map((candidate) => candidate.id),
+            projection.messages.filter(isSlashCommandMessage).map((candidate) => candidate.id),
           ),
         run,
         attempts: projection.attempts,
@@ -808,8 +800,7 @@ export const layer: Layer.Layer<
           restartNote,
           attachments: providerMessage.attachments,
           goalDriver,
-          carriesImages:
-            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(turnMessage),
+          carriesImages: !nativeResume && !cloud && !slashCommand,
           ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
           replayedInput,
         });
@@ -949,7 +940,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: resumedRetryHandoff.budget,
-            deferInline: isCompactionCommandMessage(turnMessage) || goalCommand,
+            deferInline: slashCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -1325,7 +1316,7 @@ export const layer: Layer.Layer<
           const delivery = yield* deliverContextHandoffs({
             replayedInput,
             handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
-            deferInline: compact || goalCommand,
+            deferInline: compact || slashCommand,
             providerThread: runningProviderThread,
             budget: retryHandoff.budget,
             alreadyDeliveredItemIds: deliveredItemIds,
@@ -1366,7 +1357,7 @@ export const layer: Layer.Layer<
             compact ? session.compactThread! : session.startTurn,
             noteContinuation ? promptedInput : turnInput,
             delivery,
-            goalCommand ? "" : context,
+            slashCommand ? "" : context,
           );
         },
         Effect.mapError((cause) =>

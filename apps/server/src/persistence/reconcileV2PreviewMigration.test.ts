@@ -200,6 +200,7 @@ describe("V2 preview upgrade", () => {
         [187, "ProviderTurnAttemptIndex"],
         [187, "ThreadItemCounts"],
         [188, "WorktreePathKeyIndex"],
+        [189, "DeferredSlashCommandIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -410,6 +411,7 @@ describe("V2 preview upgrade", () => {
         [187, "ProviderTurnAttemptIndex"],
         [187, "ThreadItemCounts"],
         [188, "WorktreePathKeyIndex"],
+        [189, "DeferredSlashCommandIndex"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

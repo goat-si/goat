@@ -24,7 +24,7 @@ it.live.each([
   { target: "opencode", nativeGoals: true },
   { target: "codex", nativeGoals: true },
 ] as const)(
-  "$target goal defers provider-switch history only with native support: $nativeGoals",
+  "$target goal defers provider-switch history with native support: $nativeGoals",
   ({ target, nativeGoals }) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -100,15 +100,9 @@ it.live.each([
           yield* send(1, "Original request with constraints", initialSelection);
           yield* send(2, "/goal all tests pass", targetSelection);
           const goal = (yield* Ref.get(turns)).at(-1)!.text;
-          assert.equal(goal.includes("Original request with constraints"), !nativeGoals);
-          if (nativeGoals) {
-            assert.equal(goal, "/goal all tests pass");
-            yield* send(3, "Continue", targetSelection);
-            assert.include(
-              (yield* Ref.get(turns)).at(-1)!.text,
-              "Original request with constraints",
-            );
-          }
+          assert.equal(goal, "/goal all tests pass");
+          yield* send(3, "Continue", targetSelection);
+          assert.include((yield* Ref.get(turns)).at(-1)!.text, "Original request with constraints");
         }).pipe(
           Effect.provide(
             ProviderReplayHarness.layerWithRegistry(
