@@ -32,6 +32,7 @@ import * as NodeCrypto from "node:crypto";
 import * as ServerConfig from "../config.ts";
 import { selectManagedRelease } from "./managedRelease.ts";
 import { extractCodexPackage } from "./CodexInstallationExtract.ts";
+import { makeLocalProbeCache } from "./CodexInstallationLocalProbe.ts";
 import { UPSTREAM_MAX_ARCHIVE_BYTES, lookupCodexUpstreamRelease } from "./CodexUpstreamRelease.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
@@ -393,47 +394,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.scoped,
     Effect.orElseSucceed(() => STARTUP_WARNINGS.unavailable),
   );
-  // Native Codex needs its adjacent host; launchers resolve their own payloads.
-  const hasCodeModeHost = Effect.fn("CodexInstallation.hasCodeModeHost")(
-    function* (realExecutablePath: string) {
-      if (/^(?:volta-shim|mise|aqua-proxy)(?:\.exe)?$/iu.test(path.basename(realExecutablePath)))
-        return true;
-      if (platform === "win32") {
-        if (path.extname(realExecutablePath).toLowerCase() !== ".exe") return true;
-        for (const extension of [".bunx", ".shim"]) {
-          const marker = yield* fs
-            .stat(realExecutablePath.slice(0, -4) + extension)
-            .pipe(Effect.option);
-          if (
-            Option.isSome(marker) &&
-            marker.value.type === "File" &&
-            Number(marker.value.size) > 0
-          )
-            return true;
-        }
-      } else {
-        const header = yield* fs.open(realExecutablePath, { flag: "r" }).pipe(
-          Effect.flatMap((file) => file.readAlloc(2)),
-          Effect.orElseSucceed(() => Option.none()),
-        );
-        if (Option.isSome(header) && header.value[0] === 0x23 && header.value[1] === 0x21)
-          return true;
-      }
-      const info = yield* fs.stat(
-        path.join(
-          path.dirname(realExecutablePath),
-          `codex-code-mode-host${platform === "win32" ? ".exe" : ""}`,
-        ),
-      );
-      return (
-        info.type === "File" &&
-        Number(info.size) > 0 &&
-        (platform === "win32" || (info.mode & 0o111) !== 0)
-      );
-    },
-    Effect.scoped,
-    Effect.orElseSucceed(() => false),
-  );
+  const localProbe = makeLocalProbeCache(fs, path, platform, options.baseDir);
   const localCache = new Map<
     string,
     { fingerprint: string; executable: Omit<CodexExecutable, "startupWarning"> | null }
@@ -455,11 +416,16 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
         )
       )
         return null;
-      if (!(yield* hasCodeModeHost(realExecutablePath))) return null;
-      const info = yield* fs.stat(executablePath);
-      const fingerprint = `${realExecutablePath}:${info.size}:${Option.getOrUndefined(info.mtime)?.getTime()}:${Option.getOrUndefined(info.ino)}`;
+      const localFingerprint = yield* localProbe.fingerprint(executablePath, realExecutablePath);
+      if (localFingerprint === null) return null;
+      const { fingerprint, persists } = localFingerprint;
       const cached = localCache.get(executablePath);
       let candidate = cached?.fingerprint === fingerprint ? cached.executable : undefined;
+      if (candidate === undefined && persists) {
+        const version = yield* localProbe.read(executablePath, fingerprint);
+        if (version !== null)
+          candidate = { executablePath, source: "local", version, managedVersionDirectory: null };
+      }
       let startupCandidate: CodexExecutable | null = null;
       const executable = yield* Effect.gen(function* () {
         if (candidate === undefined) {
@@ -479,6 +445,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
               diagnose ? providerProbeEnvironment(environment) : undefined,
             );
           candidate = { executablePath, source: "local", version, managedVersionDirectory: null };
+          if (persists) yield* localProbe.write(executablePath, fingerprint, version);
         }
         if (!candidate || !diagnose || !satisfiesSemverRange(candidate.version, ">=0.164.0"))
           return candidate ?? null;
