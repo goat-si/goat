@@ -11,7 +11,8 @@ export const makeIdleTimeout =
     Math.max(
       1,
       configuredMs ??
-        (runtime.providerSession.capabilities.turns.supportsNativeResume === true
+        // A runtime that omits providerSession must reach the typed turn-start failure, not throw here.
+        (runtime.providerSession?.capabilities.turns.supportsNativeResume === true
           ? DEFAULT_IDLE_TIMEOUT_MS
           : NO_NATIVE_RESUME_IDLE_TIMEOUT_MS),
     );
