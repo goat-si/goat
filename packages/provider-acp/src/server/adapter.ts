@@ -127,6 +127,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
@@ -224,6 +225,7 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 // Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
 const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
+const ACP_LOADED_COMMANDS_WAIT: Duration.Input = "2 seconds";
 const ACP_PROMPT_INACTIVITY_SLICE_MILLIS = 60_000;
 const ACP_HOST_SLEEP_TOLERANCE_MILLIS = 10_000;
 
@@ -603,7 +605,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
-        const advertisedCommandsBySession = yield* Ref.make(AdvertisedCommands.empty);
+        const advertisedCommandsBySession = yield* SubscriptionRef.make(AdvertisedCommands.empty);
         const compactsContext =
           flavor.supportsCompaction === true || flavor.compactViaAdvertisedCommand === true;
         const runtimeRestartRequired = yield* Ref.make(false);
@@ -5110,7 +5112,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (notification.update.sessionUpdate === "available_commands_update") {
                 const sessionId = rawNotification.sessionId;
                 const advertisedCommands = notification.update.availableCommands;
-                yield* Ref.update(advertisedCommandsBySession, (current) =>
+                yield* SubscriptionRef.update(advertisedCommandsBySession, (current) =>
                   AdvertisedCommands.remember(current, sessionId, advertisedCommands),
                 );
                 yield* flavor.onAvailableCommandsUpdate?.(advertisedCommands) ?? Effect.void;
@@ -7101,15 +7103,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
             }
             // Checked after activation: a loaded session advertises its own commands.
-            if (
+            const compactRequested =
               flavor.compactViaAdvertisedCommand === true &&
               turnInput.message.text.trim() === "/compact" &&
-              turnInput.message.attachments.length === 0 &&
-              !AdvertisedCommands.advertises(
-                yield* Ref.get(advertisedCommandsBySession),
-                requestedSessionId,
-                "compact",
-              )
+              turnInput.message.attachments.length === 0;
+            const sessionCommands = compactRequested
+              ? yield* SubscriptionRef.changes(advertisedCommandsBySession).pipe(
+                  Stream.map((commands) => commands.get(requestedSessionId)),
+                  Stream.filter((commands) => commands !== undefined),
+                  Stream.runHead,
+                  Effect.timeoutOption(ACP_LOADED_COMMANDS_WAIT),
+                  Effect.map(Option.flatten),
+                )
+              : Option.none<ReadonlySet<string>>();
+            if (
+              compactRequested &&
+              !Option.exists(sessionCommands, (commands) => commands.has("compact"))
             ) {
               return yield* new ProviderAdapter.ProviderCompactionUnsupportedError({
                 driver,
