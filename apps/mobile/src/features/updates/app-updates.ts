@@ -256,7 +256,8 @@ async function performAppUpdateCheck(
     );
     if (outcome === "flush-failed") {
       setState("ready");
-      armDeferredAppUpdateInstall(client, environment, deferral);
+      if (manualRequested()) deferral.pendingInstall = true;
+      else armDeferredAppUpdateInstall(client, environment, deferral);
     }
     return;
   }
@@ -285,7 +286,7 @@ async function installAppUpdate(
     reportUpdateFailure(
       flushed,
       "Could not save pending state.",
-      userRequested ? options.onFailure : undefined,
+      userRequested || manualRequested() ? options.onFailure : undefined,
     );
     deferral.installInProgress = false;
     return "flush-failed";

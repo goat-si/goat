@@ -75,6 +75,39 @@ function makeAvailableUpdateClient(overrides: Partial<AppUpdateClient> = {}): Ap
 }
 
 describe("runAppUpdateCheck", () => {
+  it("reports a failed rollback flush to a joining manual check without scheduling restart (#3830)", async () => {
+    using _report = vi.spyOn(console, "error").mockImplementation(() => {});
+    const flushing = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const client = makeUpdateClient({
+      checkForUpdateAsync: async () => ({ isAvailable: false, isRollBackToEmbedded: true }),
+      fetchUpdateAsync: async () => ({ isNew: false, isRollBackToEmbedded: true }),
+    });
+    const { environment, backgroundCallbacks } = makeUpdateEnvironment({
+      flushPendingWrites: () => {
+        started.resolve();
+        return flushing.promise;
+      },
+    });
+    const deferral = createAppUpdateDeferral();
+    const background = runAppUpdateCheck({ client, environment, deferral });
+    await started.promise;
+    const failures: string[] = [];
+    const manual = runAppUpdateCheck({
+      client,
+      environment,
+      deferral,
+      applyMode: "manual",
+      onFailure: (message) => failures.push(message),
+    });
+    flushing.reject(new Error("disk failed"));
+    await Promise.all([background, manual]);
+    expect(failures).toEqual(["disk failed"]);
+    expect(deferral.pendingInstall).toBe(true);
+    expect(backgroundCallbacks).toHaveLength(0);
+    expect(client.reloadAsync).not.toHaveBeenCalled();
+  });
+
   it("a manual check joining while rollback flushes prevents restart (#3830)", async () => {
     const flushing = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
