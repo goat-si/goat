@@ -3,7 +3,7 @@ import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { TriangleAlertIcon } from "~/components/solar";
 import { type ComponentProps, useId, useRef, useState } from "react";
 
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -337,6 +337,20 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   const showReleaseNotesPopover =
     !isRunningEverything && shouldUseSidebarUpdateReleaseNotesPopover(showUpdateDetails, state);
 
+  const [dismissedNotice, setDismissedNotice] = useState(() =>
+    window.sessionStorage.getItem("desktop-update-notice"),
+  );
+  const noticeVersion = state?.downloadedVersion ?? state?.availableVersion;
+  const noticeKey = noticeVersion && state ? JSON.stringify([state.channel, noticeVersion]) : null;
+  const isDownloadFailure = state?.errorContext === "download";
+  const [failureDismissed, setFailureDismissed] = useState(
+    () => window.sessionStorage.getItem("desktop-update-failure-dismissed") === noticeKey,
+  );
+  const [previousFailure, setPreviousFailure] = useState(isDownloadFailure);
+  if (previousFailure !== isDownloadFailure) {
+    setPreviousFailure(isDownloadFailure);
+    if (isDownloadFailure) setFailureDismissed(false);
+  }
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [releaseNotesTriggerFocusVisible, setReleaseNotesTriggerFocusVisible] = useState(false);
   // Release notes close when they stop applying, and open when they start
@@ -347,11 +361,11 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     setReleaseNotesOpen(showReleaseNotesPopover && releaseNotesTriggerFocusVisible);
   }
 
-  const handleAction = async () => {
+  const handleAction = async (localOnly = false) => {
     const bridge = window.desktopBridge;
     if (isInteractionDisabled) return;
 
-    if (runsEverything) {
+    if (runsEverything && !localOnly) {
       setIsConfirmingEverything(true);
       // Machines that still cache an older latest version add their rows while the dialog is open.
       setProviderCheck("dialog");
@@ -584,7 +598,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
               ),
         disabled && !showUpdateIconState && "opacity-60",
       )}
-      onClick={handleAction}
+      onClick={() => void handleAction()}
       onBlur={() => {
         suppressReleaseNotesFocusOpen.current = false;
         setReleaseNotesTriggerFocusVisible(false);
@@ -690,6 +704,68 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
           </PopoverPopup>
         ) : null}
       </Popover>
+      {isElectron &&
+        state?.enabled &&
+        noticeKey &&
+        (isDownloadFailure ? !failureDismissed : dismissedNotice !== noticeKey) &&
+        (action !== "none" || isDownloading) &&
+        createPortal(
+          <aside
+            aria-label={gt("Update available")}
+            className="fixed bottom-4 left-16 z-40 w-72 max-w-[calc(100vw-5rem)] rounded-xl border bg-popover p-3.5 text-sm text-popover-foreground shadow-lg"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <strong>GOAT</strong>
+                <span className="inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-lg border border-primary/15 bg-primary/5 px-2 py-0.5 text-xs tabular-nums">
+                  <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]">
+                    {state.currentVersion}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">→</span>
+                  <strong className="min-w-0 [overflow-wrap:anywhere]">{noticeVersion}</strong>
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label={gt("Close")}
+                className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => {
+                  window.sessionStorage.setItem("desktop-update-notice", noticeKey);
+                  setDismissedNotice(noticeKey);
+                  if (isDownloadFailure) {
+                    window.sessionStorage.setItem("desktop-update-failure-dismissed", noticeKey);
+                    setFailureDismissed(true);
+                  }
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <p className="mt-1 text-muted-foreground">{getDesktopUpdateButtonTooltip(state, gt)}</p>
+            {isDownloading ? (
+              <progress
+                className="mt-2 w-full"
+                aria-label={gt("Downloading update")}
+                value={state.downloadPercent ?? undefined}
+                max={100}
+              />
+            ) : (
+              <button
+                type="button"
+                className="mt-2 rounded-md bg-primary px-3 py-1 text-primary-foreground"
+                disabled={isInteractionDisabled}
+                onClick={() => void handleAction(true)}
+              >
+                {action === "install"
+                  ? gt("Restart to update")
+                  : state.errorContext === "download"
+                    ? gt("Retry")
+                    : gt("Download")}
+              </button>
+            )}
+          </aside>,
+          document.body,
+        )}
       {confirmDialog}
     </>
   );
