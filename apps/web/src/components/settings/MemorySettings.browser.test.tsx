@@ -292,7 +292,10 @@ vi.mock(
   "./settingsLayout",
   async () => (await import("./MemorySettings.browser.mockComponents")).settingsLayoutMock,
 );
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => state.navigate,
+}));
 import { RegistryContext } from "@effect/atom-react";
 import { MemorySettings, MemoryAdministration, MemoryRevertControl } from "./MemorySettings";
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
@@ -342,7 +345,6 @@ beforeEach(() => {
   state.connection = { httpBaseUrl: "https://hub.example" };
   state.deviceConnections.clear();
 });
-
 const settled = vi.fn();
 async function renderRevert(
   history:
@@ -1926,6 +1928,7 @@ import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 import { MemoryReportRetrySettings } from "./MemoryReportRetrySettings";
 import { MemoryScopeSettings } from "./MemoryScopeSettings";
 import { MemoryImportSettings } from "./MemoryImportSettings";
+import { exerciseCodexConflictNotice } from "./MemoryImportSettings.browser.testkit";
 import {
   MemorySpaceId,
   type MemoryImportProviderInput,
@@ -1936,6 +1939,8 @@ import {
   memoryImportRecoveryStorage,
 } from "../../lib/memoryImportRecoveryStorage";
 const spaceId = MemorySpaceId.make(id(1));
+it("explains what selecting a Codex change does when both versions changed (#3800)", () =>
+  exerciseCodexConflictNotice(state, envId, spaceId));
 it("toggles environment agent access off and on through updateSettings independently of sharing", async () => {
   state.executors.set("updateSettings", async (input) => {
     state.calls(input);

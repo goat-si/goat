@@ -1,3 +1,4 @@
+import { TurnFoldLabel } from "./TurnFoldLabel";
 import { useDisclosureReveal } from "./useDisclosureReveal";
 import { keyExtractor, getItemType, timelineListStateFor } from "./timelineListItems";
 import {
@@ -1465,6 +1466,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
   );
 });
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
+  const Chevron = row.expanded ? ChevronDownIcon : ChevronRightIcon;
   const ctx = use(TimelineRowCtx);
   const { loading, error, toggle } = useDeferredWorkLoading(row, () =>
     ctx.onToggleTurnFold(row.runId),
@@ -1481,14 +1483,10 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
           className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-work-log text-secondary-label/85 tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
         >
           <span>
-            {row.label}
+            <TurnFoldLabel status={row.status} duration={row.duration} />
             {error ? ` · ${error}` : ""}
           </span>
-          {row.expanded ? (
-            <ChevronDownIcon className="size-3.5" />
-          ) : (
-            <ChevronRightIcon className="size-3.5" />
-          )}
+          <Chevron className="size-3.5" />
         </button>
         <TimelineRowTimestamp
           createdAt={row.createdAt}

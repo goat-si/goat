@@ -253,6 +253,14 @@ export type ImportPorts = {
     input: ImportSourceAddress & { sourceItemKey: string },
     permit: Permit,
   ) => Effect.Effect<ImportItem | undefined, MemoryServiceError, never>;
+  readonly codexBaseline: (
+    input: ImportSourceAddress & { readonly after?: string | undefined },
+    permit: Permit,
+  ) => Effect.Effect<ReadonlyArray<M.CodexImportBaseline> | null, MemoryServiceError>;
+  readonly savedText: (
+    input: ImportAddress & { readonly memoryId: M.MemoryId },
+    permit: Permit,
+  ) => Effect.Effect<string, MemoryServiceError>;
   readonly findMatch: (
     input: ImportAddress & { source: M.MemorySourceKey; content: M.MemoryContentSuppression },
     permit: Permit,
@@ -335,6 +343,9 @@ export type ImportStorePorts = {
   readonly readImportReceiptTx: (
     input: ImportBatchAddress,
   ) => ImportInTx<M.MemoryImportReceipt | undefined>;
+  readonly readCodexImportBaselineTx: (
+    input: ImportSourceAddress & { readonly after?: string | undefined },
+  ) => ImportInTx<readonly M.CodexImportBaseline[] | null>;
   readonly readImportItemTx: (
     input: ImportSourceAddress & { sourceItemKey: string },
   ) => ImportInTx<ImportItem | undefined>;

@@ -10,6 +10,8 @@ import { dismissContextMenu, showContextMenuFallback } from "~/contextMenuFallba
 
 import { resolveShortcutCommand } from "~/keybindings";
 import { render } from "../../../test/render";
+import { GTProvider } from "gt-react";
+import chinese from "~/i18n/translations/zh.json";
 
 const state = vi.hoisted(() => ({
   readFile: vi.fn(async (_path: string): Promise<unknown> => ({ _tag: "Failure" })),
@@ -130,11 +132,12 @@ async function renderPanel(
     hostFolder?: boolean;
     selectedPath?: string;
     onOpenFile?: (path: string) => void;
+    i18n?: boolean;
   } = {},
 ) {
   const container = document.createElement("div");
   container.style.cssText = "display: flex; flex-direction: column; width: 320px; height: 480px";
-  return render(
+  const panel = (
     <FileBrowserPanel
       environmentId={EnvironmentId.make("remote-ssh")}
       cwd={props.cwd ?? "/home/dev/repo"}
@@ -145,8 +148,16 @@ async function renderPanel(
       selectedPathRevealId={0}
       onOpenFile={props.onOpenFile ?? (() => {})}
       workspaceMutationId={null}
-    />,
-    { container, router: false /* the panel renders no links */ },
+    />
+  );
+  return render(
+    <GTProvider locale={props.i18n ? "zh" : "en"} translations={{ zh: chinese }}>
+      {panel}
+    </GTProvider>,
+    {
+      container,
+      router: false /* the panel renders no links */,
+    },
   );
 }
 
@@ -206,6 +217,16 @@ it("opens the selected file again when its row is clicked", async () => {
   await userEvent.click(file);
   await userEvent.click(file);
   expect(open).toHaveBeenCalledTimes(2);
+});
+
+it("renders file search and folder controls in Simplified Chinese", async () => {
+  setup();
+  await using screen = await renderPanel({ i18n: true });
+  await expect
+    .element(screen.getByRole("searchbox", { name: "搜索 repo 的文件" }))
+    .toHaveAttribute("placeholder", "搜索文件");
+  await expect.element(screen.getByRole("button", { name: "刷新工作区文件" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "展开所有文件夹" })).toBeVisible();
 });
 
 function treeRoot(container: HTMLElement): ShadowRoot {

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "~/components/solar";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import type {
@@ -80,6 +81,7 @@ function RefreshFilesButton(props: {
   onRefresh: () => void;
   shortcut: string | null;
 }) {
+  const gt = useGT();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -88,7 +90,7 @@ function RefreshFilesButton(props: {
             type="button"
             variant="ghost"
             size="icon-xs"
-            aria-label="Refresh workspace files"
+            aria-label={gt("Refresh workspace files")}
             onClick={props.onRefresh}
           />
         }
@@ -96,7 +98,7 @@ function RefreshFilesButton(props: {
         <RefreshIcon refreshing={props.isPending} />
       </TooltipTrigger>
       <TooltipPopup>
-        {props.isPending ? "Refreshing…" : "Refresh files"}
+        {props.isPending ? gt("Refreshing…") : gt("Refresh files")}
         {props.shortcut ? (
           <span className="ms-2 text-muted-foreground">{props.shortcut}</span>
         ) : null}
@@ -117,6 +119,7 @@ function FileSearchField({
   onValueChange: (value: string) => void;
   value: string;
 }) {
+  const gt = useGT();
   return (
     <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
       <InputGroupInput
@@ -126,7 +129,7 @@ function FileSearchField({
         size="sm"
         value={props.value}
         aria-label={props.ariaLabel}
-        placeholder="Search files"
+        placeholder={gt("Search files")}
         data-workspace-focus-default
         spellCheck={false}
         onChange={(event) => props.onValueChange(event.target.value)}
@@ -189,6 +192,7 @@ export default function FileBrowserPanel({
   workspaceMutationId,
   hostFolder = false,
 }: FileBrowserPanelProps) {
+  const gt = useGT();
   const panelPath = (relativePath: string) =>
     hostFolder
       ? joinHostPath(cwd, relativePath)
@@ -668,7 +672,7 @@ export default function FileBrowserPanel({
         />
         <FileSearchField
           name="project-files-search"
-          ariaLabel={`Search ${projectName} files`}
+          ariaLabel={gt("Search {projectName} files", { projectName })}
           ref={searchInputRef}
           value={search.value}
           onValueChange={handleSearchValueChange}
@@ -685,8 +689,8 @@ export default function FileBrowserPanel({
                   variant="ghost"
                   aria-label={
                     expandAll || allDirectoriesExpanded
-                      ? "Collapse all folders"
-                      : "Expand all folders"
+                      ? gt("Collapse all folders")
+                      : gt("Expand all folders")
                   }
                   onClick={toggleAllDirectories}
                 />
@@ -699,7 +703,9 @@ export default function FileBrowserPanel({
               )}
             </TooltipTrigger>
             <TooltipPopup>
-              {expandAll || allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"}
+              {expandAll || allDirectoriesExpanded
+                ? gt("Collapse all folders")
+                : gt("Expand all folders")}
               {expandToggleShortcut ? (
                 <span className="ms-2 text-muted-foreground">{expandToggleShortcut}</span>
               ) : null}
@@ -714,12 +720,12 @@ export default function FileBrowserPanel({
           onClick={handleRefresh}
           className="p-4 text-left text-xs leading-relaxed text-destructive"
         >
-          {error ?? pathSearch.error} Click to retry.
+          {gt("{error} Click to retry.", { error: error ?? pathSearch.error ?? "" })}
         </button>
       ) : null}
       {query.trim() && pathSearch.truncated && !pathSearch.isPending ? (
         <div className="px-3 py-1 text-xs text-muted-foreground">
-          More matches available. Refine your search.
+          {gt("More matches available. Refine your search.")}
         </div>
       ) : null}
       {(!ready || pathSearch.isPending) && (
@@ -731,19 +737,19 @@ export default function FileBrowserPanel({
               : "px-3 py-1 text-xs text-muted-foreground"
           }
         >
-          Loading files…
+          {gt("Loading files…")}
         </div>
       )}
       {hasNoSearchMatches ? (
         ready && !isPending && !pathSearch.isPending && !error && !pathSearch.error ? (
           <div role="status" className="px-3 py-4 text-xs text-muted-foreground">
-            No matching files.
+            {gt("No matching files.")}
           </div>
         ) : null
       ) : (
         <FileTree
           model={model}
-          aria-label={`${projectName} files`}
+          aria-label={gt("{projectName} files", { projectName })}
           className="min-h-0 flex-1 overflow-hidden"
           onClickCapture={(event) => {
             if (

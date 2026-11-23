@@ -321,6 +321,7 @@ export interface LocalStoreShape {
   readonly writeImportRegistrationTx: ImportStorePorts["writeImportRegistrationTx"];
   readonly readImportBatchTx: ImportStorePorts["readImportBatchTx"];
   readonly readImportReceiptTx: ImportStorePorts["readImportReceiptTx"];
+  readonly readCodexImportBaselineTx: ImportStorePorts["readCodexImportBaselineTx"];
   readonly readImportItemTx: ImportStorePorts["readImportItemTx"];
   readonly commitImportItemTx: ImportStorePorts["commitImportItemTx"];
   readonly findImportMatchTx: ImportStorePorts["findImportMatchTx"];

@@ -17,6 +17,7 @@ import { ProviderDriverKind } from "./providerInstance.ts";
 
 import {
   MEMORY_BODY_MAX_UTF8_BYTES,
+  MEMORY_STORAGE_SAMPLE_MAX_UTF8_BYTES,
   MEMORY_CONTEXT_MAX_CHARS,
   MEMORY_CONTEXT_MAX_UTF8_BYTES,
   MEMORY_CONTEXT_OUTER_FRAME,
@@ -72,35 +73,6 @@ export const MEMORY_LEASE_RENEW_MS = 30000;
 export const MEMORY_RESOLUTION_ATTEMPT_MAX_MS = 600000;
 export const MEMORY_SOURCE_READ_TIMEOUT_MS = 75000;
 export const MEMORY_SOURCE_READ_POLL_MS = 1000;
-export const MEMORY_FTS_INDEXED_TEXT_MAX_BYTES = 134217728;
-export const MEMORY_FTS_ALLOCATED_WARNING_BYTES = 100663296;
-export const MEMORY_FTS_ALLOCATED_BRAKE_BYTES = 134217728;
-export const MEMORY_FTS_ALLOCATED_RESUME_BYTES = 100663296;
-/**
- * Steady-state ceiling for every memory_* btree on one server, measured with dbstat. Local
- * writes that add content are refused at or above it; forgetting always proceeds.
- */
-export const MEMORY_STORE_BUDGET_BYTES = 104857600;
-/** Where a healthy memory store sits. Storage samples above it log a warning. */
-export const MEMORY_STORE_TARGET_BYTES = 52428800;
-/**
- * Default ceiling for orchestration history: the state database minus memory and free pages.
- * While history is above it, compaction trims bulky tool output in idle threads. Configurable
- * as `storageCleanup.historyBudgetBytes`.
- */
-export const ORCHESTRATION_HISTORY_BUDGET_BYTES = 2147483648;
-/** Threads untouched this long are eligible for trimming while history is over its budget. */
-export const ORCHESTRATION_HISTORY_TRIM_IDLE_MS = 604800000;
-/** Bulky history fields above this are cut to a head and tail that fit it, marker included. */
-export const ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES = 8192;
-/**
- * Default idle days after which a thread's turn items move to a compressed archive file and
- * come back when the thread is read. Configurable as `storageCleanup.historyArchiveAfterDays`.
- */
-export const ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS = 30;
-export const MEMORY_STORAGE_SAMPLE_MAX_DAYS = 30;
-export const MEMORY_STORAGE_SAMPLE_MAX_UTF8_BYTES = 16384;
-export const MEMORY_STORAGE_SAMPLE_MAX_TABLES = 64;
 export const MEMORY_PERMANENT_METADATA_MAX_BYTES = 134217728;
 export const MEMORY_MAX_LIFETIME_IDS = 50000;
 export const MEMORY_IDENTITY_CORE_MAX_BYTES = 1024;
@@ -2114,6 +2086,14 @@ export const MemoryImportSource = struct({
 });
 export type MemoryImportSource = typeof MemoryImportSource.Type;
 
+export const CodexImportBaseline = struct({
+  sourceItemKey: key,
+  sourceFingerprint: digest,
+  scope: MemoryScope,
+  locallyEdited: Schema.Boolean,
+});
+export type CodexImportBaseline = typeof CodexImportBaseline.Type;
+
 export const MemoryImportPreviewItem = struct({
   sourceItemKey: key,
   sourceFingerprint: Schema.optionalKey(digest),
@@ -2176,6 +2156,15 @@ const importSelector = struct({
 
 export const MemoryImportProviderInput = bounded(
   Schema.Union([
+    struct({ ...space, action: Schema.Literal("codexBaseline"), after: Schema.optionalKey(key) }),
+    struct({
+      ...space,
+      action: Schema.Literal("compareCodex"),
+      sourceId: MemoryImportSourceId,
+      sessionId: canonical,
+      sourceItemKey: key,
+      sourceFingerprint: digest,
+    }),
     struct({ ...space, action: Schema.Literal("discover"), format: MemoryImportSourceFormat }),
     struct({
       ...space,
@@ -2200,6 +2189,13 @@ export type MemoryImportProviderInput = typeof MemoryImportProviderInput.Type;
 
 export const MemoryImportProviderResult = bounded(
   Schema.Union([
+    struct({
+      action: Schema.Literal("codexBaseline"),
+      sourceId: Schema.NullOr(MemoryImportSourceId),
+      items: array(CodexImportBaseline, 64),
+      next: Schema.NullOr(key),
+    }),
+    struct({ action: Schema.Literal("compareCodex"), sourceText: text, savedText: text }),
     struct({ action: Schema.Literal("discover"), sources: array(MemoryImportSource, 128) }),
     struct({
       action: Schema.Literal("preview"),
