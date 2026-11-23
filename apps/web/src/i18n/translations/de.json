@@ -775,5 +775,9 @@
   "943a2587b62ac8a3": "Bei gesperrtem Host pausieren",
   "ee0c5a67bcf4a637": "Im Energiesparmodus des Hosts pausieren",
   "bd391a005bf1172e": "Im Energiesparmodus des Clients pausieren",
-  "2ed182d6338b4a7d": "Im Akkubetrieb pausieren"
+  "2ed182d6338b4a7d": "Im Akkubetrieb pausieren",
+  "8711a1de99862971": "{label} verkürzen",
+  "7d45b094a7b5ab8f": "{label} in Sekunden",
+  "568556fb7ba81f65": "{label} verlängern",
+  "726b70e60ea3bfdd": "Intervall für die Anbieterstatusprüfung"
 }

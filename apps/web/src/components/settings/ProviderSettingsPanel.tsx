@@ -1268,7 +1268,7 @@ export function EnvironmentProviderSettings({
               )}
             >
               <IntervalSecondsField
-                label="provider health check interval"
+                label={gt("Provider health check interval")}
                 value={providerHealthRefreshIntervalSeconds}
                 min={0}
                 step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}

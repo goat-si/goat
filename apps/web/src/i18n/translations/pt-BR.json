@@ -775,5 +775,9 @@
   "943a2587b62ac8a3": "Pausar quando o host estiver bloqueado",
   "ee0c5a67bcf4a637": "Pausar quando o host estiver no modo de economia de energia",
   "bd391a005bf1172e": "Pausar quando o cliente estiver no modo de economia de energia",
-  "2ed182d6338b4a7d": "Pausar ao usar a bateria"
+  "2ed182d6338b4a7d": "Pausar ao usar a bateria",
+  "8711a1de99862971": "Diminuir o intervalo: {label}",
+  "7d45b094a7b5ab8f": "{label} (em segundos)",
+  "568556fb7ba81f65": "Aumentar o intervalo: {label}",
+  "726b70e60ea3bfdd": "Intervalo de verificação do estado do provedor"
 }

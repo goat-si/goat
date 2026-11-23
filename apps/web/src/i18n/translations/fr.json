@@ -775,5 +775,9 @@
   "943a2587b62ac8a3": "Suspendre lorsque l’hôte est verrouillé",
   "ee0c5a67bcf4a637": "Suspendre lorsque l’hôte est en mode économie d’énergie",
   "bd391a005bf1172e": "Suspendre lorsque le client est en mode économie d’énergie",
-  "2ed182d6338b4a7d": "Suspendre sur batterie"
+  "2ed182d6338b4a7d": "Suspendre sur batterie",
+  "8711a1de99862971": "Réduire l’intervalle : {label}",
+  "7d45b094a7b5ab8f": "{label} (en secondes)",
+  "568556fb7ba81f65": "Augmenter l’intervalle : {label}",
+  "726b70e60ea3bfdd": "Intervalle de vérification de l’état du fournisseur"
 }
