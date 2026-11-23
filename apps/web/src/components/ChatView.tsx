@@ -320,12 +320,7 @@ import {
   shouldShowProviderStatusBanner,
   useProviderStatusBannerDismissed,
 } from "./chat/ProviderStatusBanner";
-import {
-  getThreadErrorBannerKey,
-  resolveThreadErrorBanner,
-  isThreadErrorBannerDismissedForSession,
-  shouldShowThreadErrorBanner,
-} from "./chat/ThreadErrorBanner";
+import { resolveThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./chat/QueuedRunsControl";
 import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullRequest";
 import { useProactivePanels } from "../hooks/useProactivePanels";
@@ -858,20 +853,18 @@ export default function ChatView(props: ChatViewProps) {
           threadId: parentSubagentThreadRef.threadId,
           title: parentSubagentThread?.title ?? "Parent thread",
         };
-  const { threadError, sessionDismissal } = resolveThreadErrorBanner(
+  const {
+    key: threadErrorBannerKey,
+    error: threadError,
+    visible: visibleThreadError,
+  } = resolveThreadErrorBanner({
+    threadKey: routeThreadKey,
     isServerThread,
     localServerError,
     localDraftError,
-    serverRuntime?.lastError ?? null,
-  );
-  const threadErrorBannerKey = getThreadErrorBannerKey(routeThreadKey, sessionDismissal);
-  const visibleThreadError = shouldShowThreadErrorBanner(
-    routeThreadKey,
-    threadError,
-    isThreadErrorBannerDismissedForSession(threadErrorBannerKey),
-  )
-    ? threadError
-    : null;
+    runtimeError: serverRuntime?.lastError ?? null,
+    runtimeSource: serverRuntime?.lastErrorSource ?? null,
+  });
   const [, setThreadErrorBannerDismissTick] = useState(0);
   const threadErrorIsServerRuntimeError =
     localServerError === null && visibleThreadError === serverRuntime?.lastError;
