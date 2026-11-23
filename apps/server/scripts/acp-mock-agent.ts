@@ -18,7 +18,7 @@ import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
 import { antigravityCommands } from "./acpMockAntigravityCommands.ts";
-import { delayedLoadResponse } from "./acpMockLateLoad.ts";
+import * as LateLoad from "./acpMockLateLoad.ts";
 import { availableModels } from "./acpMockModels.ts";
 import { promptIdFromRequestMeta } from "./acpMockPrompt.ts";
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
@@ -28,7 +28,6 @@ const copilotModesProfile = process.env.GOAT_ACP_COPILOT_MODES === "1";
 const copilotModeId = (name: string) =>
   `https://agentclientprotocol.com/protocol/session-modes#${name}`;
 const modeOptionCategory = process.env.GOAT_ACP_MODE_OPTION_CATEGORY ?? "mode";
-// Comma-separated command names the mock advertises, so `/compact` support is testable.
 const advertisedCommandNames = (process.env.GOAT_ACP_AVAILABLE_COMMANDS ?? "")
   .split(",")
   .map((name) => name.trim())
@@ -672,13 +671,14 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       if (loadedCommandNames !== undefined) {
-        yield* agent.client.sessionUpdate({
+        const publish = agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "available_commands_update",
             availableCommands: loadedCommandNames.map((name) => ({ name, description: name })),
           },
         });
+        yield* LateLoad.publishLoadedCommands(publish, LateLoad.loadedCommandsDelayMs);
       }
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
@@ -704,7 +704,7 @@ const program = Effect.gen(function* () {
       }
       if (hangLoadSessionAfterReplay || delayLoadSessionAfterReplay) {
         emitLoadReplayNotifications(requestedSessionId);
-        return yield* delayedLoadResponse({
+        return yield* LateLoad.delayedLoadResponse({
           replay: agent.client.sessionUpdate({
             sessionId: requestedSessionId,
             update: {
