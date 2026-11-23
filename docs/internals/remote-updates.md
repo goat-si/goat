@@ -230,7 +230,7 @@ uses 30 s timeouts. A host download that times out or loses its connection fails
 the attempt instead of uploading, because the host may still be installing. Proxies
 come from the user's login shell (`https_proxy`), which the download runs under.
 
-Archive sizes for that nightly, which also decide what the desktop bundles:
+Archive sizes for that nightly:
 
 | Platform     | Archive  |
 | ------------ | -------- |
@@ -242,11 +242,11 @@ Archive sizes for that nightly, which also decide what the desktop bundles:
 
 There is no darwin-x64 archive: Node single executables crash on Intel Macs, so
 those hosts get an `unsupported_platform` failure that names the supported
-platforms. Release desktop builds bundle darwin-arm64, linux-x64 and linux-arm64
-(261 MiB; the nightly app is 634 MB against 452 MB for a host-only bundle). That set
-stays for now: the bundle is the only supply when neither side can reach GitHub, and
-`goat.runtime.source` now separates `host-download` from `upload`, so trimming it
-can wait for evidence of how often uploads still happen.
+platforms. Release desktops acquire SSH archives on demand. The host can download
+from `goat-si/goat-releases` over TLS and verify against the release's `SHA256SUMS`;
+otherwise the client can upload a cached or staged archive. For an offline first
+connection, stage the matching archive and its checksum in the connecting machine's
+`runtime/archives/` directory beforehand (see [remote access](../user/remote-access.md)).
 
 Integrity is TLS plus `SHA256SUMS` from the same release; the archive executable
 must also report the exact version before the install is published. Release
