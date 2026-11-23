@@ -1362,6 +1362,7 @@ export const layer: Layer.Layer<
             noteContinuation ? promptedInput : turnInput,
             delivery,
             goalCommand ? "" : context,
+            session.driver,
           );
         },
         Effect.mapError((cause) =>

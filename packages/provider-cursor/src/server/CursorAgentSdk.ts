@@ -138,6 +138,7 @@ export interface CursorAgentSdkSession {
     CursorContextUsage | undefined,
     CursorAgentSdkRunnerError
   >;
+  readonly runCheckpointed?: (runId: string) => Effect.Effect<boolean, CursorAgentSdkRunnerError>;
   readonly close: Effect.Effect<void, CursorAgentSdkRunnerError>;
 }
 
@@ -831,6 +832,17 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
             return usage === undefined || usage.maxTokens === 0 ? undefined : usage;
           }),
         ),
+        runCheckpointed: (runId) =>
+          Effect.tryPromise({
+            try: async () => {
+              const run = await storePlatform.store.getRun(agent.agentId, runId);
+              return (
+                run?.latestCheckpointRef?.blobId !== undefined &&
+                run.latestCheckpointRef.blobId !== run.startCheckpointRef?.blobId
+              );
+            },
+            catch: (cause) => runnerError(cause, "agent.run.get"),
+          }),
         close: log({
           direction: "outgoing",
           stage: "decoded",
