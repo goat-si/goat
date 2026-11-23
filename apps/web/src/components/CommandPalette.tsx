@@ -1289,6 +1289,7 @@ function OpenCommandPaletteDialog(props: {
     activeThreadKey,
     supportsThreadFind,
     usePreviewFindAvailable(routeThreadRef),
+    gt("Find in browser page"),
   );
 
   const promptLinkTarget = paletteRouteTarget
