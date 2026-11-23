@@ -14,6 +14,7 @@ import type { ItemBase } from "./externalPrompts.ts";
 
 export const makeTurnStatusItems = (deps: {
   readonly driver: ProviderDriverKind;
+  readonly emitProviderThread: (state: ThreadState) => Effect.Effect<void>;
   readonly emit: (event: ProviderAdapter.ProviderAdapterV2Event) => Effect.Effect<void>;
   readonly ordinalOf: (turn: ActiveTurn, nativeId: string) => number;
   readonly itemBase: (
@@ -65,6 +66,13 @@ export const makeTurnStatusItems = (deps: {
         ...(summary === undefined || summary.length === 0 ? {} : { summary }),
       },
     });
+    if (status === "completed") {
+      turn.lastStep = undefined;
+      if (state.providerThread.contextUsage !== null) {
+        state.providerThread = { ...state.providerThread, contextUsage: null, updatedAt };
+        yield* deps.emitProviderThread(state);
+      }
+    }
     if (status !== "running") turn.compaction = undefined;
   });
 
