@@ -11,6 +11,13 @@ import type {
   OrchestrationV2TurnItem,
   ProviderThreadId,
 } from "@goat/contracts";
+import type {
+  RuntimeRequestId,
+  OrchestrationV2RuntimeRequest,
+  ProviderApprovalDecision,
+  ProviderUserInputAnswers,
+} from "@goat/contracts";
+import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as DateTime from "effect/DateTime";
 import type * as Deferred from "effect/Deferred";
@@ -159,3 +166,29 @@ export interface AcpNativeChildSession {
   owner: ActiveAcpTurn | undefined;
   readonly pending: Array<EffectAcpSchema.SessionNotification>;
 }
+
+export type AcpCarryoverSubagents = {
+  readonly sessionId: string;
+  /** The root's subscriber keeps ingesting, so late child terminals can still project. */
+  readonly projectsLateTerminals: boolean;
+  readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
+};
+
+export type PendingRuntimeRequest = {
+  readonly generation: number;
+  readonly nativeResponseAcknowledgement: Deferred.Deferred<void, EffectAcpErrors.AcpError>;
+  readonly transportRequestId: string;
+  readonly requestId: RuntimeRequestId;
+  readonly runtimeRequest: OrchestrationV2RuntimeRequest;
+  readonly node: OrchestrationV2ExecutionNode;
+  readonly turnItem: OrchestrationV2TurnItem;
+} & (
+  | {
+      readonly type: "approval";
+      readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
+    }
+  | {
+      readonly type: "user_input";
+      readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
+    }
+);
