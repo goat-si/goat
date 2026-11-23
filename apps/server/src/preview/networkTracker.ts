@@ -3,6 +3,14 @@ import type { Page, Request } from "playwright-core";
 
 const trackers = new WeakMap<Page, ReturnType<typeof makeTracker>>();
 
+export const isMainNavigation = (page: Page, request: Request) => {
+  try {
+    return request.isNavigationRequest() && request.frame() === page.mainFrame();
+  } catch {
+    return false;
+  }
+};
+
 const makeTracker = (page: Page) => {
   const requests = new Set<Request>();
   const listeners = new Set<() => void>();
@@ -14,13 +22,7 @@ const makeTracker = (page: Page) => {
     for (const listener of listeners) listener();
   };
   const onRequest = (request: Request) => {
-    let mainNavigation = false;
-    try {
-      mainNavigation = request.isNavigationRequest() && request.frame() === page.mainFrame();
-    } catch {
-      // Playwright can emit a navigation request before its frame exists.
-    }
-    if (mainNavigation) {
+    if (isMainNavigation(page, request)) {
       previousRequests = new Set(requests);
       navigation = request;
     }

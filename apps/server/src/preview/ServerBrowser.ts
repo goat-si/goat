@@ -137,7 +137,7 @@ import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
 import { closeUnadoptedPopup } from "./popupAdmission.ts";
 import { pageRead } from "./pageRead.ts";
-import { attachNetworkTracker } from "./networkTracker.ts";
+import { attachNetworkTracker, isMainNavigation } from "./networkTracker.ts";
 import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
 import { publishFetchedBody } from "./browserArtifacts.ts";
@@ -799,20 +799,13 @@ const make = Effect.gen(function* () {
         openSignal?.throwIfAborted();
         await cdp.send("Page.enable");
       }
-      const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) => {
-        try {
-          return request.isNavigationRequest() && request.frame() === page.mainFrame();
-        } catch {
-          return false;
-        }
-      };
       const navigationGenerations = new WeakMap<object, number>();
       page.on("request", (request) => {
         if (request.isNavigationRequest()) {
           for (let hop: typeof request | null = request; hop; hop = hop.redirectedFrom())
             observeNavigation(hop.url());
         }
-        if (!isMainNavigation(request)) return;
+        if (!isMainNavigation(page, request)) return;
         const stoppedFirst = Stop.stoppedFirstRequest(tab, request.url());
         navigationGenerations.set(request, ++tab.navigationGeneration);
         tab.documentGeneration++;
@@ -866,7 +859,7 @@ const make = Effect.gen(function* () {
       page.on("requestfailed", (request) => {
         const errorText = request.failure()?.errorText ?? "";
 
-        if (!isMainNavigation(request)) return;
+        if (!isMainNavigation(page, request)) return;
         // Newer navigations own status; untracked initial popup requests yield to any tracked navigation.
         const generation = navigationGenerations.get(request) ?? 0;
         if (generation !== tab.navigationGeneration) return;
@@ -2549,7 +2542,8 @@ const make = Effect.gen(function* () {
   });
 
   yield* manager.registerBeforeClose(makeBeforePreviewClose(tabs, pendingTabs, closedPendingTabs));
-  yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
+  const managerEvents = Stream.fromSubscription(yield* manager.subscribeEvents);
+  yield* managerEvents.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
     (yield* PreviewBrowserHost.sandboxBlocked)
