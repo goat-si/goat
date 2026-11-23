@@ -6903,8 +6903,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...(providerThread.appThreadId === null
                   ? {}
                   : { threadId: providerThread.appThreadId }),
-                modelSelection: current?.modelSelection,
-                runtimePolicy: current?.runtimePolicy,
+                ...(current === undefined ? {} : current),
               });
             }),
           );
