@@ -1,3 +1,4 @@
+import { agentQueuePrecedesSend } from "./goat/AgentQueueOrder.ts";
 import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
 import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
@@ -5331,14 +5332,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         dispatchMode = { type: "start_immediately" };
       }
     }
-    // Stop leaves the run reading as running until its provider stops. A plain
-    // send in that window queues behind the stopped queue instead of steering
-    // text the agent never receives, and like any user send it releases the
-    // hold; an explicit steer still fails below.
+    // After Stop, a plain send queues and releases the hold; an explicit steer fails below.
     if (
       command.deliveryIntent === "auto" &&
       (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") &&
       (yield* stopReachedRun(command, command.threadId, dispatchMode.targetRunId))
+    ) {
+      dispatchMode = { type: "queue_after_active" };
+    }
+    if (
+      command.deliveryIntent === "auto" &&
+      command.createdBy === "agent" &&
+      (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") &&
+      (yield* agentQueuePrecedesSend(projectionStore, command.threadId, projection.runs).pipe(
+        mapDispatchError(command),
+      ))
     ) {
       dispatchMode = { type: "queue_after_active" };
     }
