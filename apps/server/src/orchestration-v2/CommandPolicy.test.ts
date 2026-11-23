@@ -274,6 +274,27 @@ it("clears the saved active order for a server-delivered channel prompt", () => 
 const layer = it.layer(CommandPolicy.layer);
 
 layer("CommandPolicyV2", (it) => {
+  it.effect("uses a native Codex fork for a busy source only with a native turn boundary", () =>
+    Effect.gen(function* () {
+      const policy = yield* CommandPolicy.CommandPolicyV2;
+      const decide = (hasNativeTurnBoundary: boolean) =>
+        policy.decideForkExecution({
+          commandId,
+          threadId,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          capabilities: CodexProviderCapabilitiesV2,
+          sameProvider: true,
+          hasStrongNativeSource: true,
+          hasNativeTurnBoundary,
+          sourceRunStatus: "completed",
+          fromSpecificTurn: true,
+          crossWorkspace: false,
+          sourceBusy: true,
+        });
+      assert.equal(yield* decide(true), "native_fork");
+      assert.equal(yield* decide(false), "portable_context");
+    }),
+  );
   it.effect("steers a live Cursor turn in place", () =>
     Effect.gen(function* () {
       const policy = yield* CommandPolicy.CommandPolicyV2;

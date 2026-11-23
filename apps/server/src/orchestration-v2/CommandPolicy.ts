@@ -312,6 +312,7 @@ export interface CommandPolicyV2Shape {
     input: CapabilityCheckInput & {
       readonly sameProvider: boolean;
       readonly hasStrongNativeSource: boolean;
+      readonly hasNativeTurnBoundary?: boolean;
       readonly sourceRunStatus: OrchestrationV2Run["status"];
       readonly fromSpecificTurn: boolean;
       /** The fork works in another checkout than its source. */
@@ -493,7 +494,8 @@ const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input)
     input.hasStrongNativeSource &&
     (!input.sourceBusy ||
       (input.sourceRunStatus === "completed" &&
-        input.capabilities.threads.canForkWhileSourceRunning === true)) &&
+        input.capabilities.threads.canForkWhileSourceRunning === true &&
+        (input.hasNativeTurnBoundary === true || !input.capabilities.turns.exposesNativeTurnId))) &&
     input.capabilities.threads.canForkThread &&
     (!input.fromSpecificTurn || input.capabilities.threads.canForkFromTurn) &&
     input.capabilities.identity.nativeThreadIds === "strong" &&
