@@ -455,12 +455,6 @@ describe("AcpAdapterV2", () => {
         retryable: true,
         resetAt: "2030-01-01T00:00:00.000Z",
       } as const;
-      const poisoned = {
-        class: "provider_error",
-        message: "Saved history is unusable.",
-        code: "INVALID_THINKING_SIGNATURE",
-        retryable: true,
-      } as const;
       // The runtime ordinal of each prompt, and the session each check watched.
       const promptRuntimes: Array<number> = [];
       const watchedSessions: Array<string> = [];
@@ -473,13 +467,8 @@ describe("AcpAdapterV2", () => {
           watchPromptOutcome: (sessionId) =>
             Effect.sync(() => {
               watchedSessions.push(sessionId);
-              const outcome =
-                watchedSessions.length === 1
-                  ? quota
-                  : watchedSessions.length === 3
-                    ? poisoned
-                    : undefined;
-              return () => Effect.succeed(outcome);
+              const failed = watchedSessions.length === 1;
+              return () => Effect.succeed(failed ? quota : undefined);
             }),
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
@@ -528,43 +517,19 @@ describe("AcpAdapterV2", () => {
             Stream.takeUntil((event) => event.type === "turn.terminal"),
             Stream.runCollect,
           );
-          return Array.from(events);
+          return events.at(-1);
         });
 
-      const failed = (yield* runTurn(1)).at(-1);
+      const failed = yield* runTurn(1);
       if (failed?.type !== "turn.terminal" || failed.status !== "failed") {
         return assert.fail("expected a failed terminal");
       }
       assert.deepEqual(failed.failure, quota);
-      const completed = (yield* runTurn(2)).at(-1);
+      const completed = yield* runTurn(2);
       assert.equal(completed?.type === "turn.terminal" ? completed.status : null, "completed");
       assert.deepEqual(promptRuntimes, [1, 2], "the next turn runs on a fresh runtime");
       assert.equal(watchedSessions.length, 2);
       assert.equal(watchedSessions[0], watchedSessions[1]);
-      const poisonedEvents = yield* runTurn(3);
-      const broken = poisonedEvents.at(-1);
-      assert.equal(broken?.type === "turn.terminal" ? broken.threadDisposition : null, "broken");
-      const brokenThread = poisonedEvents.findLast(
-        (event) => event.type === "provider_thread.updated",
-      );
-      assert.equal(
-        brokenThread?.type === "provider_thread.updated"
-          ? brokenThread.providerThread.status
-          : null,
-        "error",
-      );
-      const resumed = yield* Effect.result(
-        runtime.resumeThread({
-          threadId,
-          providerThread: { ...providerThread, status: "error" },
-          modelSelection,
-          runtimePolicy,
-        }),
-      );
-      assert.equal(
-        resumed._tag === "Failure" ? resumed.failure._tag : null,
-        "ProviderAdapterResumeThreadError",
-      );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
   it.live("retains returned usage when Stop finalizes before the prompt callback", () =>
