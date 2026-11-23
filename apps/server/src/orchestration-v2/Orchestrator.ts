@@ -11142,7 +11142,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // Missing snapshots support conversation rewind only.
       if (
         targetCheckpoint.status !== "ready" &&
-        !(command.restoreFiles === false && targetCheckpoint.status === "missing")
+        !(
+          command.restoreFiles === false &&
+          (targetCheckpoint.status === "missing" || targetCheckpoint.status === "error")
+        )
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
