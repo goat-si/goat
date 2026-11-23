@@ -759,5 +759,9 @@
   "2e2f3c6a94895504": "Buscar en la memoria",
   "701964090d7b3438": "Borrar búsqueda",
   "69f5bba063085343": "No se pudo cargar la memoria",
-  "1c79d42e902ff431": "Reintentar"
+  "1c79d42e902ff431": "Reintentar",
+  "a026f1d30905695a": "Memorias en cuarentena",
+  "65d6260964ea1eda": "Las memorias en cuarentena se excluyen de la búsqueda. Borra la búsqueda para revisarlas.",
+  "5c5a53ae73e4dc51": "Revisa las memorias que necesitan atención.",
+  "45ea728edcbbc5eb": "Incluir memorias en cuarentena"
 }

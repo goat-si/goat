@@ -759,5 +759,9 @@
   "2e2f3c6a94895504": "Rechercher dans la mémoire",
   "701964090d7b3438": "Effacer la recherche",
   "69f5bba063085343": "Impossible de charger la mémoire",
-  "1c79d42e902ff431": "Réessayer"
+  "1c79d42e902ff431": "Réessayer",
+  "a026f1d30905695a": "Mémoires en quarantaine",
+  "65d6260964ea1eda": "Les mémoires en quarantaine sont exclues de la recherche. Effacez la recherche pour les consulter.",
+  "5c5a53ae73e4dc51": "Consultez les mémoires qui nécessitent votre attention.",
+  "45ea728edcbbc5eb": "Inclure les mémoires en quarantaine"
 }

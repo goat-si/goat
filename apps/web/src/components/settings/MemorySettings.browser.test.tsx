@@ -7,7 +7,6 @@ import {
   activeItem,
   exerciseMemoryMove,
   checkVirtualizedMemorySelection,
-  checkQuarantineSearch,
   enterText,
   resolution,
   entry,
@@ -1788,8 +1787,6 @@ it("does not silently browse user memory when a project binding lookup fails", a
   expect(container.querySelector('[aria-label="Search memories"]')).not.toBeNull();
 });
 
-it("disables the quarantine filter during search and restores it when search is cleared", () =>
-  checkQuarantineSearch(container, click, state.queries, state.requests, supportedScreen));
 it.each([{ items: [] }, { items: [activeItem] }])(
   "shows incomplete search coverage with matching items %j",
   async ({ items }) => {

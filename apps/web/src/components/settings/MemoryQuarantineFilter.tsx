@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { useGT } from "gt-react";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 
@@ -12,21 +13,24 @@ export function MemoryQuarantineFilter({
   onCheckedChange: (checked: boolean) => void;
 }) {
   const hintId = useId();
+  const gt = useGT();
   return (
     <SettingsRow
-      title="Quarantined memories"
+      title={gt("Quarantined memories")}
       description={
         searching ? (
-          <span id={hintId}>Clear search to review quarantined memories.</span>
+          <span id={hintId}>
+            {gt("Quarantined memories are excluded from search. Clear search to review them.")}
+          </span>
         ) : (
-          "Review memories that need attention."
+          gt("Review memories that need attention.")
         )
       }
       control={
         <Switch
-          aria-label="Include quarantined memories"
+          aria-label={gt("Include quarantined memories")}
           aria-describedby={searching ? hintId : undefined}
-          checked={checked}
+          checked={searching ? false : checked}
           disabled={searching}
           onCheckedChange={onCheckedChange}
         />
