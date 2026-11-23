@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import JSZip from "jszip";
 
-import { openDocument, openNotebook, openRtf } from "./extendedDocumentPreview";
+import { openDocument, openEpub, openNotebook, openRtf } from "./extendedDocumentPreview";
 
 it("renders built ODT indexes without their source templates", async () => {
   const names = [
@@ -47,6 +47,29 @@ it("keeps OpenDocument image descriptions in image alt text", async () => {
     /^<p><img src="data:image\/png;base64,[^"]+" alt="Logo Research &amp; &quot;Design&quot;">Visible caption<\/p>$/,
   );
 });
+
+it.each([
+  ["percent-encoded", "My%20Book/book%201.opf", "My Book/book 1.opf", "My Book/one.xhtml"],
+  ["literal percent", "My%20Book/book.opf", "My%20Book/book.opf", "My%20Book/one.xhtml"],
+  ["malformed percent", "Book%ZZ/book.opf", "Book%ZZ/book.opf", "Book%ZZ/one.xhtml"],
+])(
+  "reads EPUB packages with %s rootfile paths",
+  async (_label, fullPath, packagePath, chapterPath) => {
+    const archive = new JSZip()
+      .file(
+        "META-INF/container.xml",
+        `<container><rootfiles><rootfile full-path="${fullPath}"/></rootfiles></container>`,
+      )
+      .file(
+        packagePath,
+        '<package><manifest><item id="a" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>',
+      )
+      .file(chapterPath, "<html><head><title>First</title></head><body><p>Hello</p></body></html>");
+    const result = await openEpub(archive);
+    if (result.type !== "document") throw new Error("Expected document");
+    expect(result.pages).toEqual([{ title: "First", html: "<p>Hello</p>" }]);
+  },
+);
 
 it("removes terminal colors from saved notebook text outputs", () => {
   const bytes = new TextEncoder().encode(
