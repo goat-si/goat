@@ -287,7 +287,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         return false;
       }),
     ];
-
     const runningCalls = (thread: ThreadState): ReadonlyArray<SubagentCall> =>
       sessionsOf(thread).flatMap((state) => [...state.calls.values()]);
 
@@ -300,7 +299,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (parent === undefined) return [];
       return [...parent.calls.values()].filter((candidate) => candidate.child === child);
     };
-
     const callsAbove = (sessionId: string) => {
       const calls: Array<SubagentCall> = [];
       let current = threads.get(sessionId);
@@ -310,7 +308,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       return calls;
     };
-
     const requestTurn = makeRequestTurn({
       ownerOf,
       callsAbove,
@@ -318,7 +315,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       isExecuting: (sessionId) =>
         busy.has(sessionId) || threads.get(sessionId)?.active !== undefined,
     });
-
     const owesWork = (state: ThreadState) =>
       shellJobs.owes(state) ||
       [...state.imageJobs.values()].some((job) => job.status === "running") ||
@@ -326,9 +322,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.reports.size > 0 ||
       (state.subagent !== undefined && busy.has(state.sessionId)) ||
       [...state.calls.values()].some((call) => call.background);
-
     const hasBackground = (thread: ThreadState) => sessionsOf(thread).some(owesWork);
-
     const emitProviderThread = Effect.fnUntraced(function* (state: ThreadState) {
       const pendingBackgroundWork = hasBackground(state);
       state.publishedBackgroundWork = pendingBackgroundWork;
@@ -364,7 +358,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       };
       yield* emitProviderThread(state);
     });
-
     const readGoal = Effect.fn("OpenCode2Adapter.readGoal")(function* (
       state: ThreadState,
       revision = state.goalRevision,
@@ -1873,6 +1866,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         after: delivered.at(-1)?.inboxId,
         first: leading ?? delivered[0]?.inboxId,
         children: new Set(),
+        awaited: new Set(),
+        ended: new Map(),
       };
       state.wakes.push(wake);
       yield* Effect.logInfo("OpenCode started a turn on its own; asking for a continuation.", {
@@ -3130,7 +3125,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     const replay = Effect.fnUntraced(function* (wake: Wake) {
       wake.dropped = true;
-      for (const event of wake.events) yield* route(event, sessionOfEvent(event), true);
+      yield* shellJobs.replay(
+        wake,
+        Effect.forEach(wake.events, (event) => route(event, sessionOfEvent(event), true), {
+          discard: true,
+        }),
+      );
     });
 
     const discardWakes = (caller: ThreadState, wakes: ReadonlyArray<Wake>) => {

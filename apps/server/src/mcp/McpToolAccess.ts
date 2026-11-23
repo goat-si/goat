@@ -376,6 +376,27 @@ export const actsAsCaller = <P, A, E, R>(
     ),
   );
 
+// A provider may mark its own held background work before GOAT opens the continuation run.
+export const actsAsCallerDuringWake = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    Effect.gen(function* () {
+      yield* requireThreadCaller;
+      yield* refuseReadOnlyClient;
+      const context = yield* loadCaller();
+      if (
+        context.caller === undefined ||
+        context.caller.archivedAt !== null ||
+        context.caller.providerInstanceId !== context.scope.thread?.providerInstanceId
+      ) {
+        return yield* new OrchestratorMcpFailure({
+          code: "parent_not_active",
+          message: "The calling provider no longer owns this thread.",
+        });
+      }
+      return yield* admitted(params, context.limits, handle(params));
+    }),
+  );
+
 export const writes = <P, A, E, R>(
   handle: (params: P) => Effect.Effect<A, E, R>,
   options: AdmissionOption = {},
