@@ -31,6 +31,7 @@ import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
 import { makeCodexMemoryDelivery } from "./CodexMemoryDelivery.ts";
+import { makeCodexContextRestores } from "./CodexContextRestores.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import { makeCodexAssistantText } from "./CodexAssistantText.ts";
@@ -899,6 +900,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const restoredCompactions = new Set<string>();
         // Native thread id to the compaction whose context goes back once its turn completes.
         const compactionsAwaitingRestore = new Map<string, string>();
+        const contextRestores = makeCodexContextRestores(scope);
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
         /** Threads Codex held before this session resumed them, such as across a server restart. */
@@ -6286,10 +6288,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const compactionId = compactionsAwaitingRestore.get(payload.threadId);
             if (compactionId !== undefined) {
               compactionsAwaitingRestore.delete(payload.threadId);
-              // The notification callback runs on the input reader. Let it read
-              // the injection response while the session-scoped request waits.
-              yield* restoreAdditionalContext(payload.threadId, compactionId).pipe(
-                Effect.forkIn(scope, { startImmediately: true }),
+              yield* contextRestores.fork(
+                payload.threadId,
+                restoreAdditionalContext(payload.threadId, compactionId),
               );
             }
             turnStartGuard.turnCompleted(
@@ -6749,6 +6750,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ).pipe(Effect.ignore),
               ),
+              // A start cancelled while waiting has no memory or pending turn to clean up.
+              (start) =>
+                Effect.flatMap(
+                  getNativeThreadId(turnInput.providerThread),
+                  contextRestores.wait,
+                ).pipe(Effect.andThen(start)),
             ),
         );
 
@@ -7192,6 +7199,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     Effect.ignore,
                   ),
                 ),
+                // An interrupted wait must not clear the earlier compaction's memory.
+                (compact) =>
+                  Effect.flatMap(
+                    getNativeThreadId(turnInput.providerThread),
+                    contextRestores.wait,
+                  ).pipe(Effect.andThen(compact)),
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterTurnStartError({
