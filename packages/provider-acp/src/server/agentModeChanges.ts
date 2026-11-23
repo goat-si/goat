@@ -25,7 +25,7 @@ export function readAgentModes(
   return modes;
 }
 
-export function agentModeSelectionChanges(
+function agentModeSelectionChanges(
   selection: NonNullable<ModelSelection["options"]>,
   configured: ReadonlyMap<string, string>,
   live: ReadonlyMap<string, string>,

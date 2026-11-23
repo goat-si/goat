@@ -3,7 +3,7 @@ import { providerProcessExitGuidance } from "@goat/provider-core/server/failure"
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 
-export const CLAUDE_ROOT_REFUSAL =
+const CLAUDE_ROOT_REFUSAL =
   "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons";
 export const CLAUDE_CONVERSATION_NOT_FOUND = "No conversation found with session ID:";
 export const MAX_CLAUDE_MISSING_NATIVE_THREADS = 1000;
@@ -92,7 +92,7 @@ const CLAUDE_PROCESS_EXIT_ERROR_CLASSES: ReadonlySet<unknown> = new Set([
   "process_exited_nonzero",
 ]);
 
-export function claudeProcessExit(sdkError: unknown): { status: string; code: string } | undefined {
+function claudeProcessExit(sdkError: unknown): { status: string; code: string } | undefined {
   if (typeof sdkError !== "object" || sdkError === null) return undefined;
   const { errorClass, telemetryMessage } = sdkError as Record<string, unknown>;
   return typeof errorClass === "string" &&

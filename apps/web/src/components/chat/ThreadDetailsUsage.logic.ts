@@ -46,13 +46,6 @@ export function resolveThreadDetailsLimits(
   return hubPool(provider.driver, model, providers, hubs, now) ?? { kind: "instance", limits: own };
 }
 
-export function nextPoolReset(window: LimitPoolWindow, now: number) {
-  const pooled = window.members.length > 1;
-  return (
-    window.resets.find((reset) => reset.at > now && (!pooled || reset.restoresPercent > 0)) ?? null
-  );
-}
-
 function hubPool(
   driver: ServerProvider["driver"],
   model: string | null,

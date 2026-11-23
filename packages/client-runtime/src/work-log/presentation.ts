@@ -340,9 +340,7 @@ export function commandVerb(status: ReturnType<typeof liveActivityToolStatus>): 
   return COMMAND_VERBS[status] ?? "Ran";
 }
 
-export function genericCommandStatusLabel(
-  status: ReturnType<typeof liveActivityToolStatus>,
-): string {
+function genericCommandStatusLabel(status: ReturnType<typeof liveActivityToolStatus>): string {
   return `${commandVerb(status)} command`;
 }
 
