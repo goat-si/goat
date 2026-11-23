@@ -215,13 +215,15 @@ describe("ProjectSetupScriptRunner", () => {
         yield* emit({ ...event, type: "output", data: "\x1b[?2004h" });
         const submitted = yield* Queue.take(writes);
         expect(submitted.endsWith("\r")).toBe(true);
-        expect(submitted).not.toContain("\n");
-        for (const line of submitted.slice(0, -1).split("\r")) {
+        expect(submitted.startsWith(" \x1b[200~")).toBe(true);
+        expect(submitted.endsWith("\x1b[201~\r")).toBe(true);
+        const shellInput = submitted.replace("\x1b[200~", "").replace("\x1b[201~", "");
+        for (const line of shellInput.slice(0, -1).split("\n")) {
           expect(Buffer.byteLength(line)).toBeLessThan(1024);
         }
         const output = NodeChildProcess.execFileSync(
           "/bin/sh",
-          ["-c", submitted.replaceAll("\r", "\n")],
+          ["-c", shellInput.replaceAll("\r", "\n")],
           {
             encoding: "utf8",
           },
@@ -258,9 +260,11 @@ describe("ProjectSetupScriptRunner", () => {
 
   it.effect("types into a quiet shell that has no line editor", () =>
     Effect.gen(function* () {
-      const { writes } = yield* setup();
+      const { writes } = yield* setup({ command: "printf '%s\\n' 'setup-ready'\n".repeat(120) });
       yield* TestClock.adjust("3 seconds");
-      expect(yield* Queue.take(writes)).toContain("vp i");
+      const submitted = yield* Queue.take(writes);
+      expect(submitted).toContain("setup-ready");
+      expect(submitted).not.toContain("\x1b[200~");
     }),
   );
 
