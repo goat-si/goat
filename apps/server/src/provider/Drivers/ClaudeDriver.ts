@@ -308,9 +308,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       env: NodeJS.ProcessEnv,
     ) {
       const resolveExecutable = yield* SpawnExecutableResolution;
+      const hostPlatform = yield* HostProcess.Platform;
       const executable =
-        resolveExecutable(effectiveConfig.binaryPath, yield* HostProcess.Platform, env) ??
-        effectiveConfig.binaryPath;
+        (yield* Effect.promise(async () =>
+          resolveExecutable(effectiveConfig.binaryPath, hostPlatform, env),
+        )) ?? effectiveConfig.binaryPath;
       const key = `${yield* makeClaudeCapabilitiesCacheKey(effectiveConfig, stateDir, env)}\0${executable}`;
       yield* Ref.set(probeEnvironment, env);
       return (yield* Cache.get(capabilitiesProbeCache, key)).capabilities;

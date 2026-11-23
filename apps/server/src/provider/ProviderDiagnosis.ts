@@ -437,7 +437,7 @@ const resolvesExecutable = Effect.fn("ProviderDiagnosis.resolvesExecutable")(fun
 ) {
   const resolve = yield* SpawnExecutableResolution;
   const platform = yield* HostProcess.Platform;
-  return resolve(command, platform, environment);
+  return yield* Effect.promise(async () => resolve(command, platform, environment));
 });
 
 // ── Claude Cloud ──────────────────────────────────────────────────────────

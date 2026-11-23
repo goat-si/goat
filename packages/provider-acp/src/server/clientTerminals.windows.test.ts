@@ -17,7 +17,7 @@ it.effect("reports missing Git Bash instead of running shell source through cmd.
     expect(String(error)).toContain("Git Bash is required");
   }).pipe(
     Effect.provideService(HostProcess.Platform, "win32"),
-    Effect.provideService(SpawnExecutableResolution, () => undefined),
+    Effect.provideService(SpawnExecutableResolution, async () => undefined),
     Effect.provide(NodeServices.layer),
     Effect.scoped,
   ),

@@ -23,6 +23,7 @@ const XCODE_GIT = "/fixture/xcode-git";
 const SYNC_GIT = "/fixture/sync-git";
 
 function setup() {
+  const entered = [Deferred.makeUnsafe<void>(), Deferred.makeUnsafe<void>()];
   const probes: Array<{
     readonly complete: (output: string) => void;
     readonly kill: Mock<NodeChildProcess.ChildProcess["kill"]>;
@@ -40,6 +41,8 @@ function setup() {
       },
       kill,
     });
+    const milestone = entered[probes.length - 1];
+    if (milestone) Deferred.doneUnsafe(milestone, Effect.void);
     return child;
   }) as typeof NodeChildProcess.execFile);
   const resolve = resolveSpawnCommand("git", [], { env: { PATH: "/fixture" } }).pipe(
@@ -54,6 +57,7 @@ function setup() {
   );
   return {
     probes,
+    entered,
     resolve,
     asyncProbe,
     [Symbol.dispose]() {
@@ -91,6 +95,7 @@ it.effect("shares concurrent xcrun lookups and starts the cache TTL after comple
     const first = yield* Effect.forkChild(native.resolve, { startImmediately: true });
     const second = yield* Effect.forkChild(native.resolve, { startImmediately: true });
     try {
+      yield* Deferred.await(native.entered[0]!);
       expect(native.probes).toHaveLength(1);
       yield* TestClock.adjust("4 seconds");
       native.probes[0]?.complete(`${XCODE_GIT}\n`);
@@ -103,6 +108,7 @@ it.effect("shares concurrent xcrun lookups and starts the cache TTL after comple
       yield* TestClock.adjust("1 second");
       const expired = yield* Effect.forkChild(native.resolve, { startImmediately: true });
       try {
+        yield* Deferred.await(native.entered[1]!);
         expect(native.probes).toHaveLength(2);
         native.probes[1]?.complete(`${XCODE_GIT}\n`);
         expect((yield* Fiber.join(expired)).command).toBe(XCODE_GIT);
@@ -120,11 +126,13 @@ it.effect("cancels the captured xcrun child and permits the next lookup", () =>
   Effect.gen(function* () {
     using native = setup();
     const first = yield* Effect.forkChild(native.resolve, { startImmediately: true });
+    yield* Deferred.await(native.entered[0]!);
     yield* Fiber.interrupt(first);
     expect(native.probes).toHaveLength(1);
     expect(native.probes[0]?.kill).toHaveBeenCalledWith("SIGKILL");
     const next = yield* Effect.forkChild(native.resolve, { startImmediately: true });
     try {
+      yield* Deferred.await(native.entered[1]!);
       expect(native.probes).toHaveLength(2);
       native.probes[1]?.complete(`${XCODE_GIT}\n`);
       expect((yield* Fiber.join(next)).command).toBe(XCODE_GIT);

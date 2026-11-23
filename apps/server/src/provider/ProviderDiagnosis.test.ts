@@ -147,7 +147,7 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
       Effect.provideService(ProviderHost.ProviderHost, host),
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(SpawnExecutableResolution, (command) => executables[command]),
+      Effect.provideService(SpawnExecutableResolution, async (command) => executables[command]),
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provideService(HostProcess.HomeDirectory, "/home/user"),
       Effect.provideService(HostProcess.Environment, fixture.env ?? { HOME: "/home/user" }),

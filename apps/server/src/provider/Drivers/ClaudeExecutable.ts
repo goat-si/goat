@@ -55,7 +55,9 @@ export const resolveClaudeSdkExecutable = Effect.fn("resolveClaudeSdkExecutable"
 
   const resolveExecutable = yield* SpawnExecutableResolution;
   const isFile = yield* ClaudeExecutableFileCheck;
-  const resolved = resolveExecutable(binaryPath, platform, environment);
+  const resolved = yield* Effect.promise(async () =>
+    resolveExecutable(binaryPath, platform, environment),
+  );
   if (resolved === undefined) {
     return { path: binaryPath, found: false };
   }

@@ -319,7 +319,7 @@ it.effect("restarts a session using its captured environment and executable", ()
       currentEnvironment: Effect.sync(() => host),
     }).pipe(
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
-      Effect.provideService(SpawnExecutableResolution, () => executable),
+      Effect.provideService(SpawnExecutableResolution, async () => executable),
     );
     const launch = yield* owner.captureLaunch;
     const first = yield* owner.withServer((server) => Effect.succeed(server.url), launch);
