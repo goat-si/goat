@@ -83,7 +83,7 @@ import { createTranscriptJsonReader, TranscriptJsonLimitError } from "./AgentSes
 import {
   normalizeForWorktreeMatch,
   isGoatManagedWorktree,
-  extractCwd,
+  makeCwdScanner,
 } from "./AgentSessionTranscriptCwd.ts";
 import {
   decodeClaudeSettings,
@@ -302,30 +302,16 @@ export const make = Effect.gen(function* () {
             const size = isCompressedTranscript(transcript.filePath)
               ? Number.POSITIVE_INFINITY
               : transcript.identity.size;
-            const decoder = new TextDecoder();
-            let remaining = "";
             let bytesRead = 0;
-            let recordsRead = 0;
-            const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES, size);
-            const reserveRecord = () => {
-              if (
-                recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT ||
-                budget.recordsRemaining === 0
-              ) {
-                budget.truncated = true;
-                return false;
-              }
-              recordsRead += 1;
-              budget.recordsRemaining -= 1;
-              return true;
-            };
-            const readLastRecord = () => {
-              const record = remaining + decoder.decode();
-              return record.length === 0 || !reserveRecord()
-                ? null
-                : extractCwd(record.trim(), source);
-            };
+            const { scanChunk, readLastRecord } = makeCwdScanner(
+              source,
+              budget,
+              MAX_TRANSCRIPT_SCAN_BYTES,
+              MAX_METADATA_RECORDS_PER_TRANSCRIPT,
+            );
+            const parse = <A>(f: () => A) => Effect.try(f);
 
+            const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES, size);
             while (bytesRead < maxBytes) {
               if (budget.bytesRemaining === 0 || budget.operationsRemaining === 0) {
                 budget.truncated = true;
@@ -340,26 +326,19 @@ export const make = Effect.gen(function* () {
               budget.bytesRemaining -= readSize;
               const next = yield* readChunk(readSize);
               if (Option.isNone(next)) {
-                return readLastRecord();
+                return yield* parse(readLastRecord);
               }
 
               bytesRead += next.value.byteLength;
-              remaining += decoder.decode(next.value, { stream: true });
-              const lines = remaining.split("\n");
-              remaining = lines.pop() ?? "";
-
-              for (const line of lines) {
-                if (!reserveRecord()) return null;
-                const cwd = extractCwd(line.trim(), source);
-                if (cwd !== null) return cwd;
-              }
+              const result = yield* parse(() => scanChunk(next.value));
+              if (result !== undefined) return result;
             }
 
             if (bytesRead < size) {
               budget.truncated = true;
               return null;
             }
-            return readLastRecord();
+            return yield* parse(readLastRecord);
           }),
         ),
       ),
