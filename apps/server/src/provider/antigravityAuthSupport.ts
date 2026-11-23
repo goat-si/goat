@@ -231,6 +231,9 @@ function antigravityEnvironment(
       ? { SSL_CERT_FILE: profile.caBundlePath }
       : {}),
     GEMINI_HOME: profile.geminiHome,
+    ...(auth.authMethod === "oauth-personal"
+      ? { SSH_CONNECTION: baseEnv.SSH_CONNECTION || "127.0.0.1 0 127.0.0.1 0" }
+      : {}),
     AGY_ACP_FORCE_FILE_STORAGE: "1",
     BROWSER: profile.browserCommand,
     PYTHONUNBUFFERED: "1",
