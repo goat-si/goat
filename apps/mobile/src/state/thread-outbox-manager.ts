@@ -54,12 +54,13 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
   };
 
-  const serialize = <A>(mutation: () => Promise<A>): Promise<A> => {
+  const serialize = <A>(mutation: () => Promise<A>, readOnly = false): Promise<A> => {
     const result = mutationQueue.then(mutation, mutation);
-    pendingMutations.add(result);
-    void result.then(
-      () => pendingMutations.delete(result),
-      () => pendingMutations.delete(result),
+    const tracked = readOnly ? result.catch(() => undefined) : result;
+    pendingMutations.add(tracked);
+    void tracked.then(
+      () => pendingMutations.delete(tracked),
+      () => pendingMutations.delete(tracked),
     );
     mutationQueue = result.then(
       () => undefined,
@@ -92,7 +93,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         throw new AggregateError(result.errors, "Some queued messages could not be read.");
       }
       return true;
-    }).catch((cause) => {
+    }, true).catch((cause) => {
       loadPromise = null;
       warn(
         "[thread-outbox] failed to load persisted messages",
@@ -396,12 +397,35 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   return {
     queuedMessagesByThreadKeyAtom,
     serialize,
-    flush: async () => {
-      const results = await Promise.allSettled(pendingMutations);
-      const failure = results.find(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      );
-      if (failure) throw failure.reason;
+    flush: async (flushWrites: () => Promise<void> = async () => {}) => {
+      let failure: unknown;
+      let failed = false;
+      let drained = false;
+      while (!drained) {
+        const queue = mutationQueue;
+        const results = await Promise.allSettled(pendingMutations);
+        for (const result of results) {
+          if (
+            result.status === "rejected" &&
+            !(
+              result.reason instanceof ThreadOutboxManagerError &&
+              (result.reason.operation === "load" ||
+                result.reason.operation === "clear-environment-load")
+            )
+          ) {
+            failed = true;
+            failure ??= result.reason;
+          }
+        }
+        try {
+          await flushWrites();
+        } catch (cause) {
+          failed = true;
+          failure ??= cause;
+        }
+        drained = queue === mutationQueue && pendingMutations.size === 0;
+      }
+      if (failed) throw failure;
     },
     load,
     enqueue,
