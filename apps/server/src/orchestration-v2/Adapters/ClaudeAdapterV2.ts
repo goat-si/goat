@@ -9613,7 +9613,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
             if (userMessage !== null && !turnInput.resume) {
               const admitted = nativeControl
-                ? { message: userMessage, receipt: Effect.void }
+                ? { message: userMessage, receipt: Effect.void, uncertain: Effect.void }
                 : yield* withFreshMemory(userMessage, turnInput);
               const admittedMessage = nativeControl
                 ? admitted.message
@@ -9630,7 +9630,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
               }
               context.rootMemoryReceipt = admitted.receipt;
-              yield* attachTurn;
+              yield* admitted.uncertain.pipe(Effect.andThen(attachTurn));
               yield* offerUserMessage(admittedMessage);
               return;
             }
@@ -10030,6 +10030,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 else next.delete(turnInput.providerTurnId);
                 return next;
               });
+            yield* admitted.uncertain;
             if (currentTurn.steersClosed) {
               yield* settleSteer(false);
               return yield* new ProviderAdapter.ProviderAdapterProtocolError({

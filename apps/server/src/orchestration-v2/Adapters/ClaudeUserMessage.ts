@@ -75,10 +75,11 @@ export const withFreshMemory = Effect.fnUntraced(function* (
   turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
 ) {
   const snapshot = yield* MemoryContext.refreshSnapshot(turnInput);
-  if (snapshot === undefined) return { message, receipt: Effect.void };
+  if (snapshot === undefined) return { message, receipt: Effect.void, uncertain: Effect.void };
   const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
   return {
     message: appendClaudeUserText(message, text),
     receipt: MemoryContext.deliveryReceipt(turnInput, snapshot),
+    uncertain: turnInput.onMemoryDeliveryUncertain?.(snapshot) ?? Effect.void,
   };
 });

@@ -15699,6 +15699,7 @@ describe("Claude WP4 memory delivery", () => {
         );
         const allocator = yield* IdAllocator.IdAllocatorV2;
         let receipts = 0;
+        let uncertain = 0;
         const input = {
           ...makeClaudeTestTurnInput({
             threadId,
@@ -15713,8 +15714,13 @@ describe("Claude WP4 memory delivery", () => {
             Effect.sync(() => {
               receipts++;
             }),
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              uncertain++;
+            }),
         };
         yield* fixture.runtime.startTurn(input);
+        assert.equal(uncertain, 1);
         yield* fixture.runtime.interruptTurn({
           providerThread: fixture.providerThread,
           providerTurnId: allocator.derive.providerTurn({
