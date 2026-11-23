@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { PreviewSessionSnapshot } from "@goat/contracts";
 import { canFindPreviewTab } from "./findAvailability";
 import { useEffect, useRef, useState } from "react";
@@ -16,6 +17,7 @@ function PreviewFindBar({
   readonly focusRequest: number;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<{ active: number; matches: number } | null>(null);
@@ -49,12 +51,12 @@ function PreviewFindBar({
 
   return (
     <div className="absolute top-2 right-2 z-40 w-[min(22rem,calc(100%-1rem))]">
-      <InputGroup role="search" aria-label="Find in page" variant="popover">
+      <InputGroup role="search" aria-label={gt("Find in page")} variant="popover">
         <InputGroupInput
           ref={input}
           type="search"
-          aria-label="Find in page"
-          placeholder="Find in page"
+          aria-label={gt("Find in page")}
+          placeholder={gt("Find in page")}
           maxLength={200}
           value={query}
           onChange={(event) => {
@@ -76,12 +78,17 @@ function PreviewFindBar({
         />
         <InputGroupAddon align="inline-end">
           <span aria-live="polite" className="text-xs text-muted-foreground tabular-nums">
-            {query && result ? `${result.matches ? result.active : 0}/${result.matches}` : null}
+            {query && result
+              ? gt("{active, number}/{matches, number}", {
+                  active: result.matches ? result.active : 0,
+                  matches: result.matches,
+                })
+              : null}
           </span>
           <Button
             size="icon-xs"
             variant="ghost"
-            aria-label="Previous match"
+            aria-label={gt("Go to previous match")}
             onClick={() => search(query, false, false)}
             disabled={!result?.matches}
           >
@@ -90,13 +97,18 @@ function PreviewFindBar({
           <Button
             size="icon-xs"
             variant="ghost"
-            aria-label="Next match"
+            aria-label={gt("Go to next match")}
             onClick={() => search(query, true, false)}
             disabled={!result?.matches}
           >
             <ChevronDownIcon />
           </Button>
-          <Button size="icon-xs" variant="ghost" aria-label="Close find" onClick={onClose}>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={gt("Close page search")}
+            onClick={onClose}
+          >
             <XIcon />
           </Button>
         </InputGroupAddon>

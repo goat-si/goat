@@ -271,10 +271,13 @@ than the SSH session's: provider CLIs must be on your Windows `PATH`. After an
 app update, a Windows host moves to the new version only from a GOAT release;
 a server started from a source checkout must be stopped before reconnecting.
 
-The first launch can take longer while GOAT installs its runtime. It uses a
-bundled or cached archive when available. Otherwise it uses your configured
-release mirror, or downloads the matching published GOAT release and checks its
-checksums. If a public download fails, GOAT can try the GitHub CLI when signed in
+Desktop releases acquire the SSH runtime on demand. For a published version with
+no mirror configured, GOAT first tries to download on the remote host. If the
+host cannot reach the release, the connecting machine can download the matching
+archive, verify its checksum, cache it, and upload it over SSH. For an offline
+first connection, pre-stage the matching release archive in the connecting
+machine's GOAT home under `runtime/archives/` with its matching
+`<archive>.sha256` entry from the release's `SHA256SUMS`. If a public download fails, GOAT can try the GitHub CLI when signed in
 (`gh auth login`). It refuses a checksum mismatch and names the expected release
 when it cannot obtain an archive. Connections shows the current setup step. The first
 installation can take a few minutes; reconnecting while it runs joins that setup.

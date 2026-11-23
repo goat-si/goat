@@ -1285,6 +1285,7 @@ function OpenCommandPaletteDialog(props: {
     activeThreadKey,
     supportsThreadFind,
     usePreviewFindAvailable(routeThreadRef),
+    gt("Find in browser page"),
   );
 
   const promptLinkTarget = paletteRouteTarget
@@ -1477,7 +1478,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:open-file-picker",
     searchTerms: ["go to file", "open file", "file picker", "find file", "quick open"],
-    title: "Go to file",
+    title: gt("Go to file"),
     icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
     keepOpen: true,
     shortcutCommand: "filePicker.toggle",

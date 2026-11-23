@@ -500,7 +500,7 @@ jobs:
 
   desktop_mac:
     name: Desktop macOS ${{ matrix.arch }}
-    needs: [prepare, js_bundle, cli]
+    needs: [prepare, js_bundle]
     if: needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'
     runs-on: [self-hosted, macOS, ARM64, goat, mac-studio]
     timeout-minutes: 90
@@ -519,6 +519,7 @@ jobs:
       STAGING_TAG: goat-nightly-staging-${{ github.run_id }}
       GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true"
       GOAT_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
+      GOAT_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL: "true"
       GOAT_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-mac-${{ matrix.arch }}.json
       APPLE_KEYCHAIN_PROFILE: goat-notary
       GOAT_REQUIRE_NOTARIZATION: "1"
@@ -562,13 +563,12 @@ jobs:
               "https://api.github.com/repos/goat-si/goat/contents/scripts/$file?ref=$GITHUB_WORKFLOW_SHA"
           done
 
-      - name: Fetch JS bundle and SSH runtime archives
+      - name: Fetch JS bundle
         env:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names js-bundle --dir apps
-          node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names 'cli-*' --dir ssh-runtime-archives
 
       # Exports CSC_NAME, CSC_KEYCHAIN, APPLE_KEYCHAIN and GOAT_CLI_MAC_SIGN_IDENTITY.
       - name: Mac signing preflight
@@ -596,7 +596,6 @@ jobs:
           mkdir -p reports
           node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch "${{ matrix.arch }}" \
             --build-version "$VERSION" --skip-build --signed \
-            --ssh-runtime-archive-dir "$GITHUB_WORKSPACE/ssh-runtime-archives" --require-all-ssh-runtimes \
             --output-dir release --verbose
 
       - name: Sign, notarize and staple the DMG
@@ -647,6 +646,16 @@ jobs:
           done
           if [ "${{ matrix.arch }}" != arm64 ]; then
             for manifest in release-publish/*-mac.yml; do mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"; done
+          fi
+
+      - name: Summarize macOS package sizes
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -f .github/scripts/macos-package-sizes.py ]; then
+            python3 .github/scripts/macos-package-sizes.py release-publish >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::This build predates the macOS package size summary."
           fi
 
       - name: Stage desktop assets and verification reports
@@ -701,6 +710,7 @@ jobs:
       GOAT_DESKTOP_SIGNED: "false"
       GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true"
       GOAT_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
+      GOAT_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL: "true"
       GOAT_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-${{ matrix.platform }}-${{ matrix.arch }}.json
     defaults:
       run:
@@ -744,13 +754,18 @@ jobs:
               "https://api.github.com/repos/goat-si/goat/contents/scripts/$file?ref=$GITHUB_WORKFLOW_SHA"
           done
 
-      - name: Fetch JS bundle and SSH runtime archives
+      - name: Fetch JS bundle
         env:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names js-bundle --dir apps
-          node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names 'cli-*' --dir ssh-runtime-archives
+
+      - name: Fetch same-architecture Linux runtime for WSL
+        if: matrix.platform == 'win'
+        env:
+          GOAT_RELEASES_TOKEN: ${{ github.token }}
+        run: node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names "cli-linux-${{ matrix.arch }}" --dir wsl-runtime
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -828,10 +843,9 @@ jobs:
           set -euo pipefail
           mkdir -p reports
           args=(--platform "${{ matrix.platform }}" --target "${{ matrix.target }}" --arch "${{ matrix.arch }}"
-            --build-version "$VERSION" --skip-build --output-dir release --verbose
-            --ssh-runtime-archive-dir "$GITHUB_WORKSPACE/ssh-runtime-archives" --require-all-ssh-runtimes)
+            --build-version "$VERSION" --skip-build --output-dir release --verbose)
           if [ "${{ matrix.platform }}" = win ]; then
-            args+=(--wsl-runtime "$GITHUB_WORKSPACE"/ssh-runtime-archives/goat-*-linux-${{ matrix.arch }}.tar.gz)
+            args+=(--wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/goat-*-linux-${{ matrix.arch }}.tar.gz)
             if [ "${GOAT_COMPUTER_USE_HELPER_BUILT:-false}" = "true" ]; then
               args+=(--computer-use-helper-dir "$RUNNER_TEMP/goat-computer-use-helper/computer-use-helper")
             fi
