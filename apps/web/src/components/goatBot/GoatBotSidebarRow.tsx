@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   buildGoatBotTimeline,
   goatBotConversationPreview,
@@ -226,6 +227,7 @@ function GoatBotConversationRow({
   /** False once this client may no longer read the bot's computer: only the name and Main stay. */
   readable: boolean;
 }) {
+  const gt = useGT();
   return (
     <SidebarMenuButton
       size="lg"
@@ -290,7 +292,7 @@ function GoatBotConversationRow({
         </span>
         <span className="flex min-w-0 items-center gap-1">
           <Badge size="sm" variant="secondary">
-            Main
+            {gt("Main")}
           </Badge>
           {readable && slackEnabled && (
             <Badge size="sm" variant="secondary">
