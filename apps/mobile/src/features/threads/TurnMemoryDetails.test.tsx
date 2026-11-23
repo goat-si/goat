@@ -143,3 +143,36 @@ it.each(["unloaded", "running", "completed"] as const)(
     }
   },
 );
+
+it("updates an open turn memory panel when recall completes before the run ends (#3801)", async () => {
+  const h = createNativeMemoryHarness({ protocolVersion: 1, turnMemory: true });
+  const runId = RunId.make("running-recall");
+  const threadId = ThreadId.make("running-thread");
+  const update = (done: boolean) => h.registry.set(h.turnDetail, {
+    projection: {
+      runs: [{ id: runId, status: "running" }],
+      turnItems: done ? [{ id: TurnItemId.make("recall"), type: "dynamic_tool", status: "completed", runId }] : [],
+    },
+  });
+  h.responses.set(WS_METHODS.memoryTurnInspect, () => ({
+    events: h.calls.filter((c) => c.method === WS_METHODS.memoryTurnInspect).length > 1
+      ? [{ id: "1", kind: "recall", query: "fresh recall", items: [] }] : [], truncated: false,
+  }));
+  const unsubscribe = h.registry.mount(h.turnDetail);
+  update(false);
+  const view = renderNative(h, <TurnMemoryDetails environmentId={nativeEnv} threadId={threadId} runId={runId} />);
+  try {
+    await h.waitForAtom(h.memory.canInspectTurnMemory(nativeEnv), Boolean);
+    await view.render();
+    await view.click("Turn memory");
+    await h.waitForCall(WS_METHODS.memoryTurnInspect);
+    await act(async () => update(true));
+    expect(h.calls.filter((c) => c.method === WS_METHODS.memoryTurnInspect)).toHaveLength(2);
+    await act(async () => h.waitForCall(WS_METHODS.memoryTurnInspect, 2));
+    expect(view.container.textContent).toContain("fresh recall");
+  } finally {
+    await view.unmount();
+    unsubscribe();
+    h.dispose();
+  }
+});
