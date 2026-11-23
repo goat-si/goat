@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 
 import type { ProcessRunner } from "../../processRunner.ts";
 
@@ -117,6 +118,7 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
     const kill = input.kill ?? killClaudeDescendant;
     const live = new Set<(rows: ReadonlyArray<ClaudeProcessRow>) => void>();
+    const reading = Semaphore.makeUnsafe(1);
     let polling: Fiber.Fiber<unknown> | undefined;
     let warned = false;
     // The poll never outlives the layer that owns it, even while a CLI is still tracked.
@@ -134,8 +136,17 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
           : Effect.void,
       ),
     );
-    const sample = readTable.pipe(
-      Effect.map(Option.map((rows) => live.forEach((observe) => observe(rows)))),
+    const sample = reading.withPermits(1)(
+      Effect.suspend(() => {
+        const tracked = [...live];
+        return readTable.pipe(
+          Effect.map(
+            Option.map((rows) => {
+              for (const observe of tracked) if (live.has(observe)) observe(rows);
+            }),
+          ),
+        );
+      }),
     );
 
     const track = (cliPid: number): ClaudeDescendantTracker => {
@@ -161,7 +172,9 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
       let stopped = false;
       return {
         refresh: Effect.suspend(() =>
-          stopped ? Effect.void : readTable.pipe(Effect.map(Option.map(observeRunning))),
+          stopped
+            ? Effect.void
+            : reading.withPermits(1)(readTable.pipe(Effect.map(Option.map(observeRunning)))),
         ),
         stop: Effect.suspend(() => {
           if (stopped) return Effect.void;
@@ -170,15 +183,24 @@ export const makeClaudeDescendantSampler = Effect.fn("ClaudeDescendantSampler.ma
           const idle = live.size === 0 ? polling : undefined;
           if (idle !== undefined) polling = undefined;
           return (idle === undefined ? Effect.void : Fiber.interrupt(idle)).pipe(
-            Effect.andThen(readTable),
-            Effect.map(
-              Option.map((rows) => {
-                const running = observe(rows, false);
-                const protectedPids = serverAndAncestors(rows);
-                for (const row of tracked.values())
-                  if (running.has(identity(row)) && row.pid > 1 && !protectedPids.has(row.pid))
-                    kill(row);
-              }),
+            Effect.andThen(
+              reading.withPermits(1)(
+                readTable.pipe(
+                  Effect.map(
+                    Option.map((rows) => {
+                      const running = observe(rows, false);
+                      const protectedPids = serverAndAncestors(rows);
+                      for (const row of tracked.values())
+                        if (
+                          running.has(identity(row)) &&
+                          row.pid > 1 &&
+                          !protectedPids.has(row.pid)
+                        )
+                          kill(row);
+                    }),
+                  ),
+                ),
+              ),
             ),
           );
         }),
