@@ -657,7 +657,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   ) : null;
 
   const modelControl = (
-    <View className="min-w-0 shrink">
+    <View className={compactEditor.isWide ? "min-w-0 shrink" : "shrink-0"}>
       <ComposerModelControl
         size={hasSidebarTabBar ? "large" : "regular"}
         modelOption={currentModelOption}
@@ -751,7 +751,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 style={[
                   {
                     minWidth:
-                      compactEditor.isWide || stripAttachments.length > 0
+                      compactEditor.isWide || stripAttachments.length > 0 || compactControl !== null
                         ? 0
                         : INLINE_EDITOR_MIN_WIDTH,
                   },
