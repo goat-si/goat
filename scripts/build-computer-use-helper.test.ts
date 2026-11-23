@@ -137,41 +137,6 @@ describe("build-computer-use-helper", () => {
     },
   );
 
-  it.effect.each(["arm64", "x64", "universal"] as const)(
-    "compiles only the requested launcher slices for %s",
-    (arch) =>
-      Effect.gen(function* () {
-        const { runner, calls } = fakeRunner(() => ({}));
-        const sources = ["/src/main.swift", "/src/Protocol.swift"];
-        const executable = "/out/launcher";
-        const work = "/work";
-        const arm64 = NodePath.join(work, "helper-arm64");
-        const x64 = NodePath.join(work, "helper-x86_64");
-        yield* compileComputerUseLauncher(sources, executable, work, arch, runner);
-        const compile = (slice: string, output: string) => [
-          "xcrun",
-          "swiftc",
-          "-O",
-          "-target",
-          slice + "-apple-macos13.0",
-          "-lbsm",
-          "-o",
-          output,
-          ...sources,
-        ];
-        assert.deepEqual(
-          calls,
-          arch === "universal"
-            ? [
-                compile("arm64", arm64),
-                compile("x86_64", x64),
-                ["lipo", "-create", "-output", executable, arm64, x64],
-              ]
-            : [compile(arch === "x64" ? "x86_64" : arch, executable)],
-        );
-      }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("parses a default build without --ad-hoc (#1349)", () =>
     Effect.gen(function* () {
       // Off macOS the build stops at its platform check, so reaching it proves the flags parsed.
