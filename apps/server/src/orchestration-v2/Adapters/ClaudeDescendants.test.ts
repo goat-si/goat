@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -133,5 +135,36 @@ it.effect("a failed read between samples keeps what the last whole table showed"
     state.rows = [row(200, 1, "B")];
     yield* tracker.stop;
     assert.deepEqual(state.killed, [200]);
+  }),
+);
+
+it.effect("serializes process table reads for polling and explicit refresh", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let active = 0;
+    let maxActive = 0;
+    let reads = 0;
+    const sampler = yield* makeClaudeDescendantSampler({
+      interval: "1 hour",
+      readTable: Effect.gen(function* () {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        if (++reads === 1) {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+        }
+        active--;
+        return Option.some([]);
+      }),
+      kill: () => {},
+    });
+    const tracker = sampler.track(100);
+    yield* Deferred.await(started);
+    const refresh = yield* Effect.forkChild(tracker.refresh, { startImmediately: true });
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(refresh);
+    yield* tracker.stop;
+    assert.equal(maxActive, 1);
   }),
 );
