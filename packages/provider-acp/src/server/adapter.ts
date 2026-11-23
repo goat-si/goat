@@ -24,6 +24,9 @@ import {
 } from "./adapterIdentity.ts";
 export { acpScopedNativeId } from "./adapterIdentity.ts";
 import { sendPromptWhenIdle } from "./promptWhenIdle.ts";
+import { followNextPrompt, makeAcpPromptSteer, type AcpPromptSettle } from "./promptSteering.ts";
+import { makeAcpPromptContent } from "./promptContent.ts";
+import { makeAcpProviderRetry } from "./providerRetry.ts";
 import { makeAcpWakeBuffer } from "./wakeBuffer.ts";
 import {
   acpBackendWebSearch,
@@ -87,7 +90,6 @@ import {
 } from "./permissionOptions.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import {
-  type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
@@ -222,12 +224,9 @@ import {
   type BackgroundWorkReport,
   backgroundWorkNotification,
 } from "@goat/provider-core/server/notification";
-import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
+import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { acpSelectionTransition } from "@goat/provider-core/server/selectionTransition";
-import {
-  isProviderNativeImageAttachment,
-  providerMessageTextWithAttachmentPaths,
-} from "@goat/provider-core/server/attachmentPrompt";
+import { providerMessageTextWithAttachmentPaths } from "@goat/provider-core/server/attachmentPrompt";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
@@ -236,7 +235,7 @@ import {
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { acpMcpActivation, acpMcpCredentialsMatch, type AcpMcpContext } from "./mcpContext.ts";
 
-import { acpPerTurnPromptUsage } from "./promptUsage.ts";
+import { acpPerTurnPromptUsage, addAcpUsage } from "./promptUsage.ts";
 export { acpPerTurnPromptUsage } from "./promptUsage.ts";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
@@ -1088,57 +1087,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return ordinal;
         };
 
-        const emitProviderRetry = Effect.fnUntraced(function* (
-          context: ActiveAcpTurn,
-          status: "running" | "completed" | "interrupted" | "cancelled",
-        ) {
-          const state = context.providerRetry;
-          if (state === undefined) return;
-          yield* emitProviderEvent({
-            type: "turn_item.updated",
-            driver,
-            turnItem: makeProviderRetryTurnItem({
-              driver,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              nodeId: context.input.rootNodeId,
-              providerThreadId: context.input.providerThread.id,
-              providerTurnId: context.providerTurnId,
-              ...state,
-              status,
-              updatedAt: yield* DateTime.now,
-            }),
-          });
-          if (status !== "running") context.providerRetry = undefined;
-        });
-
-        const reportProviderRetry = Effect.fnUntraced(function* (notice: {
-          readonly sessionId: string;
-          readonly failure: OrchestrationV2ProviderFailure;
-        }) {
-          const context = yield* Ref.get(activeTurn);
-          if (
-            context === null ||
-            context.finalized ||
-            context.interrupted ||
-            context.nativeThreadId !== notice.sessionId ||
-            (yield* Ref.get(stoppedRunQuarantine))
-          )
-            return;
-          const previous = context.providerRetry;
-          context.providerRetry = {
-            failure: notice.failure,
-            retry: {
-              attempt: (previous?.retry.attempt ?? 0) + 1,
-              maxAttempts: null,
-              retryDelayMs: null,
-            },
-            startedAt: previous?.startedAt ?? (yield* DateTime.now),
-            itemOrdinal:
-              previous?.itemOrdinal ??
-              (yield* resolveItemOrdinal(context, `terminal-failure:${context.providerTurnId}`)),
-          };
-          yield* emitProviderRetry(context, "running");
+        const { emit: emitProviderRetry, report: reportProviderRetry } = makeAcpProviderRetry({
+          driver,
+          activeTurn,
+          stoppedRunQuarantine,
+          emitProviderEvent,
+          resolveItemOrdinal,
         });
 
         const lastCapturedProposedPlan = yield* Ref.make<{
@@ -6018,7 +5972,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         yield* setActiveSessionSetup(started);
         rememberTerminalEnvironment(started.sessionId, runtimeMcpContext!);
         yield* runtime.drainEvents;
-        const capabilities = negotiatedCapabilities(yield* readCapabilities, started);
+        const steersWithPrompt = flavor.steersWithPrompt?.(started.initializeResult) === true;
+        const capabilities = negotiatedCapabilities(
+          yield* readCapabilities,
+          started,
+          steersWithPrompt,
+        );
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
           started.initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -6832,6 +6791,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
         });
 
+        const promptContent = makeAcpPromptContent({
+          driver,
+          flavor,
+          supportsImagePrompts,
+          resolveAttachmentPath: host.resolveAttachmentPath,
+          fileSystem,
+          activeSessionSetup,
+          configOptions: runtime.getConfigOptions,
+        });
+
         const resolvePromptParts = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           sessionId: string,
@@ -6869,76 +6838,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ? {}
               : { previousState: previousInstructionState }),
           });
-          if (text.length > 0) {
-            prompt.push({ type: "text", text });
-          }
-          const imageAttachments = turnInput.message.attachments.filter(
-            isProviderNativeImageAttachment,
-          );
-          if (imageAttachments.length > 0 && !supportsImagePrompts) {
-            return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-              driver,
-              detail: "ACP driver did not negotiate image prompt support",
-            });
-          }
-          if (flavor.buildPrompt) {
-            const setup = yield* Ref.get(activeSessionSetup);
-            const modelOption = findModelConfigOption(yield* runtime.getConfigOptions);
-            const currentModelId = modelOption?.currentValue;
-            const blocks = yield* flavor
-              .buildPrompt({
-                text,
-                attachments: turnInput.message.attachments,
-                resolveAttachmentPath: host.resolveAttachmentPath,
-                promptCapabilities: setup?.initializeResult.agentCapabilities?.promptCapabilities,
-                agentVersion: setup?.initializeResult.agentInfo?.version,
-                currentModel:
-                  typeof currentModelId !== "string" || modelOption === undefined
-                    ? undefined
-                    : {
-                        id: currentModelId,
-                        name: flattenSelectChoices(modelOption.options).find(
-                          (choice) => choice.value === currentModelId,
-                        )?.name,
-                      },
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapter.ProviderAdapterProtocolError({
-                      driver,
-                      detail: "Failed to build ACP attachment prompt",
-                      payload: cause,
-                    }),
-                ),
-              );
-            prompt.splice(0, prompt.length, ...blocks);
-          }
-          for (const attachment of flavor.buildPrompt ? [] : imageAttachments) {
-            const path = host.resolveAttachmentPath(attachment as ChatAttachment);
-            if (path === null) {
-              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                driver,
-                detail: `Invalid attachment id '${attachment.id}'`,
-              });
-            }
-            const bytes = yield* fileSystem.readFile(path).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterProtocolError({
-                    driver,
-                    detail: `Failed to read attachment '${attachment.id}'`,
-                    reason: "attachment_unreadable",
-                    payload: cause,
-                  }),
-              ),
-            );
-            prompt.push({
-              type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
-            });
-          }
+          prompt.push(...(yield* promptContent(text, turnInput.message.attachments)));
           if (prompt.length === 0) {
             return yield* new ProviderAdapter.ProviderAdapterProtocolError({
               driver,
@@ -6989,6 +6889,184 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* Ref.set(snapshot, emptySnapshotState());
           return true;
         });
+
+        const watchOutcome = (sessionId: string) =>
+          flavor.watchPromptOutcome === undefined
+            ? Effect.undefined
+            : flavor.watchPromptOutcome(sessionId, {
+                recordedEnvironment: terminalEnvironmentBySessionId.get(sessionId),
+                runtimeEnvironment: runtimeProcessMcpContext?.processEnvironment,
+                sessionLaunch,
+              });
+        const startInactivityWatchdog = (context: ActiveAcpTurn, settle: AcpPromptSettle) =>
+          promptInactivityTimeoutMillis === undefined
+            ? Effect.void
+            : watchPromptInactivity(
+                context,
+                settle.generation,
+                promptInactivityTimeoutMillis,
+                settle.checkPromptOutcome,
+              ).pipe(
+                Effect.forkIn(sessionScope),
+                Effect.map((fiber) => void (context.inactivityWatchdog = fiber)),
+              );
+
+        /** Follows one of the turn's prompts; a later steer prompt supersedes it. */
+        const followPrompt = (
+          context: ActiveAcpTurn,
+          prompt: (
+            superseded: () => boolean,
+          ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>,
+          settle: AcpPromptSettle,
+        ): Effect.Effect<void> => {
+          const superseded = followNextPrompt(context);
+          return prompt(superseded).pipe(
+            // Settle the wire before the completion callback's permit so a settled-soft
+            // Stop sees the native return. Capture usage only before finalize: a late
+            // response must not flip a settled turn.
+            Effect.tap((result) =>
+              Effect.suspend(() => {
+                if (flavor.reportsPerTurnPromptUsage === true && !context.finalized) {
+                  context.promptUsage = addAcpUsage(context.promptUsage, result.usage);
+                }
+                return superseded()
+                  ? Effect.void
+                  : Deferred.succeed(context.promptWireSettled, undefined).pipe(Effect.asVoid);
+              }),
+            ),
+            Effect.tap(() => options.testHooks?.afterPromptWireSettled?.() ?? Effect.void),
+            Effect.flatMap((result) =>
+              runRuntimeCallbackAtGeneration(
+                settle.generation,
+                Effect.gen(function* () {
+                  if (context.finalized || followsAgentWorkState || superseded()) return;
+                  const nativeFailure = context.interrupted
+                    ? undefined
+                    : stopReasonFailure(result.stopReason, result.error);
+                  const hiddenFailure =
+                    nativeFailure !== undefined ||
+                    settle.checkPromptOutcome === undefined ||
+                    context.interrupted ||
+                    result.stopReason === "error" ||
+                    result.stopReason === "cancelled"
+                      ? undefined
+                      : yield* settle.checkPromptOutcome(result);
+                  if (hiddenFailure !== undefined) {
+                    yield* Ref.set(runtimeRestartRequired, true);
+                  }
+                  const failure = nativeFailure ?? hiddenFailure;
+                  const status =
+                    failure !== undefined
+                      ? "failed"
+                      : result.stopReason === "cancelled"
+                        ? context.interrupted
+                          ? "interrupted"
+                          : "cancelled"
+                        : "completed";
+                  if (defersFinalizeForBackgroundWork && !context.interrupted) {
+                    context.promptSettled = true;
+                    context.promptSettledStatus = status;
+                    for (const [taskId, completion] of context.backgroundCommands) {
+                      if (completion === null) continue;
+                      yield* finishRegisteredBackgroundTool({ taskId, ...completion });
+                    }
+                  }
+                  if (failure !== undefined) {
+                    yield* terminalizeOpenForegroundTools(context, "failed");
+                    // Unlike an RPC failure, the agent survives an idle error, so its
+                    // background tools and subagents keep reporting to this run.
+                    yield* finalizeTurn(context, "failed", failure, {
+                      childTurnsContinue: hasSurvivingBackgroundWork(context),
+                      threadDisposition:
+                        hiddenFailure?.code === "INVALID_THINKING_SIGNATURE"
+                          ? "broken"
+                          : "reusable",
+                    });
+                    return;
+                  }
+                  yield* idleReportedSubagents(context, flavor, emitSubagent);
+                  if (context.finalized) return;
+                  const deferred =
+                    defersFinalizeForBackgroundWork &&
+                    !context.interrupted &&
+                    hasDeferredBackgroundWork(context);
+                  const pendingReply =
+                    !deferred &&
+                    defersFinalizeForBackgroundWork &&
+                    status === "completed" &&
+                    !context.interrupted &&
+                    flavor.hasPendingReply !== undefined
+                      ? yield* flavor.hasPendingReply(context.nativeThreadId)
+                      : false;
+                  if (context.finalized) return;
+                  if (deferred || pendingReply) {
+                    yield* closeTextStreams(context);
+                    yield* schedulePostSettleHoldExpiry(context);
+                    if (pendingReply) {
+                      context.replyOpen = true;
+                      yield* scheduleDeferredFinalize(context);
+                    }
+                    yield* (
+                      options.testHooks?.afterPromptSettledWithBackgroundWork?.() ?? Effect.void
+                    );
+                    return;
+                  }
+                  yield* finalizeTurn(context, status);
+                }),
+              ).pipe(Effect.asVoid),
+            ),
+            Effect.catchCause((cause) =>
+              runRuntimeCallbackAtGeneration(
+                settle.generation,
+                Effect.gen(function* () {
+                  if (context.finalized || superseded()) return;
+                  const error = Cause.findError(cause);
+                  // Native close rejects prompts cancelled before insertion with -32800.
+                  const interrupted =
+                    context.interrupted ||
+                    (pendingStopCloseTurn === context &&
+                      Result.isSuccess(error) &&
+                      error.success._tag === "AcpRequestError" &&
+                      error.success.code === -32800);
+                  const failure = Cause.squash(cause);
+                  if (!interrupted && flavor.restartRuntimeAfterPromptError?.(failure) === true) {
+                    yield* Ref.set(runtimeRestartRequired, true);
+                  }
+                  const agentAnswered =
+                    Result.isSuccess(error) && error.success._tag === "AcpRequestError";
+                  if (!interrupted) {
+                    yield* terminalizeOpenForegroundTools(
+                      context,
+                      agentAnswered ? "pending_failed" : "failed",
+                      agentAnswered
+                        ? "The ACP agent rejected the prompt before the tool finished."
+                        : undefined,
+                    );
+                  }
+                  yield* finalizeTurn(
+                    context,
+                    interrupted ? "interrupted" : "failed",
+                    flavor.promptFailure?.(failure) ??
+                      makeProviderFailure({
+                        cause: failure,
+                        class: "provider_error",
+                      }),
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.logWarning("orchestration-v2.acp-prompt-failed", {
+                        driver,
+                        providerSessionId: input.providerSessionId,
+                        providerThreadId: context.input.providerThread.id,
+                        providerTurnId: context.providerTurnId,
+                        cause,
+                      }),
+                    ),
+                  );
+                }),
+              ).pipe(Effect.asVoid),
+            ),
+          );
+        };
 
         const startTurnUnlocked = Effect.fn("AcpAdapterV2.startTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) {
@@ -7194,6 +7272,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               promptSettledStatus: null,
               workAccepted: false,
               promptWireSettled,
+              promptSequence: 0,
               promptUsage: undefined,
               backgroundFinalizeGeneration: 0,
               replyOpen: false,
@@ -7338,14 +7417,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               return;
             }
-            const checkPromptOutcome =
-              flavor.watchPromptOutcome === undefined
-                ? undefined
-                : yield* flavor.watchPromptOutcome(requestedSessionId, {
-                    recordedEnvironment: terminalEnvironmentBySessionId.get(requestedSessionId),
-                    runtimeEnvironment: runtimeProcessMcpContext?.processEnvironment,
-                    sessionLaunch,
-                  });
+            const checkPromptOutcome = yield* watchOutcome(requestedSessionId);
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
             const prompt = yield* Effect.gen(function* () {
               const snapshot =
@@ -7396,190 +7468,46 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ...(memory === undefined ? [] : [{ type: "text" as const, text: memory }]),
               ];
             }).pipe(Effect.tapError(() => finalizeTurn(context, "failed")));
-            if (promptInactivityTimeoutMillis !== undefined) {
-              context.inactivityWatchdog = yield* watchPromptInactivity(
-                context,
-                promptGeneration,
-                promptInactivityTimeoutMillis,
-                checkPromptOutcome,
-              ).pipe(Effect.forkIn(sessionScope));
-            }
-            yield* sendPromptWhenIdle(context, () =>
-              runtime.prompt(
-                { prompt },
-                { dispatched: context.promptDispatched, released: context.foregroundIdle },
-              ),
-            ).pipe(
-              Effect.tap(() => turnInput.inputDelivery?.submitted() ?? Effect.void),
-              Effect.tap(() =>
-                Ref.update(promptInstructionStates, (current) => {
-                  if (promptParts?.instructionState === undefined) return current;
-                  const updated = new Map(current);
-                  updated.set(requestedSessionId, promptParts.instructionState);
-                  return updated;
-                }),
-              ),
-              Effect.tap(() =>
-                Ref.update(compactionMarkers, (current) => {
-                  if (promptParts?.instructionState === undefined) return current;
-                  const observedMarker = promptParts.compactionMarker;
-                  if (
-                    observedMarker === undefined ||
-                    current.get(requestedSessionId) !== observedMarker
-                  )
-                    return current;
-                  const updated = new Map(current);
-                  updated.delete(requestedSessionId);
-                  return updated;
-                }),
-              ),
-              // Settle the wire before the completion callback's permit so a settled-soft
-              // Stop sees the native return. Capture usage only before finalize: a late
-              // response must not flip a settled turn.
-              Effect.tap((result) =>
-                Effect.sync(() => {
-                  if (flavor.reportsPerTurnPromptUsage === true && !context.finalized) {
-                    context.promptUsage = result.usage ?? undefined;
-                  }
-                }).pipe(
-                  Effect.andThen(
-                    Deferred.succeed(context.promptWireSettled, undefined).pipe(Effect.asVoid),
+            const settle = { generation: promptGeneration, checkPromptOutcome };
+            yield* startInactivityWatchdog(context, settle);
+            yield* followPrompt(
+              context,
+              (superseded) =>
+                sendPromptWhenIdle(
+                  context,
+                  () =>
+                    runtime.prompt(
+                      { prompt },
+                      { dispatched: context.promptDispatched, released: context.foregroundIdle },
+                    ),
+                  superseded,
+                ).pipe(
+                  Effect.tap(() => turnInput.inputDelivery?.submitted() ?? Effect.void),
+                  Effect.tap(() =>
+                    Ref.update(promptInstructionStates, (current) => {
+                      if (promptParts?.instructionState === undefined) return current;
+                      const updated = new Map(current);
+                      updated.set(requestedSessionId, promptParts.instructionState);
+                      return updated;
+                    }),
+                  ),
+                  Effect.tap(() =>
+                    Ref.update(compactionMarkers, (current) => {
+                      if (promptParts?.instructionState === undefined) return current;
+                      const observedMarker = promptParts.compactionMarker;
+                      if (
+                        observedMarker === undefined ||
+                        current.get(requestedSessionId) !== observedMarker
+                      )
+                        return current;
+                      const updated = new Map(current);
+                      updated.delete(requestedSessionId);
+                      return updated;
+                    }),
                   ),
                 ),
-              ),
-              Effect.tap(() => options.testHooks?.afterPromptWireSettled?.() ?? Effect.void),
-              Effect.flatMap((result) =>
-                runRuntimeCallbackAtGeneration(
-                  promptGeneration,
-                  Effect.gen(function* () {
-                    if (context.finalized || followsAgentWorkState) return;
-                    const nativeFailure = context.interrupted
-                      ? undefined
-                      : stopReasonFailure(result.stopReason, result.error);
-                    const hiddenFailure =
-                      nativeFailure !== undefined ||
-                      checkPromptOutcome === undefined ||
-                      context.interrupted ||
-                      result.stopReason === "error" ||
-                      result.stopReason === "cancelled"
-                        ? undefined
-                        : yield* checkPromptOutcome(result);
-                    if (hiddenFailure !== undefined) {
-                      yield* Ref.set(runtimeRestartRequired, true);
-                    }
-                    const failure = nativeFailure ?? hiddenFailure;
-                    const status =
-                      failure !== undefined
-                        ? "failed"
-                        : result.stopReason === "cancelled"
-                          ? context.interrupted
-                            ? "interrupted"
-                            : "cancelled"
-                          : "completed";
-                    if (defersFinalizeForBackgroundWork && !context.interrupted) {
-                      context.promptSettled = true;
-                      context.promptSettledStatus = status;
-                      for (const [taskId, completion] of context.backgroundCommands) {
-                        if (completion === null) continue;
-                        yield* finishRegisteredBackgroundTool({ taskId, ...completion });
-                      }
-                    }
-                    if (failure !== undefined) {
-                      yield* terminalizeOpenForegroundTools(context, "failed");
-                      // Unlike an RPC failure, the agent survives an idle error, so its
-                      // background tools and subagents keep reporting to this run.
-                      yield* finalizeTurn(context, "failed", failure, {
-                        childTurnsContinue: hasSurvivingBackgroundWork(context),
-                        threadDisposition:
-                          hiddenFailure?.code === "INVALID_THINKING_SIGNATURE"
-                            ? "broken"
-                            : "reusable",
-                      });
-                      return;
-                    }
-                    yield* idleReportedSubagents(context, flavor, emitSubagent);
-                    if (context.finalized) return;
-                    const deferred =
-                      defersFinalizeForBackgroundWork &&
-                      !context.interrupted &&
-                      hasDeferredBackgroundWork(context);
-                    const pendingReply =
-                      !deferred &&
-                      defersFinalizeForBackgroundWork &&
-                      status === "completed" &&
-                      !context.interrupted &&
-                      flavor.hasPendingReply !== undefined
-                        ? yield* flavor.hasPendingReply(context.nativeThreadId)
-                        : false;
-                    if (context.finalized) return;
-                    if (deferred || pendingReply) {
-                      yield* closeTextStreams(context);
-                      yield* schedulePostSettleHoldExpiry(context);
-                      if (pendingReply) {
-                        context.replyOpen = true;
-                        yield* scheduleDeferredFinalize(context);
-                      }
-                      yield* (
-                        options.testHooks?.afterPromptSettledWithBackgroundWork?.() ?? Effect.void
-                      );
-                      return;
-                    }
-                    yield* finalizeTurn(context, status);
-                  }),
-                ).pipe(Effect.asVoid),
-              ),
-              Effect.catchCause((cause) =>
-                runRuntimeCallbackAtGeneration(
-                  promptGeneration,
-                  Effect.gen(function* () {
-                    if (context.finalized) return;
-                    const error = Cause.findError(cause);
-                    // Native close rejects prompts cancelled before insertion with -32800.
-                    const interrupted =
-                      context.interrupted ||
-                      (pendingStopCloseTurn === context &&
-                        Result.isSuccess(error) &&
-                        error.success._tag === "AcpRequestError" &&
-                        error.success.code === -32800);
-                    const failure = Cause.squash(cause);
-                    if (!interrupted && flavor.restartRuntimeAfterPromptError?.(failure) === true) {
-                      yield* Ref.set(runtimeRestartRequired, true);
-                    }
-                    const agentAnswered =
-                      Result.isSuccess(error) && error.success._tag === "AcpRequestError";
-                    if (!interrupted) {
-                      yield* terminalizeOpenForegroundTools(
-                        context,
-                        agentAnswered ? "pending_failed" : "failed",
-                        agentAnswered
-                          ? "The ACP agent rejected the prompt before the tool finished."
-                          : undefined,
-                      );
-                    }
-                    yield* finalizeTurn(
-                      context,
-                      interrupted ? "interrupted" : "failed",
-                      flavor.promptFailure?.(failure) ??
-                        makeProviderFailure({
-                          cause: failure,
-                          class: "provider_error",
-                        }),
-                    ).pipe(
-                      Effect.andThen(
-                        Effect.logWarning("orchestration-v2.acp-prompt-failed", {
-                          driver,
-                          providerSessionId: input.providerSessionId,
-                          providerThreadId: turnInput.providerThread.id,
-                          providerTurnId,
-                          cause,
-                        }),
-                      ),
-                    );
-                  }),
-                ).pipe(Effect.asVoid),
-              ),
-              Effect.forkIn(sessionScope),
-            );
+              settle,
+            ).pipe(Effect.forkIn(sessionScope));
           },
           (effect, turnInput) =>
             effect.pipe(
@@ -7600,6 +7528,26 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
         ) {
           return yield* runtimeTransitionPermit.withPermit(startTurnUnlocked(turnInput));
+        });
+
+        const steerWithPrompt = makeAcpPromptSteer({
+          driver,
+          activeTurn,
+          transitionPermit: runtimeTransitionPermit,
+          currentGeneration: Ref.get(runtimeCallbackGeneration),
+          atGeneration: runRuntimeCallbackAtGeneration,
+          sessionScope,
+          promptContent: (message) =>
+            providerMessageTextWithAttachmentPaths({
+              text: message.text,
+              attachments: message.attachments,
+              resolveAttachmentPath: host.resolveAttachmentPath,
+              resolveExtractedTextPath: host.resolveExtractedTextPath,
+            }).pipe(Effect.flatMap((text) => promptContent(text, message.attachments))),
+          watchOutcome,
+          startInactivityWatchdog,
+          prompt: (prompt, promptOptions) => runtime.prompt({ prompt: [...prompt] }, promptOptions),
+          followPrompt,
         });
 
         yield* Effect.addFinalizer(() =>
@@ -7872,13 +7820,29 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 }),
               }
             : {}),
-          steerTurn: (turnInput) =>
-            Effect.fail(
-              new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+          steerTurn: Effect.fn("AcpAdapterV2.steerTurn")(
+            function* (turnInput) {
+              if (steersWithPrompt) return yield* steerWithPrompt(turnInput);
+              return yield* new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
                 driver,
                 providerThreadId: turnInput.providerThread.id,
-              }),
-            ),
+              });
+            },
+            (effect, turnInput) =>
+              effect.pipe(
+                Effect.mapError((cause) =>
+                  cause._tag === "ProviderAdapterSteerRunUnsupportedError" ||
+                  cause._tag === "ProviderAdapterSteerDeclinedError"
+                    ? cause
+                    : new ProviderAdapter.ProviderAdapterSteerRunError({
+                        driver,
+                        providerThreadId: turnInput.providerThread.id,
+                        providerTurnId: turnInput.providerTurnId,
+                        cause,
+                      }),
+                ),
+              ),
+          ),
           ...(flavor.toolOutlivesPrompt === undefined
             ? {}
             : { awaitBackgroundTasks: makeAcpAwaitBackgroundTasks(flavor, activeTurn) }),

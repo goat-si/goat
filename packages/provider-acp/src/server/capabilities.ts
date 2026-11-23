@@ -110,6 +110,7 @@ export const AcpProviderCapabilitiesV2 = {
 export function negotiatedCapabilities(
   base: OrchestrationV2ProviderCapabilities,
   started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
+  steersWithPrompt = false,
 ): OrchestrationV2ProviderCapabilities {
   const agent = started.initializeResult.agentCapabilities ?? {};
   const session = agent.sessionCapabilities;
@@ -129,6 +130,10 @@ export function negotiatedCapabilities(
       canReadThreadSnapshot: canLoad,
       canForkThread: canFork,
       canForkFromTurn: false,
+    },
+    turns: {
+      ...base.turns,
+      supportsActiveSteering: base.turns.supportsActiveSteering || steersWithPrompt,
     },
     tools: {
       ...base.tools,

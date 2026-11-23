@@ -15,8 +15,10 @@ function isAgentBusyPromptError(error: EffectAcpErrors.AcpError): boolean {
 export function sendPromptWhenIdle<A>(
   turn: { readonly interrupted: boolean; readonly finalized: boolean },
   prompt: () => Effect.Effect<A, EffectAcpErrors.AcpError>,
+  superseded: () => boolean = () => false,
 ): Effect.Effect<A, EffectAcpErrors.AcpError> {
-  const stopped = () => turn.interrupted || turn.finalized;
+  // A Stop or a prompt-steer can land during the wait, so both are rechecked before each resend.
+  const stopped = () => turn.interrupted || turn.finalized || superseded();
   return prompt().pipe(
     Effect.catchIf(
       (error) => isAgentBusyPromptError(error) && !stopped(),
@@ -24,7 +26,7 @@ export function sendPromptWhenIdle<A>(
         Effect.sleep(ACP_BUSY_PROMPT_RETRY_INTERVAL).pipe(
           Effect.andThen(
             Effect.suspend(() =>
-              stopped() ? Effect.fail(error) : sendPromptWhenIdle(turn, prompt),
+              stopped() ? Effect.fail(error) : sendPromptWhenIdle(turn, prompt, superseded),
             ),
           ),
         ),
