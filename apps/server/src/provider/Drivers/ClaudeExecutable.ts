@@ -95,7 +95,7 @@ export const claudeProgramReader = Effect.fn("claudeProgramReader")(function* (
   const resolveExecutable = yield* SpawnExecutableResolution;
   return Effect.promise(async () => {
     try {
-      const resolved = resolveExecutable(binaryPath, platform, environment);
+      const resolved = await resolveExecutable(binaryPath, platform, environment);
       return resolved === undefined ? undefined : await NodeFS.promises.realpath(resolved);
     } catch {
       return undefined;

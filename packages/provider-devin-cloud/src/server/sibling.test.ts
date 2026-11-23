@@ -59,6 +59,7 @@ const catalogFor = (
     search: () => Effect.die("No registry search"),
     prepare: () => Effect.die("No install"),
     uninstallManagedBinary: () => Effect.die("No uninstall"),
+    prepareRuntimeSpawn: () => Effect.die("No runtime spawn"),
     inspect,
     resolve,
   });

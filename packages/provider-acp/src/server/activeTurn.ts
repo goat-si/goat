@@ -22,6 +22,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as DateTime from "effect/DateTime";
 import type * as Deferred from "effect/Deferred";
+import type * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type { AcpToolCallState } from "./runtimeModel.ts";
