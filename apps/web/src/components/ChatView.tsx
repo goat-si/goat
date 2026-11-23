@@ -319,6 +319,7 @@ import {
 } from "./chat/ProviderStatusBanner";
 import {
   getThreadErrorBannerKey,
+  resolveThreadErrorBanner,
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
@@ -881,10 +882,13 @@ export default function ChatView(props: ChatViewProps) {
           threadId: parentSubagentThreadRef.threadId,
           title: parentSubagentThread?.title ?? "Parent thread",
         };
-  const threadError = isServerThread
-    ? (localServerError ?? serverRuntime?.lastError ?? null)
-    : localDraftError;
-  const threadErrorBannerKey = getThreadErrorBannerKey(routeThreadKey, threadError);
+  const { threadError, sessionDismissal } = resolveThreadErrorBanner(
+    isServerThread,
+    localServerError,
+    localDraftError,
+    serverRuntime?.lastError ?? null,
+  );
+  const threadErrorBannerKey = getThreadErrorBannerKey(routeThreadKey, sessionDismissal);
   const visibleThreadError = shouldShowThreadErrorBanner(
     routeThreadKey,
     threadError,
@@ -961,7 +965,6 @@ export default function ChatView(props: ChatViewProps) {
     limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError
       ? null
       : visibleThreadError;
-
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -1051,7 +1054,6 @@ export default function ChatView(props: ChatViewProps) {
       threadPanelPresentation,
     ),
   );
-
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
   const activePlan = deriveActivePlanState(serverProjection, activeActivityRun?.runId);
   const activeActivityRunSettled = isLatestRunSettled(activeActivityRun, activeRuntime);
@@ -1139,12 +1141,10 @@ export default function ChatView(props: ChatViewProps) {
   };
   const handleFilePendingChangeStable = useStableCallback(handleFilePendingChange);
   const configuredPreviewUrls = getConfiguredPreviewUrls(activeProjectScripts);
-
   useEffect(() => {
     if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
     useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
   }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
-
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   useBrowserHistoryProject({
     threadRef: activeThreadRef,
