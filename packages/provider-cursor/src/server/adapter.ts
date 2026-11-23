@@ -1,4 +1,5 @@
-import type { InteractionUpdate, RunResult, SDKUserMessage, ToolCall } from "@cursor/sdk";
+import { isResumeFailureAfterTurnEnded, terminalStatus } from "./cursorTurnStatus.ts";
+import type { InteractionUpdate, SDKUserMessage, ToolCall } from "@cursor/sdk";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cursorToolFailed } from "./toolPresentation.ts";
 import { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
@@ -211,10 +212,6 @@ function providerSession(input: {
     lastError: null,
   };
 }
-
-// After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
-const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
-  "Agent turn stopped after repeated resume attempts made no progress";
 
 interface CursorLiveAgent {
   readonly cwd: string | null;
@@ -1146,31 +1143,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           yield* Deferred.succeed(input.context.completed, undefined);
         });
 
-        const isResumeFailureAfterTurnEnded = (context: ActiveCursorTurn, result: RunResult) =>
-          context.turnEnded &&
-          result.status === "error" &&
-          result.error?.message === CURSOR_RESUME_NO_PROGRESS_MESSAGE;
-
-        const terminalStatus = (
-          context: ActiveCursorTurn,
-          result: RunResult,
-        ): Extract<
-          OrchestrationV2ProviderTurn["status"],
-          "completed" | "interrupted" | "failed" | "cancelled"
-        > => {
-          if (context.interrupted) {
-            return "interrupted";
-          }
-          switch (result.status) {
-            case "finished":
-              return "completed";
-            case "cancelled":
-              return "cancelled";
-            case "error":
-              return isResumeFailureAfterTurnEnded(context, result) ? "completed" : "failed";
-          }
-        };
-
         const resolveWorkspaceMcpServers = (cwd: string | null) =>
           cwd === null
             ? Effect.succeed({})
@@ -1277,7 +1249,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
-            return { message: "/compress", prompt: undefined, receipt: Effect.void };
+            return {
+              message: "/compress",
+              prompt: undefined,
+              receipt: Effect.void,
+              uncertain: Effect.void,
+            };
           }
           const newText = yield* providerMessageTextWithAttachmentPaths({
             text: yield* resolveCursorSkillText(
@@ -1333,10 +1310,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               detail: "Cursor turn requires non-empty text or attachments.",
             });
           }
-          const { text: memory, receipt } = yield* MemoryContext.promptMemory(
-            turnInput,
-            CursorAgentSdk.CURSOR_PROVIDER,
-          );
+          const {
+            text: memory,
+            receipt,
+            uncertain,
+          } = yield* MemoryContext.promptMemory(turnInput, CursorAgentSdk.CURSOR_PROVIDER);
           const agent = yield* Ref.get(liveAgent);
           const availability = McpProviderSession.memoryToolAvailability(config);
           const hasMemoryTools = availability.read || availability.write || availability.source;
@@ -1366,6 +1344,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             .join("\n\n");
           return {
             receipt,
+            uncertain,
             message: images.length === 0 ? text : ({ text, images } satisfies SDKUserMessage),
             prompt,
           };
@@ -1402,13 +1381,21 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const interrupted = yield* Ref.get(interruptedPrompt);
             const previous =
               interrupted?.agent === agent.nativeThreadId ? interrupted.prompt : undefined;
-            const { message, prompt, receipt } = yield* resolveUserMessage(
+            const { message, prompt, receipt, uncertain } = yield* resolveUserMessage(
               turnInput,
               mcpSession,
               memoryClaim,
               previous,
             );
             let delivery = receipt;
+            let unknownDelivery = uncertain;
+            let memorySettled = false;
+            const settleMemory = (accepted: boolean) =>
+              Effect.suspend(() => {
+                if (memorySettled) return Effect.void;
+                memorySettled = true;
+                return accepted ? delivery : unknownDelivery;
+              });
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
             const sdkRun = yield* agent.session
@@ -1425,6 +1412,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                       previous,
                     );
                     delivery = prepared.receipt;
+                    unknownDelivery = prepared.uncertain;
                     return {
                       message: prepared.message,
                       mcpServers: { ...workspaceMcpServers, ...cursorMcpServers(config) },
@@ -1446,18 +1434,24 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
                   mcpServers,
                 },
-                onDelta: (update) => {
-                  if (context === null) {
-                    return Effect.sync(() => {
-                      pendingUpdates.push(update);
-                    });
-                  }
-                  return handleInteractionUpdate(context, update);
-                },
+                onDelta: (update) =>
+                  settleMemory(true).pipe(
+                    Effect.andThen(
+                      Effect.suspend(() => {
+                        if (context === null)
+                          return Effect.sync(() => {
+                            pendingUpdates.push(update);
+                          });
+                        return handleInteractionUpdate(context, update);
+                      }),
+                    ),
+                  ),
               })
-              .pipe(Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)));
+              .pipe(
+                Effect.tapError(() => settleMemory(false)),
+                Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)),
+              );
             if (prompt !== undefined) yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
-            yield* delivery;
             if (prompt !== undefined) yield* Ref.set(interruptedPrompt, null);
             const startedAt = yield* DateTime.now;
             const completed = yield* Deferred.make<void, never>();
@@ -1554,6 +1548,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                     const transportFailure = context.assistantReply.failure;
                     const status =
                       transportFailure === undefined ? terminalStatus(context, result) : "failed";
+                    yield* settleMemory(status === "completed");
                     yield* finalizeTurn({
                       context,
                       status,
@@ -1581,6 +1576,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               ),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
+                  yield* settleMemory(false);
                   if (context !== null) {
                     yield* finalizeTurn({
                       context,
