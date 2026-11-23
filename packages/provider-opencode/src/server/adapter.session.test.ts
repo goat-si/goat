@@ -291,8 +291,7 @@ it.effect.each(["root-running", "root-settled", "child-timeout"] as const)(
       );
       yield* harness.startTurn();
       const { providerThread, runtime } = harness;
-      const { providerTurns } = yield* runtime.readThreadSnapshot({ providerThread });
-      const turn = providerTurns.at(-1)!;
+      const turn = yield* harness.awaitLatestTurn();
       const stop = yield* runtime
         .interruptTurn({ providerThread, providerTurnId: turn.id, requestRuntimeRestart: true })
         .pipe(Effect.result, Effect.forkScoped);
@@ -329,11 +328,10 @@ it.effect.each(["root-running", "root-settled", "child-timeout"] as const)(
       } else {
         assert.equal(result._tag, "Success");
       }
-      const stopped = yield* runtime.readThreadSnapshot({ providerThread });
-      assert.equal(
-        stopped.providerTurns.at(-1)?.status,
-        scenario === "root-running" ? "running" : "interrupted",
+      const stopped = yield* harness.awaitLatestTurn(
+        (latest) => scenario === "root-running" || latest.completedAt !== null,
       );
+      assert.equal(stopped.status, scenario === "root-running" ? "running" : "interrupted");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -416,7 +414,7 @@ it.effect.each([
       return yield* Effect.die("OpenCode runtime must expose hasPendingBackgroundWork.");
     }
     yield* harness.startTurn();
-    const terminal = yield* harness.runtime.events.pipe(
+    const terminal = yield* harness.events.pipe(
       Stream.takeUntil((event) => event.type === "turn.terminal"),
       Stream.runCollect,
       Effect.forkScoped,
@@ -530,7 +528,7 @@ it.effect.each([
         yield* push(status(child, "idle"));
       }
       nativeEvents.close();
-      const late = yield* harness.runtime.events.pipe(Stream.runCollect);
+      const late = yield* harness.events.pipe(Stream.runCollect);
       const confirmed = late.find(
         (event) => event.type === "subagent.updated" && event.subagent.id === oldest.id,
       );
@@ -562,7 +560,7 @@ it.effect.each([
         assert.equal(projected.at(-1)?.subagent.result, "Tracking lost. Outcome unknown.");
         yield* push(status(child, "idle"));
         nativeEvents.close();
-        const late = yield* harness.runtime.events.pipe(Stream.runCollect);
+        const late = yield* harness.events.pipe(Stream.runCollect);
         assert.isFalse(late.some((event) => event.type === "subagent.updated"));
       }
       return;
@@ -583,7 +581,7 @@ it.effect.each([
     }
     assert.isTrue(yield* hasPendingBackgroundWork, "the running child must pin idle release");
 
-    const finished = yield* harness.runtime.events.pipe(
+    const finished = yield* harness.events.pipe(
       Stream.filter((event) => event.type === "subagent.updated"),
       Stream.runHead,
       Effect.forkScoped,

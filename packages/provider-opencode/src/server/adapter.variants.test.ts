@@ -154,7 +154,7 @@ it.effect("reuses successful model variants for the session and retries failed i
       yield* Effect.promise(() =>
         nativeEvents.push({ type: "session.idle", properties: { sessionID: sessionId } }),
       );
-      yield* harness.runtime.events.pipe(
+      yield* harness.events.pipe(
         Stream.filter((event) => event.type === "turn.terminal"),
         Stream.take(1),
         Stream.runDrain,
@@ -225,10 +225,7 @@ it.effect("keeps queued steers behind a cold catalog lookup and cancels them on 
     );
     const start = yield* harness.startTurn().pipe(Effect.forkScoped);
     yield* Effect.promise(() => catalogStarted.promise);
-    const snapshot = yield* harness.runtime.readThreadSnapshot({
-      providerThread: harness.providerThread,
-    });
-    const activeTurn = snapshot.providerTurns.at(-1)!;
+    const activeTurn = yield* harness.awaitLatestTurn();
     const steer = (message: string) =>
       harness.runtime
         .steerTurn({

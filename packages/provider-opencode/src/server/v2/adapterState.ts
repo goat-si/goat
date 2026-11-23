@@ -164,7 +164,6 @@ export interface ThreadState {
   goalRevision: number;
   goalFresh: boolean;
   goalRefreshing: boolean;
-  readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
   active: ActiveTurn | undefined;
   model: ModelRef | undefined;
   /** Locally ended but possibly live; consume its next execution end without settling a new turn. */
@@ -259,7 +258,6 @@ export const makeNewThreadState =
     goalRevision: 0,
     goalFresh: false,
     goalRefreshing: false,
-    providerTurns: new Map(),
     active: undefined,
     model: undefined,
     unsettled: false,

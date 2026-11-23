@@ -658,7 +658,6 @@ export interface ProviderAdapterV2RuntimeRequestResponseInput {
 
 export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerThread: OrchestrationV2ProviderThread;
-  readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
   readonly reasoningMessageIds?: ReadonlyArray<OrchestrationV2ConversationMessage["id"]>;
   readonly runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest>;

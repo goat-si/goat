@@ -892,9 +892,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
         readThreadSnapshot: ({ providerThread }) =>
           Effect.succeed({
             providerThread: threads.get(providerThread.id) ?? providerThread,
-            providerTurns: [...turns.values()].filter(
-              (turn) => turn.providerThreadId === providerThread.id,
-            ),
             messages: [],
             runtimeRequests: [],
           }),

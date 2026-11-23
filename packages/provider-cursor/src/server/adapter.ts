@@ -1843,7 +1843,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   status: "idle" as const,
                   updatedAt: now,
                 },
-                providerTurns: [],
                 messages: projectedMessages,
                 runtimeRequests: [],
                 providerPayload: {

@@ -8014,7 +8014,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                   updatedAt: codexTimestamp(response.thread.updatedAt),
                 },
-                providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
                 providerPayload: response.thread,
@@ -8047,7 +8046,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     nativeConversationHeadRef,
                     status: "idle" as const,
                   },
-                  providerTurns: [],
                   messages: [],
                   runtimeRequests: [],
                 };
@@ -8098,7 +8096,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   status: "idle" as const,
                   updatedAt: codexTimestamp(response.thread.updatedAt),
                 },
-                providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
                 providerPayload: response.thread,

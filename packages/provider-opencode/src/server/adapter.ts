@@ -547,7 +547,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 }),
           };
           Object.assign(turn.providerTurn, providerTurn);
-          state.providerTurns.set(String(providerTurn.id), providerTurn);
           return emitProviderEvent({
             type: "provider_turn.updated",
             driver: OPENCODE_PROVIDER,
@@ -926,7 +925,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: childProviderThread,
               appThread: childThread,
               activeTurn: null,
-              providerTurns: new Map(),
               runtimeRequests: new Map(),
               messageRoles: resumedChild?.messageRoles ?? new Map(),
               userMessageIds: resumedChild?.userMessageIds ?? [],
@@ -1814,7 +1812,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             admissionAbortController: null,
           };
           state.activeTurn = turn;
-          state.providerTurns.set(String(providerTurnId), providerTurn);
           yield* emitProviderEvent({
             type: "node.updated",
             driver: OPENCODE_PROVIDER,
@@ -2443,7 +2440,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             providerThread,
             appThread,
             activeTurn: null,
-            providerTurns: new Map(),
             runtimeRequests: new Map(),
             messageRoles: new Map(),
             userMessageIds: [],
@@ -2542,7 +2538,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               status: "idle" as const,
               updatedAt: snapshotNow,
             },
-            providerTurns: state === undefined ? [] : [...state.providerTurns.values()],
             messages,
             runtimeRequests: state === undefined ? [] : [...state.runtimeRequests.values()],
             providerPayload: nativeMessages,
@@ -3134,7 +3129,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       }
                       state.appThread = turnInput.appThread;
                       state.activeTurn = turn;
-                      state.providerTurns.set(String(providerTurnId), providerTurn);
                       yield* emitProviderTurn(state, turn, "running", null);
                       yield* updateProviderThread(state, {
                         status: "active",

@@ -3172,7 +3172,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             );
             return {
               providerThread: state.providerThread,
-              providerTurns: [],
               messages,
               runtimeRequests: [],
             };

@@ -17,6 +17,7 @@ import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import { openCodePermissionRules, makeOpenCodeAdapterV2, OPENCODE_PROVIDER } from "./adapter.ts";
@@ -113,6 +114,46 @@ export function providerTurn(input: {
     startedAt: null,
     completedAt: null,
   };
+}
+
+// Turns reach orchestration only as `provider_turn.updated` events, so tests read them there.
+export function trackProviderTurns(
+  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "events">,
+) {
+  const turns = new Map<string, OrchestrationV2ProviderTurn>();
+  const events = runtime.events.pipe(
+    Stream.tap((event) =>
+      Effect.sync(() => {
+        if (event.type === "provider_turn.updated") {
+          turns.set(event.providerTurn.id, event.providerTurn);
+        }
+      }),
+    ),
+  );
+  const awaitTurns = Effect.fnUntraced(function* (
+    predicate: (turns: ReadonlyArray<OrchestrationV2ProviderTurn>) => boolean,
+  ) {
+    const seen = () => [...turns.values()];
+    if (!predicate(seen())) {
+      yield* events.pipe(
+        Stream.takeUntil(() => predicate(seen())),
+        Stream.runDrain,
+      );
+    }
+    return seen();
+  });
+  const awaitLatestTurn = Effect.fnUntraced(function* (
+    predicate: (turn: OrchestrationV2ProviderTurn) => boolean = () => true,
+  ) {
+    const seen = yield* awaitTurns((turns) => {
+      const latest = turns.at(-1);
+      return latest !== undefined && predicate(latest);
+    });
+    const latest = seen.at(-1);
+    if (latest === undefined) return yield* Effect.die("OpenCode emitted no provider turn.");
+    return latest;
+  });
+  return { events, awaitTurns, awaitLatestTurn };
 }
 
 export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(function* (
@@ -227,6 +268,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
       ...overrides,
     });
   return {
+    ...trackProviderTurns(runtime),
     nativeSessionId,
     now,
     policy,

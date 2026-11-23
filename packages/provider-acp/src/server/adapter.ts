@@ -8324,7 +8324,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       updatedAt: now,
                     },
                     // Imports read only the transcript; turns reach orchestration as events.
-                    providerTurns: [],
                     messages,
                     reasoningMessageIds,
                     runtimeRequests: [],
@@ -8383,7 +8382,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       status: "idle" as const,
                       updatedAt: now,
                     },
-                    providerTurns: [],
                     messages: [],
                     runtimeRequests: [],
                   };
