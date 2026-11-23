@@ -1,3 +1,13 @@
+import { makeCodexThreadTitle } from "./CodexThreadTitle.ts";
+import {
+  codexMcpAppResourceUri,
+  type CodexDynamicToolItem,
+  type CodexDynamicToolProjection,
+} from "./CodexDynamicToolProjection.ts";
+export type {
+  CodexDynamicToolItem,
+  CodexDynamicToolProjection,
+} from "./CodexDynamicToolProjection.ts";
 import { toProtocolError } from "./CodexProtocolError.ts";
 import { codexTimestamp, codexSkillMentionText } from "./CodexTextHelpers.ts";
 export { codexTimestamp } from "./CodexTextHelpers.ts";
@@ -198,12 +208,7 @@ import { codexExecLaunchArgs, resolveCodexLaunchArgs } from "../../provider/code
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import {
-  MCP_APP_EXTENSION_ID,
-  MCP_APP_MIME_TYPE,
-  MCP_APP_OUTPUT_KEY,
-  MCP_APP_RESOURCE_SCHEME,
-} from "@goat/shared/mcpApp";
+import { MCP_APP_EXTENSION_ID, MCP_APP_MIME_TYPE, MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
 import { snapshotMcpApp } from "../../mcpApps/McpAppSnapshot.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -294,22 +299,8 @@ const CODEX_CLIENT_CAPABILITIES = {
   extensions: { [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] } },
 } as const;
 
-export interface CodexDynamicToolProjection extends McpToolPresentation {
-  readonly toolName: string;
-  readonly title?: string;
-  readonly input: unknown;
-  readonly output?: unknown;
-  readonly status: OrchestrationV2TurnItem["status"];
-}
-
 // A hung MCP resource read must not hold run ingestion open.
 const MCP_APP_CAPTURE_TIMEOUT = "20 seconds";
-
-function codexMcpAppResourceUri(item: CodexDynamicToolItem): string | undefined {
-  if (item.type !== "mcpToolCall") return undefined;
-  const uri = item.mcpAppUi?.resourceUri ?? item.mcpAppResourceUri ?? item.appContext?.resourceUri;
-  return typeof uri === "string" && uri.startsWith(MCP_APP_RESOURCE_SCHEME) ? uri : undefined;
-}
 
 const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicToolItem")(function* (
   item: CodexDynamicToolItem,
@@ -520,12 +511,6 @@ type PendingCodexRuntimeRequest =
       readonly requestId: RuntimeRequestId;
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers, never>;
     };
-
-export type CodexDynamicToolItem = Extract<
-  | CodexSchema.V2ItemStartedNotification__ThreadItem
-  | CodexSchema.V2ItemCompletedNotification__ThreadItem,
-  { readonly type: "mcpToolCall" | "dynamicToolCall" }
->;
 
 type CodexCollabAgentToolCallItem = Extract<
   CodexSchema.V2ItemCompletedNotification__ThreadItem,
@@ -868,6 +853,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             connection: processStart?.connection,
           })
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
+        const applyThreadName = makeCodexThreadTitle(client);
         const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
         // Native thread id to the compaction whose context goes back once its turn completes.
@@ -6744,6 +6730,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const activation = { stopped: false };
           goalActivations.set(threadId, activation);
           yield* Effect.gen(function* () {
+            yield* applyThreadName(threadId, turnInput.appThread.title);
             yield* startNativeTurn(turnInput, yield* codexInput, steer);
             if (activation.stopped) return;
             const { goal } = yield* client.request("thread/goal/set", {
@@ -7305,6 +7292,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         true,
                       );
                     }
+                    if (nativeThreadId != null)
+                      yield* applyThreadName(nativeThreadId, turnInput.appThread.title);
                     yield* startNativeTurn(
                       turnInput,
                       turnInput.resume ? [] : yield* toCodexInput(turnInput),
@@ -7378,6 +7367,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
+          applyThreadTitle: Effect.fn("CodexAdapterV2.applyThreadTitle")(function* ({
+            providerThread,
+            title,
+          }) {
+            const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
+            if (nativeThreadId != null) yield* applyThreadName(nativeThreadId, title);
+          }),
           applyModelSelection: Effect.fn("CodexAdapterV2.applyModelSelection")(function* ({
             providerThread,
             modelSelection,

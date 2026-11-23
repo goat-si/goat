@@ -203,6 +203,76 @@ const withRequestId = (
     ? { ...entry, frame: { ...entry.frame, id } }
     : entry;
 
+export function withThreadNames(
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+  titles: readonly string[],
+): CodexReplay.CodexAppServerReplayTranscript {
+  const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [];
+  let offset = 0;
+  let ids = new Map<number, number>();
+  let named = new Set<unknown>();
+  let titleIndex = 0;
+  for (const [index, entry] of transcript.entries.entries()) {
+    const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
+    if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
+      entries.push(entry);
+      continue;
+    }
+    if (entry.type === "expect_outbound" && typeof frame.method === "string") {
+      if (frame.method === "initialize") {
+        offset = 0;
+        ids = new Map();
+        named = new Set();
+        titleIndex = 0;
+      }
+      const params = Predicate.isObject(frame.params) ? frame.params : {};
+      if (frame.method === "thread/name/set") named.add(params.threadId);
+      const next =
+        frame.method === "config/read"
+          ? transcript.entries
+              .slice(index + 1)
+              .find((candidate) => candidate.type === "expect_outbound")
+          : undefined;
+      const nextFrame =
+        next?.type === "expect_outbound" && Predicate.isObject(next.frame) ? next.frame : undefined;
+      const turnParams =
+        frame.method === "turn/start" || frame.method === "thread/goal/get"
+          ? params
+          : nextFrame?.method === "turn/start" && Predicate.isObject(nextFrame.params)
+            ? nextFrame.params
+            : undefined;
+      if (turnParams !== undefined && !named.has(turnParams.threadId)) {
+        named.add(turnParams.threadId);
+        const name = titles[titleIndex++] ?? titles.at(-1) ?? "Codex continuation test";
+        const id = frame.id + offset;
+        entries.push(
+          {
+            type: "expect_outbound",
+            label: "thread/name/set",
+            frame: {
+              id,
+              method: "thread/name/set",
+              params: { threadId: turnParams.threadId, name },
+            },
+          },
+          { type: "emit_inbound", label: "thread/name/set", frame: { id, result: {} } },
+        );
+        offset++;
+      }
+      ids.set(frame.id, frame.id + offset);
+      entries.push(withRequestId(entry, frame.id + offset));
+      continue;
+    }
+    const mapped = ids.get(frame.id);
+    entries.push(
+      entry.type === "emit_inbound" && frame.method === undefined && mapped !== undefined
+        ? withRequestId(entry, mapped)
+        : entry,
+    );
+  }
+  return { ...transcript, entries };
+}
+
 export function withThreadSetupReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
 ): CodexReplay.CodexAppServerReplayTranscript {
@@ -259,7 +329,7 @@ export function withThreadSetupReads(
         );
         offset++;
         if (reload) pendingRead = true;
-      }
+      } else if (!reload && !setup) pendingRead = false;
       previousMethod = frame.method;
       previousId = frame.id;
       failed = "";
@@ -331,7 +401,9 @@ function withConfigReadBeforeTurnStart(
 export function withConfigReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
   includeSetup = true,
+  title = "Codex continuation test",
 ): CodexReplay.CodexAppServerReplayTranscript {
-  const setup = includeSetup ? withThreadSetupReads(transcript) : transcript;
+  const named = withThreadNames(transcript, [title]);
+  const setup = includeSetup ? withThreadSetupReads(named) : named;
   return { ...setup, entries: withConfigReadBeforeTurnStart(setup.entries) };
 }

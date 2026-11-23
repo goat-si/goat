@@ -4362,7 +4362,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* encodeStringJson(cwd),
           ),
         );
-        const replayDriver = yield* CodexReplay.makeReplayDriver(withConfigReads(localTranscript));
+        const replayDriver = yield* CodexReplay.makeReplayDriver(
+          withConfigReads(localTranscript, true, "Background stop"),
+        );
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         assert.equal(Number(yield* spawner.exitCode(gitCommand(cwd, ["init", "--quiet"]))), 0);
         assert.equal(
@@ -4568,7 +4570,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           Effect.provide(
             ProviderReplayHarness.layerWithRegistry(
               { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
-              CodexAdapterV2Testkit.layer({ transcript: withConfigReads(localTranscript) }),
+              CodexAdapterV2Testkit.layer({
+                transcript: withConfigReads(localTranscript, true, "Background stop untracked"),
+              }),
               { runEffectWorker: false },
             ),
           ),

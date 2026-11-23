@@ -10,8 +10,14 @@ describe("Codex replay fixtures", () => {
     runReplayFixture({
       ...input,
       harness: CodexOrchestratorReplayHarness,
-      materializeWorkspace: (transcript, workspace) =>
-        Effect.succeed(materializeReplayTranscriptWorkspace(transcript, workspace)),
+      materializeWorkspace: (transcript, workspace, fixtureName) =>
+        Effect.succeed({
+          ...materializeReplayTranscriptWorkspace(transcript, workspace),
+          metadata: {
+            ...transcript.metadata,
+            goatReplayTitles: [`Replay fixture: ${fixtureName}`],
+          },
+        }),
     }),
   );
 });

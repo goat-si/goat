@@ -25,6 +25,10 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     processLossCount: Schema.optional(NonNegativeInt),
   }),
   Schema.Struct({
+    type: Schema.Literal("provider-session.apply-thread-title"),
+    title: Schema.String,
+  }),
+  Schema.Struct({
     type: Schema.Literal("provider-session.detach"),
     providerSessionId: ProviderSessionId,
     detail: Schema.optional(Schema.String),
