@@ -779,5 +779,7 @@
   "8711a1de99862971": "Decrease {label}",
   "7d45b094a7b5ab8f": "{label} in seconds",
   "568556fb7ba81f65": "Increase {label}",
-  "726b70e60ea3bfdd": "Provider health check interval"
+  "726b70e60ea3bfdd": "Provider health check interval",
+  "5602db67733bdfd7": "Checked {time}",
+  "348ae20f5bc603cb": "Checked unavailable"
 }

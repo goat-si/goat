@@ -1,4 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -968,4 +970,22 @@ describe("EnvironmentProviderSettings health check interval", () => {
     await expect.element(input).toHaveValue("300");
     expect(state.updateSettings).not.toHaveBeenCalled();
   });
+});
+
+it("localizes the checked status and refresh button name (PR #3835)", async () => {
+  await setup();
+  using _now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-24T12:05:00.000Z"));
+  await setProviders([provider()]);
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      {panel()}
+    </GTProvider>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "공급자 상태 새로 고침 5분 전에 확인" }))
+    .toBeVisible();
+  await setProviders([{ ...provider(), checkedAt: "invalid" }]);
+  await expect
+    .element(screen.getByRole("button", { name: "공급자 상태 새로 고침 확인 시간 알 수 없음" }))
+    .toBeVisible();
 });

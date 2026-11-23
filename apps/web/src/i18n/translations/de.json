@@ -779,5 +779,7 @@
   "8711a1de99862971": "{label} verkürzen",
   "7d45b094a7b5ab8f": "{label} in Sekunden",
   "568556fb7ba81f65": "{label} verlängern",
-  "726b70e60ea3bfdd": "Intervall für die Anbieterstatusprüfung"
+  "726b70e60ea3bfdd": "Intervall für die Anbieterstatusprüfung",
+  "5602db67733bdfd7": "{time} überprüft",
+  "348ae20f5bc603cb": "Überprüfungszeit unbekannt"
 }

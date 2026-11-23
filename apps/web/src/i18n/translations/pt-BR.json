@@ -779,5 +779,7 @@
   "8711a1de99862971": "Diminuir o intervalo: {label}",
   "7d45b094a7b5ab8f": "{label} (em segundos)",
   "568556fb7ba81f65": "Aumentar o intervalo: {label}",
-  "726b70e60ea3bfdd": "Intervalo de verificação do estado do provedor"
+  "726b70e60ea3bfdd": "Intervalo de verificação do estado do provedor",
+  "5602db67733bdfd7": "Verificado {time}",
+  "348ae20f5bc603cb": "Horário da verificação indisponível"
 }

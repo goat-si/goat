@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { useGT, useLocale } from "gt-react";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isSecretsFeatureEnabled } from "../../env";
 import { SecretsSettingsPanel } from "./SecretsSettings";
@@ -75,6 +75,7 @@ import { useEnvironmentSessionState } from "../../state/session";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
+import { relativeTimeElapsedMs } from "../../timestampFormat";
 import {
   ConnectionStatusDot,
   connectionPhaseDotClassName,
@@ -167,6 +168,8 @@ const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
 
 // Subscribe only in the label because every status push restamps all providers' checkedAt.
 function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }) {
+  const gt = useGT();
+  const locale = useLocale();
   const serverProviders =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const lastCheckedAt =
@@ -183,21 +186,20 @@ function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }
   }
 
   if (lastCheckedRelative.status === "invalid") {
-    return <span>Checked unavailable</span>;
+    return <span>{gt("Checked unavailable")}</span>;
   }
 
-  return (
-    <span>
-      {lastCheckedRelative.suffix ? (
-        <>
-          Checked <span className="font-mono tabular-nums">{lastCheckedRelative.value}</span>{" "}
-          {lastCheckedRelative.suffix}
-        </>
-      ) : (
-        <>Checked {lastCheckedRelative.value}</>
-      )}
-    </span>
-  );
+  const elapsed = lastCheckedAt === null ? 0 : (relativeTimeElapsedMs(lastCheckedAt) ?? 0);
+  const [amount, unit] =
+    elapsed < 60_000
+      ? ([0, "second"] as const)
+      : elapsed < 3_600_000
+        ? ([Math.floor(elapsed / 60_000), "minute"] as const)
+        : elapsed < 86_400_000
+          ? ([Math.floor(elapsed / 3_600_000), "hour"] as const)
+          : ([Math.floor(elapsed / 86_400_000), "day"] as const);
+  const time = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(-amount, unit);
+  return <span>{gt("Checked {time}", { time })}</span>;
 }
 
 function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
