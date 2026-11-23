@@ -213,7 +213,6 @@ it.effect.each([
       thread: {
         id: threadId,
         projectId,
-        deletedAt: null,
         worktreePath,
         branch,
         activeProviderThreadId: providerThreadId,
@@ -815,6 +814,7 @@ it.effect.each([
       thread: {
         id: threadId,
         projectId,
+        deletedAt: null,
         worktreePath,
         branch,
         activeProviderThreadId: providerThreadId,

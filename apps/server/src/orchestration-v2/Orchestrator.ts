@@ -1,4 +1,5 @@
 import { agentQueuePrecedesSend } from "./goat/AgentQueueOrder.ts";
+import { mergeBackClosedThread } from "./mergeBackClosedThread.ts";
 import { providerSwitchWaitsForTurn } from "./goat/ProviderSwitchWait.ts";
 import { makeSettleRecoveryParkNotice } from "./goat/SettleRecoveryParkNotice.ts";
 import { priorContinuationCrashCount } from "./goat/ContinuationCrashBudget.ts";
@@ -3972,7 +3973,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.target_thread_id": command.targetThreadId,
       "orchestration_v2.source_point_type": command.sourcePoint.type,
     });
-
     const sourceProjection = yield* projectionStore
       .getThreadRecords(command.sourceThreadId, [
         "runs",
@@ -4004,7 +4004,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
-
     if (
       sourceProjection.thread.lineage.relationshipToParent !== "fork" ||
       sourceProjection.thread.lineage.parentThreadId !== command.targetThreadId
@@ -4015,7 +4014,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.sourceThreadId} is not a fork of ${command.targetThreadId}.`,
       });
     }
-
+    const closed = mergeBackClosedThread(sourceProjection.thread, targetProjection.thread);
+    if (closed !== null)
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: closed,
+      });
     const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
     if (sourceRun === null) {
       return yield* new OrchestratorDispatchError({
@@ -4031,7 +4036,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Merge-back source run ${sourceRun.id} is ${sourceRun.status}; only provider-finished runs are supported.`,
       });
     }
-
     const forkTransfer = sourceProjection.contextTransfers.findLast(
       (transfer) =>
         transfer.type === "fork" &&
@@ -4045,7 +4049,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `No fork transfer exists between ${command.targetThreadId} and ${command.sourceThreadId}.`,
       });
     }
-
     // Queued runs cannot consume merge-back context. Refuse under the target's
     // command lock before a pending transfer can block its ordinary messages.
     if (targetProjection.runs.some((run) => isBlockingRun(run) || run.status === "queued")) {
@@ -4056,7 +4059,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           "Finish or stop the target thread's active work and clear its queue before merging back.",
       });
     }
-
     const sourceProviderThread = providerThreadForRun(sourceProjection, sourceRun);
     const now = command.createdAt ?? (yield* DateTime.now);
     const emitEvent = emit(events, command);
@@ -4093,7 +4095,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       updatedAt: now,
       consumedAt: null,
     };
-
     for (const pendingTransfer of pendingMergeBackTransfersForPair) {
       yield* emitEvent({
         type: "context-transfer.updated",
