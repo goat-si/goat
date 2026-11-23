@@ -12,6 +12,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { resolveMobileBrandChannel } from "../../lib/mobileBranding";
 import { useDeadlinePassed } from "../../lib/clock";
+import { I18nProvider, useGT } from "../../i18n/I18nProvider";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
@@ -22,6 +23,14 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
 
 export function SettingsAboutRouteScreen() {
+  return (
+    <I18nProvider>
+      <AboutScreen />
+    </I18nProvider>
+  );
+}
+
+function AboutScreen() {
   const insets = useSafeAreaInsets();
 
   return (
@@ -40,6 +49,7 @@ export function SettingsAboutRouteScreen() {
 }
 
 function AppSettingsSection() {
+  const gt = useGT();
   const [checkState, setCheckState] = useState<{
     readonly state: AppUpdateCheckState;
     // "Up to date" is a confirmation that fades back to idle.
@@ -68,15 +78,15 @@ function AppSettingsSection() {
   const busy =
     updateState === "checking" || updateState === "downloading" || updateState === "restarting";
 
-  async function checkForUpdate() {
+  async function checkForUpdate(install = false) {
     // disabled updates next render; the ref blocks same-frame double taps.
     if (updateInFlight.current) return;
     updateInFlight.current = true;
     // Failures arrive through onFailure; the settled result only matters for unlocking.
     await settlePromise(() =>
       runAppUpdateCheck({
-        applyMode: "immediate",
-        onFailure: (message) => Dialog.alert("Update failed", message),
+        applyMode: install ? "immediate" : "manual",
+        onFailure: (message) => Dialog.alert(gt("Update failed"), message),
         onStateChange: (state) =>
           setCheckState({
             state,
@@ -133,19 +143,27 @@ function AppSettingsSection() {
       {updateCheckAvailable ? (
         <SettingsRow
           icon="arrow.clockwise"
-          label="Check for app updates"
+          label={gt("Check for app updates")}
           disabled={busy}
           onPress={() => void checkForUpdate()}
+        />
+      ) : null}
+      {updateCheckAvailable && updateState === "ready" ? (
+        <SettingsRow
+          icon="arrow.down.circle"
+          label={gt("Install app update")}
+          disabled={busy}
+          onPress={() => void checkForUpdate(true)}
         />
       ) : null}
       {Application.applicationId === "si.goat.mobile" && betaChannel ? (
         <SettingsRow
           icon="arrow.up.right"
-          label="Check beta builds"
+          label={gt("Check beta builds")}
           value={betaChannel.label}
           onPress={() =>
             void Linking.openURL(betaChannel.url).catch(() =>
-              Dialog.alert("Could not open beta builds", betaChannel.url),
+              Dialog.alert(gt("Could not open beta builds"), betaChannel.url),
             )
           }
         />
