@@ -182,16 +182,88 @@ export function makeSubagentConversationArtifacts(input: {
 
 export const PROVIDER_STOP_REASON_SIGNAL = "provider-stop-reason";
 
-function providerStopReason(
+export const SUBAGENT_RESULT_TURN_ITEM_TYPES = [
+  "assistant_message",
+  "error",
+  "system_notice",
+  "run_interrupt_result",
+] as const;
+
+export function subagentStopNotice(
   projection: Pick<OrchestrationV2ThreadProjection, "turnItems">,
   run: OrchestrationV2Run,
-): string {
-  const id = derive.runSignalTurnItem({ runId: run.id, signal: PROVIDER_STOP_REASON_SIGNAL });
-  const notice = projection.turnItems.find((item) => item.id === id);
-  return notice?.type === "system_notice" ? `\n\n${notice.message}` : "";
+) {
+  const ids = [PROVIDER_STOP_REASON_SIGNAL, "interrupt-result"].map((signal) =>
+    derive.runSignalTurnItem({ runId: run.id, signal }),
+  );
+  return projection.turnItems.find(
+    (
+      item,
+    ): item is Extract<
+      OrchestrationV2TurnItem,
+      { type: "system_notice" | "run_interrupt_result" }
+    > =>
+      ids.includes(item.id) &&
+      (item.type === "system_notice" || item.type === "run_interrupt_result"),
+  );
+}
+
+export function delegatedTaskReportRuns(
+  projection: {
+    readonly runs: ReadonlyArray<OrchestrationV2Run>;
+    readonly messages: ReadonlyArray<
+      Pick<OrchestrationV2ConversationMessage, "runId" | "notification">
+    >;
+  },
+  run: OrchestrationV2Run,
+) {
+  if (run.status !== "completed") return [];
+  const monitorRuns = new Set(
+    projection.messages
+      .filter((message) => message.notification?.source.kind === "monitor")
+      .map((message) => message.runId),
+  );
+  const earlier = projection.runs
+    .filter(
+      (candidate) =>
+        candidate.id !== run.id &&
+        candidate.startedAt !== null &&
+        candidate.status !== "rolled_back" &&
+        !monitorRuns.has(candidate.id) &&
+        runRanAfter(run, candidate),
+    )
+    .toSorted((a, b) => (runRanAfter(a, b) ? -1 : 1));
+  const end = earlier.findIndex(
+    (candidate) =>
+      candidate.status !== "completed" || candidate.delegatedTaskId !== run.delegatedTaskId,
+  );
+  return end === -1 ? earlier : earlier.slice(0, end);
 }
 
 export function subagentResultForRun(
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems"> &
+    Partial<Pick<OrchestrationV2ThreadProjection, "providerTurns" | "runs">>,
+  run: OrchestrationV2Run,
+) {
+  const result = resultOfRun(projection, run);
+  if (
+    run.status !== "completed" ||
+    result.messageId !== null ||
+    result.turnItemId !== null ||
+    subagentStopNotice(projection, run) !== undefined
+  )
+    return result;
+  for (const earlier of delegatedTaskReportRuns(
+    { runs: projection.runs ?? [], messages: projection.messages },
+    run,
+  )) {
+    const report = resultOfRun(projection, earlier);
+    if (report.messageId !== null || report.turnItemId !== null) return report;
+  }
+  return result;
+}
+
+function resultOfRun(
   projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems"> &
     Partial<Pick<OrchestrationV2ThreadProjection, "providerTurns">>,
   run: OrchestrationV2Run,
@@ -242,11 +314,7 @@ export function subagentResultForRun(
         ? failure.failure.message
         : `${failure.failure.message}\n\nLast assistant message before the run failed:\n\n${reportBeforeFailure}`
       : undefined) ??
-    message?.text ??
-    turnItem?.text ??
-    (run.status === "completed"
-      ? `Child task completed without an assistant result.${providerStopReason(projection, run)}`
-      : `Child task ended with status ${run.status}.`);
+    `${message?.text ?? turnItem?.text ?? (run.status === "completed" ? "Child task completed without an assistant result." : `Child task ended with status ${run.status}.`)}${subagentStopNotice(projection, run) ? `\n\n${subagentStopNotice(projection, run)?.message}` : ""}`;
   const executed = latestProviderTurnForAttempt(
     projection.providerTurns ?? [],
     run.activeAttemptId,
