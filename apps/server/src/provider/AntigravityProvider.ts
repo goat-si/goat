@@ -175,6 +175,9 @@ interface AntigravityProviderOptions {
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
   readonly currentProfile?: Effect.Effect<string>;
+  /** Modes the last session advertised, saved because initialize alone does not report them. */
+  readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
+  readonly rememberRuntimeModes?: (modes: ReadonlyArray<RuntimeMode>) => Effect.Effect<void>;
 }
 
 const RUNTIME_MODES_WITHOUT_AUTO: ReadonlyArray<RuntimeMode> = [
@@ -201,7 +204,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       presentation: {
         displayName: "Antigravity",
         showInteractionModeToggle: false,
-        supportedRuntimeModes: RUNTIME_MODES_WITHOUT_AUTO,
+        supportedRuntimeModes: options.rememberedRuntimeModes ?? RUNTIME_MODES_WITHOUT_AUTO,
       },
       enabled: settings.enabled,
       checkedAt,
@@ -225,6 +228,17 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     draft: initialDraft,
     authRevision: 0,
   });
+  const updateRememberingModes = Effect.fn("AntigravityProvider.updateRememberingModes")(function* (
+    update: (state: AntigravityProviderState) => AntigravityProviderState,
+  ) {
+    const [previous, next] = yield* SubscriptionRef.modify(metadata, (state) => {
+      const updated = update(state);
+      return [[state.draft.supportedRuntimeModes, updated.draft.supportedRuntimeModes], updated];
+    });
+    if (next && options.rememberRuntimeModes && previous?.join() !== next.join()) {
+      yield* options.rememberRuntimeModes(next);
+    }
+  });
   // Preserve disk-discovered skills when callbacks replace workspace commands; the registry will not rescan them.
   const discoveredSkills = new Map<string, ServerProvider["skills"]>();
   const thinkingLevels = new Map<string, ThinkingConfig | null>();
@@ -246,7 +260,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     yield* resetUsage;
     discoveredSkills.clear();
     thinkingLevels.clear();
-    yield* SubscriptionRef.update(metadata, (state) =>
+    yield* updateRememberingModes((state) =>
       state.authProfile === undefined || state.authProfile === profile
         ? state
         : ({
@@ -433,7 +447,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const before = yield* SubscriptionRef.get(metadata);
     const supportsTextGeneration = yield* options.supportsTextGeneration;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* SubscriptionRef.update(metadata, (state) => {
+    yield* updateRememberingModes((state) => {
       if (
         state.authRevision !== before.authRevision &&
         state.draft.auth.status === "unauthenticated"
@@ -551,7 +565,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   /** Without a profile it applies to every profile and forgets which one was confirmed. */
   const markSignedOut = (updatedAt: string, profile?: string) =>
-    SubscriptionRef.update(metadata, (state) =>
+    updateRememberingModes((state) =>
       profile !== undefined && state.authProfile !== undefined && state.authProfile !== profile
         ? state
         : ({

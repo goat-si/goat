@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type RuntimeMode,
   type ServerProviderUsageLimits,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -103,8 +104,10 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly clearUsage?: Effect.Effect<void>;
     readonly currentProfile?: Effect.Effect<string>;
     readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
+    readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   } = {},
 ) {
+  const savedRuntimeModes = yield* Ref.make<ReadonlyArray<ReadonlyArray<RuntimeMode>>>([]);
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
   const probeCalls = yield* Ref.make(0);
   const safetyCalls = yield* Ref.make(0);
@@ -121,6 +124,10 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
       ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
+      ...(options.rememberedRuntimeModes
+        ? { rememberedRuntimeModes: options.rememberedRuntimeModes }
+        : {}),
+      rememberRuntimeModes: (modes) => Ref.update(savedRuntimeModes, (saved) => [...saved, modes]),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -155,6 +162,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     initialUpdate,
     initialize,
     nextPublish,
+    savedRuntimeModes,
   };
 });
 
@@ -278,6 +286,25 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         yield* harness.provider.onSessionStarted(startedWithAuto);
         yield* harness.provider.onSignedOut();
         expect(yield* modes).toEqual(withoutAuto);
+        const withAuto: ReadonlyArray<RuntimeMode> = [
+          "approval-required",
+          "auto-accept-edits",
+          "auto",
+          "full-access",
+        ];
+        expect(yield* Ref.get(harness.savedRuntimeModes)).toEqual([
+          withAuto,
+          withoutAuto,
+          withAuto,
+          withoutAuto,
+        ]);
+
+        // A restart offers what the last session advertised before any session starts.
+        const restarted = yield* makeHarness({ rememberedRuntimeModes: withAuto });
+        yield* restarted.initialize;
+        expect(yield* restarted.provider.snapshot.getSnapshot).toMatchObject({
+          supportedRuntimeModes: withAuto,
+        });
       }),
     ),
   );
