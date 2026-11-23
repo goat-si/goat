@@ -69,7 +69,7 @@ const makeNativeSessionFixture = Effect.fn("makeNativeSessionFixture")(function*
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-session-files-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-session-files-" });
   const profileDirectory = path.join(root, "profile");
   const acpDirectory = path.join(profileDirectory, "antigravity-acp");
   const conversations = path.join(acpDirectory, "conversations");
@@ -131,7 +131,7 @@ it.layer(NodeServices.layer)("removeAntigravitySessionFiles", (it) => {
       if (!symlinksSupported) return;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-symlink-" });
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-symlink-" });
       const targetCwd = path.join(parent, "real-temp");
       const linkCwd = path.join(parent, "link-temp");
       yield* fs.makeDirectory(targetCwd, { recursive: true });
@@ -155,8 +155,8 @@ it.layer(NodeServices.layer)("removeAntigravitySessionFiles", (it) => {
   it.effect("keeps a 1.5+ session DB whose metadata belongs to a different workspace", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-project-" });
-      const helperCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-helper-" });
+      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-project-" });
+      const helperCwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-helper-" });
       const fixture = yield* makeNativeSessionFixture({
         workspacePaths: [projectCwd],
       });
@@ -176,8 +176,8 @@ it.layer(NodeServices.layer)("removeAntigravitySessionFiles", (it) => {
   it.effect("keeps a 1.5+ session DB that also includes an additional workspace", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const helperCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-helper-" });
-      const attachmentsDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-attachments-" });
+      const helperCwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-helper-" });
+      const attachmentsDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-attachments-" });
       const fixture = yield* makeNativeSessionFixture({
         workspacePaths: [helperCwd, attachmentsDir],
       });
@@ -199,7 +199,7 @@ it.layer(NodeServices.layer)("removeAntigravitySessionFiles", (it) => {
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const helperCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-helper-" });
+        const helperCwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-helper-" });
         const wrongId = yield* makeNativeSessionFixture({
           workspacePaths: [helperCwd],
           metadataSessionId: OTHER_SESSION_ID,
