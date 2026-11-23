@@ -1,5 +1,6 @@
 import { assert } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Fiber from "effect/Fiber";
 import { makeProviderReplayGate } from "@goat/provider-testing/replayGate";
 import { memoryFixture } from "./memoryDelivery.testkit.ts";
@@ -18,13 +19,12 @@ import {
 export const testInboxMemoryDelivery = () =>
   Effect.gen(function* () {
     const gate = makeProviderReplayGate(["deliver-memory"]);
-    const attempt = turnInput(providerThread).attemptId;
+    const attempt = turnInput(providerThread(yield* DateTime.now)).attemptId;
     const inboxID = `msg_t3_turn_${SESSION}:${attempt}`;
     const { runtime, thread } = yield* resumed(
       [
         out("session.prompt", { sessionID: SESSION, text: "hi" }),
         promptAccepted,
-        reply,
         event("session.inbox.delivered", { sessionID: SESSION, inboxID }, "deliver-memory"),
         event("session.execution.succeeded", { sessionID: SESSION }),
       ],
