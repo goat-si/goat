@@ -1,5 +1,4 @@
 import { useGT } from "gt-react";
-import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isSecretsFeatureEnabled } from "../../env";
 import { SecretsSettingsPanel } from "./SecretsSettings";
@@ -104,6 +103,7 @@ import { readPrimaryEnvironmentTarget } from "../../environments/primary/target"
 import { ProviderCodexHomeRouteSection } from "./ProviderCodexHomeRouteSection";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { UsageProviderSettings } from "./TextGeneratorAndUsageSettings";
@@ -585,9 +585,9 @@ export function EnvironmentProviderSettings({
   readonly readOnly?: boolean;
 }) {
   const gt = useGT();
-  const setting = useTranslatedSearchableSetting();
   const settings = useEnvironmentSettings(environmentId);
   const threadShells = useThreadShells();
+  const setting = useTranslatedSearchableSetting();
   const { environments: routeEnvironments } = useEnvironments();
   const routeEnvironment = routeEnvironments.find((entry) => entry.environmentId === environmentId);
   const canOpenHomeDashboard =
