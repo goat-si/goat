@@ -5,6 +5,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { EnvironmentAuthorizationError } from "./auth.ts";
 import * as Memory from "./memory.ts";
 import * as Suggestions from "./memorySuggestions.ts";
+import * as TurnMemory from "./turnMemory.ts";
 import * as SiteNotes from "./siteNotes.ts";
 
 export const MEMORY_WS_METHODS = {
@@ -18,6 +19,7 @@ export const MEMORY_WS_METHODS = {
   memorySearch: "memory.search",
   memoryList: "memory.list",
   memoryRead: "memory.read",
+  memoryTurnInspect: "memory.turn.inspect",
   memoryHistory: "memory.history",
   memoryHubDiagnostics: "memory.hub.diagnostics",
   memoryHubReconcile: "memory.hub.reconcile",
@@ -97,6 +99,11 @@ export const WsMemoryListRpc = Rpc.make(MEMORY_WS_METHODS.memoryList, {
 export const WsMemoryReadRpc = Rpc.make(MEMORY_WS_METHODS.memoryRead, {
   payload: Memory.MemoryReadInput,
   success: Memory.MemoryItem,
+  error: MemoryRpcErrors,
+});
+const WsMemoryTurnInspectRpc = Rpc.make(MEMORY_WS_METHODS.memoryTurnInspect, {
+  payload: TurnMemory.TurnMemoryInput,
+  success: TurnMemory.TurnMemoryResult,
   error: MemoryRpcErrors,
 });
 export const WsMemoryHistoryRpc = Rpc.make(MEMORY_WS_METHODS.memoryHistory, {
@@ -215,6 +222,7 @@ export const MemoryCoreRpcs = RpcGroup.make(
   WsMemorySearchRpc,
   WsMemoryListRpc,
   WsMemoryReadRpc,
+  WsMemoryTurnInspectRpc,
   WsMemoryHistoryRpc,
   WsMemorySyncStatusRpc,
   WsMemoryHubDiagnosticsRpc,

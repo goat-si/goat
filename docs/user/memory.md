@@ -98,6 +98,10 @@ Agent memory access depends on the environment’s current policy and the run’
 
 When connecting an outside agent through OAuth, select **Read memory** or **Write memory** under **Memory access (optional)** if needed. Nothing is selected by default, and memory permissions are separate from thread access.
 
+### Inspect memory for a turn
+
+Choose **Turn memory** below your message to see which memory revisions GOAT supplied to the provider and which results the agent retrieved with `memory.recall`. A delivered item shows what the provider received. The agent may use it, ignore it, or ask for more. Older turns can have no delivery record. Each entry identifies the revision sent at the time. A text preview is available while that revision is current and visible. The panel shows up to 32 recorded events per turn. GOAT keeps these records across turns for as long as you keep the thread. Deleting the thread clears its records.
+
 ## When a conversation cannot save memories
 
 If GOAT can only trace part of a conversation’s memory history, it can save the exact words you type. Those memories carry the **Provenance unverified** badge and stay out of automatic memory context and summaries. If GOAT asks you to update the other machines in your memory hub, update them before trying again.

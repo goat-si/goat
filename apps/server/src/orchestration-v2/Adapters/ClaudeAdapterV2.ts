@@ -27,7 +27,6 @@ import {
   claudeFrameToolUseIds,
   isClaudeActiveSteeringAbortResult,
   isClaudeProviderContinuationTurn,
-  withoutMemoryBody,
   claudeEchoedPromptUuids,
   claudePromptLifecycle,
   answersClaudeRequest,
@@ -101,6 +100,7 @@ import {
 } from "./ClaudeToolFrames.ts";
 import {
   appendClaudeUserText,
+  withFreshMemory,
   handoffSkillOffset,
   makeClaudeUserMessage,
 } from "./ClaudeUserMessage.ts";
@@ -9269,18 +9269,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return context;
         });
 
-        const withFreshMemory = Effect.fnUntraced(function* (
-          message: SDKUserMessage,
-          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-        ) {
-          const snapshot = turnInput.refreshMemoryContext
-            ? yield* turnInput.refreshMemoryContext()
-            : turnInput.memoryContext;
-          if (snapshot === undefined) return message;
-          const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
-          return appendClaudeUserText(message, text);
-        });
-
         const withCuaNotice = (
           message: SDKUserMessage,
           query: ClaudeLiveQueryContext,
@@ -9461,7 +9449,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }),
               input:
                 turnInput.refreshMemoryContext || nativeControl || promptUuid === null
-                  ? withoutMemoryBody(turnInput)
+                  ? MemoryContext.withoutMemoryBody(turnInput)
                   : { ...turnInput },
               queryPolicy: querySession.queryPolicy,
               nativeThreadId,
@@ -9593,7 +9581,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfReservation.commit();
               if (appContext !== undefined) context.appContextOffered = appContext.snapshot;
             };
-            const offerUserMessage = Effect.fnUntraced(function* (message: SDKUserMessage) {
+            const offerUserMessage = Effect.fnUntraced(function* (
+              message: SDKUserMessage,
+              receipt: Effect.Effect<void> = Effect.void,
+            ) {
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* startUserTurnForWakeReports(nativeThreadId).pipe(
                 Effect.andThen(
@@ -9611,28 +9602,30 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     ),
                   ),
                 ),
+                Effect.andThen(receipt),
                 Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void),
               );
             });
             if (userMessage !== null && !turnInput.resume) {
+              const admitted = nativeControl
+                ? { message: userMessage, receipt: Effect.void }
+                : yield* withFreshMemory(userMessage, turnInput);
               const admittedMessage = nativeControl
-                ? userMessage
-                : yield* withFreshMemory(userMessage, turnInput).pipe(
-                    Effect.flatMap((m) => withCuaNotice(m, querySession, turnInput.threadId)),
-                  );
+                ? admitted.message
+                : yield* withCuaNotice(admitted.message, querySession, turnInput.threadId);
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;
                 context.memoryRelease = yield* derivedCache
                   .retain({
                     bytes: new TextEncoder().encode(encodeMemorySnapshot(body)).length,
                     release: Effect.sync(() => {
-                      context.input = withoutMemoryBody(context.input);
+                      context.input = MemoryContext.withoutMemoryBody(context.input);
                     }),
                   })
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
               }
               yield* attachTurn;
-              yield* offerUserMessage(admittedMessage);
+              yield* offerUserMessage(admittedMessage, admitted.receipt);
               return;
             }
             // Transcript reads suspend replay; hold SDK frames until the buffer is applied to preserve order.
@@ -10051,10 +10044,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // The PDF budget is spent once the message is queued, even if the steer is later refused.
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
-                existing.query.offer(admitted, () => {
+                existing.query.offer(admitted.message, () => {
                   pdfReservation.commit();
                 }),
               ).pipe(
+                Effect.tap(() => admitted.receipt),
                 Effect.tap(() =>
                   Effect.sync(() => {
                     pdfReservation.commit();

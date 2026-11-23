@@ -161,7 +161,7 @@ export const layer: Layer.Layer<
     const providerInputRefusal = yield* Effect.serviceOption(
       ChannelProviderInputAuthority.ChannelProviderInputAuthority,
     );
-    const makeRefreshMemoryContext = yield* makeMemoryRefreshFactory;
+    const memoryHooks = yield* makeMemoryRefreshFactory;
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
@@ -1406,11 +1406,7 @@ export const layer: Layer.Layer<
           ? {}
           : { cloudLaunchSource: cloudSource.launchSource }),
         reattach: observeOnly,
-        ...(observeOnly
-          ? {}
-          : {
-              refreshMemoryContext: makeRefreshMemoryContext(input.threadId, runId),
-            }),
+        ...(observeOnly ? {} : memoryHooks(input.threadId, runId)),
         providerThread: runningProviderThread,
         attempt: runningAttempt,
         attemptId: attempt.id,

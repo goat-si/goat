@@ -160,6 +160,8 @@ it.effect.each(["bound", "upgraded unbound", "rollback unbound", "rollback stale
           yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id > 178`;
           yield* sql`DROP TABLE channel_bot_attention`;
           yield* sql`DROP INDEX channel_bot_attention_approval_openings`;
+          yield* sql`DROP TRIGGER turn_memory_delete_thread`;
+          yield* sql`DROP TABLE turn_memory_receipts`;
           yield* sql`DROP TRIGGER channel_task_status_version`;
           yield* sql`DROP INDEX channel_task_views_by_task`;
           yield* sql`ALTER TABLE channel_tasks DROP COLUMN status_version`;

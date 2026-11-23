@@ -19,7 +19,10 @@ import {
   type MemoryChangeSignal,
 } from "@goat/contracts";
 import { createEnvironmentRpcCommand } from "@goat/client-runtime/state/runtime";
-import { createMemoryEnvironmentAtoms } from "@goat/client-runtime/state/memory";
+import {
+  createMemoryEnvironmentAtoms,
+  type TurnMemoryProjection,
+} from "@goat/client-runtime/state/memory";
 import {
   EnvironmentRegistry,
   EnvironmentSupervisor,
@@ -645,13 +648,15 @@ export function createNativeMemoryHarness(
           : Stream.empty,
     } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
   );
-  const memory = createMemoryEnvironmentAtoms(runtime);
+  const turnDetail = Atom.make<TurnMemoryProjection | null>(null);
+  const memory = createMemoryEnvironmentAtoms(runtime, undefined, () => turnDetail);
   const updateSettings = createEnvironmentRpcCommand(runtime, {
     label: "synthetic:update-settings",
     tag: WS_METHODS.serverUpdateSettings,
   });
   const harness = {
     registry,
+    turnDetail,
     secureValues: bridge.secure,
     setSecureWrite: (before: (() => Promise<void>) | null) => {
       bridge.beforeSecureWrite = before;

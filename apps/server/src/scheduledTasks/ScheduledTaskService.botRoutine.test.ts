@@ -870,6 +870,8 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         yield* sql`ALTER TABLE remote_dispatches DROP COLUMN remote_environment_id`;
         yield* sql`DROP TABLE channel_bot_attention`;
         yield* sql`DROP INDEX channel_bot_attention_approval_openings`;
+        yield* sql`DROP TRIGGER turn_memory_delete_thread`;
+        yield* sql`DROP TABLE turn_memory_receipts`;
         yield* sql`DROP TABLE scheduled_task_webhook_firings`;
         yield* sql`DROP TABLE channel_worker_generations`;
         yield* sql`DROP TRIGGER channel_task_status_version`;
@@ -893,6 +895,7 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
           [182, "SlackConversationBot"],
           [183, "ChannelInputSessionAuthority"],
           [184, "RemoteDispatchEnvironment"],
+          [185, "TurnMemoryReceipts"],
         ]);
         for (const through of [176, 177] as const) {
           assert.include(

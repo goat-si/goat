@@ -782,10 +782,10 @@ it.effect(
         ...reads.map((method) => ({ method, scopes: ["memory:read"] as const })),
         ...writes.map((method) => ({ method, scopes: ["memory:write"] as const })),
         ...settings.map((method) => ({ method, scopes: ["settings:write"] as const })),
-        {
-          method: WS_METHODS.memoryReadSource,
+        ...[WS_METHODS.memoryReadSource, WS_METHODS.memoryTurnInspect].map((method) => ({
+          method,
           scopes: ["memory:read", "orchestration:read"] as const,
-        },
+        })),
       ];
       expect(new Set(cases.map((c) => c.method))).toEqual(
         new Set([...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("memory."))),

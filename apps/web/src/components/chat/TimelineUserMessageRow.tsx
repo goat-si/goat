@@ -1,4 +1,5 @@
 import { copyMessageSnapshot } from "./copySnapshot";
+import { UserMessageTurnMemory } from "./TurnMemoryDetails";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
 import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
@@ -141,6 +142,7 @@ export function UserMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mes
         <ModelSwitchRow environmentId={ctx.activeThreadEnvironmentId} modelSwitch={modelSwitch} />
       ) : null}
       <UserMessageContent row={row} />
+      <UserMessageTurnMemory row={row} />
     </>
   );
 }

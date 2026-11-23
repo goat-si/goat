@@ -767,11 +767,6 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
   create: createCodexAdapterV2,
 };
 
-const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
-  const { memoryContext: _body, ...rest } = input;
-  return rest;
-};
-
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
@@ -1514,7 +1509,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           });
           const context: ActiveCodexTurnContext = {
             ...(input.waitForNativeStart ? { nativeStartReady: yield* Deferred.make<void>() } : {}),
-            input: withoutMemoryBody(input.turnInput),
+            input: MemoryContext.withoutMemoryBody(input.turnInput),
             projectionAppThread: input.turnInput.appThread,
             projectionThreadId: input.turnInput.threadId,
             projectionRunId: input.turnInput.runId,
@@ -6335,7 +6330,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const now = yield* DateTime.now;
           const nativeId = `goal-command:${turnInput.attemptId}`;
           const context: ActiveCodexTurnContext = {
-            input: withoutMemoryBody(turnInput),
+            input: MemoryContext.withoutMemoryBody(turnInput),
             projectionAppThread: turnInput.appThread,
             projectionThreadId: turnInput.threadId,
             projectionRunId: turnInput.runId,
@@ -6583,9 +6578,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               recordLoaded(threadId, runtime, mcpSession);
             }
-            const memoryContext = turnInput.refreshMemoryContext
-              ? yield* turnInput.refreshMemoryContext()
-              : turnInput.memoryContext;
+            const memoryContext = yield* MemoryContext.refreshSnapshot(turnInput);
             const clearMemoryContext =
               memoryByThread.has(threadId) ||
               (yield* Ref.get(additionalContextByThread)).get(threadId)?.goat_memory !== undefined;
@@ -6644,12 +6637,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (dispatched.type === "adopted") {
               yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
               yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
+              yield* MemoryContext.deliveryReceipt(turnInput, validatedMemory);
               return void restartNotices.delete(threadId);
             }
             const start = dispatched.reservation;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
-              new Map(current).set(threadId, withoutMemoryBody(turnInput)),
+              new Map(current).set(threadId, MemoryContext.withoutMemoryBody(turnInput)),
             );
             // Completion can remove the old context while turn/start is in flight.
             const previousTurns = new Map([
@@ -6706,6 +6700,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `Codex continued native turn ${started.turn.id}, which still belongs to an earlier run. Stop that turn and retry.`,
               );
             }
+            yield* MemoryContext.deliveryReceipt(turnInput, validatedMemory);
             if ((yield* Ref.get(pendingRootTurns)).get(threadId)?.attemptId !== turnInput.attemptId)
               return;
             yield* registerRootTurn({
@@ -7136,9 +7131,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (turnInput) {
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
               const previous = (yield* Ref.get(additionalContextByThread)).get(threadId);
-              const fresh = turnInput.refreshMemoryContext
-                ? yield* turnInput.refreshMemoryContext()
-                : turnInput.memoryContext;
+              const fresh = yield* MemoryContext.refreshSnapshot(turnInput);
               const validated =
                 fresh === undefined
                   ? undefined
@@ -7154,7 +7147,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (fresh && validated) yield* retainMemory(threadId, fresh, turnInput);
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* Ref.update(pendingRootTurns, (current) =>
-                new Map(current).set(threadId, withoutMemoryBody(turnInput)),
+                new Map(current).set(threadId, MemoryContext.withoutMemoryBody(turnInput)),
               );
               // Clear on interruption; a late turn/started must not be adopted after an interrupted start.
               yield* client.request("thread/compact/start", { threadId }).pipe(
