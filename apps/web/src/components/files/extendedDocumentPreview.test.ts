@@ -28,6 +28,26 @@ it("renders built ODT indexes without their source templates", async () => {
   expect(result.pages[0]?.html).toBe("<p>Index</p><p>Field notes: 1</p>".repeat(names.length));
 });
 
+it("keeps OpenDocument image descriptions in image alt text", async () => {
+  const archive = new JSZip()
+    .file(
+      "content.xml",
+      '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:l="http://www.w3.org/1999/xlink" xmlns:s="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">' +
+        '<office:body><office:text><text:p><draw:frame><draw:image l:href="picture.png"/><s:title>Logo</s:title><s:desc>Research &amp; &quot;Design&quot;</s:desc></draw:frame>Visible caption</text:p></office:text></office:body></office:document-content>',
+    )
+    .file(
+      "picture.png",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+      { base64: true },
+    );
+
+  const result = await openDocument(archive, "odt");
+  if (result.type !== "document") throw new Error("Expected document");
+  expect(result.pages[0]?.html).toMatch(
+    /^<p><img src="data:image\/png;base64,[^"]+" alt="Logo Research &amp; &quot;Design&quot;">Visible caption<\/p>$/,
+  );
+});
+
 it("removes terminal colors from saved notebook text outputs", () => {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
