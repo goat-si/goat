@@ -14,7 +14,7 @@ import * as Schedule from "effect/Schedule";
 import type * as Semaphore from "effect/Semaphore";
 import type { OpenCodeToolResult } from "../toolItems.ts";
 import { reportOutcome } from "./adapterHelpers.ts";
-import type { ActiveTurn, ThreadState } from "./adapterState.ts";
+import type { ActiveTurn, ThreadState, Wake } from "./adapterState.ts";
 import { ref, stringField } from "./adapterUtilities.ts";
 import { INVENTORY_TIMEOUT } from "./connectionConstants.ts";
 import type * as OpenCode2Client from "./OpenCode2Client.ts";
@@ -74,6 +74,35 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
   const shells = new Map<string, TrackedShell>();
   // The shell exit can arrive before the synthetic report. Retain only the ownership stamp.
   const exitedShells = new Map<string, { readonly sessionId: string; readonly runId: RunId }>();
+  const heldLaunch = (state: ThreadState, id: string) =>
+    sessionsOf(state)
+      .flatMap((session) => session.wakes)
+      .find((wake) =>
+        wake.events.some(
+          (event) =>
+            event.type === "session.tool.success" &&
+            stringField(event.data.metadata, "shellID") === id &&
+            event.data.metadata?.["exit"] === undefined &&
+            event.data.metadata?.["signal"] === undefined &&
+            event.data.metadata?.["timeout"] !== true,
+        ),
+      );
+  const wakeLaunchingShell = (state: ThreadState, id: string) => {
+    const wake = heldLaunch(state, id);
+    return wake === undefined ||
+      wake.ended.has(id) ||
+      (shellInfo.get(id)?.status ?? "running") !== "running" ||
+      wake.events.some(
+        (event) =>
+          event.type === "session.inbox.enqueued" &&
+          event.data.item.type === "synthetic" &&
+          stringField(event.data.item.payload.metadata, "source") === "shell" &&
+          stringField(event.data.item.payload.metadata, "shellID") === id,
+      )
+      ? undefined
+      : wake;
+  };
+  let replaying: Wake | undefined;
 
   const fetchShellOutput = Effect.fn("OpenCode2Adapter.fetchShellOutput")(function* (
     id: string,
@@ -239,7 +268,7 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
           awaited:
             state.providerThread.pendingBackgroundTasks?.some(
               (task) => task.taskId === info.id && task.kind === "command" && task.awaited === true,
-            ) === true,
+            ) === true || wakeLaunchingShell(state, info.id)?.awaited.has(info.id) === true,
           output: "",
           cursor: 0,
         });
@@ -322,15 +351,22 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
       toolId: data.id,
       tool,
       command: stringField(tool.input, "command") ?? "Shell command",
+      ...(replaying?.awaited.has(shellId) ? { awaited: true } : {}),
       running: true,
       output: "",
       cursor: 0,
     };
     shells.set(shellId, tracked);
-    yield* readShellOutput(shellId).pipe(Effect.ignore({ log: true }));
     const known = shellInfo.get(shellId);
-    tracked.running = known === undefined || known.status === "running";
-    yield* emitShell(shellId, tracked.running ? "running" : settledStatus(known), known?.exit);
+    const ended = replaying?.ended.get(shellId);
+    tracked.running = ended === undefined && (known === undefined || known.status === "running");
+    yield* readShellOutput(shellId, !tracked.running).pipe(Effect.ignore({ log: true }));
+    yield* emitShell(
+      shellId,
+      tracked.running ? "running" : (ended?.status ?? settledStatus(known)),
+      ended?.exit ?? known?.exit,
+    );
+    if (ended !== undefined) shells.delete(shellId);
     yield* syncRosterAncestors(state);
     return true;
   });
@@ -361,6 +397,25 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
       ...(runId == null ? {} : { runId }),
       report: { kind: "command", label: shell?.command ?? payload.description, outcome },
     });
+    if (id !== undefined && shell === undefined) {
+      const known = shellInfo.get(id);
+      const exit = known?.exit;
+      heldLaunch(state, id)?.ended.set(id, {
+        status:
+          known !== undefined && known.status !== "running"
+            ? known.status === "killed"
+              ? "interrupted"
+              : exit === 0
+                ? "completed"
+                : "failed"
+            : outcome === "failed"
+              ? "failed"
+              : outcome === "cancelled"
+                ? "interrupted"
+                : "completed",
+        ...(exit === undefined ? {} : { exit }),
+      });
+    }
     if (id !== undefined && shell?.stopping !== true) {
       if (shell?.running === true && shell.state === state) {
         yield* readShellOutput(id, true).pipe(Effect.ignore({ log: true }));
@@ -477,6 +532,17 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
           : { parentTaskId: shell.state.subagent.call.nativeId }),
       })),
     recover,
+    replay: <E, R>(wake: Wake, effect: Effect.Effect<void, E, R>) =>
+      Effect.suspend(() => {
+        replaying = wake;
+        return effect.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              replaying = undefined;
+            }),
+          ),
+        );
+      }),
     onToolSuccess,
     onReport,
     onEvent,
@@ -496,7 +562,15 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
       const changed = new Set<ThreadState>();
       for (const id of new Set(taskIds)) {
         const shell = shells.get(id);
-        if (shell === undefined || !shell.running || !owned.has(shell.state)) continue;
+        if (shell === undefined) {
+          const wake = wakeLaunchingShell(state, id);
+          if (wake === undefined) continue;
+          matched.push(id);
+          if (awaited) wake.awaited.add(id);
+          else wake.awaited.delete(id);
+          continue;
+        }
+        if (!shell.running || !owned.has(shell.state)) continue;
         matched.push(id);
         if ((shell.awaited === true) === awaited) continue;
         shell.awaited = awaited;

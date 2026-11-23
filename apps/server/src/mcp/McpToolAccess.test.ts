@@ -111,6 +111,7 @@ const ProbeToolkit = Toolkit.make(
   Tool.make("reads", probe).annotate(Tool.Readonly, false).annotate(Tool.Destructive, true),
   Tool.make("reads_as_caller", probe),
   Tool.make("acts_as_caller", probe),
+  Tool.make("acts_during_wake", probe),
   Tool.make("writes", probe).annotate(Tool.Readonly, true).annotate(Tool.Destructive, true),
   Tool.make("writes_with_capability", probe)
     .annotate(Tool.Readonly, true)
@@ -133,6 +134,7 @@ const probeHandlers: McpToolAccess.Handlers<typeof ProbeToolkit.tools> = {
   reads: McpToolAccess.reads(() => ran),
   reads_as_caller: McpToolAccess.readsAsCaller(() => ran),
   acts_as_caller: McpToolAccess.actsAsCaller(() => ran),
+  acts_during_wake: McpToolAccess.actsAsCallerDuringWake(() => ran),
   writes: McpToolAccess.writes(() => ran),
   writes_with_capability: McpToolAccess.destructive(McpToolAccess.writesWithCapability(() => ran)),
   writes_threads: McpToolAccess.writesThreads(
@@ -178,6 +180,7 @@ export const refusedAtCompileTime = () => {
       reads: unchecked,
       reads_as_caller: unchecked,
       acts_as_caller: unchecked,
+      acts_during_wake: unchecked,
       writes: unchecked,
       writes_with_capability: unchecked,
       writes_threads: unchecked,
@@ -252,6 +255,10 @@ it.effect.each([
   ["acts_as_caller", archivedBackground, {}, "parent_not_active"],
   ["acts_as_caller", unknownOwnerBackground, {}, "parent_not_active"],
   ["acts_as_caller", fullAccessClient, {}, "thread_credential_required"],
+  ["acts_during_wake", ended, {}, "ran"],
+  ["acts_during_wake", mismatchedProvider, {}, "parent_not_active"],
+  ["acts_during_wake", archivedBackground, {}, "parent_not_active"],
+  ["acts_during_wake", fullAccessClient, {}, "thread_credential_required"],
 
   ["writes", supervised, {}, "ran"],
   ["writes", ended, {}, "parent_not_active"],
