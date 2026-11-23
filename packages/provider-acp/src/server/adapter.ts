@@ -1,3 +1,4 @@
+import { readRetiredPromptOutcome, type PromptOutcomeCheck } from "./retiredPromptOutcome.ts";
 import {
   hasAcpDeferredBackgroundWork,
   idleReportedSubagents,
@@ -12,6 +13,7 @@ import {
   type ActiveTextStream,
   type AcpNativeBuildConfiguration,
   type PendingRuntimeRequest,
+  type AcpRuntimeTeardownState,
 } from "./activeTurnTypes.ts";
 import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
@@ -325,14 +327,6 @@ export interface ActiveAcpTurn {
   /** Frees the runtime for the next prompt while the agent still holds this one's response. */
   readonly foregroundIdle: Deferred.Deferred<void>;
 }
-
-type AcpRuntimeTeardownState =
-  | { readonly _tag: "Idle" }
-  | {
-      readonly _tag: "InProgress";
-      readonly completed: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>;
-    }
-  | { readonly _tag: "Failed"; readonly error: ProviderAdapter.ProviderAdapterProtocolError };
 
 interface ActiveAcpSubagent {
   task: OrchestrationV2Subagent;
@@ -6786,6 +6780,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           generation: number,
           timeoutMillis: number,
+          checkPromptOutcome: PromptOutcomeCheck | undefined,
         ) {
           const retired = yield* runRuntimeCallbackAtGeneration(
             generation,
@@ -6807,14 +6802,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               yield* Ref.set(runtimeRestartRequired, true);
               yield* cancelPendingRuntimeRequests();
               yield* terminalizeOpenForegroundTools(context, "failed");
+              const recorded = yield* readRetiredPromptOutcome(checkPromptOutcome, driver);
               const minutes = Math.max(1, Math.round(timeoutMillis / 60_000));
               yield* finalizeTurn(
                 context,
                 "failed",
-                makeProviderFailure({
-                  class: "provider_error",
-                  message: `${flavor.runtimeHarness ?? driver} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}, so GOAT stopped the turn and restarted the agent. Send a message to continue.`,
-                }),
+                recorded ??
+                  makeProviderFailure({
+                    class: "provider_error",
+                    message: `${flavor.runtimeHarness ?? driver} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}, so GOAT stopped the turn and restarted the agent. Send a message to continue.`,
+                  }),
+                {
+                  threadDisposition:
+                    recorded?.code === "INVALID_THINKING_SIGNATURE" ? "broken" : "reusable",
+                },
               );
               return "retired" as const;
             }),
@@ -6838,6 +6839,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           generation: number,
           timeoutMillis: number,
+          checkPromptOutcome: PromptOutcomeCheck | undefined,
         ) {
           yield* Deferred.await(context.promptDispatched);
           context.lastProgressAt = yield* Clock.currentTimeMillis;
@@ -6849,7 +6851,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               continue;
             }
             const outcome = yield* runtimeTransitionPermit.withPermit(
-              retireInactivePrompt(context, generation, timeoutMillis),
+              retireInactivePrompt(context, generation, timeoutMillis, checkPromptOutcome),
             );
             if (outcome !== "rearm") return;
           }
@@ -7410,6 +7412,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 context,
                 promptGeneration,
                 promptInactivityTimeoutMillis,
+                checkPromptOutcome,
               ).pipe(Effect.forkIn(sessionScope));
             }
             yield* sendPromptWhenIdle(context, () =>

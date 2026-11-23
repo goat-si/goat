@@ -1,3 +1,4 @@
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type {
   OrchestrationV2RuntimeRequest,
   OrchestrationV2ExecutionNode,
@@ -66,3 +67,11 @@ export type PendingRuntimeRequest = {
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
     }
 );
+
+export type AcpRuntimeTeardownState =
+  | { readonly _tag: "Idle" }
+  | {
+      readonly _tag: "InProgress";
+      readonly completed: Deferred.Deferred<void, ProviderAdapter.ProviderAdapterProtocolError>;
+    }
+  | { readonly _tag: "Failed"; readonly error: ProviderAdapter.ProviderAdapterProtocolError };

@@ -18,6 +18,7 @@ import {
   acpScopedNativeId,
   makeAcpAdapterV2,
   type AcpAdapterV2RuntimeInput,
+  type AcpAdapterV2Flavor,
 } from "@goat/provider-acp/server/adapter";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
@@ -52,6 +53,7 @@ const isProviderAdapterProtocolError = Schema.is(ProviderAdapter.ProviderAdapter
 
 const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   readonly environment: (runtimeOrdinal: number) => Readonly<Record<string, string>>;
+  readonly watchPromptOutcome?: AcpAdapterV2Flavor["watchPromptOutcome"];
   readonly runtimeMode?: "full-access" | "approval-required";
   readonly wrapPrompt?: (
     prompt: AcpSessionRuntime.AcpSessionRuntime["Service"]["prompt"],
@@ -86,6 +88,9 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
       driver: ACP_TEST_DRIVER,
       capabilities: AcpProviderCapabilitiesV2,
       promptInactivityTimeout: "15 minutes",
+      ...(input.watchPromptOutcome === undefined
+        ? {}
+        : { watchPromptOutcome: input.watchPromptOutcome }),
       ...(input.followAgentWorkState === true ? { followAgentWorkState: true } : {}),
       ...(input.recognizedBackground === true
         ? {
@@ -370,6 +375,43 @@ describe("ACP prompt inactivity", () => {
       assert.include(silent?.failure?.message, "15 minutes");
       assert.equal(next?.status, "completed");
       assert.lengthOf(harness.natives, 2);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("reports the outcome recorded by a silent prompt", () =>
+    Effect.gen(function* () {
+      const badGateway = {
+        class: "provider_error",
+        message: "Bad Gateway: Failed to connect to backend API",
+        code: "502 Bad Gateway",
+        retryable: true,
+      } as const;
+      const harness = yield* makePromptInactivityHarness({
+        environment: () => ({ GOAT_ACP_HANG_PROMPT_FOREVER: "1" }),
+        watchPromptOutcome: () =>
+          Effect.succeed((_result, options) =>
+            Effect.succeed(options?.retired ? badGateway : undefined),
+          ),
+      });
+      yield* harness.startTurn(1);
+      yield* TestClock.adjust("15 minutes");
+      const [silent] = yield* harness.terminals(1);
+      assert.equal(silent?.status, "failed");
+      assert.deepEqual(silent?.failure, badGateway);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("retires a silent prompt when its outcome check dies", () =>
+    Effect.gen(function* () {
+      const harness = yield* makePromptInactivityHarness({
+        environment: () => ({ GOAT_ACP_HANG_PROMPT_FOREVER: "1" }),
+        watchPromptOutcome: () => Effect.succeed(() => Effect.die("session log unreadable")),
+      });
+      yield* harness.startTurn(1);
+      yield* TestClock.adjust("15 minutes");
+      const [silent] = yield* harness.terminals(1);
+      assert.equal(silent?.status, "failed");
+      assert.include(silent?.failure?.message, "15 minutes");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
