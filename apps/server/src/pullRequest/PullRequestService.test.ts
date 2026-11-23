@@ -1,3 +1,4 @@
+import { resolveTarget } from "./pullRequestTarget.ts";
 import { registerPullRequestBehaviorTests } from "./PullRequestInteractive.testkit.ts";
 import {
   project,
