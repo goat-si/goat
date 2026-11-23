@@ -315,12 +315,22 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-quiet-thread-shell:${key}`));
   });
 
+  const hasChildInputsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      get(environmentThreadsAtom(environmentId)).some((thread) => subagentRequest(thread) !== null),
+    ),
+  );
+
   // Child approvals and questions are hidden with their sidebar rows. Read their
   // shell summaries, without subscribing to every child transcript.
   const childThreadInputsAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     let previous: ReadonlyArray<EnvironmentThreadShell> = [];
     return Atom.make((get) => {
+      if (!get(hasChildInputsAtom(ref.environmentId))) {
+        if (previous.length !== 0) previous = [];
+        return previous;
+      }
       const children = new Map<ThreadId, OrchestrationV2ThreadShell[]>();
       for (const thread of get(environmentThreadsAtom(ref.environmentId))) {
         const parent = thread.lineage.parentThreadId;
