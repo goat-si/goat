@@ -45,6 +45,15 @@ export function UsageLimitRecoveryCard({
   const recovery = thread.limitRecovery;
   const scheduled =
     recovery?.runId === runId && recovery?.resetAt === resetAt && recovery?.autoResume;
+  const resumes = canSchedule && scheduled;
+  const displayAt =
+    resumes &&
+    resetAt &&
+    thread.snoozedUntil &&
+    Date.parse(thread.snoozedUntil) > Date.parse(resetAt)
+      ? thread.snoozedUntil
+      : resetAt;
+  const displayPassed = useDeadlinePassed(displayAt === null ? null : Date.parse(displayAt));
   const code = thread.runtime?.lastErrorCode;
   const workspaceLimit = code === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || code === CHATGPT_USAGE_LIMIT_CODE;
@@ -134,14 +143,16 @@ export function UsageLimitRecoveryCard({
       {!chatGptLimit || resetAt ? (
         <Text className="text-sm text-warning-foreground">
           {resetAt
-            ? `Usage limit resets ${DateTime.toDateUtc(DateTime.makeUnsafe(resetAt)).toLocaleString()}.`
+            ? `Usage limit ${resumes && !displayPassed ? "resumes" : resetPassed ? "reset" : "resets"} ${DateTime.toDateUtc(DateTime.makeUnsafe(resumes && !displayPassed ? (displayAt ?? resetAt) : resetAt)).toLocaleString()}.`
             : "The provider did not report a reset time. Retry manually when your limit is available."}
         </Text>
       ) : null}
       {canSchedule ? (
         <View className="flex-row flex-wrap gap-2">
           <Button
-            label={scheduled ? "Cancel auto-resume" : "Resume at reset"}
+            label={
+              scheduled ? "Cancel auto-resume" : resetPassed ? "Resume now" : "Resume at reset"
+            }
             tone="secondary"
             disabled={pending}
             onPress={() => void toggle("resume")}

@@ -32,8 +32,32 @@ type RecoveryProps = {
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
   timestampFormat: TimestampFormat;
+  resetPassed?: boolean;
+  displayPassed?: boolean;
   onChange: (recovery: OrchestrationV2LimitRecoveryUpdate) => Promise<void>;
 };
+
+function displayTime(props: RecoveryProps): string | null {
+  const { runId, resetAt, recovery, snoozedUntil } = props;
+  return recovery?.runId === runId &&
+    recovery.resetAt === resetAt &&
+    recovery.autoResume &&
+    resetAt !== null &&
+    snoozedUntil !== null &&
+    Date.parse(snoozedUntil) > Date.parse(resetAt)
+    ? snoozedUntil
+    : resetAt;
+}
+
+export function useUsageLimitRecoveryBannerItem(
+  props: RecoveryProps | null,
+): ComposerBannerStackItem | null {
+  const resetAt = props?.resetAt ?? null;
+  const displayAt = props ? displayTime(props) : null;
+  const resetPassed = useDeadlinePassed(resetAt === null ? null : Date.parse(resetAt));
+  const displayPassed = useDeadlinePassed(displayAt === null ? null : Date.parse(displayAt));
+  return props ? usageLimitRecoveryBannerItem({ ...props, resetPassed, displayPassed }) : null;
+}
 
 export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBannerStackItem {
   const { runId, errorCode, resetAt, stoppedAt, timestampFormat, settled, requestPending } = props;
@@ -44,8 +68,18 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
   const recoveryActions = canSchedule ? (
     <RecoveryActions key={`${runId}:${resetAt}`} {...props} />
   ) : null;
-  const resetDescription = resetAt
-    ? `Resets ${formatUpcomingTimestamp(resetAt, timestampFormat)}`
+  const resetPassed = props.resetPassed ?? (resetAt !== null && Date.parse(resetAt) <= Date.now());
+  const displayAt = displayTime(props);
+  const displayPassed =
+    props.displayPassed ?? (displayAt !== null && Date.parse(displayAt) <= Date.now());
+  const resumes =
+    canSchedule &&
+    props.recovery?.runId === runId &&
+    props.recovery.resetAt === resetAt &&
+    props.recovery.autoResume;
+  const shownAt = resumes && !displayPassed ? displayAt : resetAt;
+  const resetDescription = shownAt
+    ? `${resumes && !displayPassed ? "Resumes" : resetPassed ? "Reset" : "Resets"} ${formatUpcomingTimestamp(shownAt, timestampFormat)}`
     : "Reset time unavailable; retry manually";
   if (!chatGptLimit) {
     return {
@@ -125,7 +159,13 @@ function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: R
   return (
     <>
       <Button size="xs" variant="ghost" disabled={pending} onClick={() => void toggle("resume")}>
-        {pending ? "Saving..." : scheduled ? "Cancel auto-resume" : "Resume at reset"}
+        {pending
+          ? "Saving..."
+          : scheduled
+            ? "Cancel auto-resume"
+            : resetPassed
+              ? "Resume now"
+              : "Resume at reset"}
       </Button>
       <Button
         size="xs"
