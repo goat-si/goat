@@ -60,6 +60,7 @@ const ACK_MS = 20_000;
 const FIXED_LINE_MS = 55_000;
 // A progress read slower than this takes over as if the session could not be read.
 const CHECK_READ_MS = 5_000;
+const CHECK_INTERVAL_MS = 5_000;
 const mapError = (cause: unknown) =>
   isLedgerError(cause)
     ? cause
@@ -86,6 +87,7 @@ const make = Effect.gen(function* () {
   const acknowledgments = new Map<ChannelInputId, Fiber.Fiber<void, unknown>>();
   const ackStarted = new Set<ChannelInputId>();
   const checks = new Map<ChannelInputId, Fiber.Fiber<void, unknown>>();
+  const checkedAt = new Map<ChannelInputId, number>();
   const scheduled = new Set<string>();
 
   // The bot's copy of the message shows when the session took it, as reception's copy does.
@@ -474,10 +476,6 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
     if (progress?.kind === "answering" || progress?.kind === "composing") return;
-    // From 55 seconds the fixed line owns the receipt.
-    const age =
-      DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(stored.snapshot.acceptedAt);
-    if (age >= FIXED_LINE_MS) return;
     const expected = stored.snapshot.receptionId;
     if (
       expected === undefined ||
@@ -488,6 +486,8 @@ const make = Effect.gen(function* () {
         receptionId: ChannelReceptionId.make(
           "channel-session-ack:" + inputId + ":" + NodeCrypto.randomUUID(),
         ),
+        // From 55 seconds the fixed line owns the receipt.
+        before: new Date(Date.parse(stored.snapshot.acceptedAt) + FIXED_LINE_MS).toISOString(),
       }))
     )
       return;
@@ -501,6 +501,10 @@ const make = Effect.gen(function* () {
   ) {
     const inputId = stored.snapshot.inputId;
     if (checks.has(inputId) || ackStarted.has(inputId)) return;
+    // A composing session is read again every few seconds, not on every one-second scan.
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (now < (checkedAt.get(inputId) ?? Number.NEGATIVE_INFINITY) + CHECK_INTERVAL_MS) return;
+    checkedAt.set(inputId, now);
     const fiber = yield* check(stored, owner).pipe(
       Effect.tapCause((cause) =>
         Effect.logWarning("channel session progress check failed", { inputId, cause }),
@@ -573,6 +577,7 @@ const make = Effect.gen(function* () {
             ? Effect.sync(() => {
                 scheduled.delete(key);
                 ackStarted.delete(stored.snapshot.inputId);
+                checkedAt.delete(stored.snapshot.inputId);
               })
             : Effect.void,
         ),

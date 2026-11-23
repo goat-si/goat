@@ -761,6 +761,45 @@ describe("a simple question gets one reply", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "a composing session that starts tools without a first line is acknowledged on a later check",
+    () => {
+      const harness = makeSessionHarness();
+      const summaries: string[] = [];
+      harness.script.current = (input) => {
+        if (input.mode === "task_event") summaries.push(input.taskEvent?.summary ?? "");
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("How full is the disk?", "later"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        yield* TestClock.adjust("20 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(summaries, []);
+        harness.tool(task, "df -h /");
+        // The next one-second scan does not read the session again yet.
+        yield* TestClock.adjust("1 second");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(summaries, []);
+        yield* TestClock.adjust("4 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.lengthOf(summaries, 1);
+        assert.include(summaries[0], "df -h /");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("a session whose thread cannot be read still gets its acknowledgment", () => {
     const harness = makeSessionHarness();
     const modes: string[] = [];

@@ -181,6 +181,39 @@ describe("session receipt recovery", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("a takeover that reaches the ledger at 55 seconds is refused there", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* runtime.drain;
+      const input = yield* gateway.ingest(goatInput("Inspect the disk", "late-ack"), rpcContext);
+      const claim = ChannelReceptionId.make("channel-session:" + input.inputId);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const observer = yield* freshObserver;
+          assert.isTrue(yield* observer.offer(input.inputId, runtime.ownerToken));
+        }),
+      );
+      const acceptedAt = (yield* ledger.getInput(input.inputId))!.snapshot.acceptedAt;
+      const before = new Date(Date.parse(acceptedAt) + 55_000).toISOString();
+      const takeover = {
+        owner: runtime.ownerToken,
+        inputId: input.inputId,
+        expectedReceptionId: claim,
+        receptionId: ChannelReceptionId.make("channel-session-ack:" + input.inputId + ":late"),
+      };
+      // The decision was made earlier; the transaction itself runs at the boundary.
+      yield* TestClock.adjust("55 seconds");
+      assert.isFalse(yield* ledger.takeSessionAcknowledgment({ ...takeover, before }));
+      assert.strictEqual((yield* ledger.getInput(input.inputId))?.snapshot.receptionId, claim);
+      // Without the boundary the same claim is still free to take, so the boundary refused it.
+      assert.isTrue(yield* ledger.takeSessionAcknowledgment(takeover));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("ordinary reception cannot take either durable session claim", () => {
     const harness = makeSessionHarness();
     let calls = 0;
