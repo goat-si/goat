@@ -76,7 +76,11 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
       const unrelated = Array.from(yield* drain);
       assert.isFalse(unrelated.some((event) => event.type === "turn.terminal"));
       if (full) {
-        yield* send({ sessionUpdate: "agent_message", content: [{ type: "text", text: report }] });
+        yield* send({
+          sessionUpdate: "agent_message",
+          messageId: "task-report",
+          content: [{ type: "text", text: report }],
+        });
       } else {
         yield* send({
           sessionUpdate: "agent_message_chunk",
