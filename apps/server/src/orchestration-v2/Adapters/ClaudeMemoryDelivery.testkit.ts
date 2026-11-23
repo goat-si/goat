@@ -45,7 +45,7 @@ export const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(f
   config: McpProviderSession.McpProviderSessionConfig,
   nativeSessionId: string,
   currentMemoryPolicy: McpSessionRegistry.McpSessionRegistry["Service"]["currentMemoryPolicy"] = () =>
-    Effect.succeed(undefined),
+    Effect.void,
   interruptCloses = false,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -97,7 +97,7 @@ export const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(f
   }).pipe(
     Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
       issue: () => Effect.die("unused"),
-      resolve: () => Effect.succeed(undefined),
+      resolve: () => Effect.void,
       touch: () => Effect.void,
       revokeProviderSession: () => Effect.void,
       revokeThread: () => Effect.void,
