@@ -1984,6 +1984,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const matchesAdmission =
             turn !== null &&
             (turn.admissionMessageId === null || turn.admissionMessageId === message.id);
+          if (
+            turn !== null &&
+            matchesAdmission &&
+            turn.pendingMemoryReceipt?.messageId === message.id
+          ) {
+            const receipt = turn.pendingMemoryReceipt.receipt;
+            turn.pendingMemoryReceipt = undefined;
+            yield* receipt;
+          }
           if (turn !== null && matchesAdmission) turn.usage.promptMessageIds.add(message.id);
           if (turn !== null && matchesAdmission && turn.nativeUserMessageId === null) {
             turn.nativeUserMessageId = message.id;
@@ -2735,12 +2744,18 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .join("\n\n"),
                   };
             if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
+            turn.pendingMemoryReceipt = { messageId: payload.messageID, receipt };
             return yield* sdkCall("session.promptAsync", prepared, (signal) =>
               client.session.promptAsync(prepared, {
                 signal: AbortSignal.any([signal, abortController.signal]),
               }),
             ).pipe(
-              Effect.andThen(receipt),
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  if (turn.pendingMemoryReceipt?.messageId === payload.messageID)
+                    turn.pendingMemoryReceipt = undefined;
+                }),
+              ),
               Effect.andThen(delivery?.submitted() ?? Effect.void),
               Effect.andThen(delivery?.accepted() ?? Effect.void),
             );
