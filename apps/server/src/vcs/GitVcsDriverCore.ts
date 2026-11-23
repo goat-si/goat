@@ -4,6 +4,9 @@ import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
+import { parseUpstreamRefWithRemoteNames } from "./parseUpstreamRemote.ts";
+import { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
+export { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
 import type { GitRepositoryPaths, GitRefsSnapshot } from "./gitRepositoryTypes.ts";
 import { recoverBranchRename } from "./renameBranchRecovery.ts";
 import { branchBaseConfigKey, legacyBranchBaseConfigKey } from "./gitBranchBaseKeys.ts";
@@ -227,38 +230,6 @@ const refuseOptionLikeRefName = (operation: string, cwd: string, refName: string
         }),
       )
     : Effect.void;
-
-function parseUpstreamRefWithRemoteNames(
-  upstreamRef: string,
-  remoteNames: ReadonlyArray<string>,
-): { upstreamRef: string; remoteName: string; branchName: string } | null {
-  const parsed = parseRemoteRefWithRemoteNames(upstreamRef, remoteNames);
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    upstreamRef,
-    remoteName: parsed.remoteName,
-    branchName: parsed.branchName,
-  };
-}
-
-const GIT_CHECKOUT_PROGRESS_LINE = /Updating files:\s+(\d+)%\s+\((\d+)\/(\d+)\)/;
-
-export function parseGitCheckoutProgressLine(
-  line: string,
-): { percent: number; completed: number; total: number } | null {
-  const match = GIT_CHECKOUT_PROGRESS_LINE.exec(line);
-  if (!match) return null;
-  const percent = Number(match[1]);
-  const completed = Number(match[2]);
-  const total = Number(match[3]);
-  if (!Number.isFinite(percent) || !Number.isFinite(completed) || !Number.isFinite(total)) {
-    return null;
-  }
-  return { percent: Math.max(0, Math.min(100, percent)), completed, total };
-}
 
 /** Windows Git needs core.longpaths beyond MAX_PATH (260); OS LongPathsEnabled alone is insufficient. */
 export const windowsLongPathConfigEnv = (
@@ -2386,8 +2357,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const pullCurrentBranch: GitVcsDriver.GitVcsDriver["Service"]["pullCurrentBranch"] = Effect.fn(
     "pullCurrentBranch",
   )(function* (cwd) {
-    const details = yield* readStatusDetailsLocal(cwd);
-    const refName = details.branch;
+    const [refName, currentUpstreamRef] = yield* Effect.all(
+      [
+        readCurrentBranch("GitVcsDriver.pullCurrentBranch.branch", cwd),
+        readCurrentUpstreamRef(cwd),
+      ],
+      { concurrency: 2 },
+    );
+    let upstreamRef = currentUpstreamRef;
+    // `@{upstream}` needs the tracking ref, which an unborn branch's first pull has not fetched.
+    if (upstreamRef === null && refName) {
+      const head = yield* executeGit(
+        "GitVcsDriver.pullCurrentBranch.head",
+        cwd,
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+        { allowNonZeroExit: true },
+      );
+      if (head.exitCode !== 0) {
+        const [configuredRemote, mergeRef] = yield* Effect.all([
+          readConfigValue(cwd, `branch.${refName}.remote`),
+          readConfigValue(cwd, `branch.${refName}.merge`),
+        ]);
+        const mergeBranch = mergeRef?.replace(/^refs\/heads\//, "");
+        if (configuredRemote && mergeBranch) {
+          upstreamRef =
+            configuredRemote === "." ? mergeBranch : `${configuredRemote}/${mergeBranch}`;
+        }
+      }
+    }
     if (!refName) {
       return yield* new GitCommandError({
         ...gitCommandContext({
@@ -2398,7 +2395,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         detail: "Cannot pull from detached HEAD.",
       });
     }
-    if (!details.hasUpstream) {
+    if (upstreamRef === null) {
       return yield* new GitCommandError({
         ...gitCommandContext({
           operation: "GitVcsDriver.pullCurrentBranch",
@@ -2516,14 +2513,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       true,
     ).pipe(Effect.map((stdout) => stdout.trim()));
 
-    const refreshed = yield* readStatusDetailsLocal(cwd);
     return {
       status:
         beforeSha.length > 0 && beforeSha === afterSha
           ? ("skipped_up_to_date" as const)
           : ("pulled" as const),
       refName,
-      upstreamRef: refreshed.upstreamRef,
+      upstreamRef,
     };
   }, Effect.scoped);
 
