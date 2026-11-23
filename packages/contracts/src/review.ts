@@ -28,6 +28,7 @@ export const ReviewDiffPreviewInput = Schema.Struct({
     Schema.Struct({
       path: Schema.NonEmptyString,
       previousPath: Schema.NullOr(Schema.NonEmptyString),
+      changeType: Schema.optionalKey(Schema.String),
       sourceKind: ReviewDiffPreviewSourceKind,
     }),
   ),

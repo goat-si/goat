@@ -4,6 +4,7 @@ import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
 import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
+import type { ExecuteGitOptions } from "./executeGitOptions.ts";
 import { refuseOptionLikeRefName } from "./refuseOptionLikeRefName.ts";
 import { parseUpstreamRefWithRemoteNames } from "./parseUpstreamRemote.ts";
 import { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
@@ -201,22 +202,6 @@ const STATUS_DEFAULT_BRANCH_CACHE_TTL = Duration.minutes(5);
 const STATUS_ORIGIN_EXISTS_CACHE_TTL = Duration.minutes(5);
 
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
-
-interface ExecuteGitOptions {
-  stdin?: string | undefined;
-  timeoutMs?: number | null | undefined;
-  stallTimeoutMs?: number | undefined;
-  forceKillAfterMs?: number | undefined;
-  allowNonZeroExit?: boolean | undefined;
-  fallbackErrorDetail?: string | undefined;
-  env?: NodeJS.ProcessEnv | undefined;
-  maxOutputBytes?: number | undefined;
-  appendTruncationMarker?: boolean | undefined;
-  keepLineCallbacksAfterTruncation?: boolean | undefined;
-  progress?: GitVcsDriver.ExecuteGitProgress | undefined;
-  writesSharedConfig?: boolean | undefined;
-  retryConfigLock?: boolean | undefined;
-}
 
 /** Windows Git needs core.longpaths beyond MAX_PATH (260); OS LongPathsEnabled alone is insufficient. */
 export const windowsLongPathConfigEnv = (
@@ -2969,13 +2954,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         exitCode: result.exitCode,
       });
     });
+    const indexedRef =
+      input.file && input.file.changeType && input.file.changeType !== "new"
+        ? (dirtyRef ?? review.mergeBase)
+        : null;
+    const indexedStat = indexedRef === null ? undefined : yield* readStats(indexedRef);
+    const indexed =
+      indexedStat?.files.some(
+        (file) =>
+          file.path === input.file?.path &&
+          file.changeType !== undefined &&
+          file.changeType !== "deleted",
+      ) === true;
     const readTrackedDiff = Effect.fn("GitVcsDriver.getReviewDiffPreview.tracked")(function* (
       ref: string | null,
       env?: NodeJS.ProcessEnv,
       deferPatch = false,
     ) {
       if (ref === null) return { stdout: "", stdoutTruncated: false, files: [] };
-      const stat = yield* readStats(ref, env);
+      const stat =
+        env === undefined && ref === indexedRef && indexedStat !== undefined
+          ? indexedStat
+          : yield* readStats(ref, env);
       if (deferPatch || stat.files.length === 0)
         return { stdout: "", stdoutTruncated: false, files: stat.files };
       const patch = yield* executeGit(
@@ -3038,9 +3038,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
     const [dirtyTrackedResult, baseResult] = yield* Effect.gen(function* () {
-      const untracked = trackedOnly
-        ? { env: undefined, omitted: false }
-        : yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path);
+      const untracked =
+        trackedOnly || indexed
+          ? { env: undefined, omitted: false }
+          : yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path);
       const complete = untracked !== null && !untracked.omitted;
       const [dirty, base] =
         review.mergeBase === dirtyRef

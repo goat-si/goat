@@ -178,6 +178,7 @@ export function useReviewDiffData(input: {
                       file: {
                         path: file.path,
                         previousPath: file.previousPath,
+                        ...(file.changeType ? { changeType: file.changeType } : {}),
                         sourceKind: lazySource.kind,
                       },
                     },

@@ -218,6 +218,7 @@ function reviewFileQueries({
                   file: {
                     path: file.path,
                     previousPath: file.previousPath,
+                    ...(file.changeType ? { changeType: file.changeType } : {}),
                     sourceKind: source.kind,
                   },
                 },
