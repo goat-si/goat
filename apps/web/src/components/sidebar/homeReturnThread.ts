@@ -81,9 +81,7 @@ function homeReturnThreadAt(params: RouteParams): HomeReturnThread | null {
   if (target?.kind !== "draft") return null;
   const session = useComposerDraftStore.getState().getDraftSession(target.draftId);
   if (session === null) return null;
-  return session.promotedTo
-    ? serverTarget(session.promotedTo)
-    : { kind: "draft", draftId: target.draftId };
+  return { kind: "draft", draftId: target.draftId };
 }
 
 function sameTarget(left: HomeReturnThread | null, right: HomeReturnThread) {
@@ -100,8 +98,8 @@ const isBotTarget = (target: HomeReturnThread | null, botRef: ChannelBotRef | nu
   isGoatBotThread({ environmentId: target.environmentId, id: target.threadId }, botRef);
 
 /**
- * Remembers the last thread or draft for Home. A remembered draft that is sent becomes its
- * thread before finalizing drops the draft, even when that happens after leaving it.
+ * Remembers the last thread or draft for Home. A remembered draft becomes its thread only
+ * once its send succeeds and finalizing drops the draft; a failed send restores the draft.
  * GOAT can learn its main bot's thread after it opened, so the target it replaced is kept
  * to return to once that thread turns out to be the bot's.
  */
@@ -112,15 +110,27 @@ export function startHomeReturnMemory(): {
   const stored = readStored();
   remember(isBotTarget(stored, useGlobalAgentStore.getState().botRef) ? null : stored);
   let replaced: HomeReturnThread | null = null;
-  const followSentDraft = () => {
-    if (remembered?.kind !== "draft") return;
-    const sentTo = useComposerDraftStore
-      .getState()
-      .getDraftSession(remembered.draftId as DraftId)?.promotedTo;
-    if (sentTo) remember(serverTarget(sentTo));
+  // Where each kept draft is being sent, until its session is dropped or the send fails.
+  const sending = new Map<string, ScopedThreadRef>();
+  const settle = (target: HomeReturnThread | null): HomeReturnThread | null => {
+    if (target?.kind !== "draft") return target;
+    const session = useComposerDraftStore.getState().getDraftSession(target.draftId as DraftId);
+    const sentTo = sending.get(target.draftId);
+    if (session === null) {
+      sending.delete(target.draftId);
+      return sentTo ? serverTarget(sentTo) : target;
+    }
+    if (session.promotedTo) sending.set(target.draftId, session.promotedTo);
+    else sending.delete(target.draftId);
+    return target;
   };
-  followSentDraft();
-  const unsubscribeDrafts = useComposerDraftStore.subscribe(followSentDraft);
+  const followSentDrafts = () => {
+    replaced = settle(replaced);
+    const next = settle(remembered);
+    if (next !== remembered) remember(next);
+  };
+  followSentDrafts();
+  const unsubscribeDrafts = useComposerDraftStore.subscribe(followSentDrafts);
   const unsubscribeBot = useGlobalAgentStore.subscribe((state) => {
     if (!isBotTarget(remembered, state.botRef)) return;
     remember(replaced);
@@ -132,6 +142,7 @@ export function startHomeReturnMemory(): {
       if (next === null || sameTarget(remembered, next)) return;
       replaced = remembered;
       remember(next);
+      followSentDrafts();
     },
     stop: () => {
       unsubscribeDrafts();
