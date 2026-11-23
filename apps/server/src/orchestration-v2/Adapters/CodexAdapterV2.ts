@@ -898,8 +898,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
         const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
-        // Native thread id to the compaction whose context goes back once its turn completes.
-        const compactionsAwaitingRestore = new Map<string, string>();
         const contextRestores = makeCodexContextRestores(scope);
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
@@ -1010,9 +1008,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           restorePermit.withPermits(1),
           (effect, threadId) => effect.pipe(Effect.onError(() => clearMemoryDelivery(threadId))),
           Effect.timeout("10 seconds"),
-          Effect.catch(() =>
-            Effect.logWarning("Failed to restore Codex additional context after compaction."),
-          ),
         );
         if (adapterOptions.mcpCredentialRotations)
           yield* adapterOptions.mcpCredentialRotations.pipe(
@@ -4555,7 +4550,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const emitCompletedItem = (payload: CodexSchema.V2ItemCompletedNotification) =>
           Effect.gen(function* () {
             if (payload.item.type === "contextCompaction")
-              compactionsAwaitingRestore.set(payload.threadId, payload.item.id);
+              contextRestores.mark(payload.threadId, payload.item.id);
             if (
               (payload.item.type === "subAgentActivity" ||
                 payload.item.type === "collabAgentToolCall") &&
@@ -6285,9 +6280,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // The stopped-queued record clears after finalizing, so a Stop deciding meanwhile cannot keep it.
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
-            const compactionId = compactionsAwaitingRestore.get(payload.threadId);
+            const compactionId = contextRestores.take(payload.threadId);
             if (compactionId !== undefined) {
-              compactionsAwaitingRestore.delete(payload.threadId);
               yield* contextRestores.fork(
                 payload.threadId,
                 restoreAdditionalContext(payload.threadId, compactionId),
@@ -7409,7 +7403,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return next;
               });
               sessionApprovals.delete(nativeThreadId);
-              compactionsAwaitingRestore.delete(nativeThreadId);
+              contextRestores.take(nativeThreadId);
               if (unloadInput.archive === true) {
                 // Archive also unloads, inline and without thread/closed; a resume unarchives it.
                 yield* client.request("thread/archive", { threadId: nativeThreadId });

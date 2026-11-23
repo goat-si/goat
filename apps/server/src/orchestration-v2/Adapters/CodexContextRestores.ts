@@ -1,32 +1,94 @@
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 
+const MAX_RESTORES = 256;
+
+class CodexContextRestoreError extends Data.TaggedError("CodexContextRestoreError")<{
+  readonly detail: string;
+}> {
+  override get message() {
+    return this.detail;
+  }
+}
+
+type Restore = {
+  readonly done: Deferred.Deferred<boolean>;
+  readonly run: Effect.Effect<boolean>;
+};
+
 export function makeCodexContextRestores(scope: Scope.Scope) {
-  const byThread = new Map<string, Set<Deferred.Deferred<void>>>();
-  const fork = Effect.fnUntraced(function* (threadId: string, restore: Effect.Effect<void>) {
-    const done = yield* Deferred.make<void>();
-    const pending = byThread.get(threadId) ?? new Set();
-    pending.add(done);
+  const byThread = new Map<string, Set<Restore>>();
+  const compactions = new Map<string, string>();
+  let count = 0;
+  let overflow = false;
+  const retryPermit = Semaphore.makeUnsafe(1);
+  const remove = (threadId: string, restore: Restore) => {
+    const pending = byThread.get(threadId);
+    if (pending?.delete(restore)) count--;
+    if (pending?.size === 0) byThread.delete(threadId);
+  };
+  const mark = (threadId: string, compactionId: string) => {
+    if (!compactions.has(threadId) && compactions.size >= MAX_RESTORES) overflow = true;
+    else compactions.set(threadId, compactionId);
+  };
+  const take = (threadId: string) => {
+    const id = compactions.get(threadId);
+    compactions.delete(threadId);
+    return id;
+  };
+  const fork = Effect.fnUntraced(function* <E>(threadId: string, effect: Effect.Effect<void, E>) {
+    if (count >= MAX_RESTORES) {
+      overflow = true;
+      return;
+    }
+    const done = yield* Deferred.make<boolean>();
+    const run = effect.pipe(Effect.matchCause({ onFailure: () => false, onSuccess: () => true }));
+    const restore = { done, run };
+    const pending = byThread.get(threadId) ?? new Set<Restore>();
+    pending.add(restore);
+    count++;
     byThread.set(threadId, pending);
-    // Announce the restore before publishing turn completion, but don't block the
-    // notification reader: it has to deliver the injection response to this fiber.
-    yield* restore.pipe(
-      Effect.ensuring(
+    // The notification reader must remain free to deliver the injection response.
+    yield* run.pipe(
+      Effect.tap((ok) =>
         Effect.sync(() => {
-          pending.delete(done);
-          if (pending.size === 0) byThread.delete(threadId);
-        }).pipe(Effect.andThen(Deferred.succeed(done, undefined))),
+          if (ok) remove(threadId, restore);
+        }),
       ),
+      Effect.flatMap((ok) => Deferred.succeed(done, ok)),
       Effect.forkIn(scope, { startImmediately: true }),
     );
   });
   const wait = Effect.fnUntraced(function* (threadId: string) {
-    let done = byThread.get(threadId)?.values().next().value;
-    while (done !== undefined) {
-      yield* Deferred.await(done);
-      done = byThread.get(threadId)?.values().next().value;
+    if (overflow)
+      return yield* new CodexContextRestoreError({
+        detail:
+          "Codex context restoration capacity exceeded; restart the provider session before retrying.",
+      });
+    let pending = byThread.get(threadId)?.values().next().value;
+    while (pending !== undefined) {
+      const restore = pending;
+      if (!(yield* Deferred.await(restore.done))) {
+        yield* Effect.gen(function* () {
+          if (!byThread.get(threadId)?.has(restore)) return;
+          const ok = yield* restore.run;
+          if (!ok)
+            return yield* new CodexContextRestoreError({
+              detail: "Codex could not restore context after compaction. Retry the turn.",
+            });
+          remove(threadId, restore);
+        }).pipe(retryPermit.withPermits(1));
+      }
+      pending = byThread.get(threadId)?.values().next().value;
     }
+    if (overflow)
+      return yield* new CodexContextRestoreError({
+        detail:
+          "Codex context restoration capacity exceeded; restart the provider session before retrying.",
+      });
   });
-  return { fork, wait };
+  return { fork, wait, mark, take };
 }

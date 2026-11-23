@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { EnvironmentId, RunAttemptId, type RunId, ThreadId } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -26,7 +27,13 @@ import {
 import { makeCodexReplayTranscript, makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 
 describe("Codex additional context restoration", () => {
-  it.effect.each(["survives", "revoked", "restore timeout", "manual compaction"] as const)(
+  it.effect.each([
+    "survives",
+    "revoked",
+    "restore timeout",
+    "injection failure",
+    "manual compaction",
+  ] as const)(
     "settles revalidated context restoration before starting the next turn (%s)",
     (outcome) =>
       Effect.scoped(
@@ -86,6 +93,9 @@ describe("Codex additional context restoration", () => {
               },
             ],
           }));
+          assert.isTrue(
+            items.some((item) => !item.content[0]?.text.includes("external_goat_memory")),
+          );
           const transcript = makeCodexReplayTranscript({
             scenario,
             entries: [
@@ -167,28 +177,48 @@ describe("Codex additional context restoration", () => {
                     {
                       type: "emit_inbound",
                       label: "restored context",
-                      frame: { id: injectId, result: {} },
+                      frame:
+                        outcome === "injection failure"
+                          ? { id: injectId, error: { code: -32603, message: "injection failed" } }
+                          : { id: injectId, result: {} },
                     },
                   ] as const)),
-              {
-                type: "expect_outbound",
-                frame: manual
-                  ? {
-                      id: nextId,
-                      method: "thread/compact/start",
-                      params: { threadId: nativeThreadId },
-                    }
-                  : { id: nextId, method: "turn/start", params: nextParams },
-              },
-              {
-                type: "emit_inbound",
-                frame: {
-                  id: nextId,
-                  result: manual
-                    ? {}
-                    : { turn: makeCodexReplayTurn({ id: nextTurnId, status: "inProgress" }) },
-                },
-              },
+              ...(outcome === "restore timeout" || outcome === "injection failure"
+                ? ([
+                    {
+                      type: "expect_outbound",
+                      frame: {
+                        id: nextId,
+                        method: "thread/inject_items",
+                        params: { threadId: nativeThreadId, items },
+                      },
+                    },
+                    {
+                      type: "emit_inbound",
+                      frame: { id: nextId, error: { code: -32603, message: "retry failed" } },
+                    },
+                  ] as const)
+                : ([
+                    {
+                      type: "expect_outbound",
+                      frame: manual
+                        ? {
+                            id: nextId,
+                            method: "thread/compact/start",
+                            params: { threadId: nativeThreadId },
+                          }
+                        : { id: nextId, method: "turn/start", params: nextParams },
+                    },
+                    {
+                      type: "emit_inbound",
+                      frame: {
+                        id: nextId,
+                        result: manual
+                          ? {}
+                          : { turn: makeCodexReplayTurn({ id: nextTurnId, status: "inProgress" }) },
+                      },
+                    },
+                  ] as const)),
             ],
           });
           yield* (yield* McpProviderSessions.McpProviderSessions).set({
@@ -333,10 +363,23 @@ describe("Codex additional context restoration", () => {
             assert.isFalse(yield* Deferred.isDone(refreshed), "refreshed before injection reply");
             yield* Deferred.succeed(injectionReply, undefined);
           }
-          yield* Fiber.join(following);
+          const result = yield* Effect.exit(Fiber.join(following));
+          if (outcome === "restore timeout" || outcome === "injection failure") {
+            assert.isTrue(Exit.isFailure(result), "start must fail when context restoration fails");
+            if (Exit.isFailure(result)) {
+              assert.include(Cause.pretty(result.cause), "ProviderAdapterTurnStartError");
+              assert.include(
+                Cause.pretty(result.cause),
+                "Codex could not restore context after compaction",
+              );
+            }
+            assert.isFalse(yield* Deferred.isDone(refreshed));
+            return;
+          }
+          assert.isTrue(Exit.isSuccess(result));
           assert.isTrue(yield* Deferred.isDone(refreshed));
           assert.equal(revalidations, 1);
-          assert.equal(yield* Deferred.isDone(injected), outcome !== "restore timeout");
+          assert.isTrue(yield* Deferred.isDone(injected));
           const memoryItem = items.find((item) =>
             item.content[0]?.text.includes("external_goat_memory"),
           );
