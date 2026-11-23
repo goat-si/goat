@@ -226,6 +226,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         protocolVersion: 1,
         importProvider: true,
         importTurnStartFit: true,
+        codexImportUpdates: true,
         asideImport: true,
         refusedReverts: true,
         resolutionInputs: true,

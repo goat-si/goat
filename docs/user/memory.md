@@ -40,6 +40,10 @@ Importing from a browser needs a secure connection: open GOAT over HTTPS, for ex
 
 If memory storage is full, the import result names the limit that was reached and, when you can free it, what to do: for most limits, forget memories you no longer need, then preview again. When the whole memory store is full, GOAT runs its automatic cleanup once before refusing a memory; forgetting then helps only when many memories are no longer needed.
 
+After importing Codex memories, you can check the same device for source updates in **Settings → Memory → Import memories**. Review new or changed entries and select the ones to import. If both Codex and GOAT changed an entry, you can compare the two versions, but comparing does not pick one: importing the Codex version can create a conflict with your GOAT edit, which GOAT may resolve automatically using a model. Leave the entry unselected to keep the GOAT version as it is. Entries missing from Codex stay in GOAT. An unavailable source can be checked again when it is accessible.
+
+GOAT identifies each task group in Codex’s `MEMORY.md` by its heading. If you rename a group and leave its body unchanged, the update check shows the new heading as **New** and the old heading as **Missing from Codex**. The saved GOAT memory stays as it was. Select the new heading to import it.
+
 ## Share between devices
 
 To share memory, start from the hub. Connect your other device through [Connections](./remote-access.md), then use **Add device** in the hub’s Memory settings. You need settings write permission on both devices and a **Hub address** the other device can reach. Use HTTPS and avoid localhost, which points to the receiving device itself; saving the address does not verify connectivity.

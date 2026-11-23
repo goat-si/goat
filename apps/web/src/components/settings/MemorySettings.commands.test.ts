@@ -110,6 +110,8 @@ it("runs browser recovery through the actual import command and refuses apply af
     tag: WS_METHODS.memoryImportProvider,
     execute: (input) => {
       calls.push(input);
+      if (input.action === "codexBaseline" || input.action === "compareCodex")
+        throw new Error("Unexpected source update request");
       const result: MemoryImportProviderResult =
         input.action === "preview"
           ? {

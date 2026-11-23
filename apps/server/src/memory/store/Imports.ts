@@ -193,6 +193,53 @@ export const makeImports = (
       return b && b.kind !== "retired" ? b.receipt : undefined;
     },
   );
+  const readCodexImportBaselineTx: ImportStorePorts["readCodexImportBaselineTx"] =
+    Effect.fnUntraced(function* (input) {
+      yield* Transaction;
+      const rows = yield* stored(
+        "codex-import-baseline",
+        sql<{
+          sourceItemKey: string;
+          sourceFingerprint: string;
+          scopeJson: string;
+          locallyEdited: number;
+        }>`
+          SELECT r.source_item_key AS sourceItemKey, r.scope_json AS scopeJson,
+            COALESCE(json_extract(r.registration_json, '$.pending.sourceFingerprint'),
+                     json_extract(r.registration_json, '$.accepted.sourceFingerprint')) AS sourceFingerprint,
+            json_extract(i.heads_json, '$[0]') IS NOT COALESCE(
+              json_extract(r.registration_json, '$.pending.revisionId'),
+              json_extract(r.registration_json, '$.accepted.revisionId')
+            ) AS locallyEdited
+          FROM memory_import_receipts r
+          JOIN memory_items i ON i.space=r.space AND i.memory_id=r.memory_id
+          WHERE r.space=${input.memorySpaceId} AND r.environment_id=${input.environmentId}
+            AND r.source_id=${input.sourceId} AND r.record_kind='item' AND i.status='active'
+            AND (json_extract(i.scope_json, '$.kind') != 'thread'
+                 OR json_extract(i.scope_json, '$.thread.environmentId')=${input.environmentId})
+            AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f
+                            WHERE f.space=i.space AND f.memory_id=i.memory_id)
+            AND sourceFingerprint IS NOT NULL AND r.source_item_key>${input.after ?? ""}
+          ORDER BY r.source_item_key LIMIT 65
+        `,
+      );
+      if (!rows.length && !input.after) {
+        const prior = yield* stored(
+          "codex-import-baseline",
+          sql`SELECT 1 FROM memory_import_receipts
+                WHERE space=${input.memorySpaceId} AND environment_id=${input.environmentId}
+                AND source_id=${input.sourceId} AND record_kind='item'
+                AND COALESCE(json_extract(registration_json, '$.pending.revisionId'),
+                             json_extract(registration_json, '$.accepted.revisionId')) IS NOT NULL LIMIT 1`,
+        );
+        if (!prior.length) return null;
+      }
+      return yield* Effect.forEach(rows, ({ scopeJson, locallyEdited, ...row }) =>
+        scopeCodec
+          .decode(scopeJson, strict)
+          .pipe(Effect.map((scope) => ({ ...row, scope, locallyEdited: Boolean(locallyEdited) }))),
+      );
+    });
   const readImportItemTx: ImportStorePorts["readImportItemTx"] = Effect.fnUntraced(
     function* (input) {
       yield* Transaction;
@@ -494,6 +541,7 @@ export const makeImports = (
     readImportBatchTx,
     readImportReceiptTx,
     readImportItemTx,
+    readCodexImportBaselineTx,
     commitImportItemTx,
     findImportMatchTx,
   };
