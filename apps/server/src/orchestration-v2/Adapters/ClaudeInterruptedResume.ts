@@ -9,7 +9,7 @@ const decodeHistory = Schema.decodeUnknownEffect(
       Schema.Struct({
         type: Schema.String,
         uuid: Schema.String,
-        message: Schema.Struct({ content: Schema.Unknown }),
+        message: Schema.Struct({ content: Schema.Unknown, model: Schema.optional(Schema.Unknown) }),
       }),
     ),
   ),
@@ -28,6 +28,8 @@ export const interruptedResumeOptions = Effect.fn("ClaudeAgentSdkQueryRunner.int
         ? messages.length
         : messages.findIndex((message) => message.uuid === savedBoundary) + 1;
     const boundary = end;
+    const last = messages[boundary - 1];
+    const endsOnFailedRequest = last?.type === "assistant" && last.message.model === "<synthetic>";
     let toolInterrupted = false;
     // Native reply-on-resume starts before the CLI's synthetic abort and tool-refusal rows.
     while (end > 0) {
@@ -71,8 +73,12 @@ export const interruptedResumeOptions = Effect.fn("ClaudeAgentSdkQueryRunner.int
       ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
       env: {
         ...options.env,
-        CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1",
-        CLAUDE_CODE_RESUME_REASON: "user_resume",
+        ...(endsOnFailedRequest
+          ? {}
+          : {
+              CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1",
+              CLAUDE_CODE_RESUME_REASON: "user_resume",
+            }),
       },
     };
   },
