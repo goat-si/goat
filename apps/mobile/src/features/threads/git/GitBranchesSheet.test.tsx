@@ -14,15 +14,24 @@ const state = vi.hoisted(() => ({
   inputs: new Map<string, InputProps>(),
   actions: new Map<string, ActionProps>(),
   worktrees: [] as Array<{ baseBranch: string; newBranch: string }>,
+  focused: true,
+  goBackCalls: 0,
+  gitResult: Promise.resolve<object | null>(null),
+  checkout: null as null | (() => void),
 }));
 
-vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({ goBack() {} }) }));
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({ goBack: () => state.goBackCalls++, isFocused: () => state.focused }),
+}));
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
   useWindowDimensions: () => ({ height: 800 }),
   View: ({ children }: { children: ReactNode }) => children,
   ScrollView: ({ children }: { children: ReactNode }) => children,
-  Pressable: () => null,
+  Pressable: (props: { onPress: () => void }) => {
+    state.checkout = props.onPress;
+    return null;
+  },
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
@@ -58,7 +67,7 @@ vi.mock("../../../state/use-selected-thread-worktree", () => ({
 }));
 vi.mock("../../../state/use-selected-thread-git-state", () => ({
   useSelectedThreadGitState: () => ({
-    selectedThreadBranches: [],
+    selectedThreadBranches: [{ name: "release/stable", worktreePath: null }],
     selectedThreadBranchesLoading: false,
     gitOperationLabel: null,
   }),
@@ -66,9 +75,11 @@ vi.mock("../../../state/use-selected-thread-git-state", () => ({
 vi.mock("../../../state/use-selected-thread-git-actions", () => ({
   useSelectedThreadGitActions: () => ({
     canChangeThreadBranch: true,
-    onCreateSelectedThreadWorktree: async (input: { baseBranch: string; newBranch: string }) => {
+    onCreateSelectedThreadBranch: () => state.gitResult,
+    onCheckoutSelectedThreadBranch: () => state.gitResult,
+    onCreateSelectedThreadWorktree: (input: { baseBranch: string; newBranch: string }) => {
       state.worktrees.push(input);
-      return null;
+      return state.gitResult;
     },
   }),
 }));
@@ -90,6 +101,10 @@ function setup(branch: string | null = null) {
   state.inputs.clear();
   state.actions.clear();
   state.worktrees = [];
+  state.focused = true;
+  state.goBackCalls = 0;
+  state.gitResult = Promise.resolve(null);
+  state.checkout = null;
   const root = createRoot(document.createElement("div"));
   const render = () =>
     act(() => {
@@ -141,3 +156,24 @@ it.each(["custom-base", ""])("preserves an edited base %j when status arrives", 
     base === "" ? [] : [{ baseBranch: base, newBranch: "feature/new-worktree" }],
   );
 });
+
+it.each(["Create worktree", "Create & checkout", "checkout"])(
+  "does not navigate back after %s finishes out of focus",
+  async (action) => {
+    using screen = setup();
+    const result = Promise.withResolvers<object>();
+    state.gitResult = result.promise;
+    screen.edit("New branch name", "feature/new-branch");
+    screen.edit("Worktree branch name", "feature/new-worktree");
+    act(() => {
+      if (action === "checkout") state.checkout?.();
+      else state.actions.get(action)?.onPress();
+    });
+    state.focused = false;
+    await act(async () => {
+      result.resolve({ refName: "feature/ready" });
+      await result.promise;
+    });
+    expect(state.goBackCalls).toBe(0);
+  },
+);

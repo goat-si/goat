@@ -1,13 +1,12 @@
+import { queuedMemoryParams, wp4Memory } from "./CodexQueuedMemory.testkit.ts";
 import { assertSubagentProgress } from "./CodexSubagentProgress.testkit.ts";
 import { codexReceiptTranscript, verifyCodexReceipt } from "./CodexReceipt.testkit.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as Queue from "effect/Queue";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
-import * as MemorySnapshot from "../../memory/MemorySnapshot.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as Exit from "effect/Exit";
 import * as M from "@goat/contracts";
-import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -114,22 +113,6 @@ const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJs
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
   ChildProcess.make("git", args, { cwd, env: isolatedGitEnv() });
 const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
-
-const wp4Memory = () =>
-  MemoryContext.packMemoryContext({
-    memorySpaceId: M.MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: M.MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: M.MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: M.EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <untrusted> 'quoted' \"data\"",
-      },
-    ],
-  })!;
 
 describe("CodexAdapterV2 computer use for unattended turns", () => {
   const session: McpProviderSession.McpProviderSessionConfig = {
@@ -1187,10 +1170,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const nativeTurnId = "early-stop-turn";
       const prompt = "Run a command.";
       const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
+      const snapshot = wp4Memory();
+      const params = yield* queuedMemoryParams(nativeThreadId, prompt, snapshot);
+      let receipts = 0;
+      let uncertain = 0;
       const transcript = makeCodexReplayTranscript({
         scenario: "early-stop-await-native-start",
         entries: [
-          ...preamble.slice(0, -2),
+          ...preamble.slice(0, 5),
+          { type: "expect_outbound", frame: { id: 3, method: "turn/start", params } },
           {
             type: "emit_inbound",
             label: "turn/start/queued",
@@ -1248,15 +1236,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             if (method === "turn/interrupt") interruptSent = true;
           }),
       );
-      yield* harness.runtime.startTurn(
-        makeCodexTestTurnInput({
+      yield* harness.runtime.startTurn({
+        ...makeCodexTestTurnInput({
           threadId: harness.threadId,
           providerThread: harness.providerThread,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make("early-stop-attempt"),
           text: prompt,
         }),
-      );
+        memoryContext: snapshot,
+        onMemoryDelivered: () =>
+          Effect.sync(() => {
+            receipts++;
+          }),
+        onMemoryDeliveryUncertain: () =>
+          Effect.sync(() => {
+            uncertain++;
+          }),
+      });
+      assert.equal(receipts, 0);
+      assert.equal(uncertain, 1);
       const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
         driver: CodexAdapterV2.CODEX_DRIVER_KIND,
         nativeTurnId,
@@ -1269,6 +1268,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       yield* TestClock.adjust("500 millis");
       yield* Fiber.join(interrupt);
       yield* harness.firstTerminal;
+      assert.equal(receipts, 1);
       assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
       assert.lengthOf(harness.terminalEvents(), 1);
       assert.isFalse(yield* harness.hasPendingBackgroundWork);
@@ -2221,150 +2221,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }).pipe(Effect.exit);
           assert.isTrue(Exit.isFailure(result));
           assert.equal(nativeSends, 0);
-        }).pipe(Effect.provide(layerAdapterTest)),
-      ),
-  );
-
-  it.effect.each(["survives", "revoked"] as const)(
-    "revalidates the original snapshot before native restore (%s)",
-    (outcome) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const nativeThreadId = `wp4-restore-${outcome}`;
-          const nativeTurnId = "restore-turn";
-          const scenario = `wp4-restore-${outcome}`;
-          const threadId = ThreadId.make(`thread-${scenario}`);
-          const snapshot = wp4Memory();
-          const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
-            nativeThreadId,
-            codexInput: [{ type: "text", text: "work" }],
-            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-            modelSelection: CODEX_TEST_MODEL_SELECTION,
-            hasGoatMcp: true,
-            memoryContext: snapshot,
-          });
-          const context = { ...params.additionalContext };
-          if (outcome === "revoked") delete context.goat_memory;
-          const original = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
-          const items = Object.entries(context).map(([key, entry]) => ({
-            type: "message",
-            role: entry.kind === "untrusted" ? "user" : "developer",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  entry.kind === "untrusted"
-                    ? `<external_${key}>${entry.value}</external_${key}>`
-                    : `<${key}>${entry.value}</${key}>`,
-              },
-            ],
-          }));
-          const transcript = makeCodexReplayTranscript({
-            scenario,
-            entries: [
-              ...original.slice(0, 5),
-              { type: "expect_outbound", frame: { id: 3, method: "turn/start", params } },
-              ...original.slice(6),
-              {
-                type: "emit_inbound",
-                frame: {
-                  method: "item/completed",
-                  params: {
-                    threadId: nativeThreadId,
-                    turnId: nativeTurnId,
-                    item: { type: "contextCompaction", id: "restore-item" },
-                  },
-                },
-              },
-              {
-                type: "emit_inbound",
-                frame: {
-                  method: "turn/completed",
-                  params: {
-                    threadId: nativeThreadId,
-                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
-                  },
-                },
-              },
-              {
-                type: "expect_outbound",
-                frame: {
-                  id: 4,
-                  method: "thread/inject_items",
-                  params: { threadId: nativeThreadId, items },
-                },
-              },
-              { type: "emit_inbound", frame: { id: 4, result: {} } },
-            ],
-          });
-          yield* (yield* McpProviderSessions.McpProviderSessions).set({
-            environmentId: EnvironmentId.make("fixture"),
-            threadId,
-            providerSessionId: "wp4-restore-credential",
-            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
-            endpoint: "http://127.0.0.1:43123/mcp",
-            authorizationHeader: "Bearer fixture",
-            browserToolsAvailable: true,
-            grantedScopes: ["memory:read", "orchestration:read"],
-          });
-          const entered = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          let execution: { threadId: M.ThreadId; runId: M.RunId } | undefined;
-          let revalidations = 0;
-          const injected = yield* Deferred.make<void>();
-          const harness = yield* makeCodexReplayHarness(transcript, undefined, (method) =>
-            method === "thread/inject_items" ? Deferred.succeed(injected, undefined) : Effect.void,
-          ).pipe(
-            Effect.provideService(MemorySnapshot.MemorySnapshot, {
-              forThread: () => Effect.die("restoration must not reselect"),
-              invalidate: () => Effect.void,
-              revalidate: (originalSnapshot, currentExecution, policy) =>
-                Effect.gen(function* () {
-                  assert.strictEqual(originalSnapshot, snapshot);
-                  execution = currentExecution;
-                  revalidations++;
-                  assert.deepEqual(yield* policy, { grant: "read", policyEpoch: 1 });
-                  yield* Deferred.succeed(entered, undefined);
-                  yield* Deferred.await(release);
-                  return outcome === "survives" ? originalSnapshot : undefined;
-                }),
-            }),
-            Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
-              issue: () => Effect.die("unused"),
-              resolve: () => Effect.succeed(undefined),
-              touch: () => Effect.void,
-              revokeProviderSession: () => Effect.void,
-              revokeThread: () => Effect.void,
-              revokeAll: Effect.void,
-              subscribeChanges: Effect.die("unused"),
-              inspect: () => Effect.undefined,
-              currentMemoryPolicy: () => Effect.succeed({ grant: "read", policyEpoch: 1 }),
-            }),
-          );
-          const input = makeCodexTestTurnInput({
-            threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId: RunAttemptId.make("wp4-restore"),
-            text: "work",
-          });
-          yield* harness.runtime.startTurn({
-            ...input,
-            refreshMemoryContext: () => Effect.succeed(snapshot),
-          });
-          yield* Deferred.await(entered);
-          assert.deepEqual(execution, { threadId: input.threadId, runId: input.runId });
-          yield* Deferred.succeed(release, undefined);
-          yield* harness.firstTerminal;
-          yield* Deferred.await(injected);
-          assert.equal(revalidations, 1);
-          const memoryItem = items.find((item) =>
-            item.content[0]?.text.includes("external_goat_memory"),
-          );
-          if (outcome === "survives") {
-            assert.equal(memoryItem?.role, "user");
-            assert.include(memoryItem!.content[0]!.text, "&lt;untrusted&gt;");
-          } else assert.isUndefined(memoryItem);
         }).pipe(Effect.provide(layerAdapterTest)),
       ),
   );

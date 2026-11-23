@@ -42,13 +42,14 @@ import {
   normalizeCodexThreadLoadModelSelection,
 } from "./CodexCapabilities.ts";
 export { CodexProviderCapabilitiesV2 } from "./CodexCapabilities.ts";
-import { makeCodexMcpConfigReader, codexGoatServerConfig } from "./goatCodexMcpServers.ts";
+import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
 import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
 import * as Meta from "./CodexThreadMetadata.ts";
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
 import { makeCodexMemoryDelivery } from "./CodexMemoryDelivery.ts";
+import { makeCodexContextRestores } from "./CodexContextRestores.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import { makeCodexAssistantText } from "./CodexAssistantText.ts";
@@ -71,7 +72,6 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
-import { goatMemoryToolsWithout } from "./goatMcpToolNames.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -249,7 +249,7 @@ import {
 import { codexManagedCuaDriver, codexTurnSkills } from "./CodexTurnSkills.ts";
 import { descendsFromCodexThread, makeCodexLiveWork } from "./CodexLiveWork.ts";
 import { codexSessionConfigKey } from "../../provider/CodexSessionConfigKey.ts";
-import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
+import { makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
 import {
   type CodexTurnStartParamsWithCollaborationMode,
   buildCodexTurnStartParams,
@@ -371,6 +371,7 @@ export interface ActiveCodexTurnContext {
     readonly failure: OrchestrationV2ProviderFailure;
   };
   readonly nativeStartReady?: Deferred.Deferred<void>;
+  pendingMemoryReceipt?: Effect.Effect<void> | undefined;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
   readonly projectionThreadId: ThreadId;
@@ -522,107 +523,9 @@ type CodexSubAgentActivityItem = Extract<
   { readonly type: "subAgentActivity" }
 >;
 
-/**
- * Codex waits this long for MCP servers before the first model request and
- *   leaves out any server still starting (default 1 s, too short for cold
- *   `npx`/`uvx` servers).
- */
-export const CODEX_THREAD_CONFIG = {
-  ...codexThreadMcpEnvironment(undefined),
-  "tools.update_plan.enabled": true,
-  mcp_optional_startup_grace_ms: 10_000,
-  // Codex applies concurrent summaries only to its built-in provider and sends whole sections.
-  "features.concurrent_reasoning_summaries": true,
-} as const;
-
-// Keep Codex MCP calls longer than GOAT's hour-long wait tools.
-const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
-
 export { codexNativeSubagentConfig };
-
-export function codexThreadRuntimeParams(input: {
-  readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
-  readonly threadId?: ThreadId;
-  readonly stdioEnvironment?: Readonly<Record<string, string>>;
-  readonly modelSelection?: { readonly model: string };
-  readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-  /** From `initialize`; unknown omits the subagent keys older Codex rejects. */
-  readonly codexVersion?: string | undefined;
-  /** The user's Codex config already defines `cua-driver`; theirs wins unless overridden. */
-  readonly userCuaDriver?: boolean;
-  /** A managed driver an earlier config attached to this live thread; disabled when dropped. */
-  readonly previousCuaDriver?: CuaDriverMcpConfiguration | undefined;
-}): {
-  readonly cwd?: string;
-  readonly model?: string;
-  readonly config: Readonly<Record<string, Schema.Json>>;
-} {
-  const { mcpSession } = input;
-  const memory = McpProviderSession.memoryToolAvailability(mcpSession);
-  const disabledMemoryTools = goatMemoryToolsWithout(memory);
-  const cuaDriver = codexManagedCuaDriver(mcpSession, input.userCuaDriver === true);
-  // Disable the entire dotted cua-driver entry for unattended work without a lease.
-  const cuaServer =
-    cuaDriver !== undefined
-      ? McpProviderSession.cuaCodexMcpServer(cuaDriver)
-      : input.previousCuaDriver !== undefined
-        ? { ...McpProviderSession.cuaCodexMcpServer(input.previousCuaDriver), enabled: false }
-        : mcpSession?.cuaDriverBlocked === true
-          ? {
-              command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
-              args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
-              env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
-              enabled: false,
-            }
-          : undefined;
-  return {
-    ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
-    ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
-    config: {
-      ...CODEX_THREAD_CONFIG,
-      ...(isGoatBotSessionThreadId(input.threadId ?? mcpSession?.threadId ?? "")
-        ? // The owner's hooks would steer a bot turn into running their own tools. Only this
-          // Codex session drops them: threads it launches, Claude sessions and text already in a
-          // session keep theirs, which the personal data rule in the brief covers.
-          { "features.default_mode_request_user_input": false, "features.hooks": false }
-        : {}),
-      ...codexThreadMcpEnvironment(mcpSession),
-      ...(input.threadId === undefined
-        ? {}
-        : {
-            "shell_environment_policy.set.GOAT_THREAD_ID": input.threadId,
-            "shell_environment_policy.set.T3CODE_THREAD_ID": input.threadId, // goat-rename: legacy
-          }),
-      ...input.stdioEnvironment,
-      ...codexGoatServerConfig(mcpSession?.goatMcpServers, input.threadId),
-      ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
-      ...(mcpSession === undefined
-        ? {}
-        : {
-            // Override only GOAT's server so launch-argument MCP servers survive.
-            "mcp_servers.goat": {
-              url: mcpSession.endpoint,
-              disabled_tools: [...disabledMemoryTools, "goat_thread_wait", "goat_task_create"],
-              tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
-              http_headers: {
-                Authorization: mcpSession.authorizationHeader,
-              },
-            },
-            "mcp_servers.goat-direct": {
-              url: mcpSession.endpoint,
-              tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
-              http_headers: { Authorization: mcpSession.authorizationHeader },
-              enabled_tools: ["goat_thread_wait", "goat_task_create"],
-              omit_tools_from: ["code_mode", "deferred"],
-            },
-            // A dotted override replaces only this cua-driver server.
-            ...(cuaServer === undefined
-              ? {}
-              : { [`mcp_servers.${McpProviderSession.CUA_MCP_SERVER_NAME}`]: cuaServer }),
-          }),
-    },
-  };
-}
+import { codexThreadRuntimeParams } from "./CodexThreadRuntimeParams.ts";
+export { CODEX_THREAD_CONFIG, codexThreadRuntimeParams } from "./CodexThreadRuntimeParams.ts";
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -718,11 +621,6 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
   configSchema: CodexSettings,
   defaultConfig: (): CodexSettings => DEFAULT_CODEX_SETTINGS,
   create: createCodexAdapterV2,
-};
-
-const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
-  const { memoryContext: _body, ...rest } = input;
-  return rest;
 };
 
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
@@ -856,8 +754,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const applyThreadName = makeCodexThreadTitle(client);
         const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
-        // Native thread id to the compaction whose context goes back once its turn completes.
-        const compactionsAwaitingRestore = new Map<string, string>();
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
         /** Threads Codex held before this session resumed them, such as across a server restart. */
@@ -897,6 +793,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             NonNullable<CodexTurnStartParamsWithCollaborationMode["additionalContext"]>
           >(),
         );
+        const contextRestores = makeCodexContextRestores(scope, additionalContextByThread);
         const memoryDelivery = makeCodexMemoryDelivery({
           additionalContextByThread,
           derivedCache,
@@ -967,9 +864,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           restorePermit.withPermits(1),
           (effect, threadId) => effect.pipe(Effect.onError(() => clearMemoryDelivery(threadId))),
           Effect.timeout("10 seconds"),
-          Effect.catch(() =>
-            Effect.logWarning("Failed to restore Codex additional context after compaction."),
-          ),
         );
         if (adapterOptions.mcpCredentialRotations)
           yield* adapterOptions.mcpCredentialRotations.pipe(
@@ -1486,7 +1380,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           });
           const context: ActiveCodexTurnContext = {
             ...(input.waitForNativeStart ? { nativeStartReady: yield* Deferred.make<void>() } : {}),
-            input: withoutMemoryBody(input.turnInput),
+            input: MemoryContext.withoutMemoryBody(input.turnInput),
             projectionAppThread: input.turnInput.appThread,
             projectionThreadId: input.turnInput.threadId,
             projectionRunId: input.turnInput.runId,
@@ -4083,6 +3977,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ).pipe(Effect.forkIn(scope));
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context !== undefined) {
+              const receipt = context.pendingMemoryReceipt;
+              context.pendingMemoryReceipt = undefined;
+              yield* receipt ?? Effect.void;
               if (context.nativeStartReady !== undefined) {
                 yield* Deferred.succeed(context.nativeStartReady, undefined);
               }
@@ -4329,6 +4226,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // their command items, while the shared provider session stays alive.
         yield* survivorHooks.handleNotification("thread/closed", (payload) =>
           Effect.gen(function* () {
+            yield* contextRestores.clear(payload.threadId);
             yield* threadClosings.close(payload.threadId);
             const completedAt = yield* DateTime.now;
             for (const context of (yield* Ref.get(settledTurns)).values()) {
@@ -4526,7 +4424,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const emitCompletedItem = (payload: CodexSchema.V2ItemCompletedNotification) =>
           Effect.gen(function* () {
             if (payload.item.type === "contextCompaction")
-              compactionsAwaitingRestore.set(payload.threadId, payload.item.id);
+              yield* contextRestores.mark(payload.threadId, payload.item.id);
             if (
               (payload.item.type === "subAgentActivity" ||
                 payload.item.type === "collabAgentToolCall") &&
@@ -6184,6 +6082,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 updated.delete(input.nativeTurnId);
                 return updated;
               });
+              input.context.pendingMemoryReceipt = undefined;
               if (input.context.nativeStartReady !== undefined) {
                 yield* Deferred.succeed(input.context.nativeStartReady, undefined);
               }
@@ -6257,13 +6156,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // The stopped-queued record clears after finalizing, so a Stop deciding meanwhile cannot keep it.
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
-            const compactionId = compactionsAwaitingRestore.get(payload.threadId);
+            const compactionId = contextRestores.take(payload.threadId);
             if (compactionId !== undefined) {
-              compactionsAwaitingRestore.delete(payload.threadId);
-              // The notification callback runs on the input reader. Let it read
-              // the injection response while the session-scoped request waits.
-              yield* restoreAdditionalContext(payload.threadId, compactionId).pipe(
-                Effect.forkIn(scope, { startImmediately: true }),
+              yield* contextRestores.fork(
+                payload.threadId,
+                restoreAdditionalContext(payload.threadId, compactionId),
               );
             }
             turnStartGuard.turnCompleted(
@@ -6309,7 +6206,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const now = yield* DateTime.now;
           const nativeId = `goal-command:${turnInput.attemptId}`;
           const context: ActiveCodexTurnContext = {
-            input: withoutMemoryBody(turnInput),
+            input: MemoryContext.withoutMemoryBody(turnInput),
             projectionAppThread: turnInput.appThread,
             projectionThreadId: turnInput.threadId,
             projectionRunId: turnInput.runId,
@@ -6562,9 +6459,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               recordLoaded(threadId, runtime, mcpSession);
             }
-            const memoryContext = turnInput.refreshMemoryContext
-              ? yield* turnInput.refreshMemoryContext()
-              : turnInput.memoryContext;
+            const memoryContext = yield* MemoryContext.refreshSnapshot(turnInput);
             const clearMemoryContext =
               memoryByThread.has(threadId) ||
               (yield* Ref.get(additionalContextByThread)).get(threadId)?.goat_memory !== undefined;
@@ -6609,6 +6504,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               codexInput,
               additionalContext: turnStartParams.additionalContext,
               steer,
+              beforeSteer: validatedMemory
+                ? turnInput.onMemoryDeliveryUncertain?.(validatedMemory)
+                : undefined,
               reserve: () => threadStatuses.starting(threadId),
               adopt: (nativeTurnId) =>
                 Effect.flatMap(DateTime.now, (startedAt) =>
@@ -6626,9 +6524,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return void restartNotices.delete(threadId);
             }
             const start = dispatched.reservation;
+            if (validatedMemory)
+              yield* turnInput.onMemoryDeliveryUncertain?.(validatedMemory) ?? Effect.void;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
-              new Map(current).set(threadId, withoutMemoryBody(turnInput)),
+              new Map(current).set(threadId, MemoryContext.withoutMemoryBody(turnInput)),
             );
             // Completion can remove the old context while turn/start is in flight.
             const previousTurns = new Map([
@@ -6685,17 +6585,28 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `Codex continued native turn ${started.turn.id}, which still belongs to an earlier run. Stop that turn and retry.`,
               );
             }
-            if ((yield* Ref.get(pendingRootTurns)).get(threadId)?.attemptId !== turnInput.attemptId)
-              return;
-            yield* registerRootTurn({
-              turnInput,
-              nativeTurnId: started.turn.id,
-              startedAt: codexTimestamp(started.turn.startedAt),
-              // Codex folds input into a turn it already started and names that turn.
-              waitForNativeStart:
-                started.turn.startedAt === null &&
-                threadStatuses.lastStarted(threadId) !== started.turn.id,
-            }).pipe(turnTerminalizationPermit.withPermits(1));
+            const pending = (yield* Ref.get(pendingRootTurns)).get(threadId);
+            const context =
+              pending?.attemptId === turnInput.attemptId
+                ? yield* registerRootTurn({
+                    turnInput,
+                    nativeTurnId: started.turn.id,
+                    startedAt: codexTimestamp(started.turn.startedAt),
+                    waitForNativeStart:
+                      started.turn.startedAt === null &&
+                      threadStatuses.lastStarted(threadId) !== started.turn.id,
+                  }).pipe(turnTerminalizationPermit.withPermits(1))
+                : owner?.input.attemptId === turnInput.attemptId
+                  ? owner
+                  : undefined;
+            if (context === undefined) return;
+            const receipt = MemoryContext.deliveryReceipt(turnInput, validatedMemory);
+            if (
+              started.turn.startedAt !== null ||
+              threadStatuses.lastStarted(threadId) === started.turn.id
+            )
+              yield* receipt;
+            else context.pendingMemoryReceipt = receipt;
           },
           (effect, turnInput) =>
             effect.pipe(
@@ -6714,6 +6625,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ).pipe(Effect.ignore),
               ),
+              // A start cancelled while waiting has no memory or pending turn to clean up.
+              (start) =>
+                Effect.flatMap(
+                  getNativeThreadId(turnInput.providerThread),
+                  contextRestores.wait,
+                ).pipe(Effect.andThen(start)),
             ),
         );
 
@@ -7134,9 +7051,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (turnInput) {
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
               const previous = (yield* Ref.get(additionalContextByThread)).get(threadId);
-              const fresh = turnInput.refreshMemoryContext
-                ? yield* turnInput.refreshMemoryContext()
-                : turnInput.memoryContext;
+              const fresh = yield* MemoryContext.refreshSnapshot(turnInput);
               const validated =
                 fresh === undefined
                   ? undefined
@@ -7152,7 +7067,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (fresh && validated) yield* retainMemory(threadId, fresh, turnInput);
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* Ref.update(pendingRootTurns, (current) =>
-                new Map(current).set(threadId, withoutMemoryBody(turnInput)),
+                new Map(current).set(threadId, MemoryContext.withoutMemoryBody(turnInput)),
               );
               // Clear on interruption; a late turn/started must not be adopted after an interrupted start.
               yield* client.request("thread/compact/start", { threadId }).pipe(
@@ -7178,6 +7093,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     Effect.ignore,
                   ),
                 ),
+                // An interrupted wait must not clear the earlier compaction's memory.
+                (compact) =>
+                  Effect.flatMap(
+                    getNativeThreadId(turnInput.providerThread),
+                    contextRestores.wait,
+                  ).pipe(Effect.andThen(compact)),
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterTurnStartError({
@@ -7396,7 +7317,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return next;
               });
               sessionApprovals.delete(nativeThreadId);
-              compactionsAwaitingRestore.delete(nativeThreadId);
+              yield* contextRestores.clear(nativeThreadId);
               if (unloadInput.archive === true) {
                 // Archive also unloads, inline and without thread/closed; a resume unarchives it.
                 yield* client.request("thread/archive", { threadId: nativeThreadId });

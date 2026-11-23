@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useRef, useState } from "react";
 import {
+  Platform,
   Pressable,
   ScrollView,
   View,
@@ -355,12 +356,13 @@ export function ComposerToolbarButton(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
+      accessibilityState={props.active === undefined ? undefined : { selected: props.active }}
       disabled={props.disabled}
       onPress={props.onPress}
       className={cn(
-        "h-[44px] max-w-[172px] flex-row items-center justify-center rounded-full border active:opacity-70",
+        "h-[44px] max-w-[172px] flex-row items-center justify-center rounded-full border active:opacity-70 android:h-[48px]",
         variant === "primary" && "shadow-lg shadow-adaptive-black-a10-a25 disabled:shadow-none",
-        isCircle ? "w-[44px]" : "gap-2 px-3.5",
+        isCircle ? "w-[44px] android:w-[48px]" : "gap-2 px-3.5 android:min-w-[48px]",
         variant === "primary"
           ? props.disabled
             ? "bg-subtle-strong"
@@ -368,11 +370,11 @@ export function ComposerToolbarButton(props: {
           : variant === "danger"
             ? "bg-danger"
             : props.active
-              ? "bg-subtle-strong"
+              ? "bg-primary"
               : "bg-subtle",
         variant === "default"
           ? props.active
-            ? "border-border"
+            ? "border-primary"
             : "border-border-subtle"
           : variant === "danger"
             ? "border-danger-border"
@@ -384,7 +386,10 @@ export function ComposerToolbarButton(props: {
       style={({ pressed }) => [
         {
           maxWidth: props.maxWidth,
-          minWidth: props.minWidth,
+          minWidth:
+            Platform.OS === "android" && props.minWidth !== undefined
+              ? Math.max(48, props.minWidth)
+              : props.minWidth,
           opacity: props.disabled ? 0.55 : pressed ? 0.72 : 1,
         },
         props.style,
@@ -408,7 +413,9 @@ export function ComposerToolbarButton(props: {
               ? props.disabled
                 ? "text-foreground-muted"
                 : "text-primary-foreground"
-              : "text-foreground",
+              : props.active
+                ? "text-primary-foreground"
+                : "text-foreground",
           )}
           ellipsizeMode="tail"
           numberOfLines={1}

@@ -1,6 +1,6 @@
 import { gtFallback, type useGT } from "gt-react";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
-import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
+import type { DesktopBridge, DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
+import { CLI_RELEASE_REPOSITORY, cliReleaseChannelOf } from "@goat/shared/cliRelease";
 
 export type DesktopUpdateTranslate = ReturnType<typeof useGT>;
 
@@ -146,6 +146,11 @@ function getDesktopUpdateActionTooltip(
       : gt("Downloading update");
   }
   if (state.status === "downloaded") {
+    if (state.errorContext === "install" && state.downloadedVersion) {
+      return gt("Install failed for {version}. Click to retry.", {
+        version: state.downloadedVersion,
+      });
+    }
     const version = state.downloadedVersion ?? state.availableVersion;
     const waiting =
       state.pendingRestartReason === "busy" || state.pendingRestartReason === "unknown";
@@ -166,6 +171,17 @@ function getDesktopUpdateActionTooltip(
       });
     }
     return translateDesktopUpdateMessage(state.message, gt) ?? gt("Update failed");
+  }
+  const buildChannel =
+    cliReleaseChannelOf(state.currentVersion) === "nightly" ? "nightly" : "latest";
+  if (state.status === "up-to-date" && buildChannel !== state.channel) {
+    return gt(
+      "This {build} build ignores {track} releases. Review the update track in Settings to finish the switch.",
+      {
+        build: buildChannel === "nightly" ? gt("Nightly") : gt("Stable"),
+        track: state.channel === "nightly" ? gt("Nightly") : gt("Stable"),
+      },
+    );
   }
   return gt("Up to date");
 }
@@ -192,6 +208,28 @@ export function getDesktopUpdateInstallError(result: DesktopUpdateActionResult):
   if (result.completed || result.state.errorContext !== "install")
     return getDesktopUpdateActionError(result);
   return result.state.message?.trim() || null;
+}
+
+export async function installDesktopUpdate(
+  bridge: Pick<DesktopBridge, "installUpdate" | "onUpdateState">,
+): Promise<DesktopUpdateActionResult> {
+  let awaitingFailure = false;
+  let reportFailure: (state: DesktopUpdateState) => void = () => {};
+  const failure = new Promise<DesktopUpdateState>((resolve) => {
+    reportFailure = resolve;
+  });
+  const unsubscribe = bridge.onUpdateState((state) => {
+    if (awaitingFailure && state.errorContext === "install") reportFailure(state);
+  });
+  try {
+    const result = await bridge.installUpdate();
+    if (!result.accepted || result.completed || getDesktopUpdateInstallError(result) !== null)
+      return result;
+    awaitingFailure = true;
+    return { ...result, state: await failure };
+  } finally {
+    unsubscribe();
+  }
 }
 
 export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateActionResult): boolean {

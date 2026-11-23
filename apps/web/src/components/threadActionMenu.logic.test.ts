@@ -32,6 +32,10 @@ function allIds(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("disables rename when the search result has no inline editor", () => {
+    const items = buildThreadActionMenuItems({ ...baseState, canRename: false });
+    expect(items.filter((item) => item.disabled).map((item) => item.id)).toEqual(["rename"]);
+  });
   it("offers separate thread chip and ID actions to read-only clients", () => {
     const copy = buildThreadActionMenuItems({ ...baseState, canOperate: false }).find(
       (item) => item.id === "copy",

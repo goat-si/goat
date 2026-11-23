@@ -14,7 +14,7 @@ import { CheckIcon, CopyIcon, UserRoundIcon as UserIcon } from "~/components/sol
 import { useState } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { useNowMinute } from "~/hooks/useNowMinute";
+import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection } from "~/state/entities";
 import { serverEnvironment } from "~/state/server";
@@ -205,9 +205,9 @@ export function GuestShareIndicator({ threadRef }: { readonly threadRef: ScopedT
 }
 
 function GuestShareStatus({ share }: { readonly share: ThreadGuestShare }) {
-  const nowMinute = useNowMinute();
+  const expired = useDeadlinePassed(Date.parse(share.expiresAt));
   // The share stays on the thread after it expires, until the owner clears it.
-  if (share.expiresAt.slice(0, 16) <= nowMinute) return <span>Guest link expired</span>;
+  if (expired) return <span>Guest link expired</span>;
   return (
     <span>{share.guestName !== null ? `${share.guestName} is a guest` : "Guest link active"}</span>
   );

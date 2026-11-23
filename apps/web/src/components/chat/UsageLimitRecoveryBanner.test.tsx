@@ -37,3 +37,33 @@ describe("usageLimitRecoveryBannerItem", () => {
     );
   });
 });
+
+it("uses past tense after the reset time", () => {
+  using _now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 20, 15, 14).getTime());
+  expect(bannerDescription(new Date(2026, 9, 20, 15, 0), "24-hour")).toBe("Reset 15:00");
+});
+
+it("uses the snooze wake time until it passes", () => {
+  const runId = RunId.make("run-snooze");
+  const reset = new Date(2026, 9, 20, 15, 0).toISOString();
+  const props = {
+    runId,
+    errorCode: null,
+    resetAt: reset,
+    stoppedAt: stoppedAt.toISOString(),
+    settled: false,
+    requestPending: false,
+    snoozedUntil: new Date(2026, 9, 20, 16, 0).toISOString(),
+    recovery: { runId, resetAt: reset, autoResume: true },
+    timestampFormat: "24-hour" as const,
+    onChange: async () => {},
+  };
+  {
+    using _now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 20, 15, 14).getTime());
+    expect(usageLimitRecoveryBannerItem(props).description).toBe("Resumes 16:00");
+  }
+  {
+    using _now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 20, 16, 5).getTime());
+    expect(usageLimitRecoveryBannerItem(props).description).toBe("Reset 15:00");
+  }
+});

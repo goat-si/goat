@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type Ref,
   type ReactNode,
+  useContext,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -24,7 +25,8 @@ import {
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
-import { HoldsNavigation } from "~/lib/navigationHolds";
+import { useGoatBotRouteDraft } from "./GoatBotRouteDrafts";
+import { HoldsNavigation, NavigationHoldsPaused } from "~/lib/navigationHolds";
 
 export interface GoatBotComposerHandle {
   addFiles(files: File[]): void;
@@ -58,6 +60,7 @@ export function GoatBotComposer({
   botName,
   placeholder,
   initialText = "",
+  routeDestination = null,
   attachmentSupport = null,
   modelPicker,
   onSend,
@@ -70,6 +73,7 @@ export function GoatBotComposer({
   readonly botName: string;
   readonly placeholder: string;
   readonly initialText?: string;
+  readonly routeDestination?: string | null;
   readonly replyTo?: string | null;
   readonly onClearReply?: () => void;
   readonly attachmentSupport?: GoatBotAttachmentSupport | null;
@@ -80,7 +84,13 @@ export function GoatBotComposer({
     attachments: ReadonlyArray<GoatBotDraftAttachment>,
   ) => boolean | void;
 }) {
-  const [text, setText] = useState(initialText);
+  const [initialDraft, setLocalText] = useState(initialText);
+  const routeText = useGoatBotRouteDraft(routeDestination, "text");
+  const text = routeText === null ? initialDraft : (routeText.value ?? initialText);
+  const setText = (next: string) => {
+    if (routeText === null) setLocalText(next);
+    else routeText.update(() => next);
+  };
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
   // Files handed to the box and still being prepared (an image is compressed first).
   const [staging, setStaging] = useState(0);
@@ -110,8 +120,12 @@ export function GoatBotComposer({
   const trimmed = text.trim();
   const drafted = trimmed.length > 0 || attachments.length > 0;
   const canSubmit = !disabled && drafted;
-  // Leaving the chat would drop any of these, focused or not.
-  const holdsNavigation = drafted || staging > 0 || replyTo !== null;
+  const paused = useContext(NavigationHoldsPaused);
+  // Retained text and a quote don't belong in the hidden chat's unsaved-work warning.
+  const holdsNavigation =
+    attachments.length > 0 ||
+    staging > 0 ||
+    ((!paused || routeText === null) && (trimmed.length > 0 || replyTo !== null));
   const submit = () => {
     if (!canSubmit) return;
     if (onSend(trimmed, attachments) === false) return;

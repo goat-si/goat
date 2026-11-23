@@ -30,6 +30,7 @@ vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 
 import { navigationBlocked, resetNavigationHoldsForTests } from "~/lib/navigationHolds";
+import { GoatBotRouteDrafts } from "./GoatBotRouteDrafts";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 
@@ -97,21 +98,30 @@ const member = (id: string) =>
 function chat(options: {
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly items?: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+  readonly onSend?: () => boolean;
   readonly onSendToTask?: () => boolean;
   readonly member?: BotProfile | null;
+  readonly environmentId?: EnvironmentId;
 }) {
-  const { rows, items = [], onSendToTask = () => true, member = null } = options;
+  const {
+    rows,
+    items = [],
+    onSend = () => true,
+    onSendToTask = () => true,
+    member = null,
+    environmentId = env,
+  } = options;
   const threadId = member?.sessionThreadId ?? ThreadId.make("main-bot");
   return (
     <div style={{ display: "flex", height: 600, width: 640 }}>
       <GoatBotMemberContext value={member}>
         <GoatBotChatView
-          environmentId={env}
+          environmentId={environmentId}
           visibleTurnItems={items}
-          availability={{ kind: "ready", bot: { environmentId: env, threadId } }}
+          availability={{ kind: "ready", bot: { environmentId, threadId } }}
           canOperate
           rows={rows}
-          onSend={() => true}
+          onSend={onSend}
           onSendToTask={onSendToTask}
           onRetryInput={() => {}}
           legacyAgentRoute={null}
@@ -125,6 +135,56 @@ function chat(options: {
 function setup() {
   resetNavigationHoldsForTests();
 }
+
+it.each([{ field: "Message GOAT Bot" }, { field: "Something else" }])(
+  "keeps $field through the route remount into and out of a bot task (#3474)",
+  async ({ field }) => {
+    setup();
+    const onSend = vi.fn(() => true);
+    const view = (route: string) => (
+      <GoatBotRouteDrafts>
+        <div key={route}>{chat({ rows: [question], onSend, onSendToTask: onSend })}</div>
+      </GoatBotRouteDrafts>
+    );
+    await using screen = await render(view("bot"));
+    const input = screen.getByRole("textbox", { name: field });
+    await userEvent.type(input, TYPED);
+    await screen.rerender(view("task"));
+    await expect.element(input).toHaveValue(TYPED);
+    await userEvent.fill(input, TYPED + " today");
+    await screen.rerender(view("bot"));
+    await expect.element(input).toHaveValue(TYPED + " today");
+    expect(onSend).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { name: "another bot", member: member("Research"), environmentId: env },
+  {
+    name: "the same thread on a different computer",
+    member: null,
+    environmentId: EnvironmentId.make("elsewhere"),
+  },
+])("does not bring saved chat text or an answer to $name", async ({ member, environmentId }) => {
+  setup();
+  const view = (route: string, options: Parameters<typeof chat>[0]) => (
+    <GoatBotRouteDrafts>
+      <div key={route}>{chat(options)}</div>
+    </GoatBotRouteDrafts>
+  );
+  await using screen = await render(view("bot", { rows: [question] }));
+  const composer = screen.getByRole("textbox", { name: /^Message / });
+  const answer = screen.getByRole("textbox", { name: "Something else" });
+  await userEvent.type(composer, "Write the release notes");
+  await userEvent.type(answer, TYPED);
+  // Deliberately reuse the row id across bots/hosts.
+  await screen.rerender(view("task", { rows: [question], member, environmentId }));
+  await expect.element(composer).toHaveValue("");
+  await expect.element(answer).toHaveValue("");
+  await screen.rerender(view("bot", { rows: [question] }));
+  await expect.element(composer).toHaveValue("");
+  await expect.element(answer).toHaveValue("");
+});
 
 it("a typed answer survives a pick in flight and its question leaving the loaded history, and Enter still answers that question (#3442)", async () => {
   setup();

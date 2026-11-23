@@ -14,6 +14,14 @@ import {
 import * as Schema from "effect/Schema";
 import { act } from "react";
 
+export async function enterText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  await act(() => {
+    const setValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")?.set;
+    if (!setValue) throw new Error("Expected a text field value setter");
+    setValue.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 export async function checkVirtualizedMemorySelection(
   container: HTMLElement,
   click: (label: string) => Promise<void>,

@@ -1,7 +1,7 @@
-import { type Dispatch, useEffect } from "react";
+import { type Dispatch, useEffect, useReducer } from "react";
 
-import { onOpenCommandPalette } from "../commandPaletteBus";
-import type { reduceCommandPaletteUiState } from "./CommandPalette.logic";
+import { captureCommandPaletteOpener, onOpenCommandPalette } from "../commandPaletteBus";
+import { reduceCommandPaletteUiState } from "./CommandPalette.logic";
 
 /** Opens the palette when another part of the app asks for it. */
 export function useCommandPaletteOpenRequests(
@@ -29,4 +29,19 @@ export function useCommandPaletteOpenRequests(
       }),
     [dispatch, openAddProject, openNewThreadIn, setOpen],
   );
+}
+
+export function usePaletteReducer() {
+  const [state, dispatchAction] = useReducer(reduceCommandPaletteUiState, {
+    open: false,
+    mode: "command",
+    openIntent: null,
+  });
+  const dispatch: typeof dispatchAction = (action) => {
+    if (!state.open && reduceCommandPaletteUiState(state, action).open) {
+      captureCommandPaletteOpener();
+    }
+    dispatchAction(action);
+  };
+  return [state, dispatch] as const;
 }

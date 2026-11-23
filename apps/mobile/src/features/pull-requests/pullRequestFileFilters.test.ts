@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { buildNativeReviewDiffData } from "../review/nativeReviewDiffAdapter";
 import { buildReviewParsedDiff } from "../review/reviewModel";
-import { filterPullRequestTestFiles } from "./pullRequestFileFilters";
+import { filterPullRequestTestFiles, shownPatchIndices } from "./pullRequestFileFilters";
 
 function patch(path: string) {
   return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`;
@@ -69,5 +69,24 @@ describe("mobile PR test file filter", () => {
     expect(filterPullRequestTestFiles(raw, true)).toBe(raw);
     const empty = { kind: "empty" as const };
     expect(filterPullRequestTestFiles(empty, true)).toBe(empty);
+  });
+
+  it("skips mocks and snapshots when selecting lazy patches, and restores them when shown", () => {
+    const files = [
+      "src/__mocks__/client.ts",
+      "src/__snapshots__/view.test.ts.snap",
+      "src/app.ts",
+    ].map((path) => ({ path }));
+    expect(shownPatchIndices(files, true, null)).toEqual([2]);
+    expect(shownPatchIndices(files, false, null)).toEqual([0, 1, 2]);
+  });
+
+  it("loads patches for the files the review will show, skipping hidden tests", () => {
+    const files = ["a.test.ts", "b.test.ts", "c.test.ts", "d.ts", "e.test.ts", "f.ts", "g.ts"].map(
+      (path) => ({ path }),
+    );
+    expect(shownPatchIndices(files, true, null)).toEqual([3, 5, 6]);
+    expect(shownPatchIndices(files, true, 5)).toEqual([5, 6]);
+    expect(shownPatchIndices(files, false, null)).toEqual([0, 1, 2]);
   });
 });

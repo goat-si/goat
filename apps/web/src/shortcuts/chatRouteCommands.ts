@@ -12,6 +12,7 @@ import { dispatchPreviewAction, type PreviewAction } from "../components/preview
 import { isAppModalPage, isSettingsPage } from "../components/sidebar/mainAppLocation";
 import { createNewThreadHandler, readNewThreadContext } from "../hooks/useHandleNewThread";
 import { createStartChatNew } from "../hooks/useStartChatNew";
+import { isBrowserSurfaceFocused } from "../lib/previewFocus";
 import { createScratchProjectActions } from "../hooks/useScratchProject";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -90,6 +91,13 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
       claim(event);
       if (threadRef && canOperatePreview(threadRef.environmentId)) dispatchPreviewAction(action);
     };
+  // Unclaimed, zoom keys reach the desktop menu accelerators or the browser's own zoom.
+  const zoomCommand =
+    (action: PreviewAction): CommandHandler =>
+    (event) => {
+      if (!isBrowserSurfaceFocused()) return false;
+      previewCommand(action)(event);
+    };
 
   return registerCommands(
     {
@@ -128,9 +136,9 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
       "preview.refresh": previewCommand("refresh"),
       "preview.find": previewCommand("find"),
       "preview.focusUrl": previewCommand("focus-url"),
-      "preview.zoomIn": previewCommand("zoom-in"),
-      "preview.zoomOut": previewCommand("zoom-out"),
-      "preview.resetZoom": previewCommand("reset-zoom"),
+      "preview.zoomIn": zoomCommand("zoom-in"),
+      "preview.zoomOut": zoomCommand("zoom-out"),
+      "preview.resetZoom": zoomCommand("reset-zoom"),
     },
     {
       when: () =>

@@ -1,7 +1,6 @@
 import { Session, type OpenCodeClient } from "@opencode/client/effect";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import * as Exit from "effect/Exit";
 import type * as Semaphore from "effect/Semaphore";
 import type { ActiveTurn, ThreadState, TurnTerminal } from "./adapterState.ts";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
@@ -51,11 +50,3 @@ export const finishIdleCommand = Effect.fn("OpenCode2Adapter.finishIdleCommand")
       ),
     );
 });
-
-export const deliver = <E>(answer: Effect.Effect<void, E>) =>
-  answer.pipe(
-    Effect.retry({ times: 1 }),
-    Effect.timeout("10 seconds"),
-    Effect.exit,
-    Effect.map(Exit.isSuccess),
-  );

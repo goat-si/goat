@@ -315,35 +315,7 @@ describe("desktop release runtime supply", () => {
               return result;
             };
             dependencies(id);
-            if (bundled) {
-              for (const [platform, arch, label] of [
-                ["mac", "arm64", "macOS arm64"],
-                ["linux", "x64", "Linux x64"],
-                ["linux", "arm64", "Linux arm64"],
-              ]) {
-                const producer = calls.find(
-                  ([, candidate]) =>
-                    candidate.with?.cli_archive === true &&
-                    candidate.with.platform === platform &&
-                    candidate.with.arch === arch,
-                );
-                assert.isDefined(producer, `${file}:${id} lacks ${platform}-${arch} producer`);
-                if (producer) {
-                  assert.equal(producer[1].with?.label, label);
-                  assert.isFalse(
-                    dependencies(producer[0]).has(id),
-                    `${file}: producer cannot depend on a job waiting for its artifact`,
-                  );
-                }
-              }
-            } else {
-              assert.equal(
-                file,
-                "desktop-macos-preview-publish.yml",
-                `${file}:${id} must explicitly opt in when producers exist`,
-              );
-              assert.equal(job.with?.cli_archive, false);
-            }
+            assert.isFalse(bundled, `${file}:${id} must provision SSH runtimes on demand`);
             // Run the real argument-building shell, stopping before signing/building.
             const shell = packageStep
               .run!.slice(0, packageStep.run!.indexOf("has_all()"))
@@ -360,12 +332,41 @@ describe("desktop release runtime supply", () => {
             );
             assert.equal(built.stdout.includes("--ssh-runtime-archive-dir"), bundled);
             assert.equal(built.stdout.includes("--require-all-ssh-runtimes"), bundled);
-            if (bundled) assert.include(built.stdout, "/fixture/workspace/ssh-runtime-archives");
           }
         }
         assert.equal(callers.length, 6);
         assert.isTrue(callers.every((caller) => caller.startsWith("release.yml:")));
       }),
+  );
+
+  it.effect("nightly desktop fetches only the Linux archive needed for Windows WSL", () =>
+    Effect.gen(function* () {
+      const raw = yield* Effect.tryPromise(() =>
+        NodeFSP.readFile(new URL("../.github/workflows/goat-nightly.yml", import.meta.url), "utf8"),
+      );
+      const job = Schema.Struct({
+        env: Schema.Struct({ GOAT_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL: Schema.Literal("true") }),
+        steps: Schema.Array(
+          Schema.Struct({
+            run: Schema.optionalKey(Schema.String),
+            if: Schema.optionalKey(Schema.String),
+          }),
+        ),
+      });
+      const { jobs } = yield* Schema.decodeEffect(
+        fromYaml(Schema.Struct({ jobs: Schema.Struct({ desktop_mac: job, desktop_other: job }) })),
+      )(raw);
+      for (const desktop of [jobs.desktop_mac, jobs.desktop_other]) {
+        const commands = desktop.steps.map((step) => step.run ?? "").join("\n");
+        assert.notInclude(commands, "--ssh-runtime-archive-dir");
+        assert.notInclude(commands, "--names 'cli-*'");
+      }
+      const wsl = jobs.desktop_other.steps.find((step) =>
+        step.run?.includes('--names "cli-linux-'),
+      );
+      assert.equal(wsl?.if, "matrix.platform == 'win'");
+      assert.include(wsl?.run ?? "", "cli-linux-${{ matrix.arch }}");
+    }),
   );
 
   it.live.each([

@@ -1,3 +1,5 @@
+import { deliver, REQUEST_REPLY_TIMEOUT } from "./requestDelivery.ts";
+import { takeMemoryReceipt } from "../memoryReceipt.ts";
 import { makeRequestTurn } from "./requestRouting.ts";
 import { subagentResultPreview } from "../subagentResult.ts";
 import { makeSubagentReports, subagentAnswer } from "./subagentReports.ts";
@@ -37,7 +39,7 @@ export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import { makeShellJobs } from "./shellJobs.ts";
 import { validateOpenCodeCompatibility } from "../validateCompatibility.ts";
-import { deliver, finishIdleCommand } from "./commandCompletion.ts";
+import { finishIdleCommand } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
@@ -177,7 +179,6 @@ const INSTRUCTIONS_KEY = "goat";
 const MEMORY_INSTRUCTIONS_KEY = "goat_memory";
 export const OPENCODE_2_STILL_STOPPING =
   "OpenCode is still stopping the previous turn. Send the message again in a moment.";
-const REQUEST_REPLY_TIMEOUT = "10 seconds";
 const MCP_TOOL_RELOAD_SETTLE = "250 millis";
 
 const isProviderAdapterError = Schema.is(ProviderAdapter.ProviderAdapterV2Error);
@@ -1197,6 +1198,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const turn = state.active;
       if (turn === undefined) return;
       state.active = undefined;
+      yield* takeMemoryReceipt(turn, turn.pendingMemoryReceipt?.id ?? "", false);
       for (const inboxID of turn.steers) state.strandedSteers.add(inboxID);
       for (const entry of pending.values()) {
         const background = callsAbove(entry.sessionId).some((call) => call.background);
@@ -2209,6 +2211,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const external = state.externalPrompts.get(event.data.inboxID);
         state.externalPrompts.delete(event.data.inboxID);
         const turn = state.active;
+        if (turn)
+          yield* takeMemoryReceipt(
+            turn,
+            event.data.inboxID,
+            event.type === "session.inbox.delivered",
+          );
         if (turn !== undefined && turn.steers.delete(event.data.inboxID)) {
           turn.settledInbox.add(event.data.inboxID);
           if (event.type === "session.inbox.cancelled") yield* endIfSettled(state, turn);
@@ -2296,6 +2304,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (!found) return undefined;
           const recent = before !== undefined && before !== null ? read.slice(0, -1) : read;
           for (const message of recent) {
+            if (message.type === "user") yield* takeMemoryReceipt(turn, message.id, true);
             if (message.type === "user" && turn.steers.delete(message.id)) {
               turn.settledInbox.add(message.id);
             }
@@ -3279,20 +3288,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state: ThreadState,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
     ) {
-      const snapshot = turnInput.refreshMemoryContext
-        ? yield* turnInput.refreshMemoryContext()
-        : turnInput.memoryContext;
-      const value =
-        snapshot === undefined
-          ? ""
-          : yield* Effect.try({
-              try: () => MemoryContext.memoryContextText(snapshot),
-              catch: () =>
-                new ProviderAdapter.ProviderAdapterProtocolError({
-                  driver: OPENCODE_PROVIDER,
-                  detail: "Invalid memory context frame",
-                }),
-            });
+      const {
+        text: memory,
+        receipt,
+        uncertain,
+      } = yield* MemoryContext.promptMemory(turnInput, OPENCODE_PROVIDER);
+      const value = memory ?? "";
       // Always replace, including empty clear; no local body survives this admission.
       yield* client.session.instructions.entry.put({
         sessionID: Session.ID.make(sessionId),
@@ -3302,6 +3303,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       state.memoryDigest = Hex.encode(
         yield* crypto.digest(Digest.sha256, new TextEncoder().encode(value)),
       );
+      return { receipt, uncertain };
     });
 
     const submit = Effect.fnUntraced(function* (
@@ -3350,7 +3352,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const before = newest.data[0]?.id ?? null;
           yield* markBefore(sessionId, before);
           if (state.active !== turn || turn.interrupted) return;
-          yield* prepareMemory(sessionId, state, turnInput);
+          const { uncertain } = yield* prepareMemory(sessionId, state, turnInput);
           if (!(yield* sending())) return;
           if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
             yield* client.session
@@ -3358,6 +3360,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
+          yield* uncertain;
           yield* client.session
             .command({ sessionID, ...command })
             .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
@@ -3383,10 +3386,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               readModels(location.directory),
             );
       if (state.active !== turn || turn.interrupted) return;
-      yield* prepareMemory(sessionId, state, turnInput);
+      const { receipt, uncertain } = yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
       if (!(yield* sending())) return;
+      yield* uncertain;
+      turn.pendingMemoryReceipt = { id, receipt };
       return yield* client.session
         .prompt({
           sessionID,
@@ -3397,7 +3402,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ? {}
             : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
         })
-        .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
+        .pipe(
+          Effect.tapError(() => takeMemoryReceipt(turn, id, false)),
+          Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void),
+        );
     });
 
     const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {

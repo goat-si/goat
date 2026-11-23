@@ -570,14 +570,38 @@ export interface ProviderInputDelivery {
   readonly inherited: () => Effect.Effect<void>;
 }
 
-export interface ProviderAdapterV2TurnInput {
-  readonly inputDelivery?: ProviderInputDelivery;
-  readonly memoryContext?: MemoryContextSnapshot;
+export interface TurnMemoryHooks {
+  /** Called only after a provider transport accepts a prompt carrying this snapshot. */
+  readonly onMemoryDelivered?: (snapshot: MemoryContextSnapshot) => Effect.Effect<void>;
+  readonly onMemoryDeliveryUncertain?: (snapshot: MemoryContextSnapshot) => Effect.Effect<void>;
   /** Process-local admission callback; never persisted or sent to a provider. */
   readonly refreshMemoryContext?: () => Effect.Effect<
     MemoryContextSnapshot | undefined,
     ProviderAdapterTurnStartError
   >;
+}
+
+/** Reattach never sends a fresh prompt. Retained runs must not regain turn admission hooks. */
+export const turnMemoryHooks = (
+  input: TurnMemoryHooks & { readonly reattach?: boolean },
+): TurnMemoryHooks =>
+  input.reattach
+    ? {}
+    : {
+        ...(input.onMemoryDelivered === undefined
+          ? {}
+          : { onMemoryDelivered: input.onMemoryDelivered }),
+        ...(input.onMemoryDeliveryUncertain === undefined
+          ? {}
+          : { onMemoryDeliveryUncertain: input.onMemoryDeliveryUncertain }),
+        ...(input.refreshMemoryContext === undefined
+          ? {}
+          : { refreshMemoryContext: input.refreshMemoryContext }),
+      };
+
+export interface ProviderAdapterV2TurnInput extends TurnMemoryHooks {
+  readonly inputDelivery?: ProviderInputDelivery;
+  readonly memoryContext?: MemoryContextSnapshot;
   /** Initial launch only. Follow-up and attach must not require this checkout. */
   readonly cloudLaunchSource?: ProviderAdapterV2CloudLaunchSource;
   readonly cloudSource?: OrchestrationV2CloudTask["source"];

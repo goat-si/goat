@@ -132,7 +132,8 @@ export async function persistComposerAttachmentFile(
   directory.create({ idempotent: true, intermediates: true });
   // Android's java.net.URI rejects characters expo-file-system leaves unencoded, such as `[` and `]`.
   const safeName = name.replace(/[^\w. -]/g, "-") || "file";
-  const destination = new File(directory, `${uuidv4()}-${safeName}`);
+  const prefix = `${uuidv4()}-`;
+  const destination = new File(directory, prefix + safeName.slice(-(255 - prefix.length)));
   const source = new File(uri);
   const sourceSize = source.size;
   if (

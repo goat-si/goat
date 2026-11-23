@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { GoatBotPackageImportButton } from "./GoatBotPackageActions";
 import { GoatBotTemplatePicker } from "./GoatBotTemplatePicker";
 import { useGoatBotTemplateSupport } from "./useGoatBotTemplateSupport";
@@ -48,6 +49,7 @@ export function useBotSidebarSelected() {
 }
 
 export function GoatBotSidebarTabs() {
+  const gt = useGT();
   useGoatBotHome();
   const { enabled } = useGoatBotEnabled();
   const mode = useGlobalAgentStore(selectGlobalAgentMode);
@@ -70,9 +72,9 @@ export function GoatBotSidebarTabs() {
     <>
       <SidebarGroup>
         <Tabs value={mode} onValueChange={(value: typeof mode) => setMode(value)}>
-          <TabsList aria-label="Sidebar">
-            <TabsTab value="bot">Bots</TabsTab>
-            <TabsTab value="thread">Threads</TabsTab>
+          <TabsList aria-label={gt("Sidebar")}>
+            <TabsTab value="bot">{gt("Bots")}</TabsTab>
+            <TabsTab value="thread">{gt("Threads")}</TabsTab>
           </TabsList>
         </Tabs>
       </SidebarGroup>
@@ -130,6 +132,7 @@ function NewBotButton({
   botsError: string | null;
   retryBots: () => void;
 }) {
+  const gt = useGT();
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const supportsTemplates = useGoatBotTemplateSupport(environmentId);
   const canCreate = useAtomValue(channelEnvironment.createBot.permissionAtom(environmentId));
@@ -182,10 +185,15 @@ function NewBotButton({
       {botsError !== null ? (
         <div className="mb-1 flex items-center gap-2 px-2 py-1">
           <p role="alert" className="min-w-0 flex-1 text-xs text-destructive-foreground">
-            Couldn't load bots: {botsError}
+            {gt("Couldn't load bots: {error}", { error: botsError })}
           </p>
-          <Button size="xs" variant="outline" aria-label="Retry loading bots" onClick={retryBots}>
-            Retry
+          <Button
+            size="xs"
+            variant="outline"
+            aria-label={gt("Retry loading bots")}
+            onClick={retryBots}
+          >
+            {gt("Retry")}
           </Button>
         </div>
       ) : null}
@@ -213,7 +221,7 @@ function NewBotButton({
         }}
       >
         <PlusIcon />
-        New bot
+        {gt("New bot")}
       </Button>
       {supportsTemplates && (
         <Button
@@ -222,7 +230,7 @@ function NewBotButton({
           disabled={!canCreate || bots === undefined}
           onClick={() => setTemplatesOpen(true)}
         >
-          From a template
+          {gt("From a template")}
         </Button>
       )}
       <GoatBotPackageImportButton key={environmentId} environmentId={environmentId} />
@@ -238,6 +246,7 @@ function NewBotButton({
 
 /** Servers without member bots keep the disabled button and its note. */
 function NewBotComingSoon() {
+  const gt = useGT();
   return (
     <SidebarGroup>
       <Tooltip>
@@ -245,14 +254,14 @@ function NewBotComingSoon() {
           <Button variant="outline" size="sm-multiline" disabled className="w-full">
             <span className="flex min-w-0 flex-wrap items-center justify-center gap-1">
               <PlusIcon />
-              New bot
+              {gt("New bot")}
               <Badge variant="secondary" size="sm">
-                Coming soon
+                {gt("Coming soon")}
               </Badge>
             </span>
           </Button>
         </TooltipTrigger>
-        <TooltipPopup>Creating more bots is coming soon.</TooltipPopup>
+        <TooltipPopup>{gt("Creating more bots is coming soon.")}</TooltipPopup>
       </Tooltip>
     </SidebarGroup>
   );

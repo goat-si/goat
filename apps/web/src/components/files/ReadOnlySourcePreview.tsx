@@ -1,5 +1,5 @@
 import { File, type FileOptions, Virtualizer } from "@pierre/diffs/react";
-import { useEffect, useRef, type ClipboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 
 import { DiffWorkerPoolProvider } from "~/components/DiffWorkerPoolProvider";
 import { useClientSettings } from "~/hooks/useSettings";
@@ -8,6 +8,7 @@ import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 
 import { FILE_LINK_REVEAL_UNSAFE_CSS } from "./fileSurfaceChrome";
+import { SourceSelection } from "./sourceSelection";
 
 /**
  * Select All spans the file's shadow tree, where the virtualizer mounts only rows near the viewport.
@@ -44,7 +45,7 @@ export default function ReadOnlySourcePreview(props: {
   readonly name: string;
   readonly text: string;
   readonly cacheKey?: string;
-  readonly onPostRender?: FileOptions<unknown, undefined>["onPostRender"];
+  readonly onPostRender?: FileOptions<undefined, undefined>["onPostRender"];
   /** A preview's own wrap toggle; omitted follows the word wrap setting. */
   readonly wordWrap?: boolean;
 }) {
@@ -52,6 +53,27 @@ export default function ReadOnlySourcePreview(props: {
   const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
   const wordWrap = props.wordWrap ?? defaultWordWrap;
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const [selection] = useState(() => new SourceSelection());
+  // oxlint-disable-next-line goat/react-effect-budget -- Track selections in the virtualized shadow tree across row mounts.
+  useEffect(() => {
+    const root = () => wrapperRef.current?.querySelector("diffs-container")?.shadowRoot;
+    const sync = () => {
+      const shadow = root();
+      if (shadow) selection.sync(shadow, props.text);
+    };
+    const release = () => {
+      const shadow = root();
+      if (shadow) selection.release(shadow, props.text);
+    };
+    document.addEventListener("selectionchange", sync);
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
+    return () => {
+      document.removeEventListener("selectionchange", sync);
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+    };
+  }, [selection, props.text]);
   const selectedAllRef = useRef(false);
   // oxlint-disable-next-line goat/react-effect-budget -- Where a shadow-tree selection cannot be read, remember a Select All pressed after a press in this preview.
   useEffect(() => {
@@ -106,13 +128,28 @@ export default function ReadOnlySourcePreview(props: {
   }, [props.name, props.text]);
   const copyWholeFile = (event: ClipboardEvent<HTMLDivElement>) => {
     const root = event.currentTarget.querySelector("diffs-container")?.shadowRoot;
+    const copied = root ? selection.copy(root, props.text) : undefined;
+    if (copied !== undefined) {
+      event.clipboardData.setData("text/plain", copied);
+      event.preventDefault();
+      return;
+    }
     if (!root || !(selectsEveryMountedRow(root) ?? selectedAllRef.current)) return;
     event.clipboardData.setData("text/plain", props.text);
     event.preventDefault();
   };
   return (
     <DiffWorkerPoolProvider>
-      <div ref={wrapperRef} className="contents" onCopy={copyWholeFile}>
+      <div
+        ref={wrapperRef}
+        className="contents"
+        onCopy={copyWholeFile}
+        onPointerDown={(event) => selection.press(event.button !== 0 || event.shiftKey)}
+        onScrollCapture={(event) => {
+          const root = event.currentTarget.querySelector("diffs-container")?.shadowRoot;
+          if (root) selection.sync(root, props.text);
+        }}
+      >
         <Virtualizer
           key={`${props.name}:${resolvedTheme}:${props.text.length}`}
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
@@ -131,7 +168,11 @@ export default function ReadOnlySourcePreview(props: {
               preferredHighlighter: PREFERRED_HIGHLIGHTER,
               themeType: resolvedTheme,
               unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
-              ...(props.onPostRender ? { onPostRender: props.onPostRender } : {}),
+              onPostRender: (node, instance, phase) => {
+                if (phase !== "unmount" && node.shadowRoot)
+                  selection.render(node.shadowRoot, props.text);
+                return props.onPostRender?.(node, instance, phase);
+              },
             }}
             className="min-h-full"
           />

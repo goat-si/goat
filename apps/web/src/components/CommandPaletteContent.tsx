@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ArrowDownIcon, ArrowUpIcon } from "~/components/solar";
 import { type ComponentProps, type ReactNode, type RefObject } from "react";
 
@@ -48,6 +49,7 @@ export function CommandPaletteContent({
   testId,
   ...commandProps
 }: CommandPaletteContentProps) {
+  const gt = useGT();
   return (
     <div className="contents" data-testid={testId}>
       <Command {...commandProps}>
@@ -83,7 +85,7 @@ export function CommandPaletteContent({
               <Kbd>
                 <ArrowDownIcon />
               </Kbd>
-              <span>Navigate</span>
+              <span>{gt("Navigate")}</span>
             </KbdGroup>
             {footerActionLabel !== undefined ? (
               <KbdGroup>

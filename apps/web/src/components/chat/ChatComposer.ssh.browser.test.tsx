@@ -1,6 +1,7 @@
 import { state, setupSshComposer, id, store, result, deferred } from "~/test/sshComposerFixture";
 import { act } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
 import { ChatComposer } from "./ChatComposer";
 import { editorIn } from "../ComposerPromptEditorTiptap.input.test-support";
@@ -192,4 +193,64 @@ it("holds Send while the pasted PNG is being verified", async () => {
     expect(state.composer?.composerRef.current?.hasPendingAttachments()).toBe(false);
   });
   expect(state.launch).not.toHaveBeenCalled();
+});
+
+it("pastes a chat message with its image and text", async () => {
+  await using fixture = await setupComposer();
+  await fixture.mount();
+  const editor = editorIn(fixture.container);
+  const { clipboard, record } = await snapshotClipboardFixture({ plainImage: true });
+  clipboard.setData("text/plain", "Look at this");
+  clipboard.setData("text/html", '<p>Look at this<img src="https://example.com/image.png"></p>');
+  await act(async () => {
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: clipboard, cancelable: true, bubbles: true }),
+    );
+  });
+  await vi.waitFor(() => {
+    expect(store().getComposerDraft(id)?.prompt).toContain("Look at this");
+    expect(
+      store()
+        .getComposerDraft(id)
+        ?.images.map((image) => image.name),
+    ).toEqual([record.name]);
+  });
+});
+
+it("keeps a picked image when the phone composer collapses", async () => {
+  await using fixture = await setupComposer();
+  await page.viewport(390, 844);
+  state.mobileViewport = true;
+  vi.mocked(ChatComposer.type).mockImplementation((props) => {
+    state.composer = props;
+    return renderComposer({ ...props, forceExpandedOnMobile: false });
+  });
+  fixture.primary.serverConfig!.environment.capabilities = {
+    attachmentUploads: true,
+    fileAttachments: { maxUploadBytes: 100000 },
+  };
+  await fixture.mount();
+  const editor = editorIn(fixture.container);
+  await act(async () => editor.view.focus());
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+  expect(input).not.toBeNull();
+  await act(async () => editor.view.dom.blur());
+  await vi.waitFor(() =>
+    expect(
+      fixture.container.querySelector('[data-chat-composer-mobile-collapsed="true"]'),
+    ).not.toBeNull(),
+  );
+  expect(input!.isConnected).toBe(true);
+  const { clipboard, record } = await snapshotClipboardFixture({ plainImage: true });
+  await act(async () => {
+    input!.files = clipboard.files;
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await vi.waitFor(() =>
+    expect(
+      store()
+        .getComposerDraft(id)
+        ?.images.map((image) => image.name),
+    ).toEqual([record.name]),
+  );
 });

@@ -1,3 +1,4 @@
+import { markTurnMemoryIncomplete, recordTurnMemory } from "./TurnMemoryReceipts.ts";
 import * as M from "@goat/contracts";
 import * as Renderer from "@goat/provider-core/server/memoryContext";
 import * as Context from "effect/Context";
@@ -35,6 +36,17 @@ export class MemorySnapshotError extends Schema.TaggedError<MemorySnapshotError>
 export class MemorySnapshot extends Context.Service<
   MemorySnapshot,
   {
+    readonly recordDelivery?: (
+      threadId: M.ThreadId,
+      runId: M.RunId,
+      space: M.MemorySpaceId,
+      refs: readonly (typeof M.TurnMemoryRef.Type)[],
+    ) => Effect.Effect<void>;
+    readonly recordDeliveryUncertain?: (
+      threadId: M.ThreadId,
+      runId: M.RunId,
+      space: M.MemorySpaceId,
+    ) => Effect.Effect<void>;
     readonly forThread: (
       threadId: M.ThreadId,
       policy: MemorySnapshotPolicy,
@@ -610,6 +622,10 @@ const make = Effect.gen(function* () {
     Effect.mapError((cause) => new MemorySnapshotError({ cause })),
   );
   return MemorySnapshot.of({
+    recordDeliveryUncertain: (threadId, runId, space) =>
+      markTurnMemoryIncomplete(sql, threadId, runId, space),
+    recordDelivery: (threadId, runId, space, refs) =>
+      recordTurnMemory(sql, threadId, runId, space, "automatic", refs),
     forThread,
     revalidate: (snapshot, execution, currentPolicy) =>
       revalidate(snapshot, execution, currentPolicy).pipe(

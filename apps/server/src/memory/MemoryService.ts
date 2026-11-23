@@ -1,3 +1,4 @@
+import { makeTurnMemoryReader } from "./TurnMemoryReceipts.ts";
 import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeMoveMemory } from "./MemoryMove.ts";
 import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
@@ -267,6 +268,10 @@ export class MemoryService extends Context.Service<
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
     ) => Effect.Effect<M.MemoryPage, MemoryServiceError>;
+    readonly inspectTurn: (
+      input: M.TurnMemoryInput,
+      permit: Permit,
+    ) => Effect.Effect<M.TurnMemoryResult, MemoryServiceError>;
     readonly read: (
       input: M.MemoryReadInput,
       permit: Permit,
@@ -1136,6 +1141,16 @@ const make = Effect.fnUntraced(function* (
         ),
       ),
     readItem: (input, permit) => importTransaction(input, permit, store.readImportItemTx(input)),
+    codexBaseline: (input, permit) =>
+      importTransaction(input, permit, store.readCodexImportBaselineTx(input)),
+    savedText: (input, permit) =>
+      read({ memorySpaceId: input.memorySpaceId, memoryId: input.memoryId }, permit).pipe(
+        Effect.flatMap((item) =>
+          item.status === "active"
+            ? Effect.succeed(item.payload.text)
+            : Effect.fail(new Store.MemoryStoreConflict({ code: "not_found" })),
+        ),
+      ),
     findMatch: (input, permit) => importTransaction(input, permit, store.findImportMatchTx(input)),
     prepareTarget: (input, permit) =>
       importTransaction(
@@ -2515,6 +2530,7 @@ const make = Effect.fnUntraced(function* (
         return yield* (yield* ProviderMemoryImportRuntime).run(input, permit);
       }),
     commitLocalIntent,
+    inspectTurn: makeTurnMemoryReader(sql, store, read),
     readSource,
     prepareSourceRead,
     validateSourceOutcome,

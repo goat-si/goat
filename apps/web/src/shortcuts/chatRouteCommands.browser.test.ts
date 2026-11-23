@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { readPreviewFindAvailable } from "../components/preview/findAvailability";
 import { subscribePreviewAction } from "../components/preview/previewActionBus";
 import { readEnvironmentScope } from "../state/session";
+import { isMacPlatform } from "../lib/utils";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { installChatRouteCommands } from "./chatRouteCommands";
 import { registerCommands } from "./dispatcher";
@@ -56,6 +57,18 @@ function pressKey(key: string): KeyboardEvent {
 }
 
 const pressEscape = () => pressKey("Escape");
+function pressMod(key: string): KeyboardEvent {
+  const mac = isMacPlatform(navigator.platform);
+  const event = new KeyboardEvent("keydown", {
+    key,
+    metaKey: mac,
+    ctrlKey: !mac,
+    cancelable: true,
+    bubbles: true,
+  });
+  document.activeElement?.dispatchEvent(event);
+  return event;
+}
 
 function selectThread(threadKey: string) {
   useThreadSelectionStore.getState().clearSelection();
@@ -196,5 +209,39 @@ describe("chat route commands", () => {
 
     navigate(CHAT);
     expect(pressEscape().defaultPrevented).toBe(true);
+  });
+
+  it("leaves zoom keys to the app unless the focused right panel shows a browser", () => {
+    const { router } = routerAt(CHAT);
+    using stack = new DisposableStack();
+    const atom = primaryServerKeybindingsAtom as Atom.Writable<
+      ReturnType<typeof compileResolvedKeybindingsConfig>
+    >;
+    const original = appAtomRegistry.get(atom);
+    appAtomRegistry.set(
+      atom,
+      compileResolvedKeybindingsConfig([
+        { key: "mod+=", command: "preview.zoomIn", when: "previewFocus" },
+        { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
+        { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
+        { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
+      ]),
+    );
+    stack.defer(() => appAtomRegistry.set(atom, original));
+    stack.defer(installChatRouteCommands(router));
+    const panel = document.createElement("div");
+    panel.setAttribute("data-preview-panel-mode", "inline");
+    const pullRequestTab = document.createElement("button");
+    panel.append(pullRequestTab);
+    document.body.append(panel);
+    stack.defer(() => panel.remove());
+    pullRequestTab.focus();
+
+    for (const key of ["=", "+", "-", "0"]) expect(pressMod(key).defaultPrevented).toBe(false);
+
+    const browser = document.createElement("div");
+    browser.setAttribute("data-preview-view", "");
+    panel.append(browser);
+    for (const key of ["=", "+", "-", "0"]) expect(pressMod(key).defaultPrevented).toBe(true);
   });
 });

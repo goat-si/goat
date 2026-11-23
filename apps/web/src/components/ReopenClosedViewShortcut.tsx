@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ScopedThreadRef } from "@goat/contracts";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { linkOptions, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -40,6 +40,12 @@ import {
 import { usePreviewFindAvailable } from "./preview/findAvailability";
 import { toastManager } from "./ui/toast";
 
+declare module "@tanstack/react-router" {
+  interface HistoryState {
+    reopenedViewId?: string;
+  }
+}
+
 const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "preview.focusUrl",
   "preview.zoomIn",
@@ -51,6 +57,8 @@ const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "sidebar.toggleActivity",
   "rightPanel.toggle",
   "rightPanel.toggleMaximized",
+  "rightPanel.new",
+  "rightPanel.close",
 ] as const;
 
 const isGlobalPullRequests = (ref: ScopedThreadRef) =>
@@ -58,6 +66,7 @@ const isGlobalPullRequests = (ref: ScopedThreadRef) =>
 
 export function ReopenClosedViewShortcut() {
   const navigate = useNavigate();
+  const router = useRouter();
   const params = useParams({ strict: false });
   const target = resolveThreadRouteTarget(params);
   const draft = useComposerDraftStore((state) =>
@@ -81,8 +90,10 @@ export function ReopenClosedViewShortcut() {
   const hasHistory = useClosedViewStore((state) => state.entries.length > 0);
   const openPreview = useAtomCommand(previewEnvironment.open);
   const pending = useRef(Promise.resolve());
+  type ReopenNavigation = { location: typeof router.history.location };
+  const reopenNavigation = useRef<ReopenNavigation | null>(null);
 
-  const reopenNext = useEffectEvent(async () => {
+  const reopenNext = useEffectEvent(async (request: ReopenNavigation) => {
     const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
     const drafts = useComposerDraftStore.getState();
     const panelsByThread = useRightPanelStore.getState().byThreadKey;
@@ -120,26 +131,57 @@ export function ReopenClosedViewShortcut() {
       return;
     }
     useClosedViewStore.getState().remove(restore.id);
+    if (router.history.location !== request.location) return;
+
+    let destination;
     if (globalPullRequests) {
       const selected = selectSelectedRightPanelSurface(
         useRightPanelStore.getState().byThreadKey,
         ref,
       );
-      await navigate({
+      destination = linkOptions({
         to: "/pull-requests",
         search: (previous) => pullRequestsSearchForRestore(previous, selected),
       });
     } else {
       const draftId = thread === null ? drafts.getDraftIdByRef(ref) : null;
-      if (draftId !== null)
-        await navigate({ to: "/draft/$draftId", params: buildDraftThreadRouteParams(draftId) });
-      else await navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
+      destination =
+        draftId !== null
+          ? linkOptions({ to: "/draft/$draftId", params: buildDraftThreadRouteParams(draftId) })
+          : linkOptions({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
     }
+
+    const { history } = router;
+    if (router.buildLocation(destination).publicHref === history.location.href) {
+      const { reopenedViewId } = history.location.state;
+      await navigate({ ...destination, state: reopenedViewId ? { reopenedViewId } : {} });
+      return;
+    }
+
+    // An allowing blocker can defer the commit. Only the reopen's first history hop extends the queue.
+    const unsubscribe = history.subscribe(({ location, action }) => {
+      if (location === request.location) return;
+      unsubscribe();
+      if (action.type === "PUSH" && location.state.reopenedViewId === restore.id) {
+        request.location = location;
+      }
+    });
+    try {
+      await navigate({ ...destination, state: { reopenedViewId: restore.id } });
+    } catch (error) {
+      unsubscribe();
+      throw error;
+    }
+    unsubscribe();
   });
 
   const enqueueReopen = useEffectEvent(() => {
+    const location = router.history.location;
+    const previous = reopenNavigation.current;
+    const request = previous?.location === location ? previous : { location };
+    reopenNavigation.current = request;
     pending.current = pending.current
-      .then(() => reopenNext())
+      .then(() => reopenNext(request))
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
@@ -190,6 +232,7 @@ export function ReopenClosedViewShortcut() {
       context: {
         previewFocus: true,
         previewOpen: true,
+        rightPanelOpen: true,
         terminalFocus: false,
         terminalOpen,
         editableFocus: false,

@@ -25,7 +25,7 @@ vi.mock("@react-navigation/native", async () => {
   };
 });
 
-import { useOpenThreadInspector } from "./thread-inspector-navigation";
+import { useOpenThreadInspector, useReturnToThread } from "./thread-inspector-navigation";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
 const requireNavigation = NodeModule.createRequire(
@@ -40,7 +40,14 @@ function setup(fromAgents: boolean, fullscreen = false) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const router = StackRouter({});
   const options = {
-    routeNames: ["Home", "Thread", "ThreadAgents", "ThreadInspectorFullscreen"],
+    routeNames: [
+      "Home",
+      "Thread",
+      "ThreadAgents",
+      "ThreadInspectorFullscreen",
+      "ThreadReview",
+      "GitConfirm",
+    ],
     routeParamList: {},
     routeGetIdList: {},
   };
@@ -64,12 +71,15 @@ function setup(fromAgents: boolean, fullscreen = false) {
     );
   let openInspector: ReturnType<typeof useOpenThreadInspector>;
   let openLinkedThread: ReturnType<typeof useOpenLinkedThread>;
+  let returnToThread: ReturnType<typeof useReturnToThread>;
   function Probe() {
     const open = useOpenThreadInspector();
     const openLinked = useOpenLinkedThread();
+    const returnTo = useReturnToThread();
     useLayoutEffect(() => {
       openInspector = open;
       openLinkedThread = openLinked;
+      returnToThread = returnTo;
     });
     return null;
   }
@@ -91,6 +101,9 @@ function setup(fromAgents: boolean, fullscreen = false) {
     },
     openLinked(threadId: string) {
       act(() => openLinkedThread({ environmentId: source.environmentId, threadId }));
+    },
+    returnTo(thread: Parameters<typeof returnToThread>[0]) {
+      act(() => returnToThread(thread));
     },
     [Symbol.dispose]() {
       act(() => root.unmount());
@@ -166,4 +179,20 @@ it("keeps the parent when the maximized child's Agents sheet opens another child
   const originalState = screen.state;
   expect(screen.open({ type: "thread", ...child, threadId: "grandchild" }, child)).toBe(false);
   expect(screen.state).toEqual(originalState);
+});
+
+it.each([
+  { from: "parent", routes: ["Home", "Thread"] },
+  { from: "child", routes: ["Home", "Thread", "ThreadReview", "Thread"] },
+])("returns from a Git confirmation to the $from thread", ({ from, routes }) => {
+  using screen = setup(false);
+  const thread = { ...screen.source, threadId: from };
+  if (from === "child") screen.dispatch(StackActions.push("ThreadReview", thread));
+  screen.dispatch(StackActions.push("GitConfirm", thread));
+  screen.returnTo(thread);
+  expect(screen.state.routes.map((route) => route.name)).toEqual(routes);
+  expect(screen.state.routes[1]).toMatchObject({
+    key: screen.parentKey,
+    params: { ...screen.source, prompt: "retained prompt" },
+  });
 });

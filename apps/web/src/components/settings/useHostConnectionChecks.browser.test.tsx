@@ -26,14 +26,46 @@ const targets = [{ environmentId, label: "This Mac", connected: true }];
 
 function Harness({
   onReady,
+  checkTargets = targets,
 }: {
+  checkTargets?: typeof targets;
   onReady: (run: ReturnType<typeof useHostConnectionChecks>) => void;
 }) {
-  onReady(useHostConnectionChecks(targets));
+  onReady(useHostConnectionChecks(checkTargets));
   return null;
 }
 
 describe("useHostConnectionChecks", () => {
+  it("keeps the group pending until every environment finishes", async () => {
+    setup();
+    const secondId = EnvironmentId.make("environment-2");
+    let finishSecond!: (value: ReturnType<typeof AsyncResult.failure>) => void;
+    const pending = new Promise<ReturnType<typeof AsyncResult.failure>>((resolve) => {
+      finishSecond = resolve;
+    });
+    state.test.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("first failed"))));
+    state.test.mockReturnValueOnce(pending);
+    let checks!: ReturnType<typeof useHostConnectionChecks>;
+    await using _screen = await render(
+      <Harness
+        checkTargets={[...targets, { environmentId: secondId, label: "Other", connected: true }]}
+        onReady={(next) => (checks = next)}
+      />,
+      { router: false },
+    ); // the hook reads no route state
+    const host = { kind: "ssh" as const, id: "mac", label: "Mac mini", target: "user@mac" };
+    let result!: ReturnType<typeof checks.testConnection>;
+    await act(async () => {
+      result = checks.testConnection(host);
+    });
+    expect(checks.runningKeys.size).toBe(1);
+    await act(async () => {
+      finishSecond(AsyncResult.failure(Cause.fail(new Error("second failed"))));
+      await result;
+    });
+    expect(checks.runningKeys.size).toBe(0);
+  });
+
   it("reports a failed check by its message, without a stack trace", async () => {
     setup();
     state.test.mockResolvedValue(

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { botManageFailure } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -33,6 +34,7 @@ export function GoatBotPackageImportButton({
 }: {
   readonly environmentId: EnvironmentId;
 }) {
+  const gt = useGT();
   const canReview = usePackagePermission(environmentId, "reviewBotPackage");
   const canImport = usePackagePermission(environmentId, "importBotPackage");
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
@@ -40,7 +42,7 @@ export function GoatBotPackageImportButton({
   return canReview && canImport && canOperate ? (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-        Import bot package
+        {gt("Import bot package")}
       </Button>
       {open && <ImportPackage environmentId={environmentId} close={() => setOpen(false)} />}
     </>

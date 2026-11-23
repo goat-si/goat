@@ -105,6 +105,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
     Schema.Struct({
       protocolVersion: Schema.Int,
       derivedCap: Schema.optionalKey(Schema.Literal(1000)),
+      turnMemory: Schema.optionalKey(Schema.Boolean),
       scopeMoves: Schema.optionalKey(Schema.Boolean),
       scopeMoveReceipts: Schema.optionalKey(Schema.Boolean),
       provenanceProjection: Schema.optionalKey(Schema.Boolean),
@@ -116,6 +117,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       hub: Schema.optionalKey(Schema.Boolean),
       importProvider: Schema.optionalKey(Schema.Boolean),
       /** Import preview can flag items too large for the turn-start frame; absent on older servers. */
+      codexImportUpdates: Schema.optionalKey(Schema.Boolean),
       importTurnStartFit: Schema.optionalKey(Schema.Boolean),
       refusedReverts: Schema.optionalKey(Schema.Boolean),
       resolutionInputs: Schema.optionalKey(Schema.Boolean),

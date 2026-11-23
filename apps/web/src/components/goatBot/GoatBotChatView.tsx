@@ -1,5 +1,5 @@
+import { HoldsNavigation } from "~/lib/navigationHolds";
 import { GoatBotTemplateRetry } from "./GoatBotTemplateRetry";
-import { clearBotTemplateDraft, readBotTemplateDraft } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import {
   type ChannelBotArtifact,
@@ -30,6 +30,7 @@ import {
 } from "./goatBotRunRow";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
+import { useRetainedNoteWordings } from "./useRetainedNoteWordings";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
@@ -59,6 +60,11 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotRemovedNotice } from "./GoatBotRemovedNotice";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
+import {
+  goatBotDraftDestination,
+  useGoatBotDraftSeed,
+  useGoatBotDraftReply,
+} from "./GoatBotRouteDrafts";
 import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
@@ -201,6 +207,11 @@ function GoatBotChatViewContent({
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
+  const noteWordings = useRetainedNoteWordings(
+    environmentId,
+    member?.botId ?? null,
+    availability.kind === "ready" ? availability.bot.environmentId : null,
+  );
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -210,6 +221,13 @@ function GoatBotChatViewContent({
   const registerHomeDocked = useContext(GoatBotHomeDockedRegistry);
   const narrow = presentation === "sheet";
   const bot = availability.kind === "ready" ? availability.bot : null;
+  const destination = member
+    ? goatBotDraftDestination(member.environmentId, member.sessionThreadId)
+    : projectionRef
+      ? goatBotDraftDestination(projectionRef.environmentId, projectionRef.threadId)
+      : bot
+        ? goatBotDraftDestination(bot.environmentId, bot.threadId)
+        : null;
   const routineLanding = useGoatBotRoutineLanding(bot, panelOpen, () => setPanelOpen(true));
   const removed = removal !== null;
   const ready = availability.kind === "ready" && !removed;
@@ -310,23 +328,25 @@ function GoatBotChatViewContent({
     }
     return result !== false;
   };
-  const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
-  if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
-  const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
+  const [replyTo, setReplyTo] = useGoatBotDraftReply(destination, botIdentity);
   // Home in its sheet over a task would fill a message box nobody can see.
   const onDraft =
     canSend && !hidden
       ? (text: string) => {
-          if (narrow) {
-            sheetClosedFor.current = "draft";
-            setPanelOpen(false);
-          }
-          if (composerRef.current?.offerDraft(text) === false) {
+          const composer = composerRef.current;
+          if (composer === null) return false;
+          if (!composer.offerDraft(text)) {
             toastManager.add({
               type: "info",
               title: "Your message box already has a message. Send or clear it, then try again.",
             });
+            return false;
           }
+          if (narrow) {
+            sheetClosedFor.current = "draft";
+            setPanelOpen(false);
+          }
+          return true;
         }
       : undefined;
   const notesRefreshKey = goatBotNotesRefreshKey(rows);
@@ -405,30 +425,11 @@ function GoatBotChatViewContent({
         title: `Folders can't be attached to ${title}. Drop the files instead.`,
       }),
   });
-  const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(() => {
-    const text = readBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-    return text === undefined ? null : { text, nonce: 0 };
-  });
-  // A draft belongs to the bot it was written for: another bot, or this one on another computer,
-  // gets an empty box. A bot that is only briefly unavailable keeps it.
-  const destination = member
-    ? `${member.environmentId}:${member.sessionThreadId}`
-    : bot
-      ? `${bot.environmentId}:${bot.threadId}`
-      : null;
-  const [draftFor, setDraftFor] = useState({ destination, generation: 0 });
-  if (destination !== null && destination !== draftFor.destination) {
-    const changed = draftFor.destination !== null;
-    setDraftFor({ destination, generation: draftFor.generation + (changed ? 1 : 0) });
-    {
-      const text = readBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-      if (changed || text !== undefined) setSeed(text === undefined ? null : { text, nonce: 0 });
-    }
-  }
-  // oxlint-disable-next-line goat/react-effect-budget -- Consume the one-shot draft after the destination commits.
-  useEffect(() => {
-    clearBotTemplateDraft(member?.environmentId, member?.sessionThreadId);
-  }, [member?.environmentId, member?.sessionThreadId]);
+  const { seed, setSeed, draftFor, routeDraft } = useGoatBotDraftSeed(
+    destination,
+    member?.environmentId,
+    member?.sessionThreadId,
+  );
   const working = useContext(GoatBotActivityContext);
   const reading = useGoatBotReading(replyingSince);
   const headerStatus =
@@ -445,6 +446,7 @@ function GoatBotChatViewContent({
   const refusalStep = goatBotRefusalStep(availability);
   return (
     <div ref={viewRef} className="flex min-h-0 min-w-0 flex-1" style={accentStyle}>
+      {noteWordings[0].size > 0 ? <HoldsNavigation /> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
           <div aria-hidden className="flex-1 basis-0" />
@@ -585,6 +587,7 @@ function GoatBotChatViewContent({
               <GoatBotOpenFileContext value={fileOpening}>
                 <GoatBotTypedAnswersScope
                   destination={destination}
+                  routeDestination={destination}
                   visibleTurnItems={visibleTurnItems ?? NO_ITEMS}
                   mainChat
                 >
@@ -602,7 +605,7 @@ function GoatBotChatViewContent({
                       onReply={
                         canSend
                           ? (text) => {
-                              setReplyState({ botIdentity, text });
+                              setReplyTo(text);
                               composerRef.current?.focus();
                             }
                           : undefined
@@ -652,8 +655,17 @@ function GoatBotChatViewContent({
                       legacyAgentRoute={legacyAgentRoute}
                       onSelectExample={
                         canSend
-                          ? (text) =>
-                              setSeed((previous) => ({ text, nonce: (previous?.nonce ?? 0) + 1 }))
+                          ? (text) => {
+                              if (routeDraft !== null && destination !== null) {
+                                routeDraft.update(destination, "text", () => text);
+                                composerRef.current?.focus();
+                              } else {
+                                setSeed((previous) => ({
+                                  text,
+                                  nonce: (previous?.nonce ?? 0) + 1,
+                                }));
+                              }
+                            }
                           : undefined
                       }
                     />
@@ -675,6 +687,7 @@ function GoatBotChatViewContent({
             ref={composerRef}
             key={`${draftFor.generation}:${seed?.nonce ?? 0}`}
             initialText={seed?.text ?? ""}
+            routeDestination={destination}
             disabled={!canSend}
             botName={title}
             placeholder={
@@ -687,13 +700,13 @@ function GoatBotChatViewContent({
               member ? <GoatBotMemberModelPicker member={member} /> : <GoatBotModelPicker />
             }
             replyTo={replyTo}
-            onClearReply={() => setReplyState(null)}
+            onClearReply={() => setReplyTo(null)}
             onSend={(text, attachments) => {
               const result = onSend(
                 replyTo === null ? text : buildGoatBotQuote(replyTo, text),
                 attachments,
               );
-              if (result !== false) setReplyState(null);
+              if (result !== false) setReplyTo(null);
               return recordSubmission(result);
             }}
           />
@@ -713,6 +726,7 @@ function GoatBotChatViewContent({
               environmentId={bot.environmentId}
               threadId={bot.threadId}
               onDraft={onDraft}
+              noteWordings={noteWordings}
               notesRefreshKey={notesRefreshKey}
               onClose={() => {
                 setHomeReturn(null);
@@ -753,6 +767,7 @@ function GoatBotChatViewContent({
                 environmentId={bot.environmentId}
                 threadId={bot.threadId}
                 onDraft={onDraft}
+                noteWordings={noteWordings}
                 notesRefreshKey={notesRefreshKey}
                 onShowChat={() => {
                   setHomeReturn(null);

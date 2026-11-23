@@ -1,6 +1,11 @@
+import { applyMemoryChange, emptyMemoryExposure } from "./state/memory.ts";
 import * as M from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  codexImportChanges,
+  readCodexComparison,
+  canShowCodexComparison,
+  importScopeMatches,
   initialMemoryImportWorkflowState,
   memoryImportFormats,
   memoryImportIssueReason,
@@ -154,4 +159,98 @@ describe("memoryImportIssueReason", () => {
       ),
     ).toMatch(/^Memory storage limit reached: 100\.0 MiB of 100\.0 MiB used\. Automatic cleanup/);
   });
+});
+
+describe("Codex source updates", () => {
+  it("keeps absent rows unselectable, shows rejected rows, and omits unchanged and forgotten notes", () => {
+    const keys = ["both", "changed", "same", "missing", "rejected", "forgotten"];
+    const baseline = keys.map((sourceItemKey) => ({
+      sourceItemKey,
+      sourceFingerprint: "old",
+      locallyEdited: sourceItemKey === "both",
+      scope: { kind: "user" as const },
+    }));
+    const rows = ["new", "same", "changed", "both", "rejected", "forgotten"].map(
+      (sourceItemKey) => ({
+        sourceItemKey,
+        sourceFingerprint: sourceItemKey === "same" ? "old" : "fresh",
+        byteCount: 10,
+        mappingRequired: false,
+        ...(sourceItemKey === "rejected" ? { issue: "invalid_utf8" as const } : {}),
+        ...(sourceItemKey === "forgotten" ? { priorOutcome: "suppressed" as const } : {}),
+      }),
+    );
+    const changes = codexImportChanges(rows, baseline);
+    expect(changes.map((row) => [row.sourceItemKey, row.change, row.issue])).toEqual([
+      ["new", "New", undefined],
+      ["changed", "Changed in Codex", undefined],
+      ["both", "Changed in both", undefined],
+      ["rejected", undefined, "invalid_utf8"],
+      ["missing", "Missing from Codex", undefined],
+    ]);
+    expect(changes.at(-1)?.sourceFingerprint).toBeUndefined();
+    expect(importScopeMatches(changes[0]!)).toBe(true);
+    expect(importScopeMatches(changes[1]!)).toBe(false);
+    expect(importScopeMatches(changes[1]!, { kind: "user" })).toBe(true);
+    const thread = {
+      environmentId: M.EnvironmentId.make("test-device"),
+      threadId: M.ThreadId.make("source-thread"),
+    };
+    const withProject = {
+      ...changes[1]!,
+      originalScope: {
+        kind: "thread" as const,
+        thread,
+        projectKey: { kind: "explicit" as const, sharedProjectId: "imported-project" },
+      },
+    };
+    expect(importScopeMatches(withProject, { kind: "thread", thread })).toBe(true);
+    expect(importScopeMatches(withProject, { kind: "user" })).toBe(false);
+  });
+});
+
+it("retires an open Codex comparison and rejects a delayed reply when another client forgets the memory", async () => {
+  const memoryId = M.MemoryId.make("00000000-0000-4000-8000-000000000007");
+  const memorySpaceId = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
+  const item = { sourceItemKey: "note", byteCount: 12, mappingRequired: false, memoryId };
+  let current = applyMemoryChange(emptyMemoryExposure(), {
+    kind: "reset",
+    memorySpaceId,
+    projectionWatermark: 1,
+  });
+  const result = {
+    action: "compareCodex" as const,
+    savedText: "private saved text",
+    sourceText: "private source text",
+  };
+  const shown = await readCodexComparison(
+    item,
+    () => current,
+    async () => result,
+  );
+  expect(shown?.savedText).toBe("private saved text");
+  const delayed = Promise.withResolvers<typeof result>();
+  const pending = readCodexComparison(
+    item,
+    () => current,
+    () => delayed.promise,
+  );
+  current = applyMemoryChange(current, {
+    kind: "forget",
+    memoryId,
+    memorySpaceId,
+    projectionWatermark: 2,
+  });
+  expect(canShowCodexComparison(item, shown!.exposure, current)).toBe(false);
+  delayed.resolve(result);
+  expect(await pending).toBeNull();
+  expect(
+    await readCodexComparison(
+      item,
+      () => current,
+      () => {
+        throw new Error("forgotten body requested");
+      },
+    ),
+  ).toBeNull();
 });

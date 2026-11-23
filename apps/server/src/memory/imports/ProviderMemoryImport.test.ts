@@ -1,31 +1,23 @@
-import * as Settings from "../../serverSettings.ts";
+import {
+  serviceLive,
+  live,
+  batchSnapshot,
+  setupProjects,
+} from "./ProviderMemoryImportSql.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../testkit/MemoryHubTestMigration.ts";
-import searchMigration from "../../persistence/Migrations/100_MemorySearchCounters.ts";
-import checkpointMigration from "../../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../../persistence/Migrations/104_MemoryReportLifecycle.ts";
-import usageMigration from "../../persistence/Migrations/105_MemoryUsageCounters.ts";
-import revertMigration from "../../persistence/Migrations/106_MemoryRevertResults.ts";
-import lineageMigration from "../../persistence/Migrations/102_MemoryImportLineage.ts";
 import * as Service from "../MemoryService.ts";
 import * as Store from "../MemoryStore.ts";
 import * as Quota from "../MemoryQuotaService.ts";
-import * as Environment from "../../environment/ServerEnvironment.ts";
-import * as RepositoryResolver from "../../project/RepositoryIdentityResolver.ts";
 import {
   buildMemoryImportFixture,
   MEMORY_IMPORT_FIXTURE_PROFILES,
   snapshotMemoryImportFiles,
 } from "./MemoryImportFixtures.fixture.ts";
-import type { ImportPorts, ImportSnapshot, MemoryImportParsers } from "./MemoryImportTypes.ts";
+import type { ImportPorts, MemoryImportParsers } from "./MemoryImportTypes.ts";
 import { makeProviderMemoryImport } from "./ProviderMemoryImport.ts";
 import {
   uuid,
@@ -855,17 +847,6 @@ describe("ProviderMemoryImport Hub error boundaries", () => {
   );
 });
 
-const batchSnapshot = (s: ImportSnapshot) =>
-  snapshotMemoryImportFiles(
-    s,
-    ["a", "b", "z"].map((key) => ({
-      ...s.files[0]!,
-      selector: `extensions/ad_hoc/notes/${key}.md`,
-      text: `${key} guidance`,
-      byteCount: 10,
-    })),
-  );
-
 // Capture all synthetic memory tables, including receipt/item/session/intent/outbox/quota rows.
 const inventory = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -881,47 +862,6 @@ const inventory = Effect.gen(function* () {
   );
 });
 
-const database = Layer.effectDiscard(
-  migration.pipe(
-    Effect.andThen(hubMigration),
-    Effect.andThen(searchMigration),
-    Effect.andThen(lineageMigration),
-    Effect.andThen(checkpointMigration),
-    Effect.andThen(revisionSizeMigration),
-    Effect.andThen(reportMigration),
-    Effect.andThen(usageMigration),
-    Effect.andThen(revertMigration),
-  ),
-).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })));
-const serviceLive = (
-  resolve: RepositoryResolver.RepositoryIdentityResolver["Service"]["resolve"],
-) =>
-  Service.layer.pipe(
-    Layer.provide(
-      Layer.succeed(Settings.MemoryHubCommittedSettings, {
-        read: Effect.succeed({
-          provenance: null,
-          settings: { mode: "hub" as const, memorySpaceId: space },
-          version: 1,
-        }),
-      }),
-    ),
-    Layer.provide(
-      Layer.succeed(Environment.ServerEnvironmentIdentity, {
-        getEnvironmentId: Effect.succeed(environmentId),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(RepositoryResolver.RepositoryIdentityResolver)({
-        resolve,
-      }),
-    ),
-    Layer.provideMerge(
-      Quota.layer.pipe(Layer.provideMerge(Store.layer.pipe(Layer.provideMerge(database)))),
-    ),
-  );
-const live = serviceLive(() => Effect.succeed(null));
-
 const repository = (root: string, remapped = false) => ({
   canonicalKey: `github.com/synthetic/${root.split("/").at(-1)}${remapped ? "-remapped" : ""}`,
   rootPath: root,
@@ -933,13 +873,6 @@ const repository = (root: string, remapped = false) => ({
 });
 const projectA = { environmentId, projectId: M.ProjectId.make("synthetic-a") };
 const projectZ = { environmentId, projectId: M.ProjectId.make("synthetic-z") };
-const setupProjects = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TABLE projection_projects(project_id TEXT PRIMARY KEY,workspace_root TEXT,deleted_at TEXT)`;
-  yield* sql`INSERT INTO projection_projects VALUES ('synthetic-a','/synthetic/a',NULL),('synthetic-z','/synthetic/z',NULL)`;
-  yield* sql`INSERT INTO memory_compaction_state(space,published) VALUES (${space},1)`;
-});
-
 describe("ProviderMemoryImport read-only binding preparation", () => {
   it.effect.each([
     { refusal: "scope", partial: false },

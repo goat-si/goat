@@ -33,6 +33,7 @@ import {
   mergePullRequestDiffStats,
   pullRequestDiffStatKey,
   pullRequestEntryKey,
+  pullRequestListAnsweredEmpty,
   rankPullRequestMatches,
   pullRequestStatsRefreshBatches,
   pullRequestStatsRequestBatches,
@@ -318,11 +319,7 @@ export function PullRequestsPage() {
   const baselineTargets = baselineTargetsFor(baselineEnvironmentQueries);
   const baselineQuery = usePullRequestHostList(baselineTargets);
   hostReads.observe(baselineQuery.observations, listQuery.observations);
-  const baselineEmpty =
-    baselineQuery.data?.entries.length === 0 &&
-    baselineQuery.data.errors.length === 0 &&
-    !baselineQuery.isPending &&
-    baselineQuery.error === null;
+  const baselineEmpty = pullRequestListAnsweredEmpty(baselineQuery);
   const facetTargets = (() => {
     if (!filtersOpen) return NO_LIST_TARGETS;
     return environmentQueries.map(({ environmentId, projectIds }) => ({
@@ -1113,7 +1110,7 @@ export function PullRequestsPage() {
         <PullRequestsUnavailableState
           error={`${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message}`}
           refreshing={listQuery.isPending}
-          onRetry={() => listQuery.refresh()}
+          onRetry={listQuery.retry}
         />
       ) : carriedToNothing ? (
         <PullRequestListGhost rows={7} />
@@ -1157,7 +1154,7 @@ export function PullRequestsPage() {
       {listQuery.error && shownCount > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
           <span>{`${environmentLabels.get(listQuery.error.environmentId) || "Environment"}: ${listQuery.error.message} Showing the last pull requests loaded.`}</span>
-          <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+          <Button size="xs" variant="outline" onClick={listQuery.retry}>
             Retry
           </Button>
         </div>

@@ -1,3 +1,5 @@
+import { getCommandPaletteOpener } from "../commandPaletteBus";
+import { requestWorkspaceFocus } from "../lib/workspaceFocus";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "~/components/solar";
 import { useRef, useState, type ReactNode } from "react";
@@ -18,8 +20,13 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
   // Text selection that ends on the backdrop is not a dismissal.
   const backdropPressRef = useRef(false);
   // Focus the surface, not its first control: no stray focus ring, no phone keyboard.
-  // On close, leave focus alone; returning it to the opener paints a focus ring.
+  // Pointer dismissal leaves focus alone to avoid a focus ring.
   const popupRef = useRef<HTMLDivElement>(null);
+  const [opener] = useState(
+    () =>
+      getCommandPaletteOpener() ??
+      (document.activeElement instanceof HTMLElement ? document.activeElement : null),
+  );
 
   return (
     <DialogPrimitive.Root
@@ -53,7 +60,14 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
           <DialogPrimitive.Popup
             ref={popupRef}
             initialFocus={popupRef}
-            finalFocus={false}
+            finalFocus={(closeType) => {
+              if (closeType !== "keyboard" || !opener?.isConnected) return false;
+              if (!opener.closest("[inert]")) return opener;
+              const area = opener.closest<HTMLElement>("[data-workspace-area]");
+              if (area?.dataset.workspaceArea)
+                requestWorkspaceFocus({ area: area.dataset.workspaceArea });
+              return false;
+            }}
             aria-label={label}
             data-slot="dialog-popup"
             data-app-modal=""

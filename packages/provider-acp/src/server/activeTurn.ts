@@ -129,6 +129,7 @@ export interface ActiveAcpTurn {
   lastProgressAt: number;
   inactivityWatchdog: Fiber.Fiber<void> | undefined;
   readonly promptDispatched: Deferred.Deferred<void>;
+  confirmMemory?: Effect.Effect<void>;
   /** Frees the runtime for the next prompt while the agent still holds this one's response. */
   foregroundIdle: Deferred.Deferred<void>;
 }

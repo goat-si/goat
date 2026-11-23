@@ -1,8 +1,10 @@
+import { downloadWithNetworkRetry } from "./automaticDownloadRetry.ts";
 import { makeUpdateInstallRecord } from "./updateInstallRecord.ts";
 export { DESKTOP_UPDATE_INSTALL_RECORD_FILE } from "./updateInstallRecord.ts";
 import {
   checkDesktopUpdateFeed,
   decodeDownloadProgressInfo,
+  decodeUpdateInfo,
   hasDownloadOffer,
   hasInstallableDownload,
   isPersistedDownload,
@@ -101,16 +103,6 @@ type UpdateAction = "check" | "download" | "install" | "install-recovery" | "cha
 interface DesktopPreparedUpdateInstallResult extends DesktopUpdateActionResult {
   readonly failed: boolean;
 }
-
-const UpdateInfo = Schema.Struct({
-  version: Schema.String,
-  // Malformed notes must not block update-state decoding; normalizeDesktopUpdateReleaseNotes validates separately.
-  releaseNotes: Schema.optional(Schema.Unknown),
-  releaseName: Schema.optional(Schema.NullOr(Schema.String)),
-  releaseDate: Schema.optional(Schema.String),
-});
-
-const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
 
 const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -537,6 +529,7 @@ export const make = Effect.gen(function* () {
 
   const downloadAvailableUpdate = Effect.fn("desktop.updates.downloadAvailableUpdate")(function* (
     automatic = false,
+    retryOf?: DesktopUpdateState,
   ) {
     const admission = yield* Effect.scoped(
       admitAfterCheck(
@@ -559,7 +552,10 @@ export const make = Effect.gen(function* () {
               settings.updateInstallPolicy === "paused" ||
               current.installPolicy === "paused" ||
               settings.updateChannel !== current.channel ||
-              (yield* Ref.get(availabilityGeneration)) === (yield* Ref.get(attemptedGeneration))
+              (retryOf
+                ? current !== retryOf
+                : (yield* Ref.get(availabilityGeneration)) ===
+                  (yield* Ref.get(attemptedGeneration)))
             ) {
               return "refused" as const;
             }
@@ -818,7 +814,7 @@ export const make = Effect.gen(function* () {
       return;
     }
     if (state.status === "available" && state.availableVersion) {
-      yield* downloadAvailableUpdate(true);
+      yield* downloadWithNetworkRetry((failed) => downloadAvailableUpdate(true, failed));
       return;
     }
     if (

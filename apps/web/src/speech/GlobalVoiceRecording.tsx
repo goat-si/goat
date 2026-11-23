@@ -22,7 +22,7 @@ export function GlobalVoiceRecording() {
   useEffect(() => () => voiceSession.disconnect(), []);
   if (!snapshot.active && snapshot.unattached.length === 0) return null;
   return (
-    <div className="fixed top-3 right-3 z-50 flex max-w-md flex-col gap-2 rounded-lg border bg-popover p-3 shadow-lg">
+    <div className="fixed top-3 right-3 z-50 flex max-w-md flex-col gap-2 rounded-lg border bg-popover p-3 shadow-lg [-webkit-app-region:no-drag]">
       {snapshot.active ? (
         <div className="flex items-center gap-2" role="status">
           <span>

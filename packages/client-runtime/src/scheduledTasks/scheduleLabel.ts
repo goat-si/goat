@@ -7,6 +7,7 @@ export function scheduleLabel(
   schedule: ScheduledTaskSchedule,
   timeZone?: string,
   runAt?: string | null,
+  formatTime: (value: string) => string = (value) => value,
 ): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "interval") {
@@ -23,7 +24,7 @@ export function scheduleLabel(
         ? "Weekdays"
         : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
   const zone = scheduleTimeZoneLabel(timeZone, runAt);
-  return `${days} at ${schedule.timeOfDay}${zone === undefined ? "" : ` ${zone}`}`;
+  return `${days} at ${formatTime(schedule.timeOfDay)}${zone === undefined ? "" : ` ${zone}`}`;
 }
 
 /** Label for a positive delay until an upcoming run, such as "in 3h". */

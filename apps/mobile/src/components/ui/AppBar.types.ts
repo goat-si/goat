@@ -11,6 +11,8 @@ export interface AppBarAction {
   readonly loading?: boolean;
   readonly selected?: boolean;
   readonly tintColor?: ColorValue;
+  readonly iconScale?: number;
+  readonly destructive?: boolean;
 }
 
 export type AppBarMenuItem =

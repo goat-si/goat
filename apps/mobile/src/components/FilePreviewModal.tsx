@@ -55,6 +55,7 @@ function PreviewItemResolver(props: {
   readonly source: FilePreviewItem;
   readonly onResolved: (source: ResolvedFilePreviewSource | null) => void;
   readonly progressive: boolean;
+  readonly isSelected: boolean;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
 }) {
@@ -69,7 +70,7 @@ function PreviewItemResolver(props: {
   const [uri, setUri] = useState<string | null>("uri" in source ? source.uri : null);
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const onResolutionError = useEffectEvent((error: unknown, fallbackMessage: string) => {
-    if (props.progressive) {
+    if (props.progressive || !props.isSelected) {
       props.onResolved(null);
       return;
     }
@@ -169,7 +170,7 @@ function ResolvedFilePreview(props: {
           };
         }),
       }
-    : selected && gallery.length === items.length
+    : selected && items.every((item) => Object.hasOwn(resolved, filePreviewKey(item)))
       ? { ...selected, gallery }
       : null;
   const onOpenError = (error: unknown) => {
@@ -205,6 +206,7 @@ function ResolvedFilePreview(props: {
           key={filePreviewKey(item)}
           source={item}
           progressive={progressive}
+          isSelected={filePreviewKey(item) === selectedKey}
           onResolved={(value) => onResolved(value, filePreviewKey(item))}
           onRequestClose={props.onRequestClose}
           onOpenError={props.onOpenError}

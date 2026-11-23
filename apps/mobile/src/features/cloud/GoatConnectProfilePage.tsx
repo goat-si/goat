@@ -166,29 +166,31 @@ export function GoatConnectProfilePage() {
                   size="small"
                 />
               ) : (
-                <Menu
-                  actions={ENVIRONMENT_MENU_ACTIONS}
-                  isAnchoredToRight
-                  onPressAction={() =>
-                    confirmDeregister(environment, () => void handleDeregister(environment))
-                  }
-                >
-                  <Pressable
-                    accessibilityLabel={`Actions for ${environment.label}`}
-                    accessibilityRole="button"
-                    disabled={deregisteringEnvironmentId !== null}
-                    className="size-[30px] items-center justify-center active:opacity-60 disabled:opacity-50"
+                <View pointerEvents={deregisteringEnvironmentId === null ? "auto" : "none"}>
+                  <Menu
+                    actions={ENVIRONMENT_MENU_ACTIONS}
+                    isAnchoredToRight
+                    onPressAction={() =>
+                      confirmDeregister(environment, () => void handleDeregister(environment))
+                    }
                   >
-                    <View className="rotate-90">
-                      <SymbolView
-                        name="ellipsis"
-                        size={18}
-                        tintColorClassName={"accent-clerk-foreground-muted"}
-                        type="monochrome"
-                      />
-                    </View>
-                  </Pressable>
-                </Menu>
+                    <Pressable
+                      accessibilityLabel={`Actions for ${environment.label}`}
+                      accessibilityRole="button"
+                      disabled={deregisteringEnvironmentId !== null}
+                      className="size-[30px] items-center justify-center active:opacity-60 disabled:opacity-50"
+                    >
+                      <View className="rotate-90">
+                        <SymbolView
+                          name="ellipsis"
+                          size={18}
+                          tintColorClassName={"accent-clerk-foreground-muted"}
+                          type="monochrome"
+                        />
+                      </View>
+                    </Pressable>
+                  </Menu>
+                </View>
               )
             }
           />

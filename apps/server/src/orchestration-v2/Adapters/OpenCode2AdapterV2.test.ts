@@ -1,3 +1,7 @@
+import {
+  testCommandMemoryDelivery,
+  testInboxMemoryDelivery,
+} from "./OpenCode2MemoryReceipt.testkit.ts";
 import { htmlRenderFromToolItem } from "@goat/shared/toolOutput";
 /**
  * Failures and settings a live OpenCode 2 server cannot produce on demand,
@@ -56,6 +60,7 @@ import { noMcpInstructions, openCode2ReplayRuntime } from "./OpenCode2AdapterV2.
 import { makeProviderReplayGate } from "@goat/provider-testing/replayGate";
 import {
   CHILD,
+  nativeGoal,
   PROMPT_ID,
   SESSION,
   WORK,
@@ -103,18 +108,9 @@ import {
   terminals,
 } from "./OpenCode2AdapterV2.fixtures.testkit.ts";
 
-const nativeGoal = (status: "active" | "paused" | "complete") => ({
-  id: "goal-1",
-  objective: "Write proof.txt",
-  status,
-  rounds: 2,
-  maxRounds: 100,
-  boot: "boot-1",
-  updatedAt: 1,
-  reason: "Checked proof.txt",
-});
-
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
+  it.effect("marks command memory uncertain (#3836)", testCommandMemoryDelivery);
+  it.effect("records delivered inbox memory (#3836)", testInboxMemoryDelivery);
   it.effect.each([false, true])(
     "WP4 OpenCode v2 framed instruction refresh and clear external=%s",
     (external) =>

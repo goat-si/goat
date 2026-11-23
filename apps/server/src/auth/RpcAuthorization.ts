@@ -336,6 +336,7 @@ export const MEMORY_RPC_REQUIRED_SCOPES = {
   [WS_METHODS.memorySuggestionsAccept]: "memory:write",
   [WS_METHODS.memorySuggestionsDismiss]: "memory:write",
   [WS_METHODS.memoryRevertResolution]: "memory:write",
+  [WS_METHODS.memoryTurnInspect]: "memory:read",
   [WS_METHODS.memoryReadSource]: "memory:read",
   [WS_METHODS.memoryHubSettingsGet]: "settings:write",
   [WS_METHODS.memoryHubSettingsUpdate]: "settings:write",

@@ -16,10 +16,12 @@ export function useHostConnectionChecks(targets: ReadonlyArray<DeviceHostCheckTa
   const test = useAtomCommand(deviceEnvironment.testHost, { reportFailure: false });
   const [checks, setChecks] = useState<Record<string, Record<string, DeviceHostCheck>>>({});
   const running = useRef(new Set<string>());
+  const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
   const testConnection = async (host: SshDeviceHostConfig) => {
     const key = deviceHostConnectionKey(host);
     if (running.current.has(key)) return;
     running.current.add(key);
+    setRunningKeys((current) => new Set(current).add(key));
     setChecks((current) => ({ ...current, [key]: {} }));
     const results: Record<string, DeviceHostCheck> = {};
     await checkDeviceHostConnections(
@@ -40,8 +42,15 @@ export function useHostConnectionChecks(targets: ReadonlyArray<DeviceHostCheckTa
           [key]: { ...current[key], [environmentId]: result },
         }));
       },
-    ).finally(() => running.current.delete(key));
+    ).finally(() => {
+      running.current.delete(key);
+      setRunningKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    });
     return results;
   };
-  return { checks, testConnection };
+  return { checks, runningKeys, testConnection };
 }

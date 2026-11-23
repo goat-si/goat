@@ -1,3 +1,4 @@
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import {
   EnvironmentId,
   ProjectId,
@@ -11,6 +12,7 @@ import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
+  isDraft: false,
   status: "success" as PullRequestCheck["status"],
   extraStatus: null as PullRequestCheck["status"] | null,
   mergeMethods: ["merge"] as Array<"merge" | "squash" | "rebase">,
@@ -24,6 +26,10 @@ const state = vi.hoisted(() => ({
   projects: [] as unknown[],
   pullRequests: [] as unknown[],
   projectMergeMethods: {} as Record<string, "merge" | "squash" | "rebase">,
+}));
+
+vi.mock(import("~/state/use-atom-command"), () => ({
+  useAtomCommand: (() => state.perform) as never,
 }));
 
 vi.mock(import("~/state/entities"), async (importOriginal) => ({
@@ -47,7 +53,7 @@ const queryData = () => ({
   number: 1,
   title: "Test PR",
   state: "open",
-  isDraft: false,
+  isDraft: state.isDraft,
   mergeability: "mergeable",
   headBranch: "feature",
   baseBranch: "main",
@@ -60,8 +66,8 @@ const queryData = () => ({
     description: null,
     url: null,
   })),
-  capabilities: { actions: ["merge"], mergeMethods: state.mergeMethods },
-  viewerPermissions: { actions: ["merge"] },
+  capabilities: { actions: ["merge", "ready"], mergeMethods: state.mergeMethods },
+  viewerPermissions: { actions: ["merge", "ready"] },
   mergeCapabilities: {
     merge: state.mergeMethods.includes("merge"),
     squash: state.mergeMethods.includes("squash"),
@@ -102,7 +108,6 @@ vi.mock(import("~/state/query"), async (importOriginal) => ({
 }));
 vi.mock(import("../pullRequest/usePullRequestActions"), async (importOriginal) => ({
   ...(await importOriginal()),
-  usePullRequestActionRunner: () => ({ actionPending: false, perform: state.perform }),
   usePullRequestDefaultMergeMethodResolver: ((_environmentId: unknown, projectId: unknown) => () =>
     state.projectMergeMethods[String(projectId)]) as never,
 }));
@@ -153,6 +158,9 @@ const repositoryProject = {
   environmentId: EnvironmentId.make("environment"),
   title: "repo",
   workspaceRoot: "/work/repo",
+  defaultModelSelection: null,
+  createdAt: "2026-11-18T00:00:00.000Z",
+  updatedAt: "2026-11-18T00:00:00.000Z",
   scripts: [],
   repositoryIdentity: {
     canonicalKey: "github.com/owner/repo",
@@ -166,7 +174,7 @@ const repositoryProject = {
     name: "repo",
     displayName: "owner/repo",
   },
-};
+} satisfies EnvironmentProject;
 
 const clickButton = async (scope: ParentNode, label: string) =>
   await act(async () => {
@@ -268,7 +276,7 @@ it("merges with the last selected merge method", async () => {
         pr={null}
         number={1}
         status={null}
-        project={null}
+        project={repositoryProject}
         label="Test PR"
         openAriaLabel="Open PR"
         onOpen={vi.fn()}
@@ -285,7 +293,11 @@ it("merges with the last selected merge method", async () => {
   const dialog = document.querySelector('[role="alertdialog"]')!;
   expect(dialog.textContent).toContain("using squash");
   await clickMerge(dialog);
-  expect(state.perform).toHaveBeenCalledWith("merge", "squash");
+  expect(state.perform).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ action: "merge", mergeMethod: "squash" }),
+    }),
+  );
 });
 
 it("requires a new merge click after passing checks become pending and pass again", async () => {
@@ -297,7 +309,7 @@ it("requires a new merge click after passing checks become pending and pass agai
       pr={null}
       number={1}
       status={null}
-      project={null}
+      project={repositoryProject}
       label="Test PR"
       openAriaLabel="Open PR"
       onOpen={vi.fn()}
@@ -331,7 +343,7 @@ it("requires a new merge click after passing checks become pending and pass agai
 });
 
 async function setup() {
-  state.perform.mockReset();
+  state.perform.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
   state.checkoutError = null;
   state.newThread.mockReset().mockResolvedValue({
     draftId: DraftId.make("new-draft"),
@@ -342,6 +354,7 @@ async function setup() {
   state.updateToast.mockReset();
 
   state.repositoryTitles = null;
+  state.isDraft = false;
   state.status = "success";
   state.extraStatus = null;
   state.mergeMethods = ["merge"];
@@ -363,7 +376,7 @@ it("adds the failing checks to a given composer instead of opening a new thread"
         pr={null}
         number={1}
         status={null}
-        project={null}
+        project={repositoryProject}
         label="Test PR"
         openAriaLabel="Open PR"
         onOpen={vi.fn()}
@@ -431,4 +444,48 @@ it.each([
   expect(document.querySelector('[role="alertdialog"]')!.textContent).toContain(
     `using ${expected}`,
   );
+});
+
+it("keeps Ready pending when refreshed detail becomes mergeable before the action settles", async () => {
+  await using screen = await setup();
+  const row = () => (
+    <ThreadDetailsPrRow
+      environmentId={EnvironmentId.make("environment")}
+      pr={null}
+      number={1}
+      status={null}
+      project={repositoryProject}
+      label="Test PR"
+      openAriaLabel="Open PR"
+      onOpen={vi.fn()}
+    />
+  );
+  let finish!: (result: { _tag: "Success"; value: undefined }) => void;
+  const result = new Promise<{ _tag: "Success"; value: undefined }>((resolve) => {
+    finish = resolve;
+  });
+  state.perform.mockReturnValueOnce(result);
+  state.isDraft = true;
+  await screen.rerender(row());
+  await clickButton(screen.container, "Ready");
+  expect(state.perform).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        projectId: repositoryProject.id,
+        repository: "owner/repo",
+        number: 1,
+        action: "ready",
+      }),
+    }),
+  );
+  await expect.element(screen.getByRole("button", { name: "Marking..." })).toBeDisabled();
+
+  state.isDraft = false;
+  await screen.rerender(row());
+  await expect.element(screen.getByRole("button", { name: "Marking..." })).toBeDisabled();
+  await act(async () => {
+    finish({ _tag: "Success", value: undefined });
+    await result;
+  });
+  await expect.element(screen.getByRole("button", { name: "Merge", exact: true })).toBeEnabled();
 });

@@ -2,6 +2,7 @@
 import { fileSearchFixtures, imageReadFixture, webSearchFixtures } from "./acp-search-fixtures.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import { makeLoadReplayEmitter } from "./acp-mock-load-replay.ts";
+import { crashOnPrompt } from "./acp-mock-prompt-crash.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as Effect from "effect/Effect";
@@ -1043,12 +1044,7 @@ const program = Effect.gen(function* () {
         );
         return {};
       }
-      if (
-        process.env.GOAT_ACP_CRASH_PROMPT === "1" &&
-        request.prompt.some((part) => part.type === "text" && part.text === "crash now")
-      ) {
-        return yield* Effect.sync(() => process.exit(23));
-      }
+      if (process.env.GOAT_ACP_CRASH_PROMPT) yield* crashOnPrompt(request, agent);
       if (harnessFailure)
         return yield* handleHarnessFailure(finishPrompt(requestedSessionId, "end_turn"));
 

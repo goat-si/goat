@@ -199,6 +199,8 @@ export const harness = (initial: ImportSnapshot) => {
       }),
     readItem: (a, permit) =>
       permit.pipe(Effect.andThen(Effect.sync(() => items.get(a.sourceItemKey)))),
+    codexBaseline: (_a, permit) => permit.pipe(Effect.as([])),
+    savedText: (_a, permit) => permit.pipe(Effect.as("Saved memory")),
     findMatch: (_a, permit) => permit.pipe(Effect.as({ kind: "none" as const })),
     prepareTarget: (_a, permit) =>
       permit.pipe(

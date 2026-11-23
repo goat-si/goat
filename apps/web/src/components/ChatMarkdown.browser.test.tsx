@@ -4,11 +4,9 @@ import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
 import remarkGfm from "remark-gfm";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page, userEvent } from "vite-plus/test/browser";
-
+import { commands, page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../test/render";
 import "../index.css";
-
 import { shellEnvironment } from "../state/shell";
 import { filesystemEnvironment } from "../state/filesystem";
 import {
@@ -21,7 +19,6 @@ import {
   CHAT_USER_MARKDOWN_REMARK_PLUGINS,
   remarkEnableOrderedListNumbers,
 } from "@goat/shared/markdownPipeline";
-
 const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
   workspaceSearch: vi.fn(),
   filesystemMetadata: vi.fn(),
@@ -51,13 +48,11 @@ vi.mock(import("mdast-util-from-markdown"), async (original) => {
     }) as typeof actual.fromMarkdown,
   };
 });
-
 vi.mock(import("../state/use-atom-query-runner"), async (original) => ({
   ...(await original()),
   useAtomQueryRunner: ((family: unknown) =>
     family === filesystemEnvironment.getMetadata ? filesystemMetadata : workspaceSearch) as never,
 }));
-
 // Atoms derived from the server config run in the real registry over a missing config.
 vi.mock(import("../state/server"), async (original) => {
   const actual = await original();
@@ -86,6 +81,17 @@ vi.mock(import("../state/session"), async (original) => {
     readEnvironmentScope: hasScope as never,
   };
 });
+const threadWorktrees = vi.hoisted(() => new Map<string, string>());
+vi.mock(import("../state/entities"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    readThreadShell: ((ref: { threadId: string }) => {
+      const worktreePath = threadWorktrees.get(ref.threadId);
+      return worktreePath === undefined ? actual.readThreadShell(ref as never) : { worktreePath };
+    }) as never,
+  };
+});
 vi.mock(import("../remoteOpen"), async (original) => ({
   ...(await original()),
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }) as never,
@@ -104,7 +110,6 @@ vi.mock(import("./chat/MermaidDiagram"), async (original) => {
     },
   };
 });
-
 const appearance = vi.hoisted(() => ({
   value: "light" as "light" | "dark",
   listeners: new Set<() => void>(),
@@ -120,7 +125,6 @@ vi.mock(import("../hooks/useTheme"), async (original) => {
     useRenderedAppearance: () => useSyncExternalStore(subscribe, () => appearance.value),
   };
 });
-
 const settingsOverrides = vi.hoisted(() => ({ mathRenderingEnabled: false }));
 vi.mock(import("../hooks/useSettings"), async (original) => {
   const actual = await original();
@@ -131,11 +135,9 @@ vi.mock(import("../hooks/useSettings"), async (original) => {
   }
   return { ...actual, useClientSettings };
 });
-
 import ChatMarkdown from "./ChatMarkdown";
 import { chatMarkdownClipboardPayload } from "../markdown-clipboard";
 import { AudioPreview } from "./files/AudioPreview";
-
 it("keeps compact audio playback loaded across signed URL renewals", async () => {
   const original =
     "data:audio/wav;base64,UklGRiUAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQEAAACA";
@@ -157,8 +159,8 @@ it("keeps compact audio playback loaded across signed URL renewals", async () =>
   expect(screen.container.querySelector("audio")).not.toBe(audio);
   expect(screen.container.querySelector("audio")?.getAttribute("src")).toBe(renewed);
 });
-
 function setup() {
+  threadWorktrees.clear();
   appearance.value = "light";
   parsedSources.length = 0;
   settingsOverrides.mathRenderingEnabled = false;
@@ -166,17 +168,14 @@ function setup() {
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
   filesystemMetadata.mockReset().mockResolvedValue(AsyncResult.success({ entries: [null] }));
 }
-
 function renderText(text: string, props: Partial<Parameters<typeof ChatMarkdown>[0]> = {}) {
   return render(<ChatMarkdown cwd="/tmp/project" text={text} {...props} />);
 }
-
 function buttonsLabelled(container: HTMLElement, label: string) {
   return [...container.querySelectorAll<HTMLButtonElement>("button")].filter(
     (button) => button.getAttribute("aria-label") === label,
   );
 }
-
 it("preserves right-to-left direction in expandable markdown", async () => {
   setup();
   await using screen = await renderText(
@@ -188,7 +187,6 @@ it("preserves right-to-left direction in expandable markdown", async () => {
   await userEvent.click(summary);
   await expect.element(screen.getByText("محتوى")).toBeVisible();
 });
-
 describe("ChatMarkdown context references", () => {
   it("draws skill and file references as link text at the sentence's size and baseline", async () => {
     setup();
@@ -227,7 +225,6 @@ describe("ChatMarkdown context references", () => {
     await userEvent.hover(fileLink);
     await vi.waitFor(() => expect(getComputedStyle(fileLink).textDecorationLine).toBe("underline"));
   });
-
   it.each(["t3", "goat"])(
     "renders %s text and image references through the chip renderer, with readable fallback",
     async (prefix) => {
@@ -255,9 +252,7 @@ describe("ChatMarkdown context references", () => {
     },
   );
 });
-
 const SOURCE_NUMBER_PLUGINS = [remarkEnableOrderedListNumbers];
-
 it("keeps decimal markers in nested user lists while documents keep their counter styles", async () => {
   setup();
   const text = "1. Outer\n   1. Nested\n   7. Skipped\n      1. Deeper\n      4. Fourth";
@@ -287,7 +282,6 @@ it("keeps decimal markers in nested user lists while documents keep their counte
     [...preview!.querySelectorAll("ol")].map((list) => getComputedStyle(list).listStyleType),
   ).toEqual(["decimal", "lower-alpha", "lower-roman"]);
 });
-
 it("shows unavailable audio when a workspace embed has no thread", async () => {
   setup();
   await using screen = await renderText("![recording](clip.wav)");
@@ -295,7 +289,6 @@ it("shows unavailable audio when a workspace embed has no thread", async () => {
   expect(screen.container.textContent).not.toContain("Loading audio");
   expect(screen.container.querySelector("audio")).toBeNull();
 });
-
 it("sizes raw HTML images with pixel units", async () => {
   setup();
   const image = new URL("../../public/favicon-32x32.png", import.meta.url).href;
@@ -312,7 +305,6 @@ it("sizes raw HTML images with pixel units", async () => {
   const { width, height } = element.getBoundingClientRect();
   expect({ width, height }).toEqual({ width: 14, height: 7 });
 });
-
 it("selects the picture source for the current theme", async () => {
   setup();
   const light = `${location.origin}/light.png`;
@@ -330,7 +322,6 @@ it("selects the picture source for the current theme", async () => {
   });
   expect(screen.container.querySelector("img")?.getAttribute("src")).toBe(dark);
 });
-
 it("reuses the parse of a streaming reply's finished blocks when it remounts", async () => {
   setup();
   const message = (
@@ -346,7 +337,6 @@ it("reuses the parse of a streaming reply's finished blocks when it remounts", a
   await expect.element(screen.getByText("Still growing")).toBeVisible();
   expect(parsedSources.filter((source) => source.includes("Finished block"))).toHaveLength(1);
 });
-
 it("reuses the parse of a remounted message that has stable extra plugins", async () => {
   setup();
   const parsed = vi.fn();
@@ -369,7 +359,6 @@ it("reuses the parse of a remounted message that has stable extra plugins", asyn
   await expect.element(screen.getByText("Cached text")).toBeVisible();
   expect(parsed).toHaveBeenCalledTimes(1);
 });
-
 it("highlights a code block's own source when an earlier block of the same length was cached", async () => {
   setup();
   const highlightedText = (container: HTMLElement) =>
@@ -386,7 +375,6 @@ it("highlights a code block's own source when an earlier block of the same lengt
   await using screen = await renderText(`\`\`\`ts\n${second}\n\`\`\``);
   await vi.waitFor(() => expect(highlightedText(screen.container)).toBe(second));
 });
-
 describe("ChatMarkdown favicon privacy", () => {
   it("suppresses private link images while preserving public links across updates", async () => {
     setup();
@@ -407,7 +395,6 @@ describe("ChatMarkdown favicon privacy", () => {
     expect(container.querySelector("a svg")).not.toBeNull();
   });
 });
-
 describe("ChatMarkdown external link labels", () => {
   it("keeps a leading emoji whole", async () => {
     setup();
@@ -424,7 +411,6 @@ describe("ChatMarkdown external link labels", () => {
     });
   });
 });
-
 describe("ChatMarkdown streaming", () => {
   it("runs only a complete single-line shell block after a click", async () => {
     setup();
@@ -441,11 +427,9 @@ describe("ChatMarkdown streaming", () => {
     const { container, rerender } = screen;
     const runButtons = () => buttonsLabelled(container, "Run in terminal");
     expect(runButtons()).toHaveLength(0);
-
     await rerender(message("```bash\necho hello\n```"));
     await act(async () => runButtons()[0]!.click());
     expect(onRunShellCommand).toHaveBeenCalledExactlyOnceWith("echo hello");
-
     for (const text of [
       "~~~bash\necho tilde\n~~~",
       "> ```bash\n> echo quote\n> ```",
@@ -456,7 +440,6 @@ describe("ChatMarkdown streaming", () => {
       await rerender(message(text));
       expect(runButtons()).toHaveLength(1);
     }
-
     for (const text of [
       "```bash\necho one\necho two\n```",
       "```typescript\necho hello\n```",
@@ -473,7 +456,6 @@ describe("ChatMarkdown streaming", () => {
       expect(runButtons()).toHaveLength(0);
     }
   });
-
   it("edits the current task text and marker after reusing a renderer", async () => {
     setup();
     let editedText: string | undefined;
@@ -495,7 +477,6 @@ describe("ChatMarkdown streaming", () => {
     const original = checkboxes()[1]!;
     await rerender(message("- [ ] A longer first task\n- [ ] Second"));
     expect(checkboxes()[1]).toBe(original);
-
     await act(async () => original.click());
     expect(editedText).toBe("- [ ] A longer first task\n- [x] Second");
     await vi.waitFor(() => expect(checkboxes()[1]!.checked).toBe(true));
@@ -503,7 +484,6 @@ describe("ChatMarkdown streaming", () => {
     expect(checkboxes()[1]).toBe(original);
     expect(checkboxes()[1]!.checked).toBe(false);
   });
-
   it.each([
     ["read-only", undefined],
     ["editable", () => {}],
@@ -523,13 +503,30 @@ describe("ChatMarkdown streaming", () => {
     },
   );
 });
-
 describe("ChatMarkdown workspace file opens", () => {
+  it("opens a link in the checkout used by the markdown", async () => {
+    setup();
+    const scratchThread = { ...threadRef, threadId: ThreadId.make("scratch-thread") };
+    threadWorktrees.set(scratchThread.threadId, "/scratch/thread");
+    filesystemMetadata.mockResolvedValue(AsyncResult.success({ entries: [{ kind: "file" }] }));
+    using openFile = vi.spyOn(useRightPanelStore.getState(), "openFile");
+    await using screen = await renderText("[State](packages/state/filesystem.ts)", {
+      cwd: "/repo-a",
+      threadRef: scratchThread,
+    });
+    await act(async () => screen.container.querySelector("a")!.click());
+    await vi.waitFor(() =>
+      expect(openFile).toHaveBeenCalledExactlyOnceWith(
+        scratchThread,
+        "/repo-a/packages/state/filesystem.ts",
+        undefined,
+      ),
+    );
+  });
   const threadRef = {
     environmentId: EnvironmentId.make("workspace"),
     threadId: ThreadId.make("thread"),
   };
-
   it("keeps a newer absolute file open when an earlier repo-relative lookup finishes", async () => {
     setup();
     const result = AsyncResult.success({
@@ -556,15 +553,12 @@ describe("ChatMarkdown workspace file opens", () => {
     await act(async () => notes!.click());
     expect(workspaceSearch).toHaveBeenCalledOnce();
     expect(openFile).not.toHaveBeenCalled();
-
     await act(async () => other!.click());
     await act(async () => resolvePending(result));
-
     expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, "/elsewhere/b.md", 9);
     expect(workspaceSearch).toHaveBeenCalledOnce();
   });
 });
-
 describe("ChatMarkdown skill chips", () => {
   it("closes skill details after opening its instructions", async () => {
     setup();
@@ -619,11 +613,9 @@ describe("ChatMarkdown skill chips", () => {
     useRightPanelStore.getState().openFile(otherThread, "/notes/thread.md");
     useRightPanelStore.getState().openFile(otherEnvironment, "/notes/environment.md");
     const before = useRightPanelStore.getState().byThreadKey;
-
     await userEvent.click(screen.getByRole("button", { name: "Skill Review. Show details" }));
     await expect.element(page.getByText("Reviews the current branch.")).toBeVisible();
     await userEvent.click(page.getByRole("button", { name: "View instructions" }));
-
     const after = useRightPanelStore.getState().byThreadKey;
     expect(selectActiveRightPanelSurface(after, threadRef)).toMatchObject({
       kind: "file",
@@ -637,7 +629,6 @@ describe("ChatMarkdown skill chips", () => {
     );
   });
 });
-
 describe("ChatMarkdown headings", () => {
   it("keeps insight streaming, reference links, and heading anchors in one message", async () => {
     setup();
@@ -672,7 +663,6 @@ describe("ChatMarkdown headings", () => {
     ).toHaveLength(2);
     await expect.element(screen.getByRole("note")).not.toHaveTextContent("After");
   });
-
   it("never gives two headings the same id, even when a suffix matches another heading", async () => {
     setup();
     await using screen = await renderText(
@@ -690,7 +680,6 @@ describe("ChatMarkdown headings", () => {
     ]);
   });
 });
-
 describe("ChatMarkdown selection", () => {
   it("selects the whole line on triple-click beside a favicon link or a file chip", async () => {
     setup();
@@ -713,7 +702,6 @@ describe("ChatMarkdown selection", () => {
       });
       return window.getSelection()?.toString().trim();
     };
-
     const paragraphs = screen.container.querySelectorAll("p");
     expect(paragraphs).toHaveLength(2);
     const selections = [];
@@ -728,7 +716,6 @@ describe("ChatMarkdown selection", () => {
     expect(selections).toEqual(lines);
   });
 });
-
 describe("ChatMarkdown alert copy", () => {
   it("copies a fully selected callout as alert Markdown and a partial one as text", async () => {
     setup();
@@ -745,14 +732,12 @@ describe("ChatMarkdown alert copy", () => {
     };
     const labelText = label!.lastChild!;
     const bodyText = body!.firstChild!;
-
     expect(select(labelText, bodyText, bodyText.textContent!.length)).toBe(
       "> [!WARNING]\n> Back up first.",
     );
     expect(select(labelText, bodyText, "Back up".length)).toBe("Warning\n\nBack up");
   });
 });
-
 describe("ChatMarkdown user indentation copy", () => {
   it.each([
     { text: "   Plan\nnext" },
@@ -802,8 +787,20 @@ describe("ChatMarkdown user indentation copy", () => {
     },
   );
 });
-
 describe("ChatMarkdown file chip tooltips", () => {
+  it("stays open while the pointer selects the path, then closes when it leaves", async () => {
+    setup();
+    await using screen = await renderText("[notes](/tmp/project/docs/notes.md)");
+    await userEvent.hover(screen.container.querySelector(".chat-markdown-file-link")!);
+    const path = page.getByText("/tmp/project/docs/notes.md");
+    await expect.element(path).toBeVisible();
+    // Forced so the pointer lands on the popup even when it ignores pointer events.
+    await userEvent.tripleClick(path, { force: true });
+    expect(window.getSelection()?.toString().trim()).toBe("/tmp/project/docs/notes.md");
+    await expect.element(path).toBeVisible();
+    await commands.resetPointer();
+    await expect.element(path).not.toBeInTheDocument();
+  });
   it("wraps a long path so its file name stays inside the tooltip", async () => {
     setup();
     const path =
@@ -820,7 +817,6 @@ describe("ChatMarkdown file chip tooltips", () => {
     );
   });
 });
-
 describe("ChatMarkdown inline code selection", () => {
   it("selects the whole inline code span on double-click, but only a word in fenced code", async () => {
     setup();
@@ -829,18 +825,15 @@ describe("ChatMarkdown inline code selection", () => {
     );
     await userEvent.dblClick(screen.getByText("migration-gate --dry-run"));
     expect(window.getSelection()?.toString()).toBe("migration-gate --dry-run");
-
     window.getSelection()?.removeAllRanges();
     const fenced = screen.container.querySelector("pre code")!;
     await userEvent.dblClick(fenced, { position: { x: 4, y: 4 } });
     expect(window.getSelection()?.toString()).toBe("fenced");
   });
 });
-
 describe("ChatMarkdown editor deep links", () => {
   const hrefs = (container: HTMLElement) =>
     [...container.querySelectorAll("a")].map((link) => link.getAttribute("href"));
-
   it("keeps local editor file links", async () => {
     setup();
     await using screen = await renderText(
@@ -851,7 +844,6 @@ describe("ChatMarkdown editor deep links", () => {
       "vscode://file/Users/me/repo/file.md:3:7",
     ]);
   });
-
   it("still drops other editor links and unknown schemes", async () => {
     setup();
     await using screen = await renderText(
@@ -861,7 +853,6 @@ describe("ChatMarkdown editor deep links", () => {
     expect(hrefs(screen.container).filter(Boolean)).toEqual([]);
   });
 });
-
 describe("ChatMarkdown Windows file links", () => {
   const environmentId = EnvironmentId.make("env-windows");
   const renderWindows = (text: string, parseRawHtml: boolean) =>
@@ -875,7 +866,6 @@ describe("ChatMarkdown Windows file links", () => {
     [...container.querySelectorAll(".chat-markdown-file-link")].map((chip) =>
       chip.getAttribute("href"),
     );
-
   it("still rejects unsafe schemes", async () => {
     setup();
     for (const parseRawHtml of [true, false]) {
@@ -890,7 +880,6 @@ describe("ChatMarkdown Windows file links", () => {
     }
   });
 });
-
 describe("ChatMarkdown code block actions", () => {
   it("keeps keyboard focus on the view toggle when a diagram switches to its source", async () => {
     setup();
@@ -902,7 +891,6 @@ describe("ChatMarkdown code block actions", () => {
     await expect.element(screen.getByRole("button", { name: "Show diagram" })).toHaveFocus();
   });
 });
-
 it("opens the same literal app path used for the bundle icon without searching duplicate basenames", async () => {
   setup();
   using restore = new DisposableStack();
@@ -931,7 +919,6 @@ it("opens the same literal app path used for the bundle icon without searching d
   });
   expect(workspaceSearch).not.toHaveBeenCalled();
 });
-
 it("copies part of inline code without prose escapes", async () => {
   setup();
   await using screen = await renderText("Read `items[0]*_x` and a*b*c.");
@@ -944,7 +931,6 @@ it("copies part of inline code without prose escapes", async () => {
   selection.addRange(range);
   expect(chatMarkdownClipboardPayload(selection)?.text).toBe("items[0]*_");
 });
-
 it.each([
   {
     source: "10. First\n11. Second\n12. Third\n\nAfter.",

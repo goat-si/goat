@@ -178,6 +178,81 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
           memorySpaceId: input.memorySpaceId,
           environmentId: primitives.environmentId,
         };
+        if (input.action === "codexBaseline") {
+          const r = yield* ports.readRegistration(
+            {
+              ...address,
+              by: "slot",
+              slot: { format: "codex", rootSlot: "default", selection: null },
+            },
+            permit,
+          );
+          const rows = r
+            ? yield* ports.codexBaseline(
+                { ...address, sourceId: r.sourceId, after: input.after },
+                permit,
+              )
+            : null;
+          yield* permit;
+          if (!rows || !r) return { action: input.action, sourceId: null, items: [], next: null };
+          const items: M.CodexImportBaseline[] = [];
+          let size = 0;
+          for (const row of rows) {
+            size += bytes(json(row)) + 1;
+            // Reserve the envelope and cursor in the bounded RPC response.
+            if (items.length === 64 || size > 60 * 1024) break;
+            items.push(row);
+          }
+          return {
+            action: input.action,
+            sourceId: r.sourceId,
+            items,
+            next: rows.length > items.length ? (items.at(-1)?.sourceItemKey ?? null) : null,
+          };
+        }
+        if (input.action === "compareCodex") {
+          const r = yield* registration(input.memorySpaceId, input.sourceId, permit);
+          if (
+            r.source.format !== "codex" ||
+            !r.session ||
+            r.session.sessionId !== input.sessionId ||
+            Date.parse(r.session.expiresAtUtc) <= (yield* primitives.now())
+          )
+            return yield* new M.MemoryImportRpcError({ issue: "source_changed" });
+          const { s, rows } = yield* snapshot(r);
+          const row = rows.find(
+            (row) =>
+              row.kind === "candidate" && row.candidate.sourceItemKey === input.sourceItemKey,
+          );
+          if (
+            r.session.snapshotDigest !== s.snapshotDigest ||
+            row?.kind !== "candidate" ||
+            row.candidate.sourceFingerprint !== input.sourceFingerprint
+          )
+            return yield* new M.MemoryImportRpcError({ issue: "source_changed" });
+          const attached = attachImportEvidence(row.candidate, r.sourceId);
+          if (attached.issue) return yield* new M.MemoryImportRpcError({ issue: attached.issue });
+          const previous = yield* ports.readItem(
+            { ...address, sourceId: r.sourceId, sourceItemKey: input.sourceItemKey },
+            permit,
+          );
+          if (!previous || !(previous.pending ?? previous.accepted))
+            return yield* new M.MemoryRpcError({ code: "not_found" });
+          const savedText = yield* ports.savedText(
+            { ...address, memoryId: previous.memoryId },
+            permit,
+          );
+          const result = {
+            action: input.action,
+            sourceText: attached.candidate.payload.text,
+            savedText,
+          };
+          yield* validateOutput(result).pipe(
+            Effect.mapError(() => new M.MemoryImportRpcError({ issue: "limit_exceeded" })),
+          );
+          yield* permit;
+          return result;
+        }
         if (input.action === "status")
           return yield* finish(
             "status",

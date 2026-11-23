@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   draftContextPlacement,
+  newTaskModelUnavailableMessage,
   fillNewTaskWorkspaceBranch,
   resolveNewTaskWorkspaceLabel,
   resolveNewTaskBranchLabel,
@@ -216,4 +217,9 @@ it("keeps an unpinned local choice following later checkout changes", () => {
   expect(resolve("first").branch).toBe("first");
   expect(resolve("second").branch).toBe("second");
   expect(selection.branch).toBeNull();
+});
+
+it("explains whether the host needs a connection or an available model", () => {
+  expect(newTaskModelUnavailableMessage(false, "Laptop")).toContain("Connect to an environment");
+  expect(newTaskModelUnavailableMessage(true, "Laptop")).toContain("Laptop has no model available");
 });
