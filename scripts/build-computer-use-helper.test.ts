@@ -7,6 +7,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Exit from "effect/Exit";
 import { Command } from "effect/cli";
 
@@ -19,6 +20,7 @@ import {
   renderHelperInfoPlist,
   resolveSigningIdentity,
   signComputerUseHelper,
+  stageComputerUseDriver,
 } from "./build-computer-use-helper.ts";
 import type { CommandResult, ReleaseCommandRunner } from "./lib/release-verify.ts";
 import { packagedHelperChannel } from "./lib/desktop-computer-use-helper.ts";
@@ -86,6 +88,41 @@ describe("build-computer-use-helper", () => {
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide(NodeServices.layer),
     ),
+  );
+
+  it.effect.each([
+    ["arm64", "arm64"],
+    ["x64", "x86_64"],
+    ["universal", null],
+  ] as const)("stages the driver for %s", ([arch, slice]) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const source = NodePath.join(directory, "source");
+      const destination = NodePath.join(directory, "driver");
+      yield* fs.writeFileString(source, "verified release");
+      const calls: Array<readonly string[]> = [];
+      const runner: ReleaseCommandRunner = (program, args) =>
+        Effect.gen(function* () {
+          calls.push([program, ...args]);
+          yield* fs.writeFileString(destination, "selected slice").pipe(Effect.orDie);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        });
+      yield* stageComputerUseDriver(source, destination, arch, runner);
+      assert.deepEqual(
+        calls,
+        slice ? [["lipo", source, "-thin", slice, "-output", destination]] : [],
+      );
+      assert.equal(yield* fs.readFileString(source), "verified release");
+      assert.equal(
+        yield* fs.readFileString(destination),
+        slice ? "selected slice" : "verified release",
+      );
+      if (HostProcess.Platform.defaultValue() !== "win32") {
+        const mode = (yield* fs.stat(destination)).mode;
+        assert.strictEqual(mode & 0o777, 0o755);
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it("signs every channel, dev included, with the keychain's Developer ID and its team", () => {

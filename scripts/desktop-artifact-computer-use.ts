@@ -19,7 +19,7 @@ import * as Stream from "effect/Stream";
 
 import { signWithJsign } from "./lib/windows-jsign.ts";
 
-import { buildComputerUseHelper } from "./build-computer-use-helper.ts";
+import { buildComputerUseHelper, type HelperDriverArch } from "./build-computer-use-helper.ts";
 import {
   buildWindowsComputerUseHelper,
   PINNED_DRIVER_FILES,
@@ -313,6 +313,7 @@ export function computerUseHelperRefusal(input: {
  */
 export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(function* (input: {
   readonly repoRoot: string;
+  readonly arch: HelperDriverArch;
   readonly stageRoot: string;
   readonly platform: DesktopPlatform;
   readonly appId: string;
@@ -323,6 +324,7 @@ export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(functi
   const path = yield* Path.Path;
   const built = yield* buildComputerUseHelper({
     repoRoot: input.repoRoot,
+    driverArch: input.arch,
     output: path.join(input.stageRoot, "computer-use-helper"),
     channel: input.appId.endsWith(".nightly") ? "nightly" : "stable",
     identity: undefined,
