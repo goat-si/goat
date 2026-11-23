@@ -70,7 +70,6 @@ export {
   claudeProcessExitFailure,
   queryRunnerError,
 } from "./ClaudeQueryRunnerErrors.ts";
-
 const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
@@ -416,6 +415,7 @@ const runClaudeWorker = Effect.fn("runClaudeWorker")(function* (input: {
         },
       },
     ),
+    input.method === "getSessionMessages" ? { maxStdoutBytes: 64 * 1024 * 1024 } : undefined,
   ).pipe(Effect.timeout("30 seconds"));
   if (result.code !== 0) {
     return yield* new ClaudeAgentSdkQueryRunnerError({
