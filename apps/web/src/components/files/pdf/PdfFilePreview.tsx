@@ -1,5 +1,6 @@
+import { useGT } from "gt-react";
 import type { ScopedThreadRef } from "@goat/contracts";
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { urlNeedsEnvironmentRoute } from "~/browser/openEnvironmentUrl";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/components/solar";
@@ -131,7 +132,7 @@ function PdfDocument(props: {
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [texts, setTexts] = useState<string[] | null>(null);
-  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<Error | null>(null);
   const [matchIndex, setMatchIndex] = useState(0);
 
   useEffect(() => {
@@ -201,7 +202,7 @@ function PdfDocument(props: {
       })
       .catch((cause: unknown) => {
         if (!controller.signal.aborted)
-          setSearchError(cause instanceof Error ? cause.message : "Could not search this PDF.");
+          setSearchError(cause instanceof Error ? cause : new Error());
       });
     return () => controller.abort();
   }, [findOpen, props.document, texts, searchError]);
@@ -280,60 +281,23 @@ function PdfDocument(props: {
         reload={props.retry}
       />
       {findOpen ? (
-        <div
-          role="search"
-          aria-label="Find in PDF"
-          className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1 text-xs"
-        >
-          <div className="min-w-24 flex-1">
-            <Input
-              ref={findInput}
-              size="compact"
-              aria-label="Find in PDF"
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setMatchIndex(0);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  nextMatch(event.shiftKey ? -1 : 1);
-                }
-              }}
-            />
-          </div>
-          <span role="status" className="min-w-0 text-muted-foreground">
-            {searchError ??
-              (!texts ? (
-                "Searching…"
-              ) : (
-                <span className="whitespace-nowrap tabular-nums">
-                  {matches.length ? matchIndex + 1 : 0} of {matches.length}
-                  <span className="sr-only"> matches</span>
-                </span>
-              ))}
-          </span>
-          <PdfIconButton
-            label="Previous match"
-            disabled={!matches.length}
-            onClick={() => nextMatch(-1)}
-          >
-            <ChevronLeftIcon />
-          </PdfIconButton>
-          <PdfIconButton label="Next match" disabled={!matches.length} onClick={() => nextMatch(1)}>
-            <ChevronRightIcon />
-          </PdfIconButton>
-          <PdfIconButton
-            label="Close find"
-            onClick={() => {
-              setFindOpen(false);
-              root.current?.focus();
-            }}
-          >
-            <XIcon />
-          </PdfIconButton>
-        </div>
+        <PdfFindBar
+          inputRef={findInput}
+          query={query}
+          error={searchError}
+          isSearching={!texts}
+          currentMatch={matches.length ? matchIndex + 1 : 0}
+          total={matches.length}
+          onQueryChange={(value) => {
+            setQuery(value);
+            setMatchIndex(0);
+          }}
+          onNavigate={nextMatch}
+          onClose={() => {
+            setFindOpen(false);
+            root.current?.focus();
+          }}
+        />
       ) : null}
       <div
         ref={scroll}
@@ -383,6 +347,77 @@ function PdfDocument(props: {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function PdfFindBar({
+  inputRef,
+  query,
+  error,
+  isSearching,
+  currentMatch,
+  total,
+  onQueryChange,
+  onNavigate,
+  onClose,
+}: {
+  inputRef: Ref<HTMLInputElement>;
+  query: string;
+  error: Error | null;
+  isSearching: boolean;
+  currentMatch: number;
+  total: number;
+  onQueryChange: (value: string) => void;
+  onNavigate: (direction: number) => void;
+  onClose: () => void;
+}) {
+  const gt = useGT();
+  const matchCount = { current: currentMatch, total: total };
+  return (
+    <div
+      role="search"
+      aria-label={gt("Find in PDF")}
+      className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1 text-xs"
+    >
+      <div className="min-w-24 flex-1">
+        <Input
+          ref={inputRef}
+          size="compact"
+          aria-label={gt("Find in PDF")}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onNavigate(event.shiftKey ? -1 : 1);
+            }
+          }}
+        />
+      </div>
+      <span role="status" className="min-w-0 text-muted-foreground">
+        {error ? (
+          error.message || gt("Could not search this PDF.")
+        ) : isSearching ? (
+          gt("Searching…")
+        ) : (
+          <span className="whitespace-nowrap tabular-nums">
+            <span aria-hidden>{gt("{current, number} of {total, number}", matchCount)}</span>
+            <span className="sr-only">
+              {gt("{current, number} of {total, number} matches", matchCount)}
+            </span>
+          </span>
+        )}
+      </span>
+      <PdfIconButton label={gt("Previous match")} disabled={!total} onClick={() => onNavigate(-1)}>
+        <ChevronLeftIcon />
+      </PdfIconButton>
+      <PdfIconButton label={gt("Next match")} disabled={!total} onClick={() => onNavigate(1)}>
+        <ChevronRightIcon />
+      </PdfIconButton>
+      <PdfIconButton label={gt("Close find")} onClick={onClose}>
+        <XIcon />
+      </PdfIconButton>
     </div>
   );
 }

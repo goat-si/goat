@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useState, type ReactNode } from "react";
 import {
   ArrowRightLeftIcon,
@@ -82,6 +83,7 @@ export function PdfToolbar(props: {
   find: () => void;
   reload: () => void;
 }) {
+  const gt = useGT();
   return (
     <div
       role="toolbar"
@@ -135,7 +137,7 @@ export function PdfToolbar(props: {
       <PdfIconButton label="Fit page" onClick={() => props.zoom("fit-page")}>
         <MaximizeIcon />
       </PdfIconButton>
-      <PdfIconButton label="Find" onClick={props.find}>
+      <PdfIconButton label={gt("Find")} onClick={props.find}>
         <SearchIcon />
       </PdfIconButton>
       <PdfIconButton label="Reload PDF" onClick={props.reload}>

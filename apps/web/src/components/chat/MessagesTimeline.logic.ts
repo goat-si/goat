@@ -430,7 +430,8 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       runId: RunId;
-      label: string;
+      status: TurnFoldStatus;
+      duration: string | null;
       expanded: boolean;
     }
   | {
@@ -573,6 +574,8 @@ function viewedImagesRows(
     : [{ kind: "viewed-images", id: `${groupId}:viewed-images`, createdAt, paths }];
 }
 
+export type TurnFoldStatus = "worked" | "stopped" | "continued";
+
 interface TurnFold {
   runId: RunId;
   anchorEntryId: string;
@@ -580,7 +583,8 @@ interface TurnFold {
   hiddenEntryIds: ReadonlySet<string>;
   /** Every entry in the segment, including the cards a fold never hides. */
   entryIds: ReadonlySet<string>;
-  label: string;
+  status: TurnFoldStatus;
+  duration: string | null;
 }
 
 interface SupersededAttemptFold {
@@ -955,14 +959,6 @@ function deriveTurnFolds(input: {
               lastEntryEnd,
           );
     const duration = elapsedMs !== null ? formatDuration(elapsedMs) : null;
-    const label = isLatestInterruptedTurn
-      ? duration
-        ? `You stopped after ${duration}`
-        : "You stopped this response"
-      : duration
-        ? `Worked for ${duration}`
-        : "Worked";
-
     // The top row keeps the whole turn's time, steers included. Work after a
     // steer folds under its own row below that steer, keyed apart from the run
     // so each segment opens on its own.
@@ -975,7 +971,8 @@ function deriveTurnFolds(input: {
       createdAt: group.startBoundary ?? firstEntry.createdAt,
       hiddenEntryIds: segmentHiddenIds(firstSegment),
       entryIds: new Set(firstSegment.map((entry) => entry.id)),
-      label,
+      status: isLatestInterruptedTurn ? "stopped" : "worked",
+      duration,
     });
     for (const [index, { startIndex, steer }] of group.steerSegments.entries()) {
       const entries = group.entries.slice(startIndex, group.steerSegments[index + 1]?.startIndex);
@@ -992,7 +989,8 @@ function deriveTurnFolds(input: {
         createdAt: steer.createdAt,
         hiddenEntryIds: segmentHiddenIds(entries),
         entryIds: new Set(entries.map((entry) => entry.id)),
-        label: segmentMs !== null ? `Continued for ${formatDuration(segmentMs)}` : "Continued",
+        status: "continued",
+        duration: segmentMs !== null ? formatDuration(segmentMs) : null,
       });
     }
   }
@@ -1513,7 +1511,8 @@ export function deriveMessagesTimelineRows(input: {
         ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
-        label: turnFold.label,
+        status: turnFold.status,
+        duration: turnFold.duration,
         expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
       });
     }
@@ -2157,7 +2156,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       const nextAnchors = bf.deferredWorkItemIds ?? [];
       return (
         a.createdAt === bf.createdAt &&
-        a.label === bf.label &&
+        (a.kind === "turn-fold" && bf.kind === "turn-fold"
+          ? a.status === bf.status && a.duration === bf.duration
+          : a.kind === "attempt-fold" && bf.kind === "attempt-fold" && a.label === bf.label) &&
         a.expanded === bf.expanded &&
         anchors.length === nextAnchors.length &&
         anchors.every((id, index) => id === nextAnchors[index])
