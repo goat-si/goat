@@ -32,7 +32,6 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -211,10 +210,11 @@ function providerSession(input: {
     lastError: null,
   };
 }
-
 // After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
-const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
-  "Agent turn stopped after repeated resume attempts made no progress";
+const CURSOR_POST_TURN_RETRY_ERRORS = new Set([
+  "Agent turn stopped after repeated resume attempts made no progress",
+  "Connection failed repeatedly",
+]);
 
 interface CursorLiveAgent {
   readonly cwd: string | null;
@@ -1149,7 +1149,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         const isResumeFailureAfterTurnEnded = (context: ActiveCursorTurn, result: RunResult) =>
           context.turnEnded &&
           result.status === "error" &&
-          result.error?.message === CURSOR_RESUME_NO_PROGRESS_MESSAGE;
+          CURSOR_POST_TURN_RETRY_ERRORS.has(result.error?.message ?? "");
 
         const terminalStatus = (
           context: ActiveCursorTurn,
