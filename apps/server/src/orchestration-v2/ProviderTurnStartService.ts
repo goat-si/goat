@@ -7,6 +7,7 @@ import {
   isProviderTurnStartError,
   isCloudTaskSourceError,
   isProviderAdapterOpenSessionError,
+  hasUnknownProviderOutcome,
 } from "./goat/ProviderTurnStartErrorChecks.ts";
 import { AMBIGUOUS_RESUME_MESSAGE, manualContinuationDelivery } from "./manualContinuation.ts";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
@@ -108,12 +109,10 @@ import {
   pendingRestartCancelledBackgroundWork,
   restartCancelledBackgroundWorkNote,
 } from "./RestartBackgroundNote.ts";
-
 export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2,
   ProviderTurnStartServiceV2Shape
 >()("goat/orchestration-v2/ProviderTurnStartService/ProviderTurnStartServiceV2") {}
-
 export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   never,
@@ -744,7 +743,8 @@ export const layer: Layer.Layer<
         const loaded = yield* Effect.result(load);
         if (loaded._tag === "Success") return loaded.success;
         if (input.reattach === true) return yield* loaded.failure;
-        if (input.willRetry === true) return yield* loaded.failure;
+        if (input.willRetry === true && !hasUnknownProviderOutcome(loaded.failure))
+          return yield* loaded.failure;
         yield* settleStartFailure({
           signal: "provider-thread-load-failure",
           title: "Provider turn failed to start",
@@ -856,6 +856,8 @@ export const layer: Layer.Layer<
             ),
           );
           if (forked._tag === "Success") return forked.success;
+          if (hasUnknownProviderOutcome(forked.failure))
+            return yield* loadFromProvider(Effect.fail(forked.failure));
           if (input.willRetry === true) return yield* forked.failure;
           if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return undefined;
           const fresh = yield* loadFromProvider(
@@ -995,7 +997,10 @@ export const layer: Layer.Layer<
         if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return undefined;
         if (
           resumed._tag === "Failure" &&
-          (cloud || nativeResume || resumed.failure._tag === "ProviderAdapterThreadInUseError")
+          (cloud ||
+            nativeResume ||
+            resumed.failure._tag === "ProviderAdapterThreadInUseError" ||
+            hasUnknownProviderOutcome(resumed.failure))
         )
           return yield* loadFromProvider(Effect.fail(resumed.failure));
         yield* Effect.logWarning("Recovering provider context in a fresh native session", {
@@ -1528,7 +1533,6 @@ export const layer: Layer.Layer<
     });
   }),
 );
-
 export const layerWithChannelAuthority = layer.pipe(
   Layer.provide(ChannelProviderInputAuthority.layer),
 );
