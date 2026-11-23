@@ -225,6 +225,7 @@ import { providerThreadFromCodexThread } from "./codexProviderThread.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
+import { acceptsFullAccessCommand } from "./CodexFullAccessApproval.ts";
 import {
   codexExhaustionHttpStatus,
   codexHttpStatus,
@@ -4935,13 +4936,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (acceptsFullAccessCommand(context.input.runtimePolicy, payload))
+              return {
+                decision: "accept",
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {
                 decision: "acceptForSession",
               } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
             }
-
             const nativeRequestId = payload.approvalId ?? payload.itemId;
             const artifacts = yield* buildApprovalRequestArtifacts({
               context,
@@ -4979,7 +4983,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
             });
-
             const resolved = yield* Deferred.await(decision).pipe(
               Effect.ensuring(
                 Ref.update(pendingRuntimeRequests, (current) => {
