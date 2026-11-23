@@ -237,7 +237,12 @@ export const memoryImportFormats = (
 
 export type MemoryUpdateItem = MemoryImportPreviewItem & {
   originalScope?: MemoryScope;
-  change?: "New" | "Changed in Codex" | "Changed in both" | "Missing from Codex";
+  change?:
+    | "New"
+    | "Changed in Codex"
+    | "Changed in both"
+    | "Missing from Codex"
+    | "Not checked in this profile";
 };
 type CodexComparisonResult = Extract<MemoryImportProviderResult, { action: "compareCodex" }>;
 export type CodexComparison = Omit<CodexComparisonResult, "action"> & {
@@ -278,6 +283,14 @@ export function codexImportChanges(
   items: readonly MemoryImportPreviewItem[],
   baseline: ReadonlyArray<CodexImportBaseline>,
 ): MemoryUpdateItem[] {
+  const profileOf = (key: string) =>
+    key.startsWith("MEMORY.md#task-group:")
+      ? "handbook"
+      : key.startsWith("extensions/ad_hoc/notes/") && key.endsWith("#body")
+        ? "notes"
+        : null;
+  const profiles = new Set(items.map((item) => profileOf(item.sourceItemKey)).filter(Boolean));
+  const profile = profiles.size === 1 ? [...profiles][0] : null;
   const saved = new Map(baseline.map((item) => [item.sourceItemKey, item]));
   const changes: MemoryUpdateItem[] = [];
   for (const item of items) {
@@ -303,7 +316,10 @@ export function codexImportChanges(
       sourceItemKey,
       mappingRequired: false,
       byteCount: 0,
-      change: "Missing from Codex",
+      change:
+        profileOf(sourceItemKey) && profileOf(sourceItemKey) !== profile
+          ? "Not checked in this profile"
+          : "Missing from Codex",
     });
   return changes;
 }
@@ -787,7 +803,14 @@ export function createMemoryImportWorkflow(options: {
         const items = codexImportChanges(result.items, previous);
         preview = result;
         setState({ phase: "selecting" });
-        return { items, message: items.length ? null : "Codex memories are up to date." };
+        return {
+          items,
+          message: items.some((item) => item.change === "Not checked in this profile")
+            ? "The Codex profile may have changed or is empty. Memories from the other profile were not checked; their files may still exist. Saved GOAT memories are kept."
+            : items.length
+              ? null
+              : "Codex memories are up to date.",
+        };
       }),
     compareCodex: (item: MemoryUpdateItem) =>
       exclusive(async (token) => {

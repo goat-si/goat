@@ -884,6 +884,46 @@ describe("import subscription isolation and admission", () => {
 });
 
 describe("checking Codex source updates", () => {
+  it("discloses a profile switch instead of calling an unchecked note missing (#3800)", async () => {
+    const f = workflowFixture(0);
+    const note = "extensions/ad_hoc/notes/example.md#body";
+    f.setRespond(async (input) => {
+      if (input.action === "codexBaseline")
+        return {
+          action: input.action,
+          sourceId,
+          next: null,
+          items: [
+            {
+              sourceItemKey: note,
+              sourceFingerprint: "a".repeat(64),
+              locallyEdited: false,
+              scope: { kind: "user" },
+            },
+          ],
+        };
+      if (input.action === "preview")
+        return {
+          action: input.action,
+          sourceId,
+          sessionId: "new",
+          items: [
+            {
+              sourceItemKey: "MEMORY.md#task-group:Setup",
+              sourceFingerprint: "b".repeat(64),
+              byteCount: 10,
+              mappingRequired: false,
+            },
+          ],
+        };
+      return f.result(input);
+    });
+    const result = await f.workflow.checkCodexUpdates();
+    expect(result?.message).toContain("profile");
+    expect(result?.items.find((item) => item.sourceItemKey === note)?.change).toBe(
+      "Not checked in this profile",
+    );
+  });
   it("reads all baseline pages without applying anything, and applies only confirmed changes", async () => {
     const f = workflowFixture(3);
     const [first, second, third] = f.items;
