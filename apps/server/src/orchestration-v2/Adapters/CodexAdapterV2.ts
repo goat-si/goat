@@ -6903,8 +6903,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...(providerThread.appThreadId === null
                   ? {}
                   : { threadId: providerThread.appThreadId }),
-                modelSelection: current?.modelSelection ?? input.modelSelection,
-                runtimePolicy: current?.runtimePolicy ?? input.runtimePolicy,
+                modelSelection: current?.modelSelection,
+                runtimePolicy: current?.runtimePolicy,
               });
             }),
           );
@@ -8075,8 +8075,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const loadMcp = yield* readMcpSession(threadInput.providerThread.appThreadId);
                 const loadRuntime = yield* threadRuntimeParams({
                   mcpSession: loadMcp,
-                  modelSelection: input.modelSelection,
-                  runtimePolicy: input.runtimePolicy,
                 });
                 yield* resumeNativeThread(threadId, {
                   excludeTurns: true,
