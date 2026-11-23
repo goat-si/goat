@@ -6,12 +6,15 @@ import {
   SourceControlProviderKind,
   type PullRequestDetailView,
 } from "@goat/contracts";
+import appCss from "~/index.css?inline";
+import { createWorkspaceFocusController, workspaceAreaProps } from "~/lib/workspaceFocus";
 import { expect, it, vi } from "vite-plus/test";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 
-const { permissions } = vi.hoisted(() => ({
+const { permissions, shown } = vi.hoisted(() => ({
   permissions: { checkout: true, operate: true },
+  shown: { detail: null as PullRequestDetailView | null },
 }));
 
 vi.mock(import("~/state/session"), async (original) => ({
@@ -36,9 +39,9 @@ vi.mock(import("./usePullRequestDetail"), async (original) => ({
     detailQuery: { isPending: false, refresh: vi.fn() },
     activityQuery: { isPending: false, refresh: vi.fn(), error: null },
     activity: null,
-    sharedSummary: detail,
-    coreDetail: detail,
-    detail,
+    sharedSummary: shown.detail,
+    coreDetail: shown.detail,
+    detail: shown.detail,
   })) as never,
 }));
 vi.mock(import("~/state/usePullRequestStack"), async (original) => ({
@@ -133,6 +136,7 @@ const panel = (attach = false) => (
 function setup() {
   permissions.checkout = true;
   permissions.operate = true;
+  shown.detail = detail;
   useComposerDraftStore.setState({ draftsByThreadKey: {} });
 }
 
@@ -161,4 +165,42 @@ it("can still add conflict resolution to an existing composer without checkout s
   const draft = useComposerDraftStore.getState().getComposerDraft(draftId);
   expect(draft?.prompt).toContain("conflicts");
   expect(draft?.prompt).toContain(detail.url);
+});
+
+it("keeps a screen reader's place when scrolling the description condenses the header", async () => {
+  setup();
+  shown.detail = {
+    ...detail,
+    body: Array.from({ length: 80 }, (_, line) => `Line ${line}`).join("\n\n"),
+  };
+  const style = document.createElement("style");
+  style.textContent = appCss;
+  document.head.append(style);
+  using _style = { [Symbol.dispose]: () => style.remove() };
+  const controller = createWorkspaceFocusController(document);
+  using _controller = { [Symbol.dispose]: () => controller.dispose() };
+  await using screen = await render(
+    <div {...workspaceAreaProps("pull-requests", 1)} className="flex h-[600px] flex-col">
+      {panel()}
+    </div>,
+  );
+  const openOnHost = screen.getByRole("button", { name: "Open pull request #1 on host" });
+  await expect.element(openOnHost).toBeVisible();
+  const expanded = openOnHost.element() as HTMLButtonElement;
+  expanded.focus();
+  await expect.element(screen.getByText("Line 79")).toBeInTheDocument();
+  let scroller = screen.getByText("Line 79").element().parentElement;
+  while (scroller && getComputedStyle(scroller).overflowY !== "auto") {
+    scroller = scroller.parentElement;
+  }
+  using _timers = fakeTimers();
+  using moves = vi.spyOn(HTMLElement.prototype, "focus");
+  // Browse mode scrolls a heading into view without moving DOM focus.
+  await act(() => {
+    scroller!.scrollTop = scroller!.scrollHeight;
+  });
+  await vi.waitFor(() => expect(expanded.closest("[inert]")).not.toBeNull());
+  await act(() => vi.advanceTimersToNextFrame());
+  // A programmatic focus() pulls the screen reader's browse cursor back to the header.
+  expect(moves).not.toHaveBeenCalled();
 });
