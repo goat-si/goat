@@ -16,7 +16,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
-import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import { DraftId, restoreFailedDraftThread, useComposerDraftStore } from "../../composerDraftStore";
 import { useGlobalAgentStore } from "../../globalAgentStore";
 import { resolveActiveDestination } from "./destinationRail.logic";
 import { HomeRailItem } from "./DestinationRail";
@@ -184,6 +184,52 @@ it("a main bot thread GOAT identifies only after it opened does not replace Home
   await userEvent.click(app.home());
 
   await expect.element(app.heading("Thread thread-a")).toBeVisible();
+});
+
+it("a draft whose send fails stays Home's target", async () => {
+  using _data = setup();
+  const draftId = DraftId.make("draft-1");
+  useComposerDraftStore
+    .getState()
+    .setProjectDraftThreadId(PROJECT, draftId, { threadId: ThreadId.make("reserved-1") });
+  const draft = useComposerDraftStore.getState().getDraftSession(draftId)!;
+  await using app = await openApp("/draft/draft-1");
+
+  await go(app.router, "/fleet");
+  useComposerDraftStore
+    .getState()
+    .markDraftThreadPromoting(draftId, scopeThreadRef(ENV, ThreadId.make("reserved-1")));
+  restoreFailedDraftThread(draftId, draft, ThreadId.make("reserved-1"));
+  await userEvent.click(app.home());
+
+  await expect.element(app.heading("Draft draft-1")).toBeVisible();
+});
+
+it("a draft sent while a late-identified bot thread is open stays Home's target", async () => {
+  using _data = setup(["legacy-bot"]);
+  useGlobalAgentStore.setState({ botRef: null });
+  const draftId = DraftId.make("draft-1");
+  useComposerDraftStore
+    .getState()
+    .setProjectDraftThreadId(PROJECT, draftId, { threadId: ThreadId.make("reserved-1") });
+  await using app = await openApp("/draft/draft-1");
+
+  await go(app.router, `/${ENV}/legacy-bot`);
+  data.shells.set(`${ENV}/sent-1`, LIVE);
+  const drafts = useComposerDraftStore.getState();
+  drafts.markDraftThreadPromoting(draftId, scopeThreadRef(ENV, ThreadId.make("sent-1")));
+  useComposerDraftStore.getState().finalizePromotedDraftThread(draftId);
+  useGlobalAgentStore.setState({
+    botRef: {
+      environmentId: ENV,
+      projectId: ProjectId.make("bot"),
+      threadId: ThreadId.make("legacy-bot"),
+    },
+  });
+  await go(app.router, "/fleet");
+  await userEvent.click(app.home());
+
+  await expect.element(app.heading("Thread sent-1")).toBeVisible();
 });
 
 it("a thread with the bot's id on another machine is an ordinary thread", async () => {
