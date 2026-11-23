@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limit erreicht, lösche zuerst eine Ansicht",
   "79c3a969207c8760": "Ein Feld dieser Ansicht überschreitet die zulässige Länge.",
   "856812e7e1fc445e": "Tool-Aufrufe im Chat",
-  "d24e3cd7bcf08490": "Wach halten, während Agenten arbeiten"
+  "d24e3cd7bcf08490": "Wach halten, während Agenten arbeiten",
+  "943a2587b62ac8a3": "Bei gesperrtem Host pausieren",
+  "ee0c5a67bcf4a637": "Im Energiesparmodus des Hosts pausieren",
+  "bd391a005bf1172e": "Im Energiesparmodus des Clients pausieren",
+  "2ed182d6338b4a7d": "Im Akkubetrieb pausieren"
 }

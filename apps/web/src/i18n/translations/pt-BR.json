@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limite atingido, exclua uma visualização primeiro",
   "79c3a969207c8760": "Esta visualização excede o tamanho permitido para um campo.",
   "856812e7e1fc445e": "Chamadas de ferramentas no chat",
-  "d24e3cd7bcf08490": "Manter ativo enquanto os agentes trabalham"
+  "d24e3cd7bcf08490": "Manter ativo enquanto os agentes trabalham",
+  "943a2587b62ac8a3": "Pausar quando o host estiver bloqueado",
+  "ee0c5a67bcf4a637": "Pausar quando o host estiver no modo de economia de energia",
+  "bd391a005bf1172e": "Pausar quando o cliente estiver no modo de economia de energia",
+  "2ed182d6338b4a7d": "Pausar ao usar a bateria"
 }

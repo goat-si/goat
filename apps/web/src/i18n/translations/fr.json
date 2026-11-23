@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limite atteinte, supprimez d’abord une vue",
   "79c3a969207c8760": "Cette vue dépasse la longueur autorisée pour un champ.",
   "856812e7e1fc445e": "Appels d’outils dans le chat",
-  "d24e3cd7bcf08490": "Rester éveillé pendant que les agents travaillent"
+  "d24e3cd7bcf08490": "Rester éveillé pendant que les agents travaillent",
+  "943a2587b62ac8a3": "Suspendre lorsque l’hôte est verrouillé",
+  "ee0c5a67bcf4a637": "Suspendre lorsque l’hôte est en mode économie d’énergie",
+  "bd391a005bf1172e": "Suspendre lorsque le client est en mode économie d’énergie",
+  "2ed182d6338b4a7d": "Suspendre sur batterie"
 }

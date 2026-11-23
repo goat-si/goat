@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
   "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
-  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes"
+  "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes",
+  "943a2587b62ac8a3": "Pausar cuando el equipo anfitrión esté bloqueado",
+  "ee0c5a67bcf4a637": "Pausar si el equipo anfitrión está en modo de bajo consumo",
+  "bd391a005bf1172e": "Pausar si el cliente está en modo de bajo consumo",
+  "2ed182d6338b4a7d": "Pausar al usar la batería"
 }

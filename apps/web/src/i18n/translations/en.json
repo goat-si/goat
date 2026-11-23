@@ -755,5 +755,9 @@
   "1e6c081708cf5864": "Limit reached, delete a view first",
   "79c3a969207c8760": "This view exceeds the allowed field length.",
   "856812e7e1fc445e": "Tool calls in chat",
-  "d24e3cd7bcf08490": "Keep awake while agents work"
+  "d24e3cd7bcf08490": "Keep awake while agents work",
+  "943a2587b62ac8a3": "Pause when host is locked",
+  "ee0c5a67bcf4a637": "Pause on host low power",
+  "bd391a005bf1172e": "Pause on client low power",
+  "2ed182d6338b4a7d": "Pause on battery"
 }
