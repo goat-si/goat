@@ -69,7 +69,17 @@ export function IntervalSecondsField({
     >
       <NumberFieldGroup>
         <NumberFieldDecrement aria-label={gt("Decrease {label}", { label })} />
-        <NumberFieldInput aria-label={gt("{label} in seconds", { label })} />
+        <NumberFieldInput
+          aria-label={gt("{label} in seconds", { label })}
+          // Base UI commits on blur but not on Enter; refocus so keyboard users stay put.
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229)
+              return;
+            const input = event.currentTarget;
+            input.blur();
+            input.focus();
+          }}
+        />
         <NumberFieldIncrement aria-label={gt("Increase {label}", { label })} />
       </NumberFieldGroup>
     </NumberField>
