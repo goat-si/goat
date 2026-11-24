@@ -4,7 +4,15 @@ import { FACE_MOTION_RANK, goatBotFaceSpoken } from "@goat/client-runtime/goatBo
 import type { FleetMachineSummary } from "@goat/client-runtime/state/fleet";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
-import { Fragment, lazy, memo, Suspense, useState, type MouseEvent, type ReactElement } from "react";
+import {
+  Fragment,
+  lazy,
+  memo,
+  Suspense,
+  useState,
+  type MouseEvent,
+  type ReactElement,
+} from "react";
 
 import {
   ActivityIcon,
@@ -227,43 +235,6 @@ function botRailLabel(face: GoatBotShownFace, name: string) {
   return spoken === null ? name : `${spoken}, ${name}`;
 }
 
-/** Home returns to the last thread or draft, and stays put when one is already open. */
-export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boolean }) {
-  const destination = useHomeRailDestination();
-  const params = useParams({ strict: false });
-  const botRef = useGlobalAgentStore((state) => state.botRef);
-  const onHomeThread = isHomeThreadRoute(params, botRef);
-  // Member bot threads resolve to Home, but their own rail item is the current page there.
-  const current = active && (onHomeThread || resolveThreadRouteTarget(params) === null);
-  const stayOnThread = (event: MouseEvent<HTMLAnchorElement>) => {
-    const plainClick =
-      event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
-    if (onHomeThread && plainClick) event.preventDefault();
-  };
-  const shared = {
-    "aria-label": "Home",
-    "aria-current": current ? ("page" as const) : undefined,
-    className: railItemClassName(current),
-    onClick: stayOnThread,
-    children: <HomeIcon aria-hidden />,
-  };
-  return (
-    <RailTooltip label="Home">
-      {destination.kind === "thread" ? (
-        <Link
-          to="/$environmentId/$threadId"
-          params={{ environmentId: destination.environmentId, threadId: destination.threadId }}
-          {...shared}
-        />
-      ) : destination.kind === "draft" ? (
-        <Link to="/draft/$draftId" params={{ draftId: destination.draftId }} {...shared} />
-      ) : (
-        <Link to="/" activeOptions={EXACT_MATCH} {...shared} />
-      )}
-    </RailTooltip>
-  );
-});
-
 export const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
   // The rail's one read of the main face: its avatar and its link's label both show it.
   const face = useGoatBotMainFace(null, false);
@@ -337,7 +308,13 @@ export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boo
   // Member bot threads resolve to Home, but their own rail item is the current page there.
   const current = active && (onHomeThread || resolveThreadRouteTarget(params) === null);
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    setMode("thread");
+    if (useGlobalAgentStore.getState().mode === "bot") {
+      try {
+        setMode("thread");
+      } catch {
+        // Blocked or full storage must never prevent navigating Home.
+      }
+    }
     const plainClick =
       event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
     if (onHomeThread && plainClick) event.preventDefault();

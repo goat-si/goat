@@ -97,6 +97,7 @@ vi.mock("./useGoatBotMemberStatus", () => ({
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
+  useEnvironments: () => ({ environments: [], isReady: true }),
   useEnvironment: () => ({
     connection: { phase: "connected" },
     serverConfig: {
@@ -114,6 +115,7 @@ vi.mock("~/state/entities", async (original) => {
   const entities = await original<typeof import("~/state/entities")>();
   return {
     ...entities,
+    useQuietThreadShell: () => null,
     useThreadShell: (ref: Parameters<typeof entities.useThreadShell>[0]) => {
       const shell = entities.useThreadShell(ref);
       return ref?.threadId === "member-session" ? bots.memberShell : shell;
