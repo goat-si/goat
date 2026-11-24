@@ -225,8 +225,11 @@ export function fleetQuota(
         const accounts = new Map(provider.accounts.map((account) => [account.accountRef, account]));
         accountCount += accounts.size;
         for (const account of accounts.values()) {
+          const name = quotaPoolAccountName(account, (plan) =>
+            plan ? gt("{plan} account", { plan }) : gt("Account"),
+          );
           detail.push(
-            `${quotaPoolAccountName(account)} (${gt(account.state)}): ${windowDetail(account.windows, gt) || gt("Quota unknown")}`,
+            `${name} (${gt(account.state)}): ${windowDetail(account.windows, gt) || gt("Quota unknown")}`,
           );
         }
       }
