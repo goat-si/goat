@@ -75,6 +75,7 @@ const shell = (
 ): GoatBotVisibilityThread => ({
   environmentId: options.env ?? source,
   id: ThreadId.make(id),
+  worktreePath: null,
   lineage: {
     parentThreadId: options.parent ? ThreadId.make(options.parent) : null,
     relationshipToParent: options.parent ? "subagent" : null,
@@ -104,6 +105,7 @@ type Fixture = {
   list?: "ready" | "pending" | "failed";
   eligible?: boolean;
   legacy?: boolean;
+  /** Hidden without a Home link: the bot's observation closure, or work its own record names. */
   exception?: string[];
 };
 const workerTask = task("task", { worker: { environmentId: source, threadId: "worker" } });
@@ -211,6 +213,22 @@ const fixtures: Fixture[] = [
     ].filter((item) => botRowRetiresAt(item) > Date.parse("2026-11-10T00:00:00Z")),
     threads: [shell("retired-worker")],
     hidden: [],
+  },
+  {
+    name: "regression: a retired task's channel worker and chore stay out of Threads",
+    rows: [],
+    threads: [
+      shell("channel-worker:retired"),
+      shell("channel-child-work:retired-chore", { from: caller, kind: "chore" }),
+    ],
+    hidden: [
+      key(source, "channel-worker:retired"),
+      key(source, "channel-child-work:retired-chore"),
+    ],
+    exception: [
+      key(source, "channel-worker:retired"),
+      key(source, "channel-child-work:retired-chore"),
+    ],
   },
   ...(["pending", "failed"] as const).map((list) => ({
     name: `${list} list`,
@@ -357,7 +375,8 @@ describe("Home and Threads two-way visibility", () => {
           )
         )
           expect(hidden.has(key(link.environmentId, link.threadId))).toBe(true);
-    if (fixture.name.startsWith("remote ") && fixture.name.includes("matching"))
+    // Home's link alone hides remote coding; a chore leaves by its own record either way.
+    if (fixture.name === "remote coding matching provenance")
       expect(
         goatBotObservationThreadKeys({ threads: fixture.threads, homeWork: [] }).has(
           fixture.hidden[0] ?? "",

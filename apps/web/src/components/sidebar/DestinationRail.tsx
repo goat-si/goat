@@ -4,16 +4,7 @@ import { FACE_MOTION_RANK, goatBotFaceSpoken } from "@goat/client-runtime/goatBo
 import type { FleetMachineSummary } from "@goat/client-runtime/state/fleet";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
-import {
-  createContext,
-  Fragment,
-  lazy,
-  memo,
-  Suspense,
-  useContext,
-  useState,
-  type ReactElement,
-} from "react";
+import { Fragment, lazy, memo, Suspense, useState, type ReactElement } from "react";
 
 import {
   ActivityIcon,
@@ -94,13 +85,6 @@ const AddProviderInstanceDialog = lazy(() =>
     default: module.AddProviderInstanceDialog,
   })),
 );
-
-/** True while the desktop destination rail is on screen; the sidebar footer drops its duplicates. */
-export const DestinationRailVisibleContext = createContext(false);
-
-export function useDestinationRailVisible(): boolean {
-  return useContext(DestinationRailVisibleContext);
-}
 
 // The rail owns aria-current; Link's own fuzzy matching would also mark /settings on its
 // subpages.
@@ -304,6 +288,25 @@ function MemberRailItem({ bot, onOpen }: { bot: BotProfile; onOpen: () => void }
     </RailTooltip>
   );
 }
+
+/** Home is where the thread list lives, so it is also the rail's way back from the bots. */
+export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boolean }) {
+  const setMode = useGlobalAgentStore((state) => state.setMode);
+  return (
+    <RailTooltip label="Home">
+      <Link
+        to="/"
+        aria-label="Home"
+        activeOptions={EXACT_MATCH}
+        aria-current={active ? "page" : undefined}
+        className={railItemClassName(active)}
+        onClick={() => setMode("thread")}
+      >
+        <HomeIcon aria-hidden />
+      </Link>
+    </RailTooltip>
+  );
+});
 
 const DecisionsRailItem = memo(function DecisionsRailItem({ active }: { active: boolean }) {
   const { count } = useAtomValue(decisionInbox.summaryAtom);
@@ -621,17 +624,7 @@ export const DestinationRail = memo(function DestinationRail() {
       />
       {/* Scrolls on short windows so the bottom controls stay reachable. */}
       <div className="flex min-h-0 w-full flex-1 scrollbar-gutter-both flex-col items-center gap-1 overflow-y-auto pt-2 pb-3">
-        <RailTooltip label="Home">
-          <Link
-            to="/"
-            aria-label="Home"
-            activeOptions={EXACT_MATCH}
-            aria-current={active === "home" ? "page" : undefined}
-            className={railItemClassName(active === "home")}
-          >
-            <HomeIcon aria-hidden />
-          </Link>
-        </RailTooltip>
+        <HomeRailItem active={active === "home"} />
         {preferences === null
           ? null
           : shownItems.map((item, index) => (

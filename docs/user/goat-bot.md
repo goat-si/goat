@@ -1,8 +1,9 @@
 # GOAT Bot
 
 GOAT Bot is a messenger for your agents. Text it like a person: it answers, starts the work in
-its own task threads, and reports back in the same conversation. Choose **Bots** in the sidebar
-on web and desktop, or the Bots segment on mobile Home. To reach it from Slack or iMessage, see
+its own task threads, and reports back in the same conversation. Choose GOAT Bot in the rail on
+web and desktop (**Bots** at the top of the sidebar where the rail is hidden or leaves GOAT Bot
+out), or the Bots segment on mobile Home. To reach it from Slack or iMessage, see
 [Slack](./slack.md).
 
 With a GOAT server that lists the bot's work, the conversation holds only what you and the bot
@@ -131,11 +132,15 @@ Use **Show more** in **Snoozed** to see up to 500 snoozed tasks.
 
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
-the first five appears after **Show more**). Some threads stay in Threads, such as launches from an older chat,
-some of a long task's threads, and work on a machine this device can't open; on an older server
-everything stays as it was. This holds for the computer the bot runs on in this app, while this
-device can open that bot's Home; threads a bot started on your other computers are listed in
-Threads as before. The unread badge on a bot's row counts recent work only; older work may be
+the first five appears after **Show more**). A task's worker and work the bot did outside a
+worktree, such as restarting a server, stay out of Threads after that too; coding in its own
+worktree comes back once Home no longer links it. Some coding stays in Threads, such as launches
+from an older chat, some of a long task's threads, and work on a machine this device can't open; on an older server
+Home links hide nothing, though a task's worker and work the bot did outside a worktree still stay
+out of Threads. This holds for the computer the bot runs on in this app, while this
+device can open that bot's Home; coding a bot started on your other computers is listed in
+Threads as before, while its workers and work outside a worktree stay out there too. The unread
+badge on a bot's row counts recent work only; older work may be
 missing. An unavailable mark means its unread or waiting count could not be read; the mark names
 which.
 
