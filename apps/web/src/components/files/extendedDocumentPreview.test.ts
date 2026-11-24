@@ -123,6 +123,32 @@ it("removes terminal colors from saved notebook text outputs", () => {
   expect(result.cells[0]?.outputs[0]?.text).toBe("42\n");
 });
 
+it("shows only the last frame of carriage-return progress bars in notebook stream outputs", () => {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: "code",
+          source: "",
+          outputs: [
+            {
+              output_type: "stream",
+              name: "stderr",
+              text: ["\r 10%|#         |", "\r100%|##########|\n", "done\r\n", "🚀 ready\rX\n"],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const result = openNotebook(bytes.buffer as ArrayBuffer);
+  if (result.type !== "notebook") throw new Error("Expected notebook");
+  expect(result.cells[0]?.outputs).toEqual([
+    { kind: "text", text: "100%|##########|\ndone\nX  ready\n" },
+  ]);
+});
+
 it("shows notebook error outputs saved without a traceback", () => {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
