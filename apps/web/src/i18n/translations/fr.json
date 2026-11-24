@@ -873,5 +873,15 @@
   "ab5f7cd7f8d24e36": "Requête",
   "540690430e586ae8": "Aucune entrée visible.",
   "3d40ebe62a5baa33": "Révision",
-  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés."
+  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés.",
+  "5d2dd652b3b109b5": "Les questions laissées par les agents, chacune avec une recommandation et une échéance.",
+  "bf7dc4adf5127197": "Afficher uniquement les décisions ouvertes",
+  "27db9c4ceccb1a88": "Afficher les décisions traitées et expirées",
+  "b93a42f0e373f9e4": "Connectez un environnement pour afficher les décisions.",
+  "eaa6c91a05d95ce7": "Actualiser",
+  "7f7155465b5a43aa": "Impossible de charger les décisions. Essayez d’actualiser.",
+  "162d9c37ad247ab2": "Chargement des décisions…",
+  "13af5489f852d8a4": "Aucune décision pour le moment.",
+  "3953fa3a717a94cd": "Aucune décision en attente.",
+  "2dd4e7a2d23ef17d": "Certaines décisions ne sont pas affichées."
 }
