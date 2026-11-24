@@ -1,8 +1,8 @@
 import { parseScopedThreadKey, scopedThreadKey } from "@goat/client-runtime/environment";
 import { shellSyncMessage } from "@goat/client-runtime/state/presentation";
 import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
-import { useAtomRefresh } from "@effect/atom-react";
-import { useNavigate } from "@tanstack/react-router";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
@@ -14,9 +14,10 @@ import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { resolveDraftPromotionNavigationTarget } from "./ChatView.logic";
 import { threadHasStarted } from "../lib/chatThreadActions";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { SidebarInset } from "./ui/sidebar";
 import { Button } from "./ui/button";
-import { useEnvironmentShellSync } from "../state/presentation";
+import { environmentUnreachableAtom, useEnvironmentShellSync } from "../state/presentation";
 import {
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -110,6 +111,9 @@ export function ThreadRouteView({
       : null;
 
   const shellStatus = useEnvironmentShellStatus(serverThreadRef?.environmentId ?? null);
+  const environmentUnreachable = useAtomValue(
+    environmentUnreachableAtom(serverThreadRef?.environmentId ?? null),
+  );
   const serverThreadShell = serverThread;
   const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shellStatus);
   const draftThread = useComposerDraftStore((store) =>
@@ -154,6 +158,7 @@ export function ThreadRouteView({
     serverThreadDeleted: serverThreadShell?.deletedAt != null,
     unlistedThreadDetail,
     draftThreadExists: draftThread !== null,
+    environmentUnreachable,
   });
   const serverThreadStarted = threadHasStarted(serverThreadShell);
 
@@ -246,6 +251,8 @@ export function ThreadRouteView({
     view = <GoatBotMemberUnavailable onRetry={goatBotMemberLookup.retry} />;
   } else if (goatBotMemberPending) {
     view = null;
+  } else if (renderState === "unreachable") {
+    view = <UnreachableEnvironmentState />;
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
     view = (
       <ChatView
@@ -286,5 +293,23 @@ function RetryShellSyncButton({ environmentId }: { environmentId: EnvironmentId 
     <Button variant="outline" size="sm" onClick={refresh}>
       Retry sync
     </Button>
+  );
+}
+
+function UnreachableEnvironmentState() {
+  return (
+    <Empty className="flex-1">
+      <EmptyHeader>
+        <EmptyTitle>Thread unavailable</EmptyTitle>
+        <EmptyDescription>
+          This thread is on an environment this app is not connected to.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button render={<Link to="/settings/connections" />} size="sm">
+          Open Environments
+        </Button>
+      </EmptyContent>
+    </Empty>
   );
 }
