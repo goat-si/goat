@@ -963,5 +963,15 @@
   "6348f556648fc14b": "Automatic capture isn't available here. Choose a window instead.",
   "90247d578e1b3c09": "Capture a window and attach it to your current draft.",
   "aee8a4449f25bfa4": "This desktop only provides a screenshot.",
-  "fe433c619e19c998": "Update the desktop app to use snapshots."
+  "fe433c619e19c998": "Update the desktop app to use snapshots.",
+  "5d2dd652b3b109b5": "Questions agents left for you, each with a recommendation and a deadline.",
+  "bf7dc4adf5127197": "Show open only",
+  "27db9c4ceccb1a88": "Show answered and expired",
+  "b93a42f0e373f9e4": "Connect an environment to view decisions.",
+  "eaa6c91a05d95ce7": "Refresh",
+  "7f7155465b5a43aa": "Could not load decisions. Try Refresh.",
+  "162d9c37ad247ab2": "Loading decisions…",
+  "13af5489f852d8a4": "No decisions yet.",
+  "3953fa3a717a94cd": "No open decisions.",
+  "2dd4e7a2d23ef17d": "Some decisions are not shown."
 }

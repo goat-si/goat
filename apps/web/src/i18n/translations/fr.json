@@ -963,5 +963,15 @@
   "6348f556648fc14b": "La capture automatique est indisponible ici. Sélectionnez une fenêtre.",
   "90247d578e1b3c09": "Capturez une fenêtre et joignez l’image à votre brouillon en cours.",
   "aee8a4449f25bfa4": "Ce bureau fournit uniquement une capture d’écran.",
-  "fe433c619e19c998": "Mettez à jour l’application de bureau pour utiliser les captures."
+  "fe433c619e19c998": "Mettez à jour l’application de bureau pour utiliser les captures.",
+  "5d2dd652b3b109b5": "Les questions laissées par les agents, chacune avec une recommandation et une échéance.",
+  "bf7dc4adf5127197": "Afficher uniquement les décisions ouvertes",
+  "27db9c4ceccb1a88": "Afficher les décisions traitées et expirées",
+  "b93a42f0e373f9e4": "Connectez un environnement pour afficher les décisions.",
+  "eaa6c91a05d95ce7": "Actualiser",
+  "7f7155465b5a43aa": "Impossible de charger les décisions. Essayez d’actualiser.",
+  "162d9c37ad247ab2": "Chargement des décisions…",
+  "13af5489f852d8a4": "Aucune décision pour le moment.",
+  "3953fa3a717a94cd": "Aucune décision en attente.",
+  "2dd4e7a2d23ef17d": "Certaines décisions ne sont pas affichées."
 }
