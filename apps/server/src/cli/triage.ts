@@ -116,14 +116,18 @@ export const matchAgentAnswer = <Agent extends { readonly id: string }>(
   agents.find((_, index) => String(index + 1) === answer.trim()) ??
   agents.find((agent) => agent.id === answer.trim().toLowerCase());
 
-const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
+export const pickAgent = <Agent extends { readonly id: string; readonly label: string }>(
+  agents: ReadonlyArray<Agent>,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+) =>
   Effect.tryPromise({
     try: async () => {
       const broken = Promise.withResolvers<never>();
       const readline = guardErrors(
         NodeReadlinePromises.createInterface({
-          input: process.stdin,
-          output: process.stdout,
+          input,
+          output,
         }),
         broken.reject,
       );
@@ -140,6 +144,9 @@ const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
             return picked;
           }
         }
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return undefined;
+        throw error;
       } finally {
         readline.close();
       }
@@ -255,6 +262,10 @@ export const triageCommand = Command.make("triage", {
           return yield* new TriageAgentChoiceRequiredError();
         }
         selected = yield* pickAgent(installed);
+        if (selected === undefined) {
+          yield* Console.log("\nNo agent started.");
+          return;
+        }
       }
 
       // Windows .cmd shims cannot carry multiline argv; keep the playbook on disk for both launch and paste fallback.
