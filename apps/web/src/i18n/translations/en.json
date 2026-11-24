@@ -265,6 +265,7 @@
   "dedbe2e53ad42127": "Keep worktrees with local changes",
   "09688748bad5da1c": "Delete now",
   "2678550365a59e17": "Worktree cleanup",
+  "8ae95350a8a0186f": "Where worktrees live, when they are cleaned up, and artifacts and logs.",
   "da6138080e9709f7": "Worktree location",
   "f9544ac51c5f1e53": "Artifacts and logs",
   "67cd0f5e8f1978a9": "Project overview",
@@ -873,6 +874,5 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown.",
-  "8ae95350a8a0186f": "Where worktrees live, when they are cleaned up, and artifacts and logs."
+  "7e8de5a9133d331c": "Only the first recorded events are shown."
 }
