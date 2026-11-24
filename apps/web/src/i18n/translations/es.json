@@ -1070,5 +1070,7 @@
   "97c7de6aaab317a2": "Cerrar el panel derecho",
   "81e0e9f4304d2f01": "Nueva pestaña en el panel derecho",
   "51b267b48c021ff4": "Impide la suspensión por inactividad durante las ejecuciones en los servidores seleccionados. Cerrar la tapa de un portátil aún puede suspenderlo.",
-  "29e68b2aabcc1dac": "Todos los servidores conectados y seleccionados deben admitir este ajuste."
+  "29e68b2aabcc1dac": "Todos los servidores conectados y seleccionados deben admitir este ajuste.",
+  "6b7b4054cab8e8cb": "Modo oscuro en negro puro, hilos leídos más tenues y controles de escritura más sencillos. Desactívalo para volver al aspecto clásico.",
+  "96714eee68489516": "Ordena los hilos activos por el momento en que volvieron a requerir tu atención. El trabajo en curso sigue en Prioridad."
 }
