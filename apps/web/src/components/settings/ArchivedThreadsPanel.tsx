@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import { Spinner } from "~/components/ui/spinner";
 import { ArchiveIcon, ArchiveXIcon as ArchiveX, TrashIcon as Trash2Icon } from "~/components/solar";
@@ -17,19 +18,22 @@ import { RelativeTime } from "../RelativeTime";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { ProjectFavicon } from "../ProjectFavicon";
 
 import { useRef, useState } from "react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 
 const ARCHIVE_ACTIONS = [
-  { action: "unarchive", label: "Unarchive", Icon: ArchiveX },
-  { action: "delete", label: "Delete", Icon: Trash2Icon },
+  { action: "unarchive", label: msg("Unarchive"), Icon: ArchiveX },
+  { action: "delete", label: msg("Delete"), Icon: Trash2Icon },
 ] as const;
 type ArchiveAction = (typeof ARCHIVE_ACTIONS)[number]["action"];
 
 export function ArchivedThreadsPanel() {
+  const gt = useGT();
+  const m = useMessages();
+  const setting = useTranslatedSearchableSetting();
   const { scope, groups: projectGroups, environments } = useSettingsScope();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const pendingActionsRef = useRef(new Set<string>());
@@ -190,8 +194,8 @@ export function ArchivedThreadsPanel() {
     <SettingsPageContainer>
       {archivedGroups.length === 0 ? (
         <SettingsSection
-          id={isLoadingArchive ? undefined : searchableSetting("archive").id}
-          title={searchableSetting("archive").title}
+          id={isLoadingArchive ? undefined : setting("archive").id}
+          title={setting("archive").title}
         >
           <SettingsRow
             title={
@@ -202,16 +206,16 @@ export function ArchivedThreadsPanel() {
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
                 {isLoadingArchive
-                  ? "Loading archived threads"
+                  ? gt("Loading archived threads")
                   : archiveError
-                    ? "Could not load archived threads"
-                    : "No archived threads"}
+                    ? gt("Could not load archived threads")
+                    : gt("No archived threads")}
               </span>
             }
             description={
               isLoadingArchive
-                ? "Checking connected environments."
-                : (archiveError ?? "Archived threads will appear here.")
+                ? gt("Checking connected environments.")
+                : (archiveError ?? gt("Archived threads will appear here."))
             }
           />
         </SettingsSection>
@@ -219,7 +223,7 @@ export function ArchivedThreadsPanel() {
         archivedGroups.map(({ key, project, title, threads: projectThreads }, index) => (
           <SettingsSection
             key={key}
-            id={index === 0 ? searchableSetting("archive").id : undefined}
+            id={index === 0 ? setting("archive").id : undefined}
             title={title}
             icon={<ProjectFavicon project={project} />}
           >
@@ -251,7 +255,7 @@ export function ArchivedThreadsPanel() {
                                 type="button"
                                 variant={action === "delete" ? "destructive-outline" : "outline"}
                                 size="icon-sm"
-                                aria-label={`${label} ${thread.title}`}
+                                aria-label={`${m(label)}: ${thread.title}`}
                                 disabled={pendingKeys.has(threadKey)}
                                 onClick={() => void handleThreadAction(action, thread)}
                               />
@@ -259,7 +263,7 @@ export function ArchivedThreadsPanel() {
                           >
                             <Icon className="size-3.5" />
                           </TooltipTrigger>
-                          <TooltipPopup>{label}</TooltipPopup>
+                          <TooltipPopup>{m(label)}</TooltipPopup>
                         </Tooltip>
                       ))}
                     </div>
