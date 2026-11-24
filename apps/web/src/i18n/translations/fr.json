@@ -982,5 +982,10 @@
   "c7c73764f9b4539d": "GOAT Bot répond à vos messages et lance des tâches pour vous. « Exécuté sur » choisit son environnement, qui peut différer du nœud central.",
   "547f57262a90beed": "Fils de tâches",
   "aa96ebe0442c7764": "Ouvrir les fils de tâches à côté de la conversation principale",
-  "ca61f7c11122271d": "Affichez les conversations des tâches à côté de la conversation principale lorsque l’espace le permet."
+  "ca61f7c11122271d": "Affichez les conversations des tâches à côté de la conversation principale lorsque l’espace le permet.",
+  "ee4c852b5d2fb490": "Ce que les agents retiennent d’un fil à l’autre et qui peut le consulter.",
+  "d2d02339e50a2443": "Mémoriser les conversations",
+  "f633ccf59f82fd24": "Modèle de mémoire",
+  "2f46e6da3ef449fa": "GOAT résume les conversations terminées en souvenirs. Désactiver cette option arrête les nouveaux résumés et conserve les souvenirs enregistrés.",
+  "773dc9457c17d15a": "Le mode automatique reprend le modèle de génération de texte. Vous pouvez choisir un modèle distinct pour les résumés."
 }

@@ -982,5 +982,10 @@
   "c7c73764f9b4539d": "O GOAT Bot responde às suas mensagens e inicia tarefas para você. Em «Executar em», escolha o ambiente do bot, que pode ser diferente do hub.",
   "547f57262a90beed": "Conversas de tarefas",
   "aa96ebe0442c7764": "Abrir conversas de tarefas ao lado do chat principal",
-  "ca61f7c11122271d": "Mostre as conversas das tarefas ao lado do chat principal quando houver espaço suficiente."
+  "ca61f7c11122271d": "Mostre as conversas das tarefas ao lado do chat principal quando houver espaço suficiente.",
+  "ee4c852b5d2fb490": "O que os agentes lembram entre conversas e quem pode ler essas informações.",
+  "d2d02339e50a2443": "Lembrar conversas",
+  "f633ccf59f82fd24": "Modelo de memória",
+  "2f46e6da3ef449fa": "O GOAT resume conversas concluídas na memória. Desativar interrompe os novos resumos e mantém as memórias salvas.",
+  "773dc9457c17d15a": "A opção automática usa o modelo de geração de texto. Você pode escolher outro modelo para os resumos da memória."
 }

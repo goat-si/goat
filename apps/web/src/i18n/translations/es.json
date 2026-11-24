@@ -982,5 +982,10 @@
   "c7c73764f9b4539d": "GOAT Bot responde a tus mensajes e inicia tareas por ti. En «Se ejecuta en» eliges el entorno donde vive, que puede ser distinto del nodo central.",
   "547f57262a90beed": "Hilos de tareas",
   "aa96ebe0442c7764": "Abrir los hilos de tareas junto al chat principal",
-  "ca61f7c11122271d": "Muestra las conversaciones de las tareas junto al chat principal cuando haya suficiente espacio."
+  "ca61f7c11122271d": "Muestra las conversaciones de las tareas junto al chat principal cuando haya suficiente espacio.",
+  "ee4c852b5d2fb490": "Qué recuerdan los agentes entre hilos y quién puede leerlo.",
+  "d2d02339e50a2443": "Recordar conversaciones",
+  "f633ccf59f82fd24": "Modelo de memoria",
+  "2f46e6da3ef449fa": "GOAT resume las conversaciones terminadas en la memoria. Al desactivarlo no se generan más resúmenes y se conservan los recuerdos guardados.",
+  "773dc9457c17d15a": "La opción automática usa el modelo de generación de texto. Puedes elegir otro modelo para los resúmenes de memoria."
 }

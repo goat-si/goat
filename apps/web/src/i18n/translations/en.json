@@ -982,5 +982,10 @@
   "c7c73764f9b4539d": "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
   "547f57262a90beed": "Task threads",
   "aa96ebe0442c7764": "Open task threads beside the main chat",
-  "ca61f7c11122271d": "Show task conversations beside the main chat when there is enough space."
+  "ca61f7c11122271d": "Show task conversations beside the main chat when there is enough space.",
+  "ee4c852b5d2fb490": "What agents remember across threads, and who can read it.",
+  "d2d02339e50a2443": "Remember conversations",
+  "f633ccf59f82fd24": "Memory model",
+  "2f46e6da3ef449fa": "GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories.",
+  "773dc9457c17d15a": "Automatic follows the text generation model. Choose a separate model for memory summaries."
 }

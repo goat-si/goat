@@ -982,5 +982,10 @@
   "c7c73764f9b4539d": "GOAT Bot beantwortet deine Nachrichten und startet Aufgaben für dich. Unter „Läuft auf“ wählst du seine Umgebung, die sich vom Hub unterscheiden kann.",
   "547f57262a90beed": "Aufgaben-Threads",
   "aa96ebe0442c7764": "Aufgaben-Threads neben dem Hauptchat öffnen",
-  "ca61f7c11122271d": "Wenn genug Platz vorhanden ist, werden Aufgabenunterhaltungen neben dem Hauptchat angezeigt."
+  "ca61f7c11122271d": "Wenn genug Platz vorhanden ist, werden Aufgabenunterhaltungen neben dem Hauptchat angezeigt.",
+  "ee4c852b5d2fb490": "Was Agenten sich über Threads hinweg merken und wer es lesen kann.",
+  "d2d02339e50a2443": "Unterhaltungen speichern",
+  "f633ccf59f82fd24": "Modell für Erinnerungen",
+  "2f46e6da3ef449fa": "GOAT fasst abgeschlossene Unterhaltungen als Erinnerungen zusammen. Deaktivieren stoppt neue Zusammenfassungen. Gespeicherte Erinnerungen bleiben erhalten.",
+  "773dc9457c17d15a": "„Automatisch“ verwendet das Modell für die Textgenerierung. Wähle bei Bedarf ein eigenes Modell für Zusammenfassungen."
 }
