@@ -73,7 +73,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     text: "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
   },
   "/settings/source-control": {
-    text: "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    text: msg(
+      "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    ),
   },
   "/settings/projects": { text: "Settings for the selected project." },
   "/settings/storage": {

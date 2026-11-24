@@ -873,5 +873,9 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown."
+  "7e8de5a9133d331c": "Only the first recorded events are shown.",
+  "7a0598bc546ddf61": "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+  "78f82fef9e0c8661": "Repositories",
+  "fd5e987709679db9": "Keeps this project's default branch current when the checkout has no local changes or commits.",
+  "a8d6b69e67c6015e": "Keeps the default branch current when the checkout has no local changes or commits. Projects can override it."
 }
