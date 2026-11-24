@@ -35,7 +35,7 @@ const GOAT_MCP_TITLE_SUFFIX_CALL =
  * titled "<tool>: <description>" cannot impersonate an inventory entry.
  */
 const GOAT_MCP_BARE_TITLE_CALL = /^(?<tool>[A-Za-z0-9_]+)(?::\s*\{|$)/;
-const ANTIGRAVITY_TOOL_TITLE = /^Run(?:ning)? (?<name>[^\s?]+)\??$/;
+const ANTIGRAVITY_TOOL_TITLE = /^(?:Run(?:ning)?|Ran) (?<name>[^\s?]+)\??$/;
 
 /**
  * ACP has no typed MCP tool-call item, so agents surface MCP calls in agent-specific shapes:

@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { ModelSelection } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool } from "effect/ai";
 
@@ -60,7 +61,7 @@ it("keeps validation limits, record values and JSON-shaped literal data intact",
   });
 });
 
-it("drops JSON noise, merges tagged unions, and preserves optional and required nulls", () => {
+it("drops JSON noise, merges tagged unions, and keeps the nulls the input accepts", () => {
   const Every = Schema.Struct({ ms: Schema.Int });
   const tool = Tool.make("example", {
     parameters: Schema.Struct({
@@ -86,7 +87,7 @@ it("drops JSON noise, merges tagged unions, and preserves optional and required 
       threadId: { anyOf: [{ type: "string" }, { type: "null" }] },
       beforeRunId: { anyOf: [{ type: "string" }, { type: "null" }] },
       nothing: { type: "null" },
-      limit: { anyOf: [{ type: "integer" }, { type: "null" }] },
+      limit: { type: "integer" },
       every: { type: "object", properties: { ms: { type: "integer" } }, required: ["ms"] },
       target: {
         anyOf: [
@@ -170,5 +171,68 @@ it("keeps a merged tagged union closed only when every branch refuses extra keys
     },
     mixed: { anyOf: [branch("a", {}, true), branch("b", {}, false)] },
     open: { type: "object", properties: { kind: tag("a", "b") }, required: ["kind"] },
+  });
+});
+
+// regression: Antigravity turned every `T | null` argument of goat_describe into {} for Gemini,
+// with no type or description left, so the model could not tell paths from query.
+it("advertises an optional key as its type alone, and null only where the input accepts it", () => {
+  const tool = Tool.make("example", {
+    parameters: Schema.Struct({
+      query: Schema.optional(Schema.String.annotate({ description: "Words to search." })),
+      paths: Schema.optional(Schema.Array(Schema.String)),
+      clearable: Schema.optional(Schema.NullOr(Schema.String)),
+      nested: Schema.optional(
+        Schema.Struct({
+          branch: Schema.optional(Schema.String),
+          base: Schema.NullOr(Schema.String),
+        }),
+      ),
+      args: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+    }),
+  });
+
+  expect(advertisedJsonSchema(tool).properties).toEqual({
+    query: { type: "string", description: "Words to search." },
+    paths: { type: "array", items: { type: "string" } },
+    clearable: { anyOf: [{ type: "string" }, { type: "null" }] },
+    nested: {
+      type: "object",
+      properties: {
+        branch: { type: "string" },
+        base: { anyOf: [{ type: "string" }, { type: "null" }] },
+      },
+      required: ["base"],
+    },
+    args: { type: "object" },
+  });
+});
+
+// regression: thread.launch advertised modelSelection's instanceId, model and options as {}, the
+// Unknown fields its legacy-tolerant decoder reads, so agents guessed the options shape.
+it("advertises an input decoded from untyped fields as the shape it decodes to", () => {
+  const tool = Tool.make("example", {
+    parameters: Schema.Struct({ modelSelection: Schema.optional(ModelSelection) }),
+  });
+  expect(advertisedJsonSchema(tool).properties).toMatchObject({
+    modelSelection: {
+      type: "object",
+      properties: {
+        instanceId: { type: "string" },
+        model: { type: "string" },
+        options: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              value: { anyOf: [{ type: "string" }, { type: "boolean" }] },
+            },
+            required: ["id", "value"],
+          },
+        },
+      },
+      required: ["instanceId", "model"],
+    },
   });
 });

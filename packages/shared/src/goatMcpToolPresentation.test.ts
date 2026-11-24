@@ -206,6 +206,18 @@ describe("resolveGoatMcpItemCall", () => {
     expect(call).toMatchObject({ toolName: "goat_thread_send", input });
   });
 
+  // Antigravity items recorded before the server recognized its titles keep them as toolName.
+  it.each(["Run mcp_goat_goat_call", "Running mcp_goat_goat_call", "Run mcp_goat_goat_call?"])(
+    "labels an Antigravity %s by the path it ran",
+    (toolName) => {
+      const call = resolveGoatMcpItemCall({
+        toolName,
+        input: { path: "thread.read", args: { threadId: "t1" }, toolSummary: "Read thread" },
+      });
+      expect(call).toMatchObject({ toolName: "goat_thread_read", input: { threadId: "t1" } });
+    },
+  );
+
   it.each([
     { name: "thread.read", arguments: { threadId: "t1" } },
     { tool: "goat_thread_read", input: { threadId: "t1" } },

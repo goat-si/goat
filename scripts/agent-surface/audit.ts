@@ -581,9 +581,7 @@ export function render(inventory: Inventory): string {
         allUndescribed.map((entry) => entry.name),
         10,
       ) +
-      ". Optional fields encode as " +
-      code("anyOf [T, null]") +
-      " with no stated default, so an agent learns defaults only from prose.",
+      ". Optional fields state no default, so an agent learns defaults only from prose.",
     "",
     withExamples.length +
       " of " +

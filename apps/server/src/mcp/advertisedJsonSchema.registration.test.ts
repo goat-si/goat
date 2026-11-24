@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import * as ProviderSettings from "../provider/ProviderSettings.ts";
 import * as Settings from "../serverSettings.ts";
@@ -145,7 +146,23 @@ const nullablePaths = (schema: unknown, path = "$", found = new Set<string>()): 
   return found;
 };
 
-it.effect("preserves nullable input paths across the entire registered catalog", () =>
+const members = (ast: SchemaAST.AST): ReadonlyArray<SchemaAST.AST> =>
+  ast._tag === "Union" ? ast.types.flatMap(members) : [ast];
+
+/** Properties whose input takes null itself; Schema.optional's null only stands for omitted. */
+const acceptedNullPaths = (ast: SchemaAST.AST, path = "$", found = new Set<string>()) => {
+  if (ast._tag !== "Objects") return found;
+  for (const { name, type } of ast.propertySignatures) {
+    if (typeof name !== "string") continue;
+    const at = `${path}.properties.${name}`;
+    if (members(SchemaAST.toEncoded(type)).some((member) => member._tag === "Null")) found.add(at);
+    const held = members(type).filter(({ _tag }) => _tag !== "Undefined" && _tag !== "Null");
+    if (held.length === 1 && held[0] !== undefined) acceptedNullPaths(held[0], at, found);
+  }
+  return found;
+};
+
+it.effect("keeps every null an input accepts across the entire registered catalog", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const allToolkits = { ...toolkits, screen: ScreenToolkit };
@@ -159,7 +176,7 @@ it.effect("preserves nullable input paths across the entire registered catalog",
       const retained = nullablePaths(advertised!.tool.inputSchema);
       // A path that requires a key advertises it non-null on purpose; ToolAdmission refuses null.
       const requiredKey = "keyRequired" in entry && entry.keyRequired === true;
-      for (const nullable of nullablePaths(Tool.getJsonSchema(original!)))
+      for (const nullable of acceptedNullPaths(original!.parametersSchema.ast))
         if (
           !retained.has(nullable) &&
           !(requiredKey && nullable === "$.properties.clientRequestId")

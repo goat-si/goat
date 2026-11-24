@@ -347,6 +347,53 @@ describe("goat_describe with host", () => {
     }),
   );
 
+  // regression: a thread's agent asking another machine got the host's full answer, JSON
+  // schemas and all, which Antigravity cuts at about 10 KB; the host answers a forwarder at full.
+  it.effect.each([
+    ["omitted, as a thread's agent reads by default", undefined, false],
+    ["full", "full", true],
+  ] as const)("answers a host path with detail %s", ([, detail, schemas]) =>
+    Effect.gen(function* () {
+      const full = {
+        path: "thread.read",
+        name: "goat_thread_read",
+        summary: "Read a thread",
+        effect: "read",
+        available: { now: true },
+        canonicalName: "goat_thread_read",
+        legacyNames: [],
+        description: "Read a thread.",
+        guide: "Page with afterPosition.",
+        hostRoutable: true,
+        requires: "either",
+        dryRun: "unsupported",
+        humanSteps: [],
+        signature: "(thread.read :threadId :host? ...)",
+        inputSchema: { type: "object", properties: { threadId: { type: "string" } } },
+        outputSchema: null,
+        examples: [{ title: "Read one", args: { threadId: "t1" } }],
+      };
+      const args = { host, paths: ["thread.read"], ...(detail === undefined ? {} : { detail }) };
+      const { results, record } = yield* describeAs(
+        { answer: describeAnswer({ depth: "paths", entries: [full], missing: [] }) },
+        [["goat_describe", args]],
+      );
+      const [answer] = valueOf(results[0]!)["entries"] as ReadonlyArray<Record<string, unknown>>;
+      expect(answer).toMatchObject({
+        guide: full.guide,
+        examples: full.examples,
+        signature: full.signature,
+      });
+      expect("inputSchema" in answer!).toBe(schemas);
+      expect(record.toolCallArguments).toEqual([
+        {
+          tool: "goat_describe",
+          arguments: { paths: ["thread.read"], ...(detail === undefined ? {} : { detail }) },
+        },
+      ]);
+    }),
+  );
+
   it.effect("still answers a read-only client's local describe", () =>
     Effect.gen(function* () {
       const { results } = yield* describeAs(

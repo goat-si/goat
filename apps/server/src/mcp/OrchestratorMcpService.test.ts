@@ -2255,7 +2255,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
     );
 
-    it.effect("describes models by id, distinct label, and option values", () =>
+    it.effect("describes models by id, distinct label, custom origin, and option values", () =>
       Effect.gen(function* () {
         const codex = (yield* capabilitiesWith()).providers[0];
         assert.deepEqual(codex?.models.slice(0, 4), [
@@ -2270,7 +2270,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           },
           { id: "gpt-4" },
           { id: "gpt-3" },
-          { id: "my-alpha" },
+          { id: "my-alpha", custom: true },
         ]);
       }),
     );

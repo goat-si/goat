@@ -169,6 +169,7 @@ it("renders a signature for every schema shape tools declare", () => {
 interface Described {
   readonly path: string;
   readonly signature?: string;
+  readonly guide?: string;
   readonly inputSchema?: unknown;
 }
 
@@ -268,10 +269,21 @@ it.effect("goat_describe answers several paths at once and shows signatures in l
     );
     expect(batch.depth).toBe("paths");
     expect(batch.entries.map((entry) => entry.path)).toEqual(["thread.read", "task.create"]);
-    expect(batch.entries[0]?.inputSchema).toEqual(schemaOf(tools, "thread.read"));
     expect(batch.entries[1]?.signature).toBe(
       toSignature("task.create", schemaOf(tools, "task.create")),
     );
+    expect(batch.entries[1]?.guide).toBe(agentSurfaceRegistry["task.create"].guide);
+    expect(batch.entries.map((entry) => entry.inputSchema)).toEqual([undefined, undefined]);
+    const full = structured<{ entries: ReadonlyArray<Described> }>(
+      yield* describe({ paths: ["thread.read"], detail: "full" }),
+    );
+    expect(full.entries[0]?.inputSchema).toEqual(schemaOf(tools, "thread.read"));
+    // Another GOAT forwarding goat_describe {host} reaches this one as a client, and an older one
+    // decodes only the summary or full entry it knows; a client keeps full as its default.
+    const forwarded = structured<{ entries: ReadonlyArray<Described> }>(
+      yield* http.callTool("client", "goat_describe", { paths: ["thread.read"] }),
+    );
+    expect(forwarded.entries[0]?.inputSchema).toEqual(schemaOf(tools, "thread.read"));
     expect(batch.missing.map((entry) => entry.path)).toEqual(["thread.teleport"]);
     expect(batch.missing[0]?.nearest.length).toBeGreaterThan(0);
     expect((yield* describe({ paths: ["thread.read"], query: "read" })).isError).toBe(true);
@@ -286,6 +298,25 @@ it.effect("goat_describe answers several paths at once and shows signatures in l
       expect(entry.signature, entry.path).toBe(
         toSignature(entry.path, schemaOf(tools, entry.path), { depth: 0 }),
       );
+  }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
+);
+
+// regression: Antigravity keeps about 10 KB of a tool result and cut the input schema out of the
+// middle of goat_describe {paths:["thread.launch"]}, an 18 KB answer.
+it.effect("answers any one path, unless asked for its JSON schemas, within 9 KB", () =>
+  Effect.gen(function* () {
+    const http = yield* serve;
+    const names = (yield* http.listTools("thread")).map((tool) => tool.name);
+    const sizes: Array<{ path: string; bytes: number }> = [];
+    for (let start = 0; start < names.length; start += 10) {
+      const { entries } = structured<{ entries: ReadonlyArray<Described> }>(
+        yield* http.callTool("thread", "goat_describe", { paths: names.slice(start, start + 10) }),
+      );
+      for (const entry of entries)
+        sizes.push({ path: entry.path, bytes: Buffer.byteLength(JSON.stringify(entry)) });
+    }
+    expect(sizes.length).toBeGreaterThan(100);
+    expect(sizes.filter(({ bytes }) => bytes > 9_000)).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 
