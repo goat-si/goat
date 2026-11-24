@@ -1043,5 +1043,13 @@
   "f86d1b3defd75cea": "Keines",
   "2f019f0b4e55d916": "Blau und Orange",
   "5ca2302ec416f499": "Rot und Grün",
-  "3f383e72dcd7d5a8": "Rot und Grün (Standard)"
+  "3f383e72dcd7d5a8": "Rot und Grün (Standard)",
+  "c9f0ae0132e5debb": "Zeige die Bedienelemente für Branch und Worktree auch nach Beginn eines Threads unter dem Eingabefeld.",
+  "03338c6aec8edacd": "Lege fest, wie breit Nachrichten und das Eingabefeld auf großen Bildschirmen werden können.",
+  "5f5df3703ab56499": "Lege fest, wie schnell sich Bereiche öffnen und schließen.",
+  "d5dc7576fd468be7": "Komfortabel",
+  "81f3a196537bbee0": "Komfortabel (Standard)",
+  "3141408bf3874e64": "Breit",
+  "06366a0ccebbf9c3": "Volle Breite",
+  "cfa4521f8239a22f": "Stelle LaTeX-Formeln wie $x^2$ oder \\[x^2\\] in Nachrichten und Markdown-Vorschauen dar. Der TeX-Quelltext bleibt im Eingabefeld bearbeitbar."
 }

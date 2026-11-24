@@ -1043,5 +1043,13 @@
   "f86d1b3defd75cea": "Ninguna",
   "2f019f0b4e55d916": "Azul y naranja",
   "5ca2302ec416f499": "Rojo y verde",
-  "3f383e72dcd7d5a8": "Rojo y verde (predeterminado)"
+  "3f383e72dcd7d5a8": "Rojo y verde (predeterminado)",
+  "c9f0ae0132e5debb": "Mantén los controles de rama y árbol de trabajo debajo del campo de mensaje al iniciar un hilo.",
+  "03338c6aec8edacd": "Define el ancho máximo de los mensajes y el campo de mensaje en pantallas grandes.",
+  "5f5df3703ab56499": "Define la velocidad de apertura y cierre de los paneles.",
+  "d5dc7576fd468be7": "Cómodo",
+  "81f3a196537bbee0": "Cómodo (predeterminado)",
+  "3141408bf3874e64": "Ancho",
+  "06366a0ccebbf9c3": "Ancho completo",
+  "cfa4521f8239a22f": "Muestra fórmulas LaTeX como $x^2$ o \\[x^2\\] en mensajes y vistas previas de Markdown. El código TeX se puede editar en el campo de mensaje."
 }
