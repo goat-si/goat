@@ -970,5 +970,9 @@
   "89d08a5be3347890": "Archived threads will appear here.",
   "8e944f7583a727fd": "Unarchive",
   "da49b8271b9dffa0": "Delete",
-  "d0caad5cb95ee8cd": "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in."
+  "d0caad5cb95ee8cd": "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+  "7a0598bc546ddf61": "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+  "78f82fef9e0c8661": "Repositories",
+  "fd5e987709679db9": "Keeps this project's default branch current when the checkout has no local changes or commits.",
+  "a8d6b69e67c6015e": "Keeps the default branch current when the checkout has no local changes or commits. Projects can override it."
 }

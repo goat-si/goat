@@ -970,5 +970,9 @@
   "89d08a5be3347890": "Les fils archivés apparaîtront ici.",
   "8e944f7583a727fd": "Désarchiver",
   "da49b8271b9dffa0": "Supprimer",
-  "d0caad5cb95ee8cd": "Les agents de programmation exécutés par GOAT, avec leurs comptes et modèles. Codex peut envoyer ses requêtes de modèle via OpenCodex Home, l’instance OpenCodex du nœud central qui conserve toutes les connexions."
+  "d0caad5cb95ee8cd": "Les agents de programmation exécutés par GOAT, avec leurs comptes et modèles. Codex peut envoyer ses requêtes de modèle via OpenCodex Home, l’instance OpenCodex du nœud central qui conserve toutes les connexions.",
+  "7a0598bc546ddf61": "Git, demandes de fusion, comptes GitHub et textes rédigés par les agents pour les commits et les revues.",
+  "78f82fef9e0c8661": "Dépôts",
+  "fd5e987709679db9": "Maintient la branche par défaut de ce projet à jour si la copie de travail n’a aucune modification ni aucun commit local.",
+  "a8d6b69e67c6015e": "Maintient la branche par défaut à jour si la copie de travail n’a aucune modification ni aucun commit local. Les projets peuvent modifier ce réglage."
 }

@@ -970,5 +970,9 @@
   "89d08a5be3347890": "As conversas arquivadas aparecerão aqui.",
   "8e944f7583a727fd": "Desarquivar",
   "da49b8271b9dffa0": "Excluir",
-  "d0caad5cb95ee8cd": "Os agentes de programação que o GOAT executa, com suas contas e modelos. O Codex pode enviar solicitações aos modelos pelo OpenCodex Home, a instância do OpenCodex no hub que guarda todos os logins."
+  "d0caad5cb95ee8cd": "Os agentes de programação que o GOAT executa, com suas contas e modelos. O Codex pode enviar solicitações aos modelos pelo OpenCodex Home, a instância do OpenCodex no hub que guarda todos os logins.",
+  "7a0598bc546ddf61": "Git, pull requests, contas do GitHub e textos que os agentes escrevem para commits e revisões.",
+  "78f82fef9e0c8661": "Repositórios",
+  "fd5e987709679db9": "Mantém a branch padrão deste projeto atualizada quando o checkout não tem alterações nem commits locais.",
+  "a8d6b69e67c6015e": "Mantém a branch padrão atualizada quando o checkout não tem alterações nem commits locais. Cada projeto pode substituir esta configuração."
 }

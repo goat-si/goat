@@ -77,7 +77,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     ),
   },
   "/settings/source-control": {
-    text: "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    text: msg(
+      "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    ),
   },
   "/settings/projects": { text: msg("Settings for the selected project.") },
   "/settings/storage": {

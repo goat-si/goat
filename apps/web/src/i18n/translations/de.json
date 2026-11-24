@@ -970,5 +970,9 @@
   "89d08a5be3347890": "Archivierte Threads erscheinen hier.",
   "8e944f7583a727fd": "Aus Archiv holen",
   "da49b8271b9dffa0": "Löschen",
-  "d0caad5cb95ee8cd": "Die Coding-Agenten, die GOAT ausführt, mit ihren Konten und Modellen. Codex kann Modellanfragen über OpenCodex Home senden. Diese OpenCodex-Instanz des Hubs speichert alle Anmeldungen."
+  "d0caad5cb95ee8cd": "Die Coding-Agenten, die GOAT ausführt, mit ihren Konten und Modellen. Codex kann Modellanfragen über OpenCodex Home senden. Diese OpenCodex-Instanz des Hubs speichert alle Anmeldungen.",
+  "7a0598bc546ddf61": "Git, Pull Requests, GitHub-Konten und die Texte, die Agenten für Commits und Reviews schreiben.",
+  "78f82fef9e0c8661": "Repositorys",
+  "fd5e987709679db9": "Hält den Standardbranch dieses Projekts aktuell, wenn der Checkout keine lokalen Änderungen oder Commits enthält.",
+  "a8d6b69e67c6015e": "Hält den Standardbranch aktuell, wenn der Checkout keine lokalen Änderungen oder Commits enthält. Projekte können diese Einstellung überschreiben."
 }
