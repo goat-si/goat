@@ -77,7 +77,7 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/projects": { text: "Settings for the selected project." },
   "/settings/storage": {
-    text: "Where worktrees live, when they are cleaned up, and artifacts and logs.",
+    text: msg("Where worktrees live, when they are cleaned up, and artifacts and logs."),
   },
   "/settings/archived": { text: "Threads you archived. Restore or delete them here." },
   "/settings/goat-bot": {
