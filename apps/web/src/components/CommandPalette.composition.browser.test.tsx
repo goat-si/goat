@@ -1,4 +1,5 @@
 import { GTProvider } from "gt-react";
+import chinese from "../i18n/translations/zh.json";
 import spanish from "../i18n/translations/es.json";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -305,5 +306,24 @@ it("shows settings in the UI language and matches both localized names and Engli
     }
   } finally {
     setup();
+  }
+});
+
+it("translates the add-project source picker and keeps English search aliases", async () => {
+  setup();
+  await using _screen = await render(
+    <GTProvider locale="zh" translations={{ zh: chinese }}>
+      <CommandPalette>{null}</CommandPalette>
+    </GTProvider>,
+  );
+  await act(() => openCommandPalette({ open: "add-project" }));
+  const input = page.getByPlaceholder("搜索…", { exact: true });
+  for (const label of ["来源", "新建项目", "本地文件夹", "Git 地址", "选择", "返回", "关闭"]) {
+    await expect.element(page.getByText(label, { exact: true })).toBeVisible();
+  }
+  for (const query of ["本地文件夹", "Local folder"]) {
+    await input.fill(query);
+    await expect.element(page.getByText("本地文件夹", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Git 地址", { exact: true })).not.toBeInTheDocument();
   }
 });
