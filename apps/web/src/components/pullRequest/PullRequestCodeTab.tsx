@@ -126,11 +126,17 @@ import {
   COMMIT_PAGE_SIZE,
   PULL_REQUEST_FILE_TREE_STORAGE_KEY,
   REPLACE_FILE_COUNTS_CSS,
+  reviewAnnotationsVersion,
   type ReviewAnnotationGroup,
   type ReviewAnnotation,
   type MutableAnnotationGroup,
 } from "./pullRequestCodeAnnotations";
-import { PullRequestInlineDraft, type DraftAnchor } from "./PullRequestInlineDraft";
+import {
+  draftFileIdentity,
+  PullRequestInlineDraft,
+  resolveDraftFile,
+  type DraftAnchor,
+} from "./PullRequestInlineDraft";
 import { PullRequestStaleReviewComments } from "./PullRequestStaleReviewComments";
 import { PullRequestStaleInlineDraft } from "./PullRequestStaleInlineDraft";
 
@@ -436,6 +442,15 @@ function PullRequestCodeTab({
       })
     : loadedFiles;
   const hiddenTestFileCount = loadedFiles.length - files.length;
+  const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
+  const draftMatch = resolveDraftFile(
+    draft,
+    loadedFiles,
+    fileRenderKey,
+    loadedSlices.length > 0 && nextCursor === null,
+  );
+  const { file: draftFile, fileKey: draftFileKey } = draftMatch;
+  if (!draftStale && draftMatch.invalid) closeDraft();
   const filePaths = files.map((file) => resolveFileDiffPath(file));
   const omittedFileStats = new Map(
     loadedSlices.flatMap((slice) =>
@@ -490,7 +505,7 @@ function PullRequestCodeTab({
         groupAt(anchor.side, anchor.line).pending.push(comment);
       }
     }
-    if (!draftStale && draft?.fileKey === fileKey) {
+    if (!draftStale && draft !== null && draftFileKey === fileKey) {
       const anchor = getReviewPositionAnchor(draft.position);
       groupAt(anchor.side, anchor.line).draft = true;
     }
@@ -528,37 +543,10 @@ function PullRequestCodeTab({
       path,
       fileDiff,
       annotations,
-      // The viewer redraws annotations only when their version changes.
-      annotationsVersion: fnv1a32(
-        annotations
-          .map(
-            ({ side, lineNumber, metadata }) =>
-              `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.withheld?.readable ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
-                .map((comment) => `${comment.id}:${comment.body}`)
-                .join(",")}:${metadata.threads
-                .map(
-                  (thread) =>
-                    `${thread.id}:${thread.isResolved ? "r" : ""}:${
-                      thread.isOutdated ? "o" : ""
-                    }:${thread.comments
-                      .map(
-                        (comment) =>
-                          `${comment.id}:${comment.author?.login ?? ""}:${comment.createdAt}:${comment.body}:${(
-                            comment.reactions ?? []
-                          )
-                            .map((r) => `${r.content}:${r.count}:${r.viewerHasReacted ? "v" : ""}`)
-                            .join(",")}`,
-                      )
-                      .join(";")}`,
-                )
-                .join(",")}`,
-          )
-          .join("|"),
-      ),
+      annotationsVersion: reviewAnnotationsVersion(annotations),
     };
   });
 
-  const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
   const withheldContent =
     loadedSlices.some((slice) => slice.truncated) ||
     parsedSlices.some((parsed) => parsed?.kind === "raw");
@@ -699,7 +687,7 @@ function PullRequestCodeTab({
       sourceRevision,
       moving,
       openedHeadSha: detail.headSha,
-      fileKey: item.id,
+      ...draftFileIdentity(file),
       path,
       oldPath: previousPath === path ? null : previousPath,
       ...anchor,
@@ -712,16 +700,15 @@ function PullRequestCodeTab({
     text: string,
     onFinish: (comment: ReviewCommentContext) => void,
   ) => {
-    const file = files.find((candidate) => fileRenderKey(candidate) === anchor.fileKey);
     const comment =
-      file === undefined
+      draftFile === undefined || draftFileKey === null
         ? null
         : buildDiffReviewComment({
-            id: `pull-request-selection:${anchor.fileKey}:${anchor.range.start}:${anchor.range.end}`,
+            id: `pull-request-selection:${draftFileKey}:${anchor.range.start}:${anchor.range.end}`,
             sectionId: `pull-request:${detail.number}`,
             sectionTitle: `PR #${detail.number} review`,
             filePath: anchor.path,
-            fileDiff: file,
+            fileDiff: draftFile,
             range: anchor.range,
             text,
           });

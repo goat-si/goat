@@ -3,7 +3,8 @@ import { REVISION_REVIEW_UNAVAILABLE } from "@goat/client-runtime/state/pull-req
 import { Atom } from "effect/reactivity";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import type { EnvironmentId, PullRequestReviewPosition } from "@goat/contracts";
-import type { SelectedLineRange } from "@pierre/diffs";
+import type { FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
+import { buildFileDiffContentVersion, buildFileDiffIdentityKey } from "~/lib/diffRendering";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import type { PullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
 import { getReviewPositionAnchor } from "./PullRequestReviewAnnotation";
@@ -14,7 +15,9 @@ import {
 } from "./pullRequestReviewStore";
 
 export interface DraftAnchor {
-  readonly fileKey: string;
+  // A refresh re-keys every file's render key, so the draft finds its file by identity and content.
+  readonly identityKey: string;
+  readonly fileVersion: number;
   readonly path: string;
   readonly oldPath: string | null;
   readonly position: PullRequestReviewPosition;
@@ -23,6 +26,36 @@ export interface DraftAnchor {
   readonly openedHeadSha: string | undefined;
   readonly sourceRevision?: PendingReviewComment["sourceRevision"];
   readonly moving?: PendingReviewComment | undefined;
+}
+
+export function draftFileIdentity(file: FileDiffMetadata) {
+  return {
+    identityKey: buildFileDiffIdentityKey(file),
+    fileVersion: buildFileDiffContentVersion(file),
+  };
+}
+
+export function resolveDraftFile(
+  draft: DraftAnchor | null,
+  loadedFiles: readonly FileDiffMetadata[],
+  fileRenderKey: (file: FileDiffMetadata) => string,
+  allPagesLoaded: boolean,
+): {
+  readonly file: FileDiffMetadata | undefined;
+  readonly fileKey: string | null;
+  readonly invalid: boolean;
+} {
+  if (draft === null) return { file: undefined, fileKey: null, invalid: false };
+  const file = loadedFiles.find(
+    (candidate) => buildFileDiffIdentityKey(candidate) === draft.identityKey,
+  );
+  const fileKey =
+    file !== undefined && buildFileDiffContentVersion(file) === draft.fileVersion
+      ? fileRenderKey(file)
+      : null;
+  // Never attach the draft to lines of a changed file; one missing mid-refresh may come back.
+  const invalid = fileKey === null && (file !== undefined || allPagesLoaded);
+  return { file, fileKey, invalid };
 }
 
 const UNBOUND_REVIEW = Atom.make(() => true);

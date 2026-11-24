@@ -46,6 +46,11 @@ const {
     truncated: false,
     nextCursor: null,
   };
+  const refreshedFirstPage: PullRequestDiffResult = {
+    patch: `${filePatch("a.ts")}${filePatch("b.ts")}`,
+    truncated: false,
+    nextCursor: null,
+  };
   // An environment query whose refetch returns equal content hands back the previous value
   // itself, so a refresh publishes a new result around the very same page.
   const pages: Record<string, PullRequestDiffResult> = {
@@ -130,7 +135,9 @@ const {
     withheldFilesAtom,
     withheldAdvertisementAtom: Atom.family((fresh: boolean) => Atom.make(() => fresh)),
     revisionReviewAtom: Atom.make(true),
-    diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
+    diffAtom: Atom.make(() =>
+      AsyncResult.success(mocks.refreshed ? refreshedFirstPage : firstPage),
+    ),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
       Atom.make(() => AsyncResult.success(pages[cursor]!)),
@@ -140,6 +147,7 @@ const {
 
 const mocks = vi.hoisted(() => ({
   paged: false,
+  refreshed: false,
   image: false,
   withheld: false,
   inlineWithheldPage: false,
@@ -279,6 +287,7 @@ const detail: PullRequestDetailView = {
 
 function setup(paged = false, image = false) {
   mocks.paged = paged;
+  mocks.refreshed = false;
   mocks.image = image;
   mocks.withheld = false;
   mocks.inlineWithheldPage = false;
@@ -406,6 +415,52 @@ it("scrolls to a loaded file requested before the viewer mounts", async () => {
   await using screen = await render(tab(0, { path: "early-39.ts", nonce: 1 }), { container });
 
   await expectFileHeaderShown(screen, container, "early-39.ts");
+});
+
+// regression: #42199 an agent's push re-keyed every file and dropped the comment being typed
+it("keeps an unfinished inline comment when a background refresh changes another file", async () => {
+  setup();
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  const reviewable = {
+    ...detail,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const reviewTab = (backgroundRefreshToken: number) => (
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={reviewable}
+      detail={reviewable}
+      selectedCommitOid={null}
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+      backgroundRefreshToken={backgroundRefreshToken}
+    />
+  );
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(reviewTab(0), { container });
+  const header = screen.getByText("a.ts", { exact: true }).first();
+  await expect.element(header).toBeVisible();
+  const root = header.element().getRootNode() as ShadowRoot;
+  await userEvent.click(root.querySelector<HTMLElement>('[data-column-number="1"]')!);
+  const input = () => screen.getByRole("textbox", { name: "Comment on lines a.ts:1" });
+  await input().fill("Unsent review note");
+
+  mocks.refreshed = true;
+  await screen.rerender(reviewTab(1));
+
+  await expect.element(screen.getByText("2 files", { exact: true })).toBeVisible();
+  await expect.element(input()).toHaveValue("Unsent review note");
 });
 
 it("previews an image the host sent no patch for at the pull request's head", async () => {
