@@ -149,6 +149,21 @@ it.effect("SQL snapshot windows leave handoff bodies in SQLite without changing 
         projection: { ...window.projection, contextHandoffs: handoffs.slice(0, 2) },
       }),
     );
+    const thread = full.projection.thread;
+    yield* store.apply({
+      id: EventId.make("event:handoff-window:deleted"),
+      type: "thread.deleted",
+      threadId,
+      occurredAt: now,
+      payload: { ...thread, deletedAt: now },
+    });
+    for (const read of [
+      store.getThreadSnapshot(threadId),
+      store.getThreadSnapshotWindow(threadId, { rowLimit: 10 }),
+    ]) {
+      assert.equal((yield* Effect.flip(read))._tag, "ProjectionStoreThreadNotFoundError");
+    }
+    assert.equal((yield* store.getThreadProjection(threadId)).thread.id, threadId);
   }).pipe(Effect.provide(layerTest)),
 );
 
