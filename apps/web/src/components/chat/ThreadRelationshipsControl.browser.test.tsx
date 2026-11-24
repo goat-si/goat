@@ -1,5 +1,6 @@
 import { EnvironmentId, NodeId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -68,7 +69,7 @@ vi.mock(import("../../lib/useThreadContextHosts"), async () => {
   };
 });
 
-import { render } from "../../../test/render";
+import { fakeTimers, render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { ScrollArea } from "../ui/scroll-area";
 import { ToastProvider } from "../ui/toast";
@@ -428,6 +429,59 @@ it("keeps a remote lineage title at full width under a long environment name", a
   expect(
     page.getByText(title, { exact: true }).element().getBoundingClientRect().width,
   ).toBeGreaterThan(0);
+});
+
+it("shows how long a running remote subagent has been running, as a local one does", async () => {
+  setup();
+  const remoteTitle = "Remote subagent running on a linked machine";
+  using _timers = fakeTimers();
+  vi.setSystemTime(new Date("2026-11-23T12:12:00.000Z"));
+  const startedAt = DateTime.makeUnsafe("2026-11-23T12:00:00.000Z");
+  const projection = makeThreadProjectionFixture();
+  state.projection = {
+    ...projection,
+    subagents: [
+      {
+        id: NodeId.make("remote-agent"),
+        threadId: projection.thread.id,
+        runId: null,
+        parentNodeId: NodeId.make("parent"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: "codex",
+        providerInstanceId: projection.thread.providerInstanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: null,
+        remote: {
+          host: "builder-ssh",
+          threadId: ThreadId.make("remote-thread"),
+          correlationId: "task",
+        },
+        prompt: "Run remote task",
+        title: remoteTitle,
+        model: null,
+        status: "running",
+        result: null,
+        startedAt,
+        completedAt: null,
+        updatedAt: startedAt,
+      },
+    ],
+  };
+  await using screen = await render(
+    <ThreadRelationshipsPanel
+      environmentId={environmentId}
+      threadId={projection.thread.id}
+      showLineage
+      showSideChats={false}
+    />,
+    { router: "/environment/fork" },
+  );
+
+  // Assert synchronously: expect.element polls on timers this test fakes.
+  const row = screen.getByRole("button", { name: new RegExp(remoteTitle) });
+  expect(row.element().textContent).toContain("12m");
 });
 
 it.each([1, 18])("continues scrolling the panel past a list of %i subagents", async (count) => {
