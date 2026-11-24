@@ -958,5 +958,10 @@
   "05c31d948cc5627c": "Da die Hosts die Zuordnung zum Pool nicht gemeldet haben, wurden die Instanzen anhand des Anbietertreibers zugeordnet. Ältere Hosts melden dies nach einem GOAT-Update.",
   "edaebeea1915f9c1": "Konto",
   "022be4c560f02e1a": "{plan}-Konto",
-  "1eb63b662c5a7792": "{count} ausgelassen"
+  "1eb63b662c5a7792": "{count} ausgelassen",
+  "173a624274ec430e": "Erfasse einen Teil des Bildschirms und hänge ihn an einen Thread an.",
+  "6348f556648fc14b": "Die automatische Aufnahme ist hier nicht verfügbar. Wähle ein Fenster aus.",
+  "90247d578e1b3c09": "Erfasse ein Fenster und hänge das Bild an deinen Entwurf an.",
+  "aee8a4449f25bfa4": "Diese Desktopumgebung liefert nur einen Screenshot.",
+  "fe433c619e19c998": "Aktualisiere die Desktop-App, um Schnappschüsse zu verwenden."
 }

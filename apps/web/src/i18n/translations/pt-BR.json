@@ -958,5 +958,10 @@
   "05c31d948cc5627c": "Os hosts não informaram quais instâncias usam este pool, então elas foram associadas pelo driver do provedor. Hosts antigos passam a informar isso após atualizar o GOAT.",
   "edaebeea1915f9c1": "Conta",
   "022be4c560f02e1a": "Conta {plan}",
-  "1eb63b662c5a7792": "{count} omitidos"
+  "1eb63b662c5a7792": "{count} omitidos",
+  "173a624274ec430e": "Capture parte da tela e anexe a imagem a uma conversa.",
+  "6348f556648fc14b": "A captura automática não está disponível aqui. Escolha uma janela.",
+  "90247d578e1b3c09": "Capture uma janela e anexe a imagem ao rascunho atual.",
+  "aee8a4449f25bfa4": "Este ambiente de trabalho fornece apenas uma captura de tela.",
+  "fe433c619e19c998": "Atualize o aplicativo para computador para usar capturas."
 }

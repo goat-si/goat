@@ -958,5 +958,10 @@
   "05c31d948cc5627c": "Les hôtes n’ayant pas indiqué quelles instances utilisent ce pool, le parc les a associées selon le pilote du fournisseur. Les anciens hôtes le signalent après une mise à jour de GOAT.",
   "edaebeea1915f9c1": "Compte",
   "022be4c560f02e1a": "Compte {plan}",
-  "1eb63b662c5a7792": "{count} omis"
+  "1eb63b662c5a7792": "{count} omis",
+  "173a624274ec430e": "Capturez une partie de l’écran et joignez-la à un fil.",
+  "6348f556648fc14b": "La capture automatique est indisponible ici. Sélectionnez une fenêtre.",
+  "90247d578e1b3c09": "Capturez une fenêtre et joignez l’image à votre brouillon en cours.",
+  "aee8a4449f25bfa4": "Ce bureau fournit uniquement une capture d’écran.",
+  "fe433c619e19c998": "Mettez à jour l’application de bureau pour utiliser les captures."
 }

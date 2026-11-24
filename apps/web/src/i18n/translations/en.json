@@ -958,5 +958,10 @@
   "05c31d948cc5627c": "Fleet matched instances by provider driver because their hosts did not report which ones use this pool. Older hosts report this after a GOAT update.",
   "edaebeea1915f9c1": "Account",
   "022be4c560f02e1a": "{plan} account",
-  "1eb63b662c5a7792": "{count} omitted"
+  "1eb63b662c5a7792": "{count} omitted",
+  "173a624274ec430e": "Capture part of your screen and attach it to a thread.",
+  "6348f556648fc14b": "Automatic capture isn't available here. Choose a window instead.",
+  "90247d578e1b3c09": "Capture a window and attach it to your current draft.",
+  "aee8a4449f25bfa4": "This desktop only provides a screenshot.",
+  "fe433c619e19c998": "Update the desktop app to use snapshots."
 }
