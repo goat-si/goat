@@ -1051,5 +1051,22 @@
   "81f3a196537bbee0": "Komfortabel (Standard)",
   "3141408bf3874e64": "Breit",
   "06366a0ccebbf9c3": "Volle Breite",
-  "cfa4521f8239a22f": "Stelle LaTeX-Formeln wie $x^2$ oder \\[x^2\\] in Nachrichten und Markdown-Vorschauen dar. Der TeX-Quelltext bleibt im Eingabefeld bearbeitbar."
+  "cfa4521f8239a22f": "Stelle LaTeX-Formeln wie $x^2$ oder \\[x^2\\] in Nachrichten und Markdown-Vorschauen dar. Der TeX-Quelltext bleibt im Eingabefeld bearbeitbar.",
+  "201cda878c0d768a": "Tastenkürzel für diese App.",
+  "03f8789fc359bc15": "Tastenkürzel suchen",
+  "698320cf519ac99a": "Tastenkürzel hinzufügen",
+  "53b9a6ba24deb0e7": "Navigation",
+  "cba3e832ece50257": "Dateien",
+  "5c78a8ae7b71af1d": "Terminal",
+  "555805dcc65047bc": "Vorschau und Diff",
+  "66b6769d2ae085a0": "Projektskripte",
+  "78344b60f407928e": "Sonstiges",
+  "5df837c01830b63e": "Immer",
+  "12d1d6fabe3f0b96": "Wenn",
+  "a9cdd8c7073be920": "Befehlspalette ein- oder ausblenden",
+  "7752817256fa96b7": "Bevorzugten Editor öffnen",
+  "4e0943e8c7a465d1": "Dateiauswahl ein- oder ausblenden",
+  "df5fdcdf26a6b52a": "Projektsuche ein- oder ausblenden",
+  "97c7de6aaab317a2": "Rechten Bereich schließen",
+  "81e0e9f4304d2f01": "Neuer Tab im rechten Bereich"
 }

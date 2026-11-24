@@ -1051,5 +1051,22 @@
   "81f3a196537bbee0": "Comfortable (default)",
   "3141408bf3874e64": "Wide",
   "06366a0ccebbf9c3": "Full",
-  "cfa4521f8239a22f": "Typeset LaTeX math, such as $x^2$ or \\[x^2\\], in messages and Markdown previews. The composer keeps TeX source editable."
+  "cfa4521f8239a22f": "Typeset LaTeX math, such as $x^2$ or \\[x^2\\], in messages and Markdown previews. The composer keeps TeX source editable.",
+  "201cda878c0d768a": "Keyboard shortcuts for this app.",
+  "03f8789fc359bc15": "Search keybindings",
+  "698320cf519ac99a": "Add keybinding",
+  "53b9a6ba24deb0e7": "Navigation",
+  "cba3e832ece50257": "Files",
+  "5c78a8ae7b71af1d": "Terminal",
+  "555805dcc65047bc": "Preview & diff",
+  "66b6769d2ae085a0": "Project scripts",
+  "78344b60f407928e": "Other",
+  "5df837c01830b63e": "Always",
+  "12d1d6fabe3f0b96": "When",
+  "a9cdd8c7073be920": "Command Palette: Toggle",
+  "7752817256fa96b7": "Editor: Open Favorite",
+  "4e0943e8c7a465d1": "File Picker: Toggle",
+  "df5fdcdf26a6b52a": "Project Search: Toggle",
+  "97c7de6aaab317a2": "Right Panel: Close",
+  "81e0e9f4304d2f01": "Right Panel: New"
 }

@@ -1051,5 +1051,22 @@
   "81f3a196537bbee0": "Cómodo (predeterminado)",
   "3141408bf3874e64": "Ancho",
   "06366a0ccebbf9c3": "Ancho completo",
-  "cfa4521f8239a22f": "Muestra fórmulas LaTeX como $x^2$ o \\[x^2\\] en mensajes y vistas previas de Markdown. El código TeX se puede editar en el campo de mensaje."
+  "cfa4521f8239a22f": "Muestra fórmulas LaTeX como $x^2$ o \\[x^2\\] en mensajes y vistas previas de Markdown. El código TeX se puede editar en el campo de mensaje.",
+  "201cda878c0d768a": "Atajos de teclado de esta aplicación.",
+  "03f8789fc359bc15": "Buscar atajos",
+  "698320cf519ac99a": "Añadir atajo",
+  "53b9a6ba24deb0e7": "Navegación",
+  "cba3e832ece50257": "Archivos",
+  "5c78a8ae7b71af1d": "Terminal",
+  "555805dcc65047bc": "Vista previa y diferencias",
+  "66b6769d2ae085a0": "Scripts del proyecto",
+  "78344b60f407928e": "Otros",
+  "5df837c01830b63e": "Siempre",
+  "12d1d6fabe3f0b96": "Cuando",
+  "a9cdd8c7073be920": "Mostrar u ocultar la paleta de comandos",
+  "7752817256fa96b7": "Abrir el editor favorito",
+  "4e0943e8c7a465d1": "Mostrar u ocultar el selector de archivos",
+  "df5fdcdf26a6b52a": "Mostrar u ocultar la búsqueda del proyecto",
+  "97c7de6aaab317a2": "Cerrar el panel derecho",
+  "81e0e9f4304d2f01": "Nueva pestaña en el panel derecho"
 }

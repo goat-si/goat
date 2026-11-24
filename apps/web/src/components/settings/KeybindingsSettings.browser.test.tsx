@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import chinese from "../../i18n/translations/zh.json";
 import { RegistryProvider } from "@effect/atom-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent, type Locator } from "vite-plus/test/browser";
@@ -174,4 +176,20 @@ it("filters actions and allows additional shortcuts for assigned commands", asyn
   await expect
     .element(screen.getByRole("combobox", { name: "Command", exact: true }))
     .toHaveTextContent("Composer: Cycle Host");
+});
+
+it("finds a localized shortcut by its display name, English label, or command ID", async () => {
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh: chinese }}>
+      <KeybindingsSettingsPanel />
+    </GTProvider>,
+  );
+  const search = screen.getByRole("searchbox", { name: "搜索快捷键" });
+  for (const query of ["切换命令面板", "Command Palette: Toggle", "commandPalette.toggle"]) {
+    await search.fill(query);
+    await expect.element(screen.getByText("切换命令面板", { exact: true })).toBeVisible();
+    await expect
+      .element(screen.getByText("打开首选编辑器", { exact: true }))
+      .not.toBeInTheDocument();
+  }
 });
