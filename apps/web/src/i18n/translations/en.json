@@ -330,6 +330,10 @@
   "5b442f7315d2ec3d": "GOAT skills",
   "bb55c1e6954b3a01": "Agent workspace access",
   "3311b929611c3fa7": "Agent terminal access",
+  "fe9ecfc8c6212d72": "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+  "a4bf49b31758ff7e": "Only available in the desktop app.",
+  "6797e82cca21dbff": "Allow agents in this project to use the shared browser. Applies when the agent session next starts.",
+  "a6a6dc235b108747": "Allow agents to use the shared browser. Projects can override it.",
   "19e1f74805f4a1fb": "Agent browser access",
   "c9eb81303de2fda9": "GOAT tools agents see",
   "19eaeea310cf256b": "Development discipline",
@@ -873,9 +877,5 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown.",
-  "fe9ecfc8c6212d72": "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
-  "a4bf49b31758ff7e": "Only available in the desktop app.",
-  "6797e82cca21dbff": "Allow agents in this project to use the shared browser. Applies when the agent session next starts.",
-  "a6a6dc235b108747": "Allow agents to use the shared browser. Projects can override it."
+  "7e8de5a9133d331c": "Only the first recorded events are shown."
 }
