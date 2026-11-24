@@ -101,7 +101,9 @@ export function collectServerUpdateTargets(
       continue;
     }
     if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
-      skip("needs a newer desktop app");
+      // Desktop servers without the desktop control fd (older apps, WSL backends: wsl.exe cannot
+      // pass fds) cannot be updated from here, and their desktop app is not necessarily stale.
+      skip("update GOAT on that machine");
       continue;
     }
     const serverVersion = config.environment.serverVersion;
