@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import {
   AuthAccessWriteScope,
@@ -121,6 +123,8 @@ export function HubDeviceCard({
   networkAccessError,
   onPairingLinkCreated,
 }: HubDeviceCardProps) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const [dialogOpen, setDialogOpen] = useState(false);
   // A relaunch for Network access or Tailscale HTTPS reopens the dialog; it stays open, showing
   // loading state, until the user closes it, so a remount while state loads keeps it.
@@ -274,10 +278,10 @@ export function HubDeviceCard({
   );
 
   return (
-    <SettingsSection {...searchableSetting("hub-device")}>
+    <SettingsSection {...setting("hub-device")}>
       {tailscaleRow}
       <SettingsRow
-        title="Phone pairing"
+        title={gt("Phone pairing")}
         description={phoneDescription}
         status={networkAccessError ? <span role="alert">{networkAccessError}</span> : undefined}
         control={
@@ -287,11 +291,11 @@ export function HubDeviceCard({
                 render={<Button size="sm" variant="outline" disabled={!allowed || unavailable} />}
               >
                 <QrCodeIcon aria-hidden />
-                Show phone QR
+                {gt("Show phone QR")}
               </DialogTrigger>
               <DialogPopup showCloseButton={!isCreating}>
                 <DialogHeader>
-                  <DialogTitle>Pair your phone</DialogTitle>
+                  <DialogTitle>{gt("Pair your phone")}</DialogTitle>
                   <DialogDescription>
                     Scan with the GOAT app on your phone: Connect hub → Scan QR code.
                   </DialogDescription>
