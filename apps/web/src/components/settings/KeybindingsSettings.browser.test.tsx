@@ -5,7 +5,7 @@ import { RegistryProvider } from "@effect/atom-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent, type Locator } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 vi.mock(import("../../state/session"), async (original) => ({
   ...(await original()),
@@ -219,4 +219,45 @@ it("announces shortcut and condition controls in Korean", async () => {
   await expect.element(shortcut).toBeVisible();
   await shortcut.click();
   await expect.element(screen.getByRole("textbox", { name: `단축키: ${command}` })).toBeVisible();
+});
+
+it("keeps the keybindings search query when an IME Escape cancels a conversion", async () => {
+  const onOpenChange = vi.fn();
+  await using _screen = await render(
+    <RegistryProvider>
+      <Dialog open onOpenChange={onOpenChange}>
+        <DialogPopup>
+          <DialogTitle>Settings</DialogTitle>
+          <KeybindingsSettingsPanel />
+        </DialogPopup>
+      </Dialog>
+    </RegistryProvider>,
+  );
+  const search = page.getByRole("searchbox", { name: "Search keybindings" });
+  await search.fill("sidebar");
+  for (const composition of [
+    { key: "Escape", isComposing: true, keyCode: 27 },
+    { key: "Escape", isComposing: false, keyCode: 229 },
+  ]) {
+    const keydown = new KeyboardEvent("keydown", {
+      ...composition,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => {
+      // Safari ends the composition just before the Escape keydown.
+      if (!composition.isComposing)
+        search.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      search.element().dispatchEvent(keydown);
+    });
+    expect(keydown.defaultPrevented).toBe(false);
+    await expect.element(search).toHaveValue("sidebar");
+    await expect.element(search).toHaveFocus();
+  }
+  expect(search.element().getAttribute("type")).toBe("text");
+
+  await userEvent.keyboard("{Escape}");
+
+  await expect.element(search).toHaveValue("");
+  expect(onOpenChange).not.toHaveBeenCalled();
 });

@@ -5,7 +5,7 @@ export function handleKeybindingsSearchEscape(
   query: string,
   onChange: (next: string) => void,
 ) {
-  if (event.key !== "Escape") return;
+  if (event.key !== "Escape" || event.nativeEvent.isComposing || event.keyCode === 229) return;
   event.preventDefault();
   if (query.length > 0) {
     event.stopPropagation();
