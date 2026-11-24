@@ -591,6 +591,7 @@
   "4beeab8d1814b251": "Diffs y pull requests",
   "3b958faa12d54484": "Atajos de teclado",
   "1a6679bbe62703b2": "Capturas de pantalla",
+  "d0caad5cb95ee8cd": "Los agentes de programación que ejecuta GOAT, con sus cuentas y modelos. Codex puede enviar las solicitudes a modelos mediante OpenCodex Home, la instancia de OpenCodex del nodo central que guarda todos los inicios de sesión.",
   "2f77cc3105ddd7f8": "Proveedores",
   "6d9bf91f0d4b7ba3": "Hilos",
   "795854feef8d2f52": "Navegador",
@@ -873,6 +874,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
-  "d0caad5cb95ee8cd": "Los agentes de programación que ejecuta GOAT, con sus cuentas y modelos. Codex puede enviar las solicitudes a modelos mediante OpenCodex Home, la instancia de OpenCodex del nodo central que guarda todos los inicios de sesión."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }
