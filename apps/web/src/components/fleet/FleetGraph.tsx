@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { FleetMachine, FleetSnapshot, FleetThread } from "@goat/client-runtime/state/fleet";
 import {
   NO_FLEET_HEAT,
@@ -60,7 +61,6 @@ const MACHINE_RADIUS = 18;
 const AGENT_RADIUS = 11;
 /** The status mark sits on the machine's ring, lower right, like an avatar's presence dot. */
 const STATUS_OFFSET = Math.round(MACHINE_RADIUS * Math.SQRT1_2);
-const THIS_MACHINE = "This machine";
 /** A card-coloured outline under label text, so an edge passing behind a label leaves it legible. */
 const LABEL_HALO = "stroke-card stroke-3 [paint-order:stroke] [stroke-linejoin:round]";
 
@@ -794,6 +794,7 @@ function MachineNode(props: {
   readonly onSelect: (machineId: string) => void;
   readonly handlers: NodeHandlers;
 }) {
+  const gt = useGT();
   const { at, machine, connection, heat, current, selected, reduced, onSelect, handlers } = props;
   const busy = machine.running + machine.attention;
   const { quiet } = fleetConnectionVisual(connection.state);
@@ -807,7 +808,7 @@ function MachineNode(props: {
   };
   // The user knows their own hardware; naming the machine is what matters here.
   const sub = current
-    ? THIS_MACHINE
+    ? gt("This machine")
     : (fleetMachineSubtitle(machine) ??
       (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh"));
   const status =
@@ -818,7 +819,7 @@ function MachineNode(props: {
             (connection.reason === null ? "" : ": " + connection.reason),
         ];
   const description = [
-    current ? THIS_MACHINE : null,
+    current ? gt("This machine") : null,
     machine.boat === null ? null : "Boat machine",
     ...status,
     workSummary(machine),

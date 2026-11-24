@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   BOAT_MACHINE_STATUS_LABEL,
@@ -260,7 +261,13 @@ function HostRow({
 }) {
   const metrics = row.entry?.metrics;
   const omitted = row.entry === null ? null : omittedSectionsView(row.entry);
-  const hub = viaHub === undefined ? null : `via Hub${viaHub === null ? "" : ` ${viaHub}`}`;
+  const gt = useGT();
+  const hub =
+    viaHub === undefined
+      ? null
+      : viaHub === null
+        ? gt("via Hub")
+        : gt("via Hub {name}", { name: viaHub });
   const stale = row.tone === "stale";
   const statusText =
     row.tone === "none"
@@ -313,7 +320,7 @@ function HostRow({
             {/* Markers never shrink; the Hub name truncates first, and the tooltip has the full text. */}
             {hub === null && omitted === null ? null : (
               <span className="flex min-w-0 gap-1 overflow-hidden text-3xs text-muted-foreground">
-                {inferred ? <span className="shrink-0 text-warning">inferred</span> : null}
+                {inferred ? <span className="shrink-0 text-warning">{gt("inferred")}</span> : null}
                 {omitted === null ? null : (
                   <span className="shrink-0 text-warning">{omitted.count} omitted</span>
                 )}
@@ -326,9 +333,9 @@ function HostRow({
             {hub === null ? null : ` · ${hub}`}
             {inferred ? (
               <span className="mt-1 block">
-                Quota routing inferred: this host did not report which instances use the pool, so
-                Fleet matched them by provider driver. Hosts on an older GOAT report it after an
-                update.
+                {gt(
+                  "Fleet matched instances by provider driver because their hosts did not report which ones use this pool. Older hosts report this after a GOAT update.",
+                )}
               </span>
             ) : null}
             {omitted === null ? null : (
@@ -471,6 +478,7 @@ function FleetConsoleExpanded(props: {
   readonly reduced: boolean;
   readonly onCollapse: () => void;
 }) {
+  const gt = useGT();
   const { snapshot, connections, heat, reduced } = props;
   const status = useAtomValue(fleetConsoleTelemetryAtom);
   const environments = useAtomValue(fleetPageEnvironmentsAtom);
@@ -513,20 +521,26 @@ function FleetConsoleExpanded(props: {
     [...connections.values()].some((connection) => isFleetConnectionWait(connection.state)) ||
     rows.some((row) => row.entry?.metrics?.storage?.compactingSince !== undefined);
   const now = Math.max(useNowWhile(inProgress), status.observedAt);
-  const alerts = fleetAlerts(rows, connections, now, {
-    unreadable,
-    lastSeen: status.lastSeen,
-    environmentOf,
-    pendingSince: status.pendingSince,
-    stalls,
-    childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
-    idleBilling: new Map(
-      snapshot.idleCloudMachines.map(({ machineId, owner, ownerLabel }) => [
-        machineId,
-        { owner, ownerLabel, ownedHere: owner === primaryEnvironmentId },
-      ]),
-    ),
-  });
+  const alerts = fleetAlerts(
+    rows,
+    connections,
+    now,
+    {
+      unreadable,
+      lastSeen: status.lastSeen,
+      environmentOf,
+      pendingSince: status.pendingSince,
+      stalls,
+      childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
+      idleBilling: new Map(
+        snapshot.idleCloudMachines.map(({ machineId, owner, ownerLabel }) => [
+          machineId,
+          { owner, ownerLabel, ownedHere: owner === primaryEnvironmentId },
+        ]),
+      ),
+    },
+    gt,
+  );
   // A host that is not answering takes its alert's color on the row, so both say the same.
   const answeringLate = new Map(
     alerts.flatMap((alert) =>
@@ -536,7 +550,7 @@ function FleetConsoleExpanded(props: {
     ),
   );
   const hottest = hottestHost(rows, heat);
-  const quota = fleetQuota(rows);
+  const quota = fleetQuota(rows, 2, gt);
   const hub = hubSnapshot(rows);
   const relayWarnings = hubRelayWarnings(rows);
   // A linked Child names its Home even when no pool reading routes its quota there.
@@ -561,7 +575,7 @@ function FleetConsoleExpanded(props: {
       <ConsoleHeader collapsed={false} onToggle={props.onCollapse}>
         {hottest === null ? null : (
           <span className="hidden min-w-0 items-baseline gap-1.5 sm:flex">
-            <Label>Hottest</Label>
+            <Label>{gt("Hottest")}</Label>
             <span className="truncate text-xs font-medium">{hottest.row.label}</span>
             <span className={cn("text-xs tabular-nums", TONE_TEXT[hottest.tier])}>
               {hottestReading(hottest)}
@@ -570,7 +584,7 @@ function FleetConsoleExpanded(props: {
         )}
         {status.sampledAt > 0 ? (
           <span className="hidden items-baseline gap-1.5 md:flex">
-            <Label>Sampled</Label>
+            <Label>{gt("Sampled")}</Label>
             <span className="text-xs text-muted-foreground tabular-nums">
               {clock.format(status.sampledAt)}
             </span>
@@ -589,20 +603,29 @@ function FleetConsoleExpanded(props: {
         )}
 
         <section
-          aria-label="Threads"
+          aria-label={gt("Threads")}
           className="flex flex-col gap-3 border-b p-3 @min-[32rem]/fleet-console:border-r @min-[56rem]/fleet-console:border-b-0"
         >
           <div className="flex flex-col gap-2">
-            <Stat label="Running" value={totals.running} dot="bg-info" />
-            <Stat label="Need you" value={totals.attention} dot="bg-warning" />
-            <Stat label="Reported" value={totals.reported} dot="border border-muted-foreground" />
+            <Stat label={gt("Running")} value={totals.running} dot="bg-info" />
+            <Stat label={gt("Need you")} value={totals.attention} dot="bg-warning" />
+            <Stat
+              label={gt("Reported")}
+              value={totals.reported}
+              dot="border border-muted-foreground"
+            />
           </div>
           <div className="mt-auto flex flex-col gap-1">
             <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-              <Label>1h</Label>
+              <Label>{gt("1h")}</Label>
               <span className="text-2xs text-muted-foreground tabular-nums">
-                <span className="text-info">{throughput.started}</span> started ·{" "}
-                <span className="text-success">{throughput.finished}</span> done
+                <span className="text-info">
+                  {gt("{count} started", { count: throughput.started })}
+                </span>{" "}
+                ·{" "}
+                <span className="text-success">
+                  {gt("{count} done", { count: throughput.finished })}
+                </span>
               </span>
             </div>
             <ThroughputBars throughput={throughput} />
@@ -610,22 +633,22 @@ function FleetConsoleExpanded(props: {
         </section>
 
         <section
-          aria-label="Hosts"
+          aria-label={gt("Hosts")}
           className="flex min-h-0 flex-col border-b p-3 @min-[32rem]/fleet-console:order-last @min-[32rem]/fleet-console:col-span-2 @min-[32rem]/fleet-console:border-b-0 @min-[56rem]/fleet-console:order-none @min-[56rem]/fleet-console:col-span-1 @min-[56rem]/fleet-console:border-r"
         >
           <div className={cn("mb-1", HOST_GRID)}>
             <span className="flex min-w-0 items-center gap-1">
               <Label>
-                Hosts {hostCount.reporting}/{totals.machines}
+                {gt("Hosts")} {hostCount.reporting}/{totals.machines}
               </Label>
               <FleetUncountedHosts hosts={hostCount.uncounted} />
             </span>
             <Label>CPU</Label>
-            <Label>Mem</Label>
-            <Label>Load 1m</Label>
+            <Label>{gt("Mem")}</Label>
+            <Label>{gt("Load 1m")}</Label>
           </div>
           {rows.length === 0 && status.loading ? (
-            <p className="text-2xs text-muted-foreground">Reading hosts…</p>
+            <p className="text-2xs text-muted-foreground">{gt("Reading hosts…")}</p>
           ) : (
             <ul className="flex min-h-0 flex-col @min-[56rem]/fleet-console:overflow-y-auto">
               {rows.map((row) => (
@@ -655,7 +678,7 @@ function FleetConsoleExpanded(props: {
         </section>
 
         <section
-          aria-label="Status"
+          aria-label={gt("Status")}
           className="flex min-h-0 flex-col gap-3 p-3 @min-[32rem]/fleet-console:border-b @min-[56rem]/fleet-console:overflow-y-auto @min-[56rem]/fleet-console:border-b-0"
         >
           {hub === null ? null : (
@@ -665,11 +688,11 @@ function FleetConsoleExpanded(props: {
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <span className="flex items-baseline justify-between gap-2">
-                <Label>Quota</Label>
+                <Label>{gt("Quota")}</Label>
                 {quota.quotas.some((row) => row.detail !== undefined) && hiddenQuotas.length > 0 ? (
                   <span className="text-2xs text-muted-foreground">
                     <QuotaDetails
-                      label={`Show ${hiddenQuotas.length} more quota entries`}
+                      label={gt("Show {count} more quota entries", { count: hiddenQuotas.length })}
                       detail={hiddenQuotas
                         .map(
                           (row) =>
@@ -678,7 +701,7 @@ function FleetConsoleExpanded(props: {
                         )
                         .join("\n")}
                     >
-                      +{hiddenQuotas.length} more
+                      {gt("+{count} more", { count: hiddenQuotas.length })}
                     </QuotaDetails>
                   </span>
                 ) : null}
@@ -706,13 +729,19 @@ function FleetConsoleExpanded(props: {
                       )}
                     >
                       {quota.windows
-                        .map((window) => window.label + " " + Math.round(window.usedPercent) + "%")
+                        .map(
+                          (window) =>
+                            (window.label === "Weekly" ? gt("Weekly") : window.label) +
+                            " " +
+                            Math.round(window.usedPercent) +
+                            "%",
+                        )
                         .join(" · ")}
-                      {quota.peak === null ? (quota.status ?? "Quota unknown") : null}
+                      {quota.peak === null ? (quota.status ?? gt("Quota unknown")) : null}
                       {quota.hidden > 0 ? (
                         <QuotaDetails
                           detail={quota.detail}
-                          label={`Show ${quota.hidden} more quota details`}
+                          label={gt("Show {count} more quota details", { count: quota.hidden })}
                         >
                           {" " + (quota.hiddenLabel ?? `+${quota.hidden}`)}
                         </QuotaDetails>
@@ -723,7 +752,7 @@ function FleetConsoleExpanded(props: {
                     <span
                       className="h-1 overflow-hidden rounded-full bg-muted"
                       role="meter"
-                      aria-label={quota.label + " quota used"}
+                      aria-label={gt("{label} quota used", { label: quota.label })}
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-valuenow={Math.round(quota.peak)}
@@ -739,7 +768,7 @@ function FleetConsoleExpanded(props: {
                   )}
                   {quota.inferred === undefined ? null : (
                     <span className="truncate text-2xs text-muted-foreground">
-                      Routing inferred for {quota.inferred.join(", ")}
+                      {gt("Routing inferred for {hosts}", { hosts: quota.inferred.join(", ") })}
                     </span>
                   )}
                 </div>
@@ -747,9 +776,11 @@ function FleetConsoleExpanded(props: {
             </div>
           ) : null}
           <div className="flex flex-col gap-1">
-            <Label>Alerts {alerts.length > 0 ? alerts.length : null}</Label>
+            <Label>
+              {gt("Alerts")} {alerts.length > 0 ? alerts.length : null}
+            </Label>
             {alerts.length === 0 ? (
-              <span className="text-2xs text-muted-foreground">All clear</span>
+              <span className="text-2xs text-muted-foreground">{gt("All clear")}</span>
             ) : (
               <ul className="flex flex-col gap-0.5">
                 {alerts.slice(0, 3).map((alert) => (
@@ -766,10 +797,10 @@ function FleetConsoleExpanded(props: {
                           />
                         }
                       >
-                        +{alerts.length - 3} more
+                        {gt("+{count} more", { count: alerts.length - 3 })}
                       </PopoverTrigger>
                       <PopoverPopup side="top" align="start" width="md">
-                        <ul aria-label="More alerts" className="flex flex-col gap-1">
+                        <ul aria-label={gt("More alerts")} className="flex flex-col gap-1">
                           {alerts.slice(3).map((alert) => (
                             <AlertRow key={alert.key} alert={alert} />
                           ))}
@@ -840,12 +871,13 @@ function ConsoleHeader(props: {
   readonly onToggle: () => void;
   readonly children?: React.ReactNode;
 }) {
+  const gt = useGT();
   return (
     <header className={cn("flex h-9.5 items-center gap-4 px-3", !props.collapsed && "border-b")}>
       <span className="flex shrink-0 items-center gap-2">
         <span aria-hidden className="fleet-console-mark" />
         <h2 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Fleet telemetry
+          {gt("Fleet telemetry")}
         </h2>
       </span>
       {props.children}
@@ -854,7 +886,7 @@ function ConsoleHeader(props: {
         variant="ghost-muted"
         className="ml-auto shrink-0"
         aria-expanded={!props.collapsed}
-        aria-label={props.collapsed ? "Expand fleet telemetry" : "Collapse fleet telemetry"}
+        aria-label={props.collapsed ? gt("Expand fleet telemetry") : gt("Collapse fleet telemetry")}
         onClick={props.onToggle}
       >
         <ChevronDownIcon className={cn("size-3.5", !props.collapsed && "rotate-180")} />
@@ -873,6 +905,7 @@ export default function FleetConsole(props: {
   readonly connections: ReadonlyMap<string, FleetConnection>;
   readonly heat: ReadonlyMap<string, FleetMachineHeat>;
 }) {
+  const gt = useGT();
   const collapsed = useUiStateStore((state) => state.fleetConsoleCollapsed);
   const setCollapsed = useUiStateStore((state) => state.setFleetConsoleCollapsed);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -883,16 +916,18 @@ export default function FleetConsole(props: {
   return (
     <section
       ref={frameRef}
-      aria-label="Fleet telemetry"
+      aria-label={gt("Fleet telemetry")}
       data-collapsed={collapsed || undefined}
       className={fleetConsoleFrameClassName()}
     >
       {collapsed ? (
         <ConsoleHeader collapsed onToggle={() => setCollapsed(false)}>
           <span className="truncate text-xs text-muted-foreground tabular-nums">
-            <span className="text-foreground">{totals.running}</span> running ·{" "}
-            <span className="text-foreground">{totals.attention}</span> need you ·{" "}
-            <span className="text-foreground">{totals.reported}</span> reported
+            {gt("{running} running · {attention} need you · {reported} reported", {
+              running: totals.running,
+              attention: totals.attention,
+              reported: totals.reported,
+            })}
           </span>
         </ConsoleHeader>
       ) : (

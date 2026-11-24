@@ -1,5 +1,6 @@
 import type { FleetMachine, FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import {
+  DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -11,6 +12,9 @@ import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
+import { __setClientSettingsForTests, persistClientSettingsPatch } from "~/hooks/useSettings";
+import { I18nProvider } from "~/i18n/I18nProvider";
+import { startI18n, whenLocaleReady } from "~/i18n/runtime";
 import { render } from "../../../test/render";
 import { useUiStateStore } from "../../uiStateStore";
 
@@ -203,4 +207,29 @@ it("shows one Home pool with via Hub device references and account detail withou
     .element(page.getByText("Account A (available): 5h: 35% (header)", { exact: false }))
     .toBeVisible();
   expect(screen.container.querySelectorAll("[data-fleet-quota]")).toHaveLength(1);
+});
+
+it("updates quota details and their accessible name when the display language changes", async () => {
+  const snapshot = setup();
+  __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+  startI18n();
+  await using screen = await render(
+    <I18nProvider>
+      <FleetConsole snapshot={snapshot} connections={new Map()} heat={new Map()} />
+    </I18nProvider>,
+  );
+  try {
+    await expect.element(screen.getByLabelText("Show 1 more quota details")).toBeVisible();
+    await persistClientSettingsPatch({ language: "zh" }, async () => {});
+    await whenLocaleReady();
+    const details = screen.getByLabelText("显示另外 1 项配额详情");
+    await expect.element(details).toHaveTextContent("+1 个账户");
+    await userEvent.hover(details);
+    await expect
+      .element(page.getByText("Account A (可用): 5h: 35% (响应头)", { exact: false }))
+      .toBeVisible();
+  } finally {
+    await persistClientSettingsPatch({ language: "en" }, async () => {});
+    await whenLocaleReady();
+  }
 });
