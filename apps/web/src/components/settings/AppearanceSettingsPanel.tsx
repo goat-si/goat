@@ -50,9 +50,9 @@ const ENVIRONMENT_IDENTIFICATION_LABELS: Record<
 };
 
 const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
-  comfortable: "Comfortable",
-  wide: "Wide",
-  full: "Full",
+  comfortable: msg("Comfortable"),
+  wide: msg("Wide"),
+  full: msg("Full"),
 };
 
 const BACKDROP_ERROR_MESSAGES = {
@@ -458,7 +458,9 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           {...setting("composer-context")}
-          description="Keep branch and worktree controls below the composer after a thread starts."
+          description={gt(
+            "Keep branch and worktree controls below the composer after a thread starts.",
+          )}
           resetAction={
             settings.persistComposerContextStrip !==
             DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip ? (
@@ -486,7 +488,7 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           {...setting("chat-width")}
-          description="Set how wide messages and the composer can grow on large screens."
+          description={gt("Set how wide messages and the composer can grow on large screens.")}
           resetAction={
             settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? (
               <SettingResetButton
@@ -505,12 +507,12 @@ export function AppearanceSettingsPanel() {
                 }}
               >
                 <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Chat width">
-                  <SelectValue>{CHAT_WIDTH_LABELS[settings.chatWidth]}</SelectValue>
+                  <SelectValue>{m(CHAT_WIDTH_LABELS[settings.chatWidth])}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="comfortable">Comfortable (default)</SelectItem>
-                  <SelectItem value="wide">Wide</SelectItem>
-                  <SelectItem value="full">Full</SelectItem>
+                  <SelectItem value="comfortable">{gt("Comfortable (default)")}</SelectItem>
+                  <SelectItem value="wide">{gt("Wide")}</SelectItem>
+                  <SelectItem value="full">{gt("Full")}</SelectItem>
                 </SelectPopup>
               </Select>
             </div>
@@ -518,7 +520,9 @@ export function AppearanceSettingsPanel() {
         />
         <SettingsRow
           {...setting("math-rendering")}
-          description="Typeset LaTeX math, such as $x^2$ or \[x^2\], in messages and Markdown previews. The composer keeps TeX source editable."
+          description={gt(
+            "Typeset LaTeX math, such as $x^2$ or \\[x^2\\], in messages and Markdown previews. The composer keeps TeX source editable.",
+          )}
           resetAction={
             settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled ? (
               <SettingResetButton
@@ -546,7 +550,7 @@ export function AppearanceSettingsPanel() {
       <SettingsSection id="motion" title={gt("Motion")}>
         <SettingsRow
           {...setting("panel-animations")}
-          description="Set how fast panels open and close."
+          description={gt("Set how fast panels open and close.")}
           control={
             <div className="grid w-full grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 sm:w-auto sm:grid-cols-[7rem_13rem] sm:gap-4">
               <PanelAnimationsPreview durationMs={settings.panelAnimationDurationMs} />

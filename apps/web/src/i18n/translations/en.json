@@ -895,5 +895,13 @@
   "f86d1b3defd75cea": "None",
   "2f019f0b4e55d916": "Blue & orange",
   "5ca2302ec416f499": "Red & green",
-  "3f383e72dcd7d5a8": "Red & green (default)"
+  "3f383e72dcd7d5a8": "Red & green (default)",
+  "c9f0ae0132e5debb": "Keep branch and worktree controls below the composer after a thread starts.",
+  "03338c6aec8edacd": "Set how wide messages and the composer can grow on large screens.",
+  "5f5df3703ab56499": "Set how fast panels open and close.",
+  "d5dc7576fd468be7": "Comfortable",
+  "81f3a196537bbee0": "Comfortable (default)",
+  "3141408bf3874e64": "Wide",
+  "06366a0ccebbf9c3": "Full",
+  "cfa4521f8239a22f": "Typeset LaTeX math, such as $x^2$ or \\[x^2\\], in messages and Markdown previews. The composer keeps TeX source editable."
 }

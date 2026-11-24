@@ -895,5 +895,13 @@
   "f86d1b3defd75cea": "Nenhum",
   "2f019f0b4e55d916": "Azul e laranja",
   "5ca2302ec416f499": "Vermelho e verde",
-  "3f383e72dcd7d5a8": "Vermelho e verde (padrão)"
+  "3f383e72dcd7d5a8": "Vermelho e verde (padrão)",
+  "c9f0ae0132e5debb": "Mantenha os controles de branch e worktree abaixo do campo de mensagem após iniciar uma conversa.",
+  "03338c6aec8edacd": "Defina a largura máxima das mensagens e do campo de mensagem em telas grandes.",
+  "5f5df3703ab56499": "Defina a velocidade de abertura e fechamento dos painéis.",
+  "d5dc7576fd468be7": "Confortável",
+  "81f3a196537bbee0": "Confortável (padrão)",
+  "3141408bf3874e64": "Ampla",
+  "06366a0ccebbf9c3": "Largura total",
+  "cfa4521f8239a22f": "Renderize fórmulas LaTeX como $x^2$ ou \\[x^2\\] nas mensagens e prévias de Markdown. O código TeX continua editável no campo de mensagem."
 }

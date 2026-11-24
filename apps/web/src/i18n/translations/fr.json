@@ -895,5 +895,13 @@
   "f86d1b3defd75cea": "Aucun",
   "2f019f0b4e55d916": "Bleu et orange",
   "5ca2302ec416f499": "Rouge et vert",
-  "3f383e72dcd7d5a8": "Rouge et vert (par défaut)"
+  "3f383e72dcd7d5a8": "Rouge et vert (par défaut)",
+  "c9f0ae0132e5debb": "Conservez les commandes de branche et d’arbre de travail sous le champ de saisie une fois le fil lancé.",
+  "03338c6aec8edacd": "Définissez la largeur maximale des messages et du champ de saisie sur les grands écrans.",
+  "5f5df3703ab56499": "Réglez la vitesse d’ouverture et de fermeture des panneaux.",
+  "d5dc7576fd468be7": "Confortable",
+  "81f3a196537bbee0": "Confortable (par défaut)",
+  "3141408bf3874e64": "Large",
+  "06366a0ccebbf9c3": "Pleine largeur",
+  "cfa4521f8239a22f": "Affichez les formules LaTeX comme $x^2$ ou \\[x^2\\] dans les messages et les aperçus Markdown. Le code TeX reste modifiable dans le champ de saisie."
 }
