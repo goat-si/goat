@@ -216,6 +216,7 @@ export function ScheduledTasksSettings(target: {
     <SettingsPageContainer>
       <SettingsSection
         {...searchableSetting("scheduled-tasks")}
+        title={gt("Scheduled tasks")}
         variant="plain"
         headerAction={
           <Button
