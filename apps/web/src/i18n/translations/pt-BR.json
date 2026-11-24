@@ -330,6 +330,10 @@
   "5b442f7315d2ec3d": "Habilidades do GOAT",
   "bb55c1e6954b3a01": "Acesso dos agentes ao espaço de trabalho",
   "3311b929611c3fa7": "Acesso dos agentes ao terminal",
+  "fe9ecfc8c6212d72": "Ferramentas que os agentes podem usar além do seu código: navegador, ferramentas do GOAT, simuladores e controle do computador.",
+  "a4bf49b31758ff7e": "Disponível apenas no aplicativo para computador.",
+  "6797e82cca21dbff": "Permita que os agentes deste projeto usem o navegador compartilhado. Aplica-se no início da próxima sessão do agente.",
+  "a6a6dc235b108747": "Permita que os agentes usem o navegador compartilhado. Cada projeto pode substituir essa configuração.",
   "19e1f74805f4a1fb": "Acesso dos agentes ao navegador",
   "c9eb81303de2fda9": "Ferramentas do GOAT visíveis para os agentes",
   "19eaeea310cf256b": "Diretrizes de desenvolvimento",
@@ -873,9 +877,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "Nenhuma entrada visível.",
   "3d40ebe62a5baa33": "Revisão",
-  "7e8de5a9133d331c": "Somente os primeiros eventos registrados são exibidos.",
-  "fe9ecfc8c6212d72": "Ferramentas que os agentes podem usar além do seu código: navegador, ferramentas do GOAT, simuladores e controle do computador.",
-  "a4bf49b31758ff7e": "Disponível apenas no aplicativo para computador.",
-  "6797e82cca21dbff": "Permita que os agentes deste projeto usem o navegador compartilhado. Aplica-se no início da próxima sessão do agente.",
-  "a6a6dc235b108747": "Permita que os agentes usem o navegador compartilhado. Cada projeto pode substituir essa configuração."
+  "7e8de5a9133d331c": "Somente os primeiros eventos registrados são exibidos."
 }
