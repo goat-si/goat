@@ -873,5 +873,10 @@
   "ab5f7cd7f8d24e36": "Requête",
   "540690430e586ae8": "Aucune entrée visible.",
   "3d40ebe62a5baa33": "Révision",
-  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés."
+  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés.",
+  "ee4c852b5d2fb490": "Ce que les agents retiennent d’un fil à l’autre et qui peut le consulter.",
+  "d2d02339e50a2443": "Mémoriser les conversations",
+  "f633ccf59f82fd24": "Modèle de mémoire",
+  "2f46e6da3ef449fa": "GOAT résume les conversations terminées en souvenirs. Désactiver cette option arrête les nouveaux résumés et conserve les souvenirs enregistrés.",
+  "773dc9457c17d15a": "Le mode automatique reprend le modèle de génération de texte. Vous pouvez choisir un modèle distinct pour les résumés."
 }

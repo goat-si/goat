@@ -68,7 +68,7 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     text: "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
     related: [{ label: "Hub", to: "/settings/hub" }],
   },
-  "/settings/memory": { text: "What agents remember across threads, and who can read it." },
+  "/settings/memory": { text: msg("What agents remember across threads, and who can read it.") },
   "/settings/integrations": {
     text: "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
   },
