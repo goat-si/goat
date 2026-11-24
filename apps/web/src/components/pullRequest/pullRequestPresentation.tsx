@@ -519,6 +519,21 @@ export function PullRequestMetaLine({
   );
 }
 
+/** The short label beside the checks icon; null when every check passed. */
+export function pullRequestChecksCountLabel(
+  checks: ReadonlyArray<PullRequestCheck>,
+): string | null {
+  const count = (statuses: ReadonlyArray<PullRequestCheckStatus>) =>
+    checks.filter((check) => statuses.includes(check.status)).length;
+  const failed = count(["failure", "cancelled"]);
+  if (failed > 0) return `${failed} failed`;
+  const awaitingAction = count(["action-required"]);
+  if (awaitingAction > 0) return `${awaitingAction} awaiting action`;
+  const running = count(["pending"]);
+  if (running > 0) return `${running} running`;
+  return null;
+}
+
 export function summarizePullRequestChecks(checks: ReadonlyArray<PullRequestCheck>): string {
   if (checks.length === 0) return "No checks reported";
   const actionRequired = checks.filter((check) => check.status === "action-required");
