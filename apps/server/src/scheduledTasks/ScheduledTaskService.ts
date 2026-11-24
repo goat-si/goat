@@ -1,4 +1,5 @@
 import { loggedWebhookPrompt } from "./webhookLogPrompt.ts";
+import { resolveThreadMode } from "./scheduledTaskThreadMode.ts";
 import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
 import { decodeRow, decodeTaskId, listDueTasks } from "./scheduledTaskRowDecode.ts";
@@ -31,7 +32,6 @@ import {
   type ScheduledTaskRunNowInput,
   type ScheduledTaskRunNowResult,
   type ScheduledTaskSetEnabledInput,
-  type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertInput,
   type ScheduledTaskWebhookDeliveryOutcome,
   type ScheduledTaskWebhookUrlUnavailableReason,
@@ -221,19 +221,6 @@ export class ScheduledTaskService extends Context.Service<
 
 const localNow = DateTime.withCurrentZoneLocal(DateTime.nowInCurrentZone);
 
-/**
- * Clients that predate thread modes send none, and may send a thread loaded before the first run
- * bound one. An edit keeps the stored mode; binding a thread to a new-thread task continues it.
- */
-function resolveThreadMode(
-  input: Pick<ScheduledTaskUpsertInput, "threadId" | "threadMode">,
-  existing: Pick<ScheduledTask, "threadId" | "threadMode"> | null,
-): ScheduledTaskThreadMode {
-  if (input.threadMode !== undefined) return input.threadMode;
-  const stored = existing === null ? "new_thread" : scheduledTaskThreadMode(existing);
-  return stored === "new_thread" && input.threadId != null ? "continue" : stored;
-}
-
 export const layer = Layer.effect(
   ScheduledTaskService,
   Effect.gen(function* () {
@@ -418,6 +405,7 @@ export const layer = Layer.effect(
     const saveTask = (
       task: ScheduledTask,
       requireExisting: boolean,
+      unboundThreadId: ThreadId | null,
       webhook: {
         readonly token: string | null;
         readonly secret: string | null;
@@ -497,7 +485,7 @@ export const layer = Layer.effect(
           thread_id = CASE
             WHEN excluded.thread_mode = 'new_thread' THEN NULL
             WHEN excluded.project_id != scheduled_tasks.project_id THEN excluded.thread_id
-            ELSE COALESCE(excluded.thread_id, scheduled_tasks.thread_id)
+            ELSE COALESCE(excluded.thread_id, NULLIF(scheduled_tasks.thread_id, ${unboundThreadId}))
           END,
           thread_mode = excluded.thread_mode,
           workspace_strategy_json = excluded.workspace_strategy_json,
@@ -1017,7 +1005,8 @@ export const layer = Layer.effect(
       const existingTask = yield* findTask(id);
       const routineMode = input.routineMode ?? existingTask?.routineMode;
       const resolvedMode = resolveThreadMode(input, existingTask);
-      const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
+      const keptThreadId =
+        input.threadId ?? (input.unbindThread === true ? null : (existingTask?.threadId ?? null));
       // A bound thread belongs to its project, so moving the task leaves it for a new one.
       const movedOffThread =
         existingTask !== null &&
@@ -1090,7 +1079,12 @@ export const layer = Layer.effect(
         lastRunError: existingTask?.lastRunError ?? null,
         runCount: existingTask?.runCount ?? 0,
       };
-      const save = saveTask(task, input.requireExisting === true, webhook);
+      const save = saveTask(
+        task,
+        input.requireExisting === true,
+        threadId === null && input.unbindThread === true ? (existingTask?.threadId ?? null) : null,
+        webhook,
+      );
       yield* botRoutines.saveWithOwner(save, task, owner);
       return { task: (yield* findTask(id)) ?? task };
     });

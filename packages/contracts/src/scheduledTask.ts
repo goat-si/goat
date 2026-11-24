@@ -331,6 +331,7 @@ const ScheduledTaskUpsertInputFields = Schema.Struct({
   schedule: ScheduledTaskUpsertSchedule,
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  unbindThread: Schema.optional(Schema.Boolean),
   /** Omitted: keep the stored mode, or derive it from threadId for a new or rebound task. */
   threadMode: Schema.optional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,

@@ -876,6 +876,7 @@ function ScheduledTaskEditorForm({
         : {}),
       schedule,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(draft.threadId === "" && draft.savedThreadId !== "" ? { unbindThread: true } : {}),
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       ...context,
       runtimeMode: draft.runtimeMode,
