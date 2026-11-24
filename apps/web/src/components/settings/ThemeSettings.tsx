@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { CheckIcon } from "~/components/solar";
 import { useState } from "react";
 import { useEnvironmentThemeDefinitions } from "../../hooks/useEnvironmentTheme";
@@ -34,7 +35,7 @@ import { ThemeImportDialog } from "./ThemeImportDialog";
 import { ThemeBackgroundNotice } from "./ThemeBackgroundNotice";
 import { ThemePickerMenu, type ThemeChoice } from "./ThemePickerMenu";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useThemeEditorStore } from "./themeEditorStore";
 import {
   STANDARD_THEME_CARDS,
@@ -309,16 +310,19 @@ export function ThemeLibrary({
   ];
 
   const ownerLabel = (id: string | null) => cardDefById(id).label;
+  const setting = useTranslatedSearchableSetting();
+  const gt = useGT();
   const appearanceOption =
     APPEARANCE_OPTIONS.find((option) => option.mode === appearanceMode) ?? APPEARANCE_OPTIONS[0];
+  const appearanceLabels = { system: gt("System"), light: gt("Light"), dark: gt("Dark") };
   const AppearanceIcon = appearanceOption.icon;
 
   return (
     <>
       <ThemeBackgroundNotice />
       <SettingsRow
-        {...searchableSetting("color-scheme")}
-        description="Follow the system appearance, or stay in light or dark mode."
+        {...setting("color-scheme")}
+        description={gt("Follow the system appearance, or stay in light or dark mode.")}
         control={
           <Select
             value={appearanceMode}
@@ -326,16 +330,20 @@ export function ThemeLibrary({
               if (value === "system" || value === "light" || value === "dark") setMode(value);
             }}
           >
-            <SelectTrigger aria-label="Color scheme" className="w-full sm:w-40" size="sm">
+            <SelectTrigger
+              aria-label={setting("color-scheme").title}
+              className="w-full sm:w-40"
+              size="sm"
+            >
               <AppearanceIcon aria-hidden />
-              <SelectValue>{appearanceOption.label}</SelectValue>
+              <SelectValue>{appearanceLabels[appearanceOption.mode]}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              {APPEARANCE_OPTIONS.map(({ mode, label, icon: Icon }) => (
+              {APPEARANCE_OPTIONS.map(({ mode, icon: Icon }) => (
                 <SelectItem key={mode} value={mode}>
                   <span className="flex items-center gap-2">
                     <Icon aria-hidden />
-                    {label}
+                    {appearanceLabels[mode]}
                   </span>
                 </SelectItem>
               ))}
@@ -344,8 +352,8 @@ export function ThemeLibrary({
         }
       />
       <SettingsRow
-        {...searchableSetting("theme")}
-        description="Choose colors for light and dark mode, or create your own theme."
+        {...setting("theme")}
+        description={gt("Choose colors for light and dark mode, or create your own theme.")}
         control={
           <ThemePickerMenu
             choices={choices}
