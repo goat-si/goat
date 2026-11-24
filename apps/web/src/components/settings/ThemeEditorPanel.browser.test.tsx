@@ -131,6 +131,27 @@ async function renderBesideSettings() {
   };
 }
 
+async function pressImeEscapes(target: HTMLElement) {
+  // The bare 229 goes first, before a compositionend opens Base UI's own composition window.
+  for (const { compositionEnd, ...composition } of [
+    { key: "Escape", isComposing: false, keyCode: 229, compositionEnd: false },
+    { key: "Escape", isComposing: true, keyCode: 27, compositionEnd: false },
+    // Safari ends the composition just before the Escape keydown.
+    { key: "Escape", isComposing: false, keyCode: 229, compositionEnd: true },
+  ]) {
+    const keydown = new KeyboardEvent("keydown", {
+      ...composition,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => {
+      if (compositionEnd)
+        target.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      target.dispatchEvent(keydown);
+    });
+    expect(keydown.defaultPrevented).toBe(false);
+  }
+}
 async function editorElement(selector: string) {
   const query = () => document.querySelector<HTMLElement>(`[data-theme-editor-panel] ${selector}`);
   await expect.poll(query).toBeTruthy();
@@ -222,6 +243,14 @@ describe("ThemeEditorPanel", () => {
       pointerAt(hueSlider, "pointerup", 0.5);
     });
     await expect.element(hex).not.toHaveValue(original);
+    const edited = (hex.element() as HTMLInputElement).value;
+
+    const pickerHex = page.getByRole("textbox", { name: "Accent picker hex value" });
+    await act(() =>
+      pickerHex.element().dispatchEvent(new KeyboardEvent("keydown", IME_ESCAPE_229)),
+    );
+    await expect.element(hue).toBeInTheDocument();
+    expect((hex.element() as HTMLInputElement).value).toBe(edited);
 
     await act(async () => {
       pointerAt(hueSlider, "pointerdown", 0.25);
@@ -275,7 +304,13 @@ describe("ThemeEditorPanel", () => {
     using _windowKeys = {
       [Symbol.dispose]: () => window.removeEventListener("keydown", windowKeys),
     };
-    (await editorElement("input")).focus();
+    const input = await editorElement("input");
+    input.focus();
+    await pressImeEscapes(input);
+    expect(view.onEditorOpenChange).not.toHaveBeenCalled();
+    expect(view.router.state.location.pathname).toBe("/settings/appearance");
+    windowKeys.mockClear();
+
     await userEvent.keyboard("{Escape}");
 
     expect(view.onEditorOpenChange).toHaveBeenCalledWith(false);
@@ -291,6 +326,11 @@ describe("ThemeEditorPanel", () => {
     await using view = await renderBesideSettings();
     (await editorElement('[aria-label="Inspect app colors"]')).click();
     await editorElement('[aria-label="Cancel inspecting app colors"]');
+    await pressImeEscapes(await editorElement("input"));
+    await editorElement('[aria-label="Cancel inspecting app colors"]');
+    expect(view.onEditorOpenChange).not.toHaveBeenCalled();
+    expect(view.router.state.location.pathname).toBe("/settings/appearance");
+
     await userEvent.keyboard("{Escape}");
 
     await editorElement('[aria-label="Inspect app colors"]');
