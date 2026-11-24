@@ -873,5 +873,22 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown."
+  "7e8de5a9133d331c": "Only the first recorded events are shown.",
+  "201cda878c0d768a": "Keyboard shortcuts for this app.",
+  "03f8789fc359bc15": "Search keybindings",
+  "698320cf519ac99a": "Add keybinding",
+  "53b9a6ba24deb0e7": "Navigation",
+  "cba3e832ece50257": "Files",
+  "5c78a8ae7b71af1d": "Terminal",
+  "555805dcc65047bc": "Preview & diff",
+  "66b6769d2ae085a0": "Project scripts",
+  "78344b60f407928e": "Other",
+  "5df837c01830b63e": "Always",
+  "12d1d6fabe3f0b96": "When",
+  "a9cdd8c7073be920": "Command Palette: Toggle",
+  "7752817256fa96b7": "Editor: Open Favorite",
+  "4e0943e8c7a465d1": "File Picker: Toggle",
+  "df5fdcdf26a6b52a": "Project Search: Toggle",
+  "97c7de6aaab317a2": "Right Panel: Close",
+  "81e0e9f4304d2f01": "Right Panel: New"
 }

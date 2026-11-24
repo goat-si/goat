@@ -62,7 +62,7 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     text: msg("Defaults for new threads, notifications, updates, and how GOAT behaves day to day."),
   },
   "/settings/appearance": { text: "Theme, fonts, and layout of this app on this device." },
-  "/settings/keybindings": { text: "Keyboard shortcuts for this app." },
+  "/settings/keybindings": { text: msg("Keyboard shortcuts for this app.") },
   "/settings/snap-shot": { text: "Capture part of your screen and attach it to a thread." },
   "/settings/providers": {
     text: "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
