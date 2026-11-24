@@ -335,6 +335,8 @@
   "19eaeea310cf256b": "Entwicklungsrichtlinien",
   "f335b149c1d8d43c": "GOAT-Dokumentation",
   "adeba4f2153a83d7": "Wird ausgeführt auf",
+  "6b7b4054cab8e8cb": "Ein tiefschwarzer Dunkelmodus, weniger hervorgehobene gelesene Threads und einfachere Eingabefunktionen. Ausschalten, um zum klassischen Design zurückzukehren.",
+  "96714eee68489516": "Sortiere aktive Threads danach, wann sie zuletzt wieder deine Aufmerksamkeit brauchten. Laufende Aufgaben bleiben unter Priorität.",
   "fbdd295f9ebb9211": "Neues Design",
   "98a0d9d96a4b98f1": "Browserprofile",
   "769f162aadf1c6b4": "Standardbrowserprofil",
@@ -873,7 +875,5 @@
   "ab5f7cd7f8d24e36": "Suchanfrage",
   "540690430e586ae8": "Keine sichtbaren Einträge.",
   "3d40ebe62a5baa33": "Version",
-  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt.",
-  "6b7b4054cab8e8cb": "Ein tiefschwarzer Dunkelmodus, weniger hervorgehobene gelesene Threads und einfachere Eingabefunktionen. Ausschalten, um zum klassischen Design zurückzukehren.",
-  "96714eee68489516": "Sortiere aktive Threads danach, wann sie zuletzt wieder deine Aufmerksamkeit brauchten. Laufende Aufgaben bleiben unter Priorität."
+  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt."
 }

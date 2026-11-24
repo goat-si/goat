@@ -335,6 +335,8 @@
   "19eaeea310cf256b": "Normas de desarrollo",
   "f335b149c1d8d43c": "Documentación de GOAT",
   "adeba4f2153a83d7": "Se ejecuta en",
+  "6b7b4054cab8e8cb": "Modo oscuro en negro puro, hilos leídos más tenues y controles de escritura más sencillos. Desactívalo para volver al aspecto clásico.",
+  "96714eee68489516": "Ordena los hilos activos por el momento en que volvieron a requerir tu atención. El trabajo en curso sigue en Prioridad.",
   "fbdd295f9ebb9211": "Nuevo diseño",
   "98a0d9d96a4b98f1": "Perfiles del navegador",
   "769f162aadf1c6b4": "Perfil predeterminado del navegador",
@@ -873,7 +875,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
-  "6b7b4054cab8e8cb": "Modo oscuro en negro puro, hilos leídos más tenues y controles de escritura más sencillos. Desactívalo para volver al aspecto clásico.",
-  "96714eee68489516": "Ordena los hilos activos por el momento en que volvieron a requerir tu atención. El trabajo en curso sigue en Prioridad."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }
