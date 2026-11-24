@@ -954,7 +954,7 @@ function PullRequestCodeTab({
   };
   const toolbar = (
     <div data-glass-layer className={DIFF_SURFACE_TOOLBAR_CLASS}>
-      <div className="flex min-w-0 flex-1 items-center gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-clip">
         <PullRequestDiffCommitMenu
           commits={orderedCommits}
           commit={commit}
