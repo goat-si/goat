@@ -134,7 +134,7 @@ export function FleetPage() {
               {loading ? " " + gt("Checking SSH hosts and cloud machines…") : null}
             </p>
             <section
-              aria-label="Fleet graph"
+              aria-label={gt("Fleet graph")}
               className="@container/fleet-graph overflow-hidden rounded-xl border bg-card"
             >
               <FleetGraph
@@ -150,7 +150,9 @@ export function FleetPage() {
                 {(["running", "attention", "reported"] as const).map((state) => (
                   <span key={state} className="inline-flex items-center gap-1.5">
                     <span aria-hidden className={cn("size-2 rounded-full", STATE_DOT[state])} />
-                    {STATE_LABEL[state]}
+                    {gt(STATE_LABEL[state], {
+                      $context: "Thread status in the Fleet graph legend",
+                    })}
                   </span>
                 ))}
                 {connectionLegend.length > 0 ? (
@@ -159,7 +161,7 @@ export function FleetPage() {
                 {connectionLegend.map((entry) => (
                   <span key={entry.label} className="inline-flex items-center gap-1.5">
                     <FleetConnectionIcon state={entry.state} />
-                    {entry.label}
+                    {gt(entry.label)}
                   </span>
                 ))}
                 {heatLegend.length > 0 ? (
@@ -168,11 +170,11 @@ export function FleetPage() {
                 {heatLegend.map((tier) => (
                   <span key={tier} className="inline-flex items-center gap-1.5">
                     <span aria-hidden className={cn("size-2 rounded-full", HEAT_DOT[tier])} />
-                    {FLEET_HEAT_LABEL[tier]}
+                    {gt(FLEET_HEAT_LABEL[tier])}
                   </span>
                 ))}
                 <span className="ml-auto hidden text-muted-foreground/80 @min-[40rem]/fleet-graph:inline">
-                  Select a machine to show only its threads.
+                  {gt("Select a machine to show only its threads.")}
                 </span>
               </div>
             </section>
