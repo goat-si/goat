@@ -969,5 +969,6 @@
   "4e690f420bcbdb5d": "Comprobando los entornos conectados.",
   "89d08a5be3347890": "Los hilos archivados aparecerán aquí.",
   "8e944f7583a727fd": "Desarchivar",
-  "da49b8271b9dffa0": "Eliminar"
+  "da49b8271b9dffa0": "Eliminar",
+  "d0caad5cb95ee8cd": "Los agentes de programación que ejecuta GOAT, con sus cuentas y modelos. Codex puede enviar las solicitudes a modelos mediante OpenCodex Home, la instancia de OpenCodex del nodo central que guarda todos los inicios de sesión."
 }

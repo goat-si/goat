@@ -969,5 +969,6 @@
   "4e690f420bcbdb5d": "Verificando os ambientes conectados.",
   "89d08a5be3347890": "As conversas arquivadas aparecerão aqui.",
   "8e944f7583a727fd": "Desarquivar",
-  "da49b8271b9dffa0": "Excluir"
+  "da49b8271b9dffa0": "Excluir",
+  "d0caad5cb95ee8cd": "Os agentes de programação que o GOAT executa, com suas contas e modelos. O Codex pode enviar solicitações aos modelos pelo OpenCodex Home, a instância do OpenCodex no hub que guarda todos os logins."
 }

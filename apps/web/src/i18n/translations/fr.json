@@ -969,5 +969,6 @@
   "4e690f420bcbdb5d": "Vérification des environnements connectés.",
   "89d08a5be3347890": "Les fils archivés apparaîtront ici.",
   "8e944f7583a727fd": "Désarchiver",
-  "da49b8271b9dffa0": "Supprimer"
+  "da49b8271b9dffa0": "Supprimer",
+  "d0caad5cb95ee8cd": "Les agents de programmation exécutés par GOAT, avec leurs comptes et modèles. Codex peut envoyer ses requêtes de modèle via OpenCodex Home, l’instance OpenCodex du nœud central qui conserve toutes les connexions."
 }
