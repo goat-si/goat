@@ -973,5 +973,10 @@
   "162d9c37ad247ab2": "Loading decisions…",
   "13af5489f852d8a4": "No decisions yet.",
   "3953fa3a717a94cd": "No open decisions.",
-  "2dd4e7a2d23ef17d": "Some decisions are not shown."
+  "2dd4e7a2d23ef17d": "Some decisions are not shown.",
+  "93635c8f20f04033": "Prompts that run on a schedule.",
+  "40c503999bce960e": "New task",
+  "1b30548ce8e56b75": "Edit task",
+  "1517f4c831b1c8aa": "No scheduled tasks",
+  "6d799d4105f2696b": "No tasks match this environment and project selection."
 }

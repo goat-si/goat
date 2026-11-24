@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useClientSettings } from "../../hooks/useSettings";
 import { formatTimeOfDay } from "../../timestampFormat";
 import { ScheduledRelativeLabel } from "./ScheduledRelativeLabel";
@@ -150,6 +151,7 @@ export function ScheduledTasksSettings(target: {
   readonly environmentId?: EnvironmentId;
   readonly taskId?: ScheduledTaskId | undefined;
 }) {
+  const gt = useGT();
   const { scope, environments, connectedEnvironments, environment } = useSettingsScope();
   const [editor, setEditor] = useState<{
     environmentId: EnvironmentId;
@@ -226,7 +228,7 @@ export function ScheduledTasksSettings(target: {
             }
           >
             <PlusIcon className="size-3" />
-            New task
+            {gt("New task")}
           </Button>
         }
       >
@@ -294,6 +296,7 @@ function ScheduledTaskEnvironmentList({
   readonly taskId: ScheduledTaskId | undefined;
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
 }) {
+  const gt = useGT();
   const { scope, environments } = useSettingsScope();
   const connectedIds = environments.flatMap((environment) =>
     environment.connection.phase === "connected" && environment.serverConfig !== null
@@ -383,8 +386,8 @@ function ScheduledTaskEnvironmentList({
       ) : null}
       {populated.length === 0 && loaded.length > 0 ? (
         <SettingsRow
-          title="No scheduled tasks"
-          description="No tasks match this environment and project selection."
+          title={gt("No scheduled tasks")}
+          description={gt("No tasks match this environment and project selection.")}
         />
       ) : null}
       {Object.entries(summaries).map(([label, entries]) => {
@@ -439,6 +442,7 @@ function ScheduledTaskEnvironmentSection({
   readonly taskId?: ScheduledTaskId | undefined;
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
 }) {
+  const gt = useGT();
   const { scope } = useSettingsScope();
   const connected =
     environment.connection.phase === "connected" && environment.serverConfig !== null;
@@ -485,8 +489,8 @@ function ScheduledTaskEnvironmentSection({
           ) : null}
           {tasks.length === 0 ? (
             <SettingsRow
-              title="No scheduled tasks"
-              description="No tasks match this environment and project selection."
+              title={gt("No scheduled tasks")}
+              description={gt("No tasks match this environment and project selection.")}
             />
           ) : (
             tasks.map((task) => (
@@ -689,6 +693,7 @@ function ScheduledTaskEditorForm({
   readonly onSavingChange: (saving: boolean) => void;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
   const { scope, connectedEnvironments } = useSettingsScope();
   const [environmentId, setEnvironmentId] = useState(initialEnvironmentId);
   const environment = useEnvironment(environmentId);
@@ -899,7 +904,7 @@ function ScheduledTaskEditorForm({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
+        <DialogTitle>{draft.editingId ? gt("Edit task") : gt("New task")}</DialogTitle>
         <DialogDescription>
           Run a prompt automatically on an interval, at a fixed time, or when a webhook is called.
         </DialogDescription>

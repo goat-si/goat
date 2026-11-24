@@ -88,7 +88,7 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   "/settings/decision-inbox": {
     text: msg("Questions agents left for you, each with a recommendation and a deadline."),
   },
-  "/settings/scheduled-tasks": { text: "Prompts that run on a schedule." },
+  "/settings/scheduled-tasks": { text: msg("Prompts that run on a schedule.") },
   "/settings/hub": {
     text: msg(
       "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",

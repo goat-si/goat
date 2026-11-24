@@ -973,5 +973,10 @@
   "162d9c37ad247ab2": "Chargement des décisions…",
   "13af5489f852d8a4": "Aucune décision pour le moment.",
   "3953fa3a717a94cd": "Aucune décision en attente.",
-  "2dd4e7a2d23ef17d": "Certaines décisions ne sont pas affichées."
+  "2dd4e7a2d23ef17d": "Certaines décisions ne sont pas affichées.",
+  "93635c8f20f04033": "Invites exécutées selon un calendrier.",
+  "40c503999bce960e": "Nouvelle tâche",
+  "1b30548ce8e56b75": "Modifier la tâche",
+  "1517f4c831b1c8aa": "Aucune tâche planifiée",
+  "6d799d4105f2696b": "Aucune tâche ne correspond à l’environnement et au projet sélectionnés."
 }

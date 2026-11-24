@@ -973,5 +973,10 @@
   "162d9c37ad247ab2": "Cargando decisiones…",
   "13af5489f852d8a4": "Aún no hay decisiones.",
   "3953fa3a717a94cd": "No hay decisiones pendientes.",
-  "2dd4e7a2d23ef17d": "Algunas decisiones no se muestran."
+  "2dd4e7a2d23ef17d": "Algunas decisiones no se muestran.",
+  "93635c8f20f04033": "Instrucciones que se ejecutan según una programación.",
+  "40c503999bce960e": "Nueva tarea",
+  "1b30548ce8e56b75": "Editar tarea",
+  "1517f4c831b1c8aa": "No hay tareas programadas",
+  "6d799d4105f2696b": "No hay tareas que coincidan con el entorno y el proyecto seleccionados."
 }
