@@ -120,7 +120,6 @@ import {
 import { markdownFileEditorTarget, resolveMarkdownFileHostPath } from "../markdownFileHostPath";
 import { normalizeMarkdownLinkHrefKey } from "./chatMarkdownLinkHref";
 import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
-import { isElectron } from "../env";
 import { contextMenuForEvent } from "../contextMenuSource";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
@@ -206,7 +205,7 @@ import {
 import { reportMarkdownActionFailure } from "./chat/markdownActionFailure";
 import {
   handleMarkdownLinkAuxClick,
-  markdownLinkNeedsEnvironmentRoute,
+  markdownLinkNeedsExternalBridge,
   openMarkdownLinkExternally,
   openMarkdownLinkInSystemBrowser,
   reportMarkdownExternalOpenFailure,
@@ -1046,12 +1045,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
                 canOpenInApp: canOpenInPreview,
               }) !== "app"
             ) {
-              // Open desktop Alt-clicks before Chromium downloads them so link routers can read the held key.
-              // A remote environment's loopback link needs its address, which native navigation skips.
-              if (
-                (isElectron && event.altKey) ||
-                markdownLinkNeedsEnvironmentRoute(environmentId, href)
-              ) {
+              // Open desktop Alt-clicks, editor links, and remote loopback links over the bridge.
+              if (markdownLinkNeedsExternalBridge(environmentId, href, event.altKey)) {
                 event.preventDefault();
                 event.stopPropagation();
                 openMarkdownLinkInSystemBrowser(environmentId, href);
