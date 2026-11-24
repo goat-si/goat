@@ -313,13 +313,21 @@ jobs:
               "https://api.github.com/repos/goat-si/goat/contents/scripts/$file?ref=$GITHUB_WORKFLOW_SHA"
           done
 
-      - name: Stage JS bundle
+      - name: Render third-party notices
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-notices"
+          node scripts/render-third-party-notices.ts \
+            --input apps/server/dist/client/third-party-licenses.json --output "$RUNNER_TEMP/release-notices/THIRD_PARTY_NOTICES.md"
+
+      - name: Stage JS bundle and release notices
         env:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          node scripts/.staging/nightly-staging.ts put --repo goat-si/goat --tag "$STAGING_TAG" --target "$SHA" \
-            --name js-bundle --dir apps --paths server/dist,desktop/dist-electron
+          set -euo pipefail
+          stage=(node scripts/.staging/nightly-staging.ts put --repo goat-si/goat --tag "$STAGING_TAG" --target "$SHA")
+          "${stage[@]}" --name js-bundle --dir apps --paths server/dist,desktop/dist-electron
+          "${stage[@]}" --name release-notices --dir "$RUNNER_TEMP/release-notices" --paths THIRD_PARTY_NOTICES.md
 
   cli:
     name: CLI ${{ matrix.key }}
@@ -955,9 +963,8 @@ jobs:
         run: |
           set -euo pipefail
           fetch=(node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG")
-          "${fetch[@]}" --names 'desktop-*,cli-*' --dir release
+          "${fetch[@]}" --names 'desktop-*,cli-*,release-notices' --dir release
           "${fetch[@]}" --names 'verify-*' --dir reports
-          "${fetch[@]}" --names js-bundle --dir apps
 
       - name: Merge update manifests
         env:
@@ -968,13 +975,11 @@ jobs:
           node scripts/merge-update-manifests.ts --platform win "release/$MANIFEST-win-x64.yml" "release/$MANIFEST-win-arm64.yml" "release/$MANIFEST.yml"
           rm -f "release/$MANIFEST-mac-x64.yml" "release/$MANIFEST-win-x64.yml" "release/$MANIFEST-win-arm64.yml"
 
-      - name: Add installers and notices
+      - name: Add installers and license
         run: |
           set -euo pipefail
           cp LICENSE release/LICENSE-T3CODE.txt
           cp scripts/install.sh scripts/install.ps1 scripts/install-goat-server.sh release/
-          node scripts/render-third-party-notices.ts \
-            --input apps/server/dist/client/third-party-licenses.json --output release/THIRD_PARTY_NOTICES.md
 
       - name: Build the private npm-installable launcher
         run: |
