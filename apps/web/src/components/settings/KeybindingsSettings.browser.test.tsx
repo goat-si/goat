@@ -150,9 +150,28 @@ it("Esc in the keybindings search clears the query without closing Settings", as
   await search.fill("sidebar");
 
   await userEvent.keyboard("{Escape}");
-
   await expect.element(search).toHaveValue("");
+  await expect.element(search).toHaveFocus();
+
+  await act(() =>
+    search.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  await expect.element(search).toHaveValue("");
+  await expect.element(search).toHaveFocus();
   expect(onOpenChange).not.toHaveBeenCalled();
+
+  await search.fill("sidebar");
+  await userEvent.keyboard("{Shift>}{Escape}{/Shift}");
+  await expect.element(search).toHaveValue("sidebar");
+  await expect.element(search).toHaveFocus();
+  expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
 });
 
 it("re-enables Save when a When editor closes on an expression it could not parse", async () => {

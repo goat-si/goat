@@ -89,6 +89,7 @@ import {
   whenAstToExpression,
   whenNodeRemoveLabel,
 } from "./KeybindingsSettings.logic";
+import { isBareEscape } from "./keybindingsSearchEscape";
 import { KeybindingPill } from "./KeybindingPill";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -570,13 +571,6 @@ function rowKeybindingTarget(row: KeybindingRow): ServerRemoveKeybindingInput {
     key: row.key,
     ...(row.when.trim().length > 0 ? { when: row.when } : {}),
   };
-}
-
-// Esc with a modifier is a shortcut to record, not a cancel.
-function isBareEscape(event: KeyboardEvent<HTMLInputElement>) {
-  return (
-    event.key === "Escape" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
-  );
 }
 
 function useKeybindingRowEditor({
