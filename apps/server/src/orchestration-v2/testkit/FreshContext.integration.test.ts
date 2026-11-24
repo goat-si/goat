@@ -18,6 +18,7 @@ import * as EventSink from "../EventSink.ts";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
+import * as ProviderSessionManager from "../ProviderSessionManager.ts";
 import { CLAUDE_MODEL_SELECTION, CODEX_MODEL_SELECTION } from "./fixtures/shared.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { type CapturedTurn, makeTestAdapter } from "./testing/providerSwitchAdapter.ts";
@@ -55,16 +56,24 @@ const waitForIdle = Effect.fn("ProviderSwitchTest.waitForIdle")(function* (
 });
 
 describe("fresh provider context", () => {
-  it.live.each(["immediately", "behind a running turn"] as const)(
+  it.live.each([
+    "immediately",
+    "behind a running turn",
+    "and recovers it after it breaks",
+    "and recovers it after it breaks and the server restarts",
+  ] as const)(
     "starts a fresh provider session %s and never hands earlier runs to a later provider",
     (variant) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const queued = variant !== "immediately";
-          const key = queued ? "queued" : "immediate";
+          const queued = variant === "behind a running turn";
+          const restarted = variant === "and recovers it after it breaks and the server restarts";
+          const broken = restarted || variant === "and recovers it after it breaks";
+          const key = queued ? "queued" : restarted ? "restarted" : broken ? "broken" : "immediate";
           const cwd = yield* checkpointWorkspace(`fresh-context-${key}`);
           const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
           const closedSessions = yield* Ref.make<ReadonlyArray<string>>([]);
+          const runtimeStarts = yield* Ref.make<ReadonlyArray<string>>([]);
           // A queued start has nobody to refuse, so a busy session must stay up.
           const backgroundWork = yield* Ref.make(queued);
           const started = yield* Deferred.make<void>();
@@ -78,6 +87,10 @@ describe("fresh provider context", () => {
               responseByRunOrdinal: {},
               capturedTurns,
               closedSessions,
+              runtimeStarts,
+              ...(broken
+                ? { failedRunOrdinals: new Set([3]), brokenRunOrdinals: new Set([3]) }
+                : {}),
               backgroundWork,
               nativeThreadGeneration: yield* Ref.make(0),
               ...(queued
@@ -175,6 +188,22 @@ describe("fresh provider context", () => {
             // Claude hosts one native thread per session, so an idle old one is closed.
             assert.deepEqual(yield* Ref.get(closedSessions), queued ? [] : [firstSession.id]);
             yield* Ref.set(backgroundWork, false);
+            let startsBeforeRecovery = 0;
+            if (broken) {
+              if (restarted) {
+                const projection = yield* orchestrator.getThreadProjection(freshThreadId);
+                const brokenThread = projection.providerThreads.find(
+                  (thread) => thread.id === projection.thread.activeProviderThreadId,
+                )!;
+                assert.equal(brokenThread.status, "error");
+                const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+                yield* sessions.close(brokenThread.providerSessionId!);
+              }
+              startsBeforeRecovery = (yield* Ref.get(runtimeStarts)).length;
+              yield* send("epsilon", CLAUDE_MODEL_SELECTION);
+              yield* worker.drain();
+              yield* waitForIdle(freshThreadId);
+            }
             yield* send("delta", CODEX_MODEL_SELECTION);
             yield* worker.drain();
             yield* waitForIdle(freshThreadId);
@@ -202,6 +231,18 @@ describe("fresh provider context", () => {
             assert.equal(turnFor("beta").text, "Prompt beta");
             if (queued) {
               assert.equal(turnFor("gamma").providerThreadId, turnFor("beta").providerThreadId);
+            }
+            if (broken) {
+              const recovered = turnFor("epsilon");
+              assert.equal(recovered.providerThreadId, turnFor("beta").providerThreadId);
+              assert.notEqual(recovered.nativeThreadId, turnFor("beta").nativeThreadId);
+              assert.include(recovered.text, "Prompt beta");
+              assert.notInclude(recovered.text, "Prompt alpha");
+              assert.notInclude(recovered.text, "Prompt zero");
+              assert.deepEqual(
+                (yield* Ref.get(runtimeStarts)).slice(startsBeforeRecovery),
+                restarted ? ["new"] : ["replacement"],
+              );
             }
             const codexTurn = turnFor("delta");
             assert.notEqual(codexTurn.providerThreadId, turnFor("zero").providerThreadId);

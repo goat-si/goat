@@ -30,8 +30,10 @@ import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
 const layerProjectionStoreTest = Layer.mergeAll(
+  ThreadCommandExecutor.layer,
   ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
   SqlitePersistence.layerMemory,
 );
@@ -675,7 +677,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
       }),
   );
 
-  it.effect("records the checkpoint of a cancelled run and keeps it cancelled", () =>
+  it.effect.each([false, true])("keeps a run cancelled during capture=%s", (cancelDuringCapture) =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
@@ -827,7 +829,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
       });
       for (const [status, completedAt] of [
         ["running", null],
-        ["cancelled", cancelledAt],
+        [cancelDuringCapture ? "waiting" : "cancelled", cancelDuringCapture ? null : cancelledAt],
       ] as const) {
         yield* projectionStore.apply({
           id: EventId.make(`event:checkpoint-capture-cancelled:run-${status}`),
@@ -873,7 +875,21 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               materializeBaselineCheckpoint: () =>
                 Effect.die("baseline materialization must be skipped when ordinal 0 is ready"),
-              capture: () => Effect.succeed(captured),
+              capture: () =>
+                cancelDuringCapture
+                  ? projectionStore
+                      .apply({
+                        id: EventId.make("event:cancel-during-capture"),
+                        type: "run.updated",
+                        threadId: cancelledThreadId,
+                        runId: cancelledRunId,
+                        nodeId: cancelledRootNodeId,
+                        providerInstanceId,
+                        occurredAt: cancelledAt,
+                        payload: { ...runningRun, status: "cancelled", completedAt: cancelledAt },
+                      })
+                      .pipe(Effect.as(captured), Effect.orDie)
+                  : Effect.succeed(captured),
             }),
             Layer.mock(EventSink.EventSinkV2)({
               commitCommand: (input) =>
@@ -913,7 +929,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         completedAt ? DateTime.formatIso(completedAt) : completedAt,
         DateTime.formatIso(cancelledAt),
       );
-      assert.equal(projected.rootNode?.status, "cancelled");
+      assert.equal(projected.rootNode?.status, cancelDuringCapture ? "waiting" : "cancelled");
       assert.deepEqual([...projected.preservedCheckpointOrdinals].toSorted(), [0, 1]);
 
       // A rewind leaves the run's checkpoint stale; the next capture must rebaseline it.

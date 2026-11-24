@@ -138,8 +138,8 @@ export const detectCloudClis = Effect.fn("CloudProviderAutoSetup.detect")(functi
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
   return {
-    devin: resolve("devin", platform, environment),
-    cursorAgent: resolve("cursor-agent", platform, environment),
+    devin: yield* Effect.promise(async () => resolve("devin", platform, environment)),
+    cursorAgent: yield* Effect.promise(async () => resolve("cursor-agent", platform, environment)),
   } satisfies DetectedCloudClis;
 });
 

@@ -10,6 +10,7 @@ import type {
   RunId,
   ThreadId,
 } from "@goat/contracts";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 
@@ -35,6 +36,20 @@ export class ContextHandoffBackgroundWorkError extends Schema.TaggedError<Contex
 ) {
   override get message() {
     return "The target provider still has background work running. Wait for it to finish or stop it before retrying the handoff.";
+  }
+}
+
+const CODEX_RESTORE_MESSAGES = {
+  failed: "Codex could not restore context after compaction. Retry the turn.",
+  capacity:
+    "Codex context restoration capacity exceeded; restart the provider session before retrying.",
+} as const;
+
+export class CodexContextRestoreError extends Data.TaggedError("CodexContextRestoreError")<{
+  readonly reason: keyof typeof CODEX_RESTORE_MESSAGES;
+}> {
+  override get message() {
+    return CODEX_RESTORE_MESSAGES[this.reason];
   }
 }
 
@@ -66,6 +81,19 @@ const PROVIDER_FAILURE_CATEGORIES: Partial<
 
 // Devin Cloud CLI stages whose messages are GOAT's fixed text; relay details carry vendor text.
 const DEVIN_CLI_STAGES = new Set(["sibling", "resolve", "probe", "version", "auth"]);
+// macOS privacy protection (TCC) refuses a CLI the project folder with EPERM.
+const PERMISSION_DENIED_OUTPUT = /\bEPERM\b|Operation not permitted/u;
+
+/**
+ * What to do after a provider CLI exits on its own. Only recognises the
+ * output; the output itself stays out of the message.
+ */
+export function providerProcessExitGuidance(output: unknown): string {
+  return typeof output === "string" && PERMISSION_DENIED_OUTPUT.test(output)
+    ? "It was denied access to a file or folder (EPERM). On macOS, allow GOAT under System Settings > Privacy & Security > Files and Folders, or move the project out of Desktop, Documents, or Downloads, then retry the turn."
+    : "Check the server logs for the provider's output, then retry the turn.";
+}
+
 // codex_protocol::protocol::validate_thread_goal_objective
 const CODEX_GOAL_VALIDATION_MESSAGE =
   /^goal objective must (?:not be empty|be at most \d{1,6} characters)$/u;
@@ -107,6 +135,12 @@ function curatedCauseMessages(cause: unknown): {
       if (typeof cause !== "object") break;
       const tag = (cause as Record<string, unknown>)._tag;
       switch (tag) {
+        case "CodexContextRestoreError": {
+          const reason = (cause as Record<string, unknown>).reason;
+          if (reason === "failed" || reason === "capacity")
+            return { known: CODEX_RESTORE_MESSAGES[reason], category: categoryMessage() };
+          break;
+        }
         case "ContextHandoffBudgetError":
           return { known: new ContextHandoffBudgetError().message, category: categoryMessage() };
         case "ContextHandoffBackgroundWorkError":
@@ -121,6 +155,7 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeSettingsLaunchArgError":
         case "ClaudeMcpRegistrationTimeoutError":
         case "ClaudeCodeRootRefusalError":
+        case "ClaudeCodeStartupExitError":
         case "ClaudeConversationNotFoundError":
         case "CursorModelUnavailableError":
         case "PiPromptAcknowledgmentTimeoutError":
@@ -158,11 +193,13 @@ function curatedCauseMessages(cause: unknown): {
           }
           break;
         }
-        case "AcpProcessExitedError": {
+        case "AcpProcessExitedError":
+        case "CodexAppServerProcessExitedError": {
           const exit = `provider process exited${processExitStatus(cause)}`;
           const stage = category === undefined ? `The ${exit}` : `${category.summary}: the ${exit}`;
+          const guidance = providerProcessExitGuidance((cause as Record<string, unknown>).stderr);
           return {
-            known: `${stage}. Check the server logs for the provider's output, then retry the turn.`,
+            known: `${stage}. ${guidance}`,
             category: categoryMessage(),
           };
         }

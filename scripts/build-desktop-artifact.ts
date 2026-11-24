@@ -4046,15 +4046,15 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // an ad-hoc one to an unsigned build.
   const computerUseHelper = options.computerUseHelper
     ? yield* stageComputerUseHelper({
+        ...options,
         repoRoot,
         stageRoot,
-        platform: options.platform,
         appId: resolveDesktopAppId(appVersion),
-        signed: options.signed,
       })
     : signedComputerUseHelper(
         yield* stageDesktopComputerUseHelper({
           repoRoot,
+          arch: options.arch,
           output: path.join(stageRoot, "computer-use-helper"),
           channel: resolveDesktopUpdateChannel(appVersion),
           signed: options.platform === "mac" && options.signed,

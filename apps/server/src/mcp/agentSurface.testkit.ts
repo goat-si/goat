@@ -267,6 +267,8 @@ const inertDependencies = Layer.mergeAll(
       preflightBatch: unusedImport,
       readReceipt: unusedImport,
       readItem: unusedImport,
+      codexBaseline: unusedImport,
+      savedText: unusedImport,
       findMatch: unusedImport,
       prepareTarget: unusedImport,
       binding: unusedImport,

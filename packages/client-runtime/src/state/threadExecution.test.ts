@@ -213,6 +213,53 @@ describe("thread execution presentation", () => {
     ).toMatchObject({ status: "running", lastError: null, lastErrorClass: null });
   });
 
+  it.each([
+    { name: "a provider without native resume", nativeResume: false, delivery: "accepted" },
+    { name: "an undelivered message", nativeResume: false, delivery: "unsent", resumes: true },
+    {
+      name: "an uncertain delivery without native resume",
+      nativeResume: false,
+      delivery: "ambiguous",
+    },
+    {
+      name: "a provider with native resume",
+      nativeResume: true,
+      delivery: "accepted",
+      resumes: true,
+    },
+    {
+      name: "a session from an older server",
+      nativeResume: undefined,
+      delivery: "accepted",
+      resumes: true,
+    },
+  ] as const)(
+    "offers to resume an interrupted run on $name",
+    ({ nativeResume, delivery, ...row }) => {
+      const providerThreadId = ProviderThreadId.make("stopped-thread");
+      const sessionId = ProviderSessionId.make("stopped-session");
+      const stopped = { ...run("stopped", 1, "interrupted"), providerThreadId };
+      const projection = {
+        ...v2Projection,
+        runs: [stopped],
+        attempts: [
+          {
+            id: RunAttemptId.make("stopped-attempt"),
+            runId: stopped.id,
+            attemptOrdinal: 1,
+            reason: "initial",
+            inputDelivery: delivery,
+          },
+        ],
+        providerThreads: [{ id: providerThreadId, providerSessionId: sessionId }],
+        providerSessions: [
+          { id: sessionId, capabilities: { turns: { supportsNativeResume: nativeResume } } },
+        ],
+      } as unknown as typeof v2Projection;
+      expect(deriveResumableRunId(projection, null)).toBe("resumes" in row ? stopped.id : null);
+    },
+  );
+
   // regression: #15029 working timers no longer reset on every background wake
   it("counts a wake run's activity from the start of the work it continues", () => {
     const workStartedAt = DateTime.makeUnsafe("2026-07-28T09:20:00.000Z");

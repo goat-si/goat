@@ -57,5 +57,14 @@
   "8a79ebeceb89b809": "Les vues enregistrées illisibles seront supprimées.",
   "1e6c081708cf5864": "Limite atteinte, supprimez d’abord une vue",
   "00ad8aeed0a6c461": "Annuler",
-  "79c3a969207c8760": "Cette vue dépasse la longueur autorisée pour un champ."
+  "79c3a969207c8760": "Cette vue dépasse la longueur autorisée pour un champ.",
+  "a034d65164bb39de": "Copier",
+  "0165ef55eb6c8a99": "Copier en Markdown",
+  "439737cb6de2a5b3": "Copier l’URL de l’image",
+  "d3d24474c922eef2": "Copier {count} URL d’images",
+  "1472b8664ddbb128": "Rechercher les mises à jour de l’application",
+  "7ebd9f61d1766c38": "Installer la mise à jour de l’application",
+  "a840ff60c35b919d": "Voir les versions bêta",
+  "5df0a7f15501c3d9": "Impossible d’ouvrir les versions bêta",
+  "78a04e0e625c0990": "Échec de la mise à jour"
 }

@@ -133,11 +133,20 @@ it.effect("keeps a steer pending until Claude starts it", () =>
         user_message_uuid: harness.promptUuid(0),
       }),
     );
-    yield* harness.awaitTerminal(1);
-    yield* expectSteers({
-      "message-steer-read": "completed",
-      "message-steer-unread": "completed",
-    });
+    assert.equal(harness.terminalEvents().length, 0);
+    yield* expectSteers({ "message-steer-read": "completed", "message-steer-unread": "pending" });
+    yield* Queue.offer(
+      harness.sdkMessages,
+      claudeSdkFrame({
+        ...makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000002398",
+          result: "Steer reply.",
+        }),
+        user_message_uuid: harness.promptUuid(2),
+      }),
+    );
+    yield* Queue.take(harness.terminalReceipts);
+    yield* expectSteers({ "message-steer-read": "completed", "message-steer-unread": "completed" });
   }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
 
@@ -147,7 +156,9 @@ it.effect("settles a turn whose result echoes only a steer before the offer retu
     let settleDuringOffer: (message: SDKUserMessage) => Effect.Effect<void> = () => Effect.void;
     const harness = yield* makeWakeHarnessWithOptions({
       offer: (message) =>
-        message.priority === "now" ? Effect.suspend(() => settleDuringOffer(message)) : Effect.void,
+        message.priority === "next"
+          ? Effect.suspend(() => settleDuringOffer(message))
+          : Effect.void,
     });
     settleDuringOffer = (message) =>
       harness
@@ -255,7 +266,7 @@ it.effect.each([
         },
       }),
     );
-    // Past task_started the CLI queues a "now" steer until the call returns.
+    // Past task_started the CLI queues a steer until the call returns.
     yield* harness.offerAndWait(
       claudeSdkFrame({
         type: "system",

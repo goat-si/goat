@@ -15,6 +15,7 @@ import {
   sessionUpdateIsReplay,
   syntheticLoadSessionResponseFromInitialize,
   toolCallProgressLength,
+  toolCallVisibleOutputChanged,
   withTrackedPermissionToolCall,
   type AcpToolCallState,
   isSessionLoadReplayIdle,
@@ -334,7 +335,6 @@ describe("AcpRuntimeModel", () => {
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId: "read-1",
-          kind: "read",
           ...(locations === undefined ? {} : { locations }),
         },
       } satisfies EffectAcpSchema.SessionNotification);
@@ -350,14 +350,21 @@ describe("AcpRuntimeModel", () => {
     const cleared = mergeToolCallState(created, toolCall([]));
     expect(cleared.data.locations).toEqual([]);
     expect(mergeToolCallState(created, toolCall(null)).data.locations).toEqual([]);
-    expect(
+    const emits = (previous: AcpToolCallState, next: AcpToolCallState) =>
       decideToolCallUpdateEmission({
-        previous: created,
-        next: cleared,
+        previous,
+        next,
         lastEmittedDetailLength: 0,
         skippedSinceEmit: 0,
-      }).emit,
-    ).toBe(true);
+      }).emit;
+    expect(emits(created, cleared)).toBe(true);
+    expect(toolCallVisibleOutputChanged(created, cleared)).toBe(true);
+    const relocated = mergeToolCallState(cleared, toolCall([{ path: "/workspace/src/app.ts" }]));
+    expect(emits(cleared, relocated)).toBe(true);
+    expect(toolCallVisibleOutputChanged(cleared, relocated)).toBe(true);
+    const repeated = mergeToolCallState(relocated, toolCall([{ path: "/workspace/src/app.ts" }]));
+    expect(emits(relocated, repeated)).toBe(false);
+    expect(toolCallVisibleOutputChanged(relocated, repeated)).toBe(false);
   });
 
   it("forwards an empty ACP v1 plan to clear previous entries", () => {
@@ -1001,54 +1008,6 @@ describe("AcpRuntimeModel", () => {
     ).toMatchObject([{ _tag: "UnknownUpdate", updateType: "timeline_update" }]);
   });
 
-  it("projects ACP v2 compaction lifecycle and prompt usage", () => {
-    const compacting = parseSessionUpdateEvent({
-      sessionId: "session-1",
-      update: {
-        sessionUpdate: "compaction_update",
-        compactionId: "compact-1",
-        status: "in_progress",
-      },
-    } satisfies EffectAcpSchema.SessionNotification);
-    const compacted = parseSessionUpdateEvent({
-      sessionId: "session-1",
-      update: {
-        sessionUpdate: "compaction_update",
-        compactionId: "compact-1",
-        status: "completed",
-        summary: [{ type: "text", text: "Retained the implementation decisions." }],
-      },
-    } satisfies EffectAcpSchema.SessionNotification);
-    const idle = parseSessionUpdateEvent({
-      sessionId: "session-1",
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-        usage: { totalTokens: 420, inputTokens: 300, outputTokens: 100, thoughtTokens: 20 },
-      },
-    } satisfies EffectAcpSchema.SessionNotification);
-
-    expect(compacting.events[0]).toMatchObject({
-      _tag: "ToolCallUpdated",
-      toolCall: {
-        toolCallId: "acp-compaction:compact-1",
-        kind: "think",
-        title: "Compact context",
-        status: "inProgress",
-      },
-    });
-    expect(compacted.events[0]).toMatchObject({
-      _tag: "ToolCallUpdated",
-      toolCall: {
-        toolCallId: "acp-compaction:compact-1",
-        status: "completed",
-        data: { rawOutput: "Retained the implementation decisions." },
-      },
-    });
-    expect(idle.events).toEqual([]);
-  });
-
   it("applies ACP v2 agent-owned terminal snapshots and output chunks", () => {
     const snapshot = applyAcpAgentTerminalUpdate(undefined, {
       sessionUpdate: "terminal_update",
@@ -1096,9 +1055,27 @@ describe("AcpRuntimeModel", () => {
     expect(second.pendingOutputBytes).toBeUndefined();
   });
 
-  it("trims full ACP terminal output by a further 1 MiB at a UTF-8 boundary", () => {
-    const cap = 16 * 1024 * 1024;
-    const step = 1024 * 1024;
+  it("retains only the terminal output tail the projection reads", () => {
+    const projectedChars = 320 * 1024;
+    let state: ReturnType<typeof applyAcpAgentTerminalUpdate> | undefined;
+    let full = "";
+    for (let index = 0; index < 64; index += 1) {
+      const text = `${index % 10}`.repeat(64 * 1024 - 1) + "é";
+      full += text;
+      state = applyAcpAgentTerminalUpdate(state, {
+        sessionUpdate: "terminal_output_chunk",
+        terminalId: "terminal-tail",
+        data: Buffer.from(text).toString("base64"),
+      });
+    }
+    expect(state!.outputBytes).toBeLessThanOrEqual(4 * projectedChars);
+    expect(state!.outputBytes).toBe(Buffer.byteLength(state!.output));
+    expect(state!.output.slice(-projectedChars)).toBe(full.slice(-projectedChars));
+  });
+
+  it("trims full ACP terminal output by a further 256 KiB at a UTF-8 boundary", () => {
+    const cap = 1280 * 1024;
+    const step = 256 * 1024;
     const chunk = (text: string | Uint8Array) => ({
       sessionUpdate: "terminal_output_chunk" as const,
       terminalId: "terminal-cap",
@@ -1117,7 +1094,7 @@ describe("AcpRuntimeModel", () => {
     expect(full.outputBytes).toBe(cap);
     expect(full.output.length).toBe(cap - 1);
 
-    // The cut at one byte past the cap plus 1 MiB falls inside "é", so the whole character goes.
+    // The cut at one byte past the cap plus 256 KiB falls inside "é", so the whole character goes.
     const trimmed = applyAcpAgentTerminalUpdate(full, chunk("c"));
     expect(trimmed.outputBytes).toBe(cap - step - 1);
     expect(trimmed.output.length).toBe(cap - step - 1);
@@ -1331,6 +1308,7 @@ describe("extractMcpToolCallIdentity", () => {
     });
     const merged = mergeToolCallState(created, completed);
 
+    expect(merged.title).toBe(created.title);
     expect(extractMcpToolCallIdentity(merged)).toEqual({
       server: "goat",
       tool: "orchestrator_capabilities",

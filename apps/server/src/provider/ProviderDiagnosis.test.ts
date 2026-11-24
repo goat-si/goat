@@ -94,6 +94,7 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
       }),
     );
     const host = ProviderHost.ProviderHost.of({
+      compatibility: () => Effect.undefined,
       paths: {
         cwd: "/project",
         baseDir: "/goat",
@@ -115,6 +116,7 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
       search: () => Effect.die("No registry search"),
       prepare: () => Effect.die("No install"),
       uninstallManagedBinary: () => Effect.die("No uninstall"),
+      prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
       inspect: (selected) =>
         Effect.succeed(
           executables[selected.commandPath]
@@ -147,7 +149,7 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
       Effect.provideService(ProviderHost.ProviderHost, host),
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(SpawnExecutableResolution, (command) => executables[command]),
+      Effect.provideService(SpawnExecutableResolution, async (command) => executables[command]),
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provideService(HostProcess.HomeDirectory, "/home/user"),
       Effect.provideService(HostProcess.Environment, fixture.env ?? { HOME: "/home/user" }),

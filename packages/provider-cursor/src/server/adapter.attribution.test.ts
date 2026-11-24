@@ -3,7 +3,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -11,6 +11,8 @@ import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
 
 import { makeCursorAgentOptions } from "./agentOptions.ts";
+import * as CursorAgentSdk from "./CursorAgentSdk.ts";
+import * as CursorSdk from "./CursorSdk.ts";
 import { loadCursorSdk } from "./sdk.ts";
 
 // The SDK reads CURSOR_BACKEND_URL once when it loads, before any test body runs.
@@ -28,6 +30,42 @@ const cursorBackendUrl = await vi.hoisted(async () => {
 const { Agent } = loadCursorSdk();
 
 describe("CursorAdapterV2", () => {
+  it.live("opens a model added after the workspace has already run Cursor", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "cursor-new-model-" });
+      const backend = yield* fakeCursorBackend;
+      yield* scopedProcessEnv({
+        HOME: home,
+        USERPROFILE: home,
+        CURSOR_CONFIG_DIR: path.join(home, ".cursor"),
+      });
+      const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
+        Effect.provide(CursorSdk.layer),
+      );
+      const open = (model: string) =>
+        Effect.acquireRelease(
+          runner.open({
+            operation: "create",
+            options: makeCursorAgentOptions({
+              apiKey: "synthetic-cursor-api-key",
+              modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model },
+              runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: home },
+              threadId: ThreadId.make(`cursor-${model}`),
+              mcpSession: undefined,
+              platform: "linux",
+            }),
+            threadId: ThreadId.make(`cursor-${model}`),
+            providerSessionId: ProviderSessionId.make(`cursor-${model}`),
+          }),
+          (session) => session.close.pipe(Effect.ignore),
+        );
+      yield* open("composer-2");
+      backend.models.push("composer-2.5");
+      yield* open("composer-2.5");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
   it.live("honors the user's Cursor CLI attribution preferences", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -140,6 +178,7 @@ const scopedProcessEnv = (values: Record<string, string>) =>
 // Loopback stand-in for Cursor's backend: it asks the local SDK runtime for its request
 // context over RunSSE and decodes the RequestContext the SDK appends back (agent.v1 protos).
 const fakeCursorBackend = Effect.gen(function* () {
+  const models = ["composer-2"];
   const requestContext = yield* Deferred.make<{
     readonly commitAttributionMessage: string | undefined;
     readonly prAttributionMessage: string | undefined;
@@ -162,7 +201,7 @@ const fakeCursorBackend = Effect.gen(function* () {
           return;
         case "/v1/models":
           response.setHeader("content-type", "application/json");
-          response.end(JSON.stringify({ items: [{ id: "composer-2" }] }));
+          response.end(JSON.stringify({ items: models.map((id) => ({ id })) }));
           return;
         case "/agent.v1.AgentService/RunSSE":
           response.writeHead(200, { "content-type": "application/connect+proto" });
@@ -204,7 +243,7 @@ const fakeCursorBackend = Effect.gen(function* () {
         server.close(() => resume(Effect.void));
       }),
   );
-  return { requestContext };
+  return { requestContext, models };
 });
 
 function protoVarint(value: number): Buffer {

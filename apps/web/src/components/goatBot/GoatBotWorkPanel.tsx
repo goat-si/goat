@@ -27,7 +27,7 @@ import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
 import { GoatBotHomeWork } from "./GoatBotHomeWork";
 import { GoatBotLibrary } from "./GoatBotLibrary";
-import { GoatBotMemory } from "./GoatBotMemory";
+import { GoatBotMemory, type NoteWordings } from "./GoatBotMemory";
 import { GoatBotNewRoutineButton, GoatBotRoutines } from "./GoatBotRoutines";
 import { GoatBotSectionCard } from "./GoatBotSectionCard";
 import { GoatBotStatusCard } from "./GoatBotStatusCard";
@@ -55,6 +55,7 @@ export function GoatBotWorkPanel({
   threadId,
   onDraft,
   notesRefreshKey,
+  noteWordings,
   onShowChat,
   onClose,
   peekRows,
@@ -73,8 +74,9 @@ export function GoatBotWorkPanel({
   /** Set only on the pinned panel: its Close button, which the chat points back at the name chip. */
   onClose?: (() => void) | undefined;
   /** Puts a message in this chat's composer; absent while the chat cannot send. */
-  onDraft?: ((text: string) => void) | undefined;
+  onDraft?: ((text: string) => boolean) | undefined;
   notesRefreshKey?: string | undefined;
+  noteWordings?: NoteWordings | undefined;
   /** A task's conversation, for reading it here without leaving the bot's chat. */
   peekRows?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
   /** The chat's displayed-thread source that peekRows come from. */
@@ -429,6 +431,7 @@ export function GoatBotWorkPanel({
               <div className="px-3 py-3">
                 <GoatBotMemory
                   environmentId={environmentId}
+                  wordings={noteWordings}
                   onDraft={onDraft}
                   refreshKey={notesRefreshKey}
                 />

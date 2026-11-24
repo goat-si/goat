@@ -1,4 +1,9 @@
 import {
+  brokenVersionDetail,
+  type ProviderCompatibilityLookup,
+} from "@goat/provider-core/server/ProviderHost";
+import {
+  ProviderDriverKind,
   type CustomModelSetting,
   type ServerProvider,
   type ServerProviderModel,
@@ -75,7 +80,6 @@ const PI_TEXT_GENERATION_DISCOVERY_TIMEOUT_MS = 5_000;
  * get_entries arrived in 0.80.3 and agent_settled landed in source at 0.80.4.
  * Version 0.80.5 was the first published package containing both hooks.
  */
-export const MINIMUM_PI_VERSION = "0.80.5";
 /** `pi auth check --json --no-refresh` arrived in 0.84.1. */
 const PI_AUTH_CHECK_VERSION = "0.84.1";
 
@@ -470,6 +474,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
   profile: PiRuntimeProfile = PI_PROFILE,
+  compatibility: ProviderCompatibilityLookup = () => Effect.undefined,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = piModelsFromSettings(piSettings.customModels, [], profile);
@@ -584,14 +589,20 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: `GOAT could not determine the ${profile.displayName} version. ${profile.displayName} ${profile.driver === "omo" ? "5.1.40" : MINIMUM_PI_VERSION} or newer is required.`,
+        message: `GOAT could not determine the ${profile.displayName} version. Update it, then refresh its status.`,
       },
     });
   }
 
-  if (
-    compareSemverVersions(version, profile.driver === "omo" ? "5.1.40" : MINIMUM_PI_VERSION) < 0
-  ) {
+  const broken =
+    profile.driver === "omo" && compareSemverVersions(version, "5.1.40") < 0
+      ? `${profile.displayName} ${version} is unsupported. Update to ${profile.displayName} 5.1.40 or newer.`
+      : brokenVersionDetail({
+          name: profile.displayName,
+          version,
+          advisory: yield* compatibility(ProviderDriverKind.make(profile.driver), version),
+        });
+  if (broken !== undefined) {
     return buildServerProvider({
       presentation: { ...PI_PRESENTATION, displayName: profile.displayName },
       enabled: piSettings.enabled,
@@ -603,7 +614,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         version,
         status: "error",
         auth: { status: "unknown" },
-        message: `${profile.displayName} ${version} is unsupported. Update to ${profile.displayName} ${profile.driver === "omo" ? "5.1.40" : MINIMUM_PI_VERSION} or newer.`,
+        message: broken,
       },
     });
   }

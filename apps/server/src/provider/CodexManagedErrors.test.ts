@@ -1,5 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import { classifyCodexManagedError } from "./CodexManagedErrors.ts";
+it("keeps encrypted history rejection actionable without revoking credentials", () => {
+  const failure = classifyCodexManagedError({ error: { code: "invalid_encrypted_content" } });
+  assert.equal(failure?.code, "invalid_encrypted_content");
+  assert.isFalse(failure?.revoke);
+  assert.include(failure?.message, "fresh session");
+});
 it("maps streamed failures to safe actionable messages and reconnect decisions", () => {
   assert.deepEqual(
     classifyCodexManagedError({

@@ -113,7 +113,7 @@ it.layer(
               ChildProcessSpawner.ChildProcessSpawner,
               stdoutSpawner(() => {
                 probes++;
-                return JSON.stringify(version);
+                return JSON.stringify({ "@example/package-tool": { latest: version } });
               }),
             ),
             Effect.tap((capabilities) =>

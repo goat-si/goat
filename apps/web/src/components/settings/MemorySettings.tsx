@@ -1,5 +1,6 @@
 import { MemoryForgetControl } from "./MemoryForgetControl";
 import { MemoryMoveControl } from "./MemoryMoveControl";
+import { MemoryRecordsError, MemorySearchControls } from "./MemorySearchControls";
 import {
   MemoryOriginPicker,
   useWebMemoryBatch,
@@ -65,6 +66,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { MemoryQuarantineFilter } from "./MemoryQuarantineFilter";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
@@ -81,8 +83,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import { Input } from "../ui/input";
-import { Switch } from "../ui/switch";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
 import { formatTimestamp } from "../../timestampFormat";
@@ -567,6 +567,7 @@ function ScopedMemoryRecords({
   const writePermission = useAtomValue(memoryEnvironment.upsert.permissionAtom(environmentId));
   const canWrite = writePermission && memoryEnabled;
   const [quarantine, setQuarantine] = useState(false);
+  const searching = query !== "";
   const navigate = useNavigate();
   if (!canWrite && adding) setAdding(false);
   const input = memoryBrowseInput({
@@ -577,7 +578,7 @@ function ScopedMemoryRecords({
     ...(capabilities?.scopeMoves ? { includeScopeVersion: true } : {}),
     ...(cursor ? { cursor } : {}),
   });
-  const atom = query
+  const atom = searching
     ? memoryEnvironment.search({ environmentId, input: memorySearchInput(input, query) })
     : memoryEnvironment.list({
         environmentId,
@@ -664,42 +665,19 @@ function ScopedMemoryRecords({
             />
           </SettingsRow>
         ) : null}
-        <SettingsRow
-          title="Search memories"
-          control={
-            <form
-              className="flex flex-wrap gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setCursor(undefined);
-                setQuery(queryInput.trim());
-              }}
-            >
-              <Input
-                aria-label="Search memories"
-                placeholder="Search memories"
-                value={queryInput}
-                onChange={(event) => setQueryInput(event.currentTarget.value)}
-              />
-              <Button type="submit" size="sm" variant="outline">
-                Search
-              </Button>
-              {queryInput || query ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setQueryInput("");
-                    setQuery("");
-                    setCursor(undefined);
-                  }}
-                >
-                  Clear search
-                </Button>
-              ) : null}
-            </form>
-          }
+        <MemorySearchControls
+          value={queryInput}
+          canClear={Boolean(queryInput || query)}
+          onChange={setQueryInput}
+          onSearch={() => {
+            setCursor(undefined);
+            setQuery(queryInput.trim());
+          }}
+          onClear={() => {
+            setQueryInput("");
+            setQuery("");
+            setCursor(undefined);
+          }}
         />
         {capabilities?.originFilter ? (
           <MemoryOriginPicker
@@ -713,29 +691,19 @@ function ScopedMemoryRecords({
           />
         ) : null}
         {batch.controls}
-        <SettingsRow
-          title="Quarantined memories"
-          description="Review memories that need attention."
-          control={
-            <Switch
-              aria-label="Include quarantined memories"
-              checked={quarantine}
-              onCheckedChange={(checked) => {
-                setQuarantine(checked);
-                setCursor(undefined);
-              }}
-            />
-          }
+        <MemoryQuarantineFilter
+          checked={quarantine}
+          searching={searching}
+          onCheckedChange={(checked) => {
+            setQuarantine(checked);
+            setCursor(undefined);
+          }}
         />
         {page.error ? (
-          <SettingsRow
-            title="Could not load memories"
-            description={<span role="alert">{page.error}</span>}
-            control={
-              <Button size="sm" variant="outline" onClick={page.refresh}>
-                Retry
-              </Button>
-            }
+          <MemoryRecordsError
+            searching={Boolean(query)}
+            error={page.error}
+            onRetry={page.refresh}
           />
         ) : null}
         {items.length > 0 && coverage && coverage.status !== "available" ? (

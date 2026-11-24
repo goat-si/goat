@@ -283,6 +283,8 @@ const settingsWatcher = (
     }),
   );
 
+export const providerHostLayer = Layer.fresh(ProviderHostLive.layer);
+
 export const layerSettingsWatcher = settingsWatcher();
 
 export const layer: Layer.Layer<
@@ -344,7 +346,7 @@ export const layer: Layer.Layer<
         ),
       ),
       Layer.provide(AcpRegistrySupport.layerFromHost),
-      Layer.provide(ProviderHostLive.layer),
+      Layer.provide(providerHostLayer),
     );
 
     const afterInitial = changes.pipe(

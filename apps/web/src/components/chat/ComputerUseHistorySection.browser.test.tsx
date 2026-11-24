@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import chinese from "../../i18n/translations/zh.json";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -65,6 +67,31 @@ it("loads history on demand, pages older results, and clears it when the thread 
   );
   await expect.element(screen.getByRole("button", { name: "Show input history" })).toBeVisible();
   expect(screen.getByText(/target_busy/).elements()).toHaveLength(0);
+});
+
+it("shows the input history action and empty state in the selected language", async () => {
+  mocks.canRead = true;
+  mocks.request
+    .mockReset()
+    .mockResolvedValue({ _tag: "Success", value: { entries: [], nextCursor: null } });
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh: chinese }}>
+      <ComputerUseHistorySection
+        environmentId={EnvironmentId.make("environment:a")}
+        threadId={ThreadId.make("thread:a")}
+      />
+    </GTProvider>,
+  );
+  try {
+    await userEvent.click(screen.getByRole("button", { name: "显示输入历史" }));
+    await expect.element(screen.getByText("暂无输入记录。")).toBeVisible();
+  } finally {
+    await screen.rerender(
+      <GTProvider locale="en" translations={{ en: {} }}>
+        {null}
+      </GTProvider>,
+    );
+  }
 });
 
 it("offers thread history without work entries only with read permission", async () => {

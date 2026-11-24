@@ -30,8 +30,10 @@ import {
   isAntigravitySignInRequiredError,
   makeAntigravityStderrHandler,
   makeAntigravityStdoutTransform,
+  antigravityLoginResponse,
   parseAntigravityAuthorizationUrl,
   prepareAntigravityProfile,
+  prepareAntigravityRuntimeHome,
   resolveAntigravityInstanceDirectories,
 } from "./antigravityAuthSupport.ts";
 
@@ -71,6 +73,7 @@ describe("Antigravity process environment", () => {
       GEMINI_HOME: "/shared-gemini-home",
       gemini_home: "/alias-shared-home",
       AGY_ACP_FORCE_FILE_STORAGE: "0",
+      AGY_CLI_DISABLE_AUTO_UPDATE: "0",
       ANTIGRAVITY_HARNESS_PATH: "/wrong-version/harness",
       BROWSER: "open-real-browser",
       browser: "another-real-browser",
@@ -91,15 +94,17 @@ describe("Antigravity process environment", () => {
     expect(baseEnv).toEqual(original);
     expect(spawn).toEqual({
       command: "/release/acp",
-      args: ["--uid="],
+      args: ["--uid=", "--alsologtostderr"],
       cwd: "/project",
       extendEnv: false,
       env: {
         HOME: "/home/developer",
         PATH: "/usr/bin",
         CUSTOM_SETTING: "keep-this",
+        SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 0",
         GEMINI_HOME: profile.geminiHome,
         AGY_ACP_FORCE_FILE_STORAGE: "1",
+        AGY_CLI_DISABLE_AUTO_UPDATE: "1",
         ANTIGRAVITY_HARNESS_PATH: "/release/harness",
         BROWSER: profile.browserCommand,
         PYTHONUNBUFFERED: "1",
@@ -167,6 +172,11 @@ describe("Antigravity process environment", () => {
     });
     expect(business.GEMINI_API_KEY).toBeUndefined();
     expect(business.GOOGLE_API_KEY).toBeUndefined();
+    for (const env of [geminiKey, vertexKey, business]) expect(env.SSH_CONNECTION).toBeUndefined();
+    expect(
+      spawnFor({ authMethod: "oauth-personal", apiKey: "", gcpProject: "", gcpLocation: "" })
+        .SSH_CONNECTION,
+    ).toBe("127.0.0.1 0 127.0.0.1 0");
   });
 
   it("isolates TEMP and TMP to the profile directory on Windows", () => {
@@ -272,9 +282,58 @@ describe("Antigravity authorization URL", () => {
   );
 });
 
+describe("Antigravity code sign-in", () => {
+  const loginUrl =
+    "https://accounts.google.com/o/oauth2/auth?access_type=offline&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=login-state";
+
+  it.effect("accepts the agy CLI's link and only a code or page URL for that sign-in", () =>
+    Effect.gen(function* () {
+      const pending = yield* parseAntigravityAuthorizationUrl(loginUrl, "code");
+      expect(pending.redirectUri).toBe("https://antigravity.google/oauth-callback");
+      for (const other of [
+        loginUrl.replace("antigravity.google", "antigravity.google.example.invalid"),
+        loginUrl.replace("/o/oauth2/auth", "/o/oauth2/v2/auth"),
+      ]) {
+        expect(
+          Result.isFailure(
+            yield* parseAntigravityAuthorizationUrl(other, "code").pipe(Effect.result),
+          ),
+        ).toBe(true);
+      }
+      expect(
+        Result.isFailure(yield* parseAntigravityAuthorizationUrl(loginUrl).pipe(Effect.result)),
+      ).toBe(true);
+
+      const page = "https://antigravity.google/oauth-callback?state=login-state&code=4%2F0Ab-c";
+      expect(antigravityLoginResponse(pending, " 4/0Ab-code_1.x~ ")).toBe("4/0Ab-code_1.x~");
+      expect(antigravityLoginResponse(pending, page)).toBe(page);
+      for (const invalid of [
+        "",
+        "4/0Ab code",
+        "4/0Ab\nsecond line",
+        "4/0Ab\n",
+        page.replace("login-state", "other-state"),
+        page.replace("antigravity.google", "evil.example"),
+        page.replace("&code=4%2F0Ab-c", ""),
+        `${page}&code=again`,
+      ]) {
+        expect(antigravityLoginResponse(pending, invalid)).toBeUndefined();
+      }
+    }),
+  );
+});
+
 describe("Antigravity sign-in errors", () => {
   it("recognizes native auth-required errors and the blocked-login transport error", () => {
     expect(isAntigravitySignInRequiredError(AcpErrors.AcpRequestError.authRequired())).toBe(true);
+    // The 1.5 CLI's `authenticate` answer when it has no sign-in and no display to open a browser on.
+    expect(
+      isAntigravitySignInRequiredError(
+        AcpErrors.AcpRequestError.internalError(
+          "No browser is available here (no graphical display is available to open a browser). Run `agy acp --login` in a terminal on this machine, then retry; or use a Gemini API key.",
+        ),
+      ),
+    ).toBe(true);
     expect(
       isAntigravitySignInRequiredError(
         new AcpErrors.AcpTransportError({
@@ -393,6 +452,37 @@ describe("Antigravity stdout compatibility", () => {
 });
 
 describe("Antigravity stderr compatibility", () => {
+  it.effect.each([
+    "I1022 11:04:37.910207 1865358 local_connection.py:551] harness stderr: Agent run failed: failed to handle call hook response: no pending hook for ID hook_request_2",
+    "E1022 11:04:37.910207 1865358 server.py:5275] Failed to rebuild agent for session native-session; connection unrecoverable",
+    "E1022 11:04:37.910207 1865358 server.py:5266] Agent connection lost for session native-session after rebuild retry",
+  ])("retires the transport on a native harness failure: %s", (line) =>
+    Effect.gen(function* () {
+      const handleStderr = makeAntigravityStderrHandler();
+      yield* handleStderr(line.slice(0, 70));
+      const error = yield* handleStderr(`${line.slice(70)}\r\n`).pipe(Effect.flip);
+      expect(error._tag).toBe("AcpTransportError");
+      expect(error.message).not.toContain("native-session");
+      expect(error.message).not.toContain("hook_request_2");
+    }),
+  );
+
+  it.effect(
+    "does not classify task prose or unrelated native warnings as a transport failure",
+    () =>
+      Effect.gen(function* () {
+        const handleStderr = makeAntigravityStderrHandler();
+        yield* handleStderr("Agent run failed: example from a task\n");
+        yield* handleStderr("Agent connection was lost and could not be re-established\n");
+        yield* handleStderr(
+          "I1022 11:04:37.910207 1865358 server.py:5142] Agent connection closed for session native-session; rebuilding agent and retrying the turn once.\n",
+        );
+        yield* handleStderr(
+          "W1022 11:04:37.910207 1865358 telemetry.py:431] No business auth manager configured\n",
+        );
+      }),
+  );
+
   it.effect("forwards fragmented native sign-in URLs from runtime 1.1.1", () =>
     Effect.gen(function* () {
       const urls: string[] = [];
@@ -653,6 +743,58 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
         yield* prepareAntigravityProfile({ profileDirectory, userHome });
         expect(yield* isLink(cliLink)).toBe(false);
       }),
+  );
+
+  it.effect("copies the user's global rule files on Windows and keeps the profile's own", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryDirectory = yield* fs.makeTempDirectoryScoped();
+      const userHome = path.join(temporaryDirectory, "home");
+      const profileDirectory = path.join(temporaryDirectory, "profile");
+      const userGemini = path.join(userHome, ".gemini");
+      const prepare = prepareAntigravityProfile({
+        profileDirectory,
+        userHome,
+        platform: "win32",
+        skipUserSkills: true,
+      });
+      const profileAgents = path.join(profileDirectory, "AGENTS.md");
+      const profileGemini = path.join(profileDirectory, "GEMINI.md");
+      yield* fs.makeDirectory(userGemini, { recursive: true });
+      yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "global agents rule");
+      yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
+      yield* fs.makeDirectory(path.join(userGemini, "config"));
+      yield* fs.writeFileString(path.join(userGemini, "config", "skills.json"), '{"entries":[]}');
+
+      yield* prepare;
+      expect(yield* fs.readFileString(profileAgents)).toBe("global agents rule");
+      expect(yield* fs.readFileString(profileGemini)).toBe("global gemini rule");
+      expect(yield* fs.readFileString(path.join(profileDirectory, "config", "skills.json"))).toBe(
+        '{"entries":[]}',
+      );
+
+      yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "edited agents rule");
+      yield* fs.remove(path.join(userGemini, "GEMINI.md"));
+      yield* prepare;
+      expect(yield* fs.readFileString(profileAgents)).toBe("edited agents rule");
+      expect(yield* fs.exists(profileGemini)).toBe(false);
+
+      yield* fs.writeFileString(profileGemini, "profile's own rule");
+      yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
+      yield* prepare;
+      expect(yield* fs.readFileString(profileGemini)).toBe("profile's own rule");
+      const profile = yield* prepare;
+      const runtimeDirectory = path.join(temporaryDirectory, "runtime");
+      yield* fs.makeDirectory(runtimeDirectory);
+      yield* prepareAntigravityRuntimeHome({ directory: runtimeDirectory, profile, userHome });
+      expect(yield* fs.readFileString(path.join(runtimeDirectory, "GEMINI.md"))).toBe(
+        "profile's own rule",
+      );
+      expect(yield* fs.readFileString(path.join(runtimeDirectory, "config", "skills.json"))).toBe(
+        '{"entries":[]}',
+      );
+    }),
   );
 
   it.effect("rewrites the GCP block on every launch and never stores the API key", () =>

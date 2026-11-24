@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   type AntigravitySettings,
   type ProviderSetupError,
+  type RuntimeMode,
   type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
@@ -23,8 +24,12 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+import { parseSessionModeState } from "@goat/provider-acp/server/runtimeModel";
 import { acpProviderOptionDescriptors } from "@goat/provider-acp/server/sessionConfig";
-import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
+import {
+  DeferringFailedCheck,
+  makeManagedServerProvider,
+} from "@goat/provider-core/server/managedProvider";
 import {
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilities,
@@ -170,7 +175,16 @@ interface AntigravityProviderOptions {
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
   readonly currentProfile?: Effect.Effect<string>;
+  /** Modes the last session advertised, saved because initialize alone does not report them. */
+  readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
+  readonly rememberRuntimeModes?: (modes: ReadonlyArray<RuntimeMode>) => Effect.Effect<void>;
 }
+
+const RUNTIME_MODES_WITHOUT_AUTO: ReadonlyArray<RuntimeMode> = [
+  "approval-required",
+  "auto-accept-edits",
+  "full-access",
+];
 
 export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(function* (
   settings: AntigravitySettings,
@@ -190,8 +204,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       presentation: {
         displayName: "Antigravity",
         showInteractionModeToggle: false,
-        // No automatic review, so Auto falls back to Supervised instead of approving everything.
-        supportedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"],
+        supportedRuntimeModes: options.rememberedRuntimeModes ?? RUNTIME_MODES_WITHOUT_AUTO,
       },
       enabled: settings.enabled,
       checkedAt,
@@ -215,6 +228,17 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     draft: initialDraft,
     authRevision: 0,
   });
+  const updateRememberingModes = Effect.fn("AntigravityProvider.updateRememberingModes")(function* (
+    update: (state: AntigravityProviderState) => AntigravityProviderState,
+  ) {
+    const [previous, next] = yield* SubscriptionRef.modify(metadata, (state) => {
+      const updated = update(state);
+      return [[state.draft.supportedRuntimeModes, updated.draft.supportedRuntimeModes], updated];
+    });
+    if (next && options.rememberRuntimeModes && previous?.join() !== next.join()) {
+      yield* options.rememberRuntimeModes(next);
+    }
+  });
   // Preserve disk-discovered skills when callbacks replace workspace commands; the registry will not rescan them.
   const discoveredSkills = new Map<string, ServerProvider["skills"]>();
   const thinkingLevels = new Map<string, ThinkingConfig | null>();
@@ -236,7 +260,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     yield* resetUsage;
     discoveredSkills.clear();
     thinkingLevels.clear();
-    yield* SubscriptionRef.update(metadata, (state) =>
+    yield* updateRememberingModes((state) =>
       state.authProfile === undefined || state.authProfile === profile
         ? state
         : ({
@@ -250,6 +274,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
               slashCommands: [],
               skills: [],
               workspaceSnapshots: [],
+              supportedRuntimeModes: RUNTIME_MODES_WITHOUT_AUTO,
               supportsTextGeneration: false,
               usageLimits: undefined,
             },
@@ -331,7 +356,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       initialized !== undefined ? yield* options.supportsTextGeneration : false;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* reconcileProfile();
-    const next = yield* SubscriptionRef.updateAndGet(metadata, (state) => {
+    const applyCheck = (state: AntigravityProviderState) => {
       if (state.authRevision !== before.authRevision) return state;
       const { message: _previousMessage, ...draft } = state.draft;
       const authenticated = draft.auth.status === "authenticated";
@@ -358,6 +383,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
                 slashCommands: [],
                 skills: [],
                 workspaceSnapshots: [],
+                supportedRuntimeModes: RUNTIME_MODES_WITHOUT_AUTO,
                 supportsTextGeneration: false,
               }
             : {}),
@@ -370,6 +396,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           ...(message ? { message } : {}),
         },
       } satisfies AntigravityProviderState;
+    };
+    const deferFailure = errorMessage !== undefined && (yield* DeferringFailedCheck);
+    const next = yield* SubscriptionRef.modifySome(metadata, (state) => {
+      const checked = applyCheck(state);
+      const stored = deferFailure && state.draft.status === "ready" ? state : checked;
+      return [checked, stored === state ? Option.none() : Option.some(stored)];
     });
     if (
       initialized !== undefined &&
@@ -415,7 +447,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const before = yield* SubscriptionRef.get(metadata);
     const supportsTextGeneration = yield* options.supportsTextGeneration;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* SubscriptionRef.update(metadata, (state) => {
+    yield* updateRememberingModes((state) => {
       if (
         state.authRevision !== before.authRevision &&
         state.draft.auth.status === "unauthenticated"
@@ -440,6 +472,11 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           },
           checkedAt: updatedAt,
           models: buildAntigravityModelsFromSession(started.sessionSetupResult, thinkingLevels),
+          supportedRuntimeModes: parseSessionModeState(
+            started.sessionSetupResult,
+          )?.availableModes.some((mode) => mode.id === "auto")
+            ? ["approval-required", "auto-accept-edits", "auto", "full-access"]
+            : RUNTIME_MODES_WITHOUT_AUTO,
           supportsTextGeneration,
           ...(cwd
             ? {
@@ -512,7 +549,15 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
                   },
                 ].slice(-MAX_WORKSPACE_SNAPSHOTS),
               }
-            : {}),
+            : state.draft.workspaceSnapshots
+              ? // Thread sessions report commands without a cwd; folder entries seeded on start follow.
+                {
+                  workspaceSnapshots: state.draft.workspaceSnapshots.map((entry) => ({
+                    ...entry,
+                    slashCommands,
+                  })),
+                }
+              : {}),
         },
       };
     });
@@ -520,7 +565,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   /** Without a profile it applies to every profile and forgets which one was confirmed. */
   const markSignedOut = (updatedAt: string, profile?: string) =>
-    SubscriptionRef.update(metadata, (state) =>
+    updateRememberingModes((state) =>
       profile !== undefined && state.authProfile !== undefined && state.authProfile !== profile
         ? state
         : ({
@@ -539,6 +584,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
               slashCommands: [],
               skills: [],
               workspaceSnapshots: [],
+              supportedRuntimeModes: RUNTIME_MODES_WITHOUT_AUTO,
               supportsTextGeneration: false,
               usageLimits: undefined,
             },

@@ -1,5 +1,5 @@
 import { mobileComposerDraftIsLocal } from "./composerLocalCommand";
-import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
+import { COMPOSER_ATTACHMENT_ENTERING } from "./composerVisualConstants";
 export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
 import { composerAttachmentUploadKey } from "../../lib/composerAttachmentUploadQueue";
 import { setActiveComposerDraftText } from "../../state/queued-run-edit";
@@ -115,9 +115,7 @@ import {
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
 import type { ThreadComposerProps } from "./thread-composer-props";
-
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
-
 export function ComposerSurface(props: {
   readonly children: ReactNode;
   readonly style: ViewStyle;
@@ -301,11 +299,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       props.serverConfig?.providers ?? [],
       props.serverConfig?.usageLimitSources ?? [],
       Date.now(),
+      currentModelSelection.model,
     );
     onShowUsageLimits(report);
-    if (!report) {
+    if (!report)
       Dialog.alert("Usage limits unavailable", "This provider does not currently report limits.");
-    }
     return report !== null;
   };
   const composerFork = useComposerFork({
@@ -657,7 +655,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   ) : null;
 
   const modelControl = (
-    <View className="min-w-0 shrink">
+    <View className={compactEditor.isWide ? "min-w-0 shrink" : "shrink-0"}>
       <ComposerModelControl
         size={hasSidebarTabBar ? "large" : "regular"}
         modelOption={currentModelOption}
@@ -750,10 +748,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 onLayout={compactEditor.onEditorLayout}
                 style={[
                   {
-                    minWidth:
-                      compactEditor.isWide || stripAttachments.length > 0
-                        ? 0
-                        : INLINE_EDITOR_MIN_WIDTH,
+                    minWidth: 0,
                   },
                   compactEditor.containerStyle,
                   compactEditor.isWide ? { flex: 0, width: 0 } : undefined,
@@ -763,7 +758,9 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               <Animated.View
                 style={[
                   compactEditor.editorStyle,
-                  showsCompactDictation ? { display: "none" } : undefined,
+                  Platform.OS === "android" && showsCompactDictation
+                    ? { display: "none" }
+                    : undefined,
                 ]}
               >
                 <ComposerEditor

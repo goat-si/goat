@@ -10,12 +10,64 @@ import {
   type DesktopUpdateTranslate,
   getDesktopUpdateCheckError,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateInstallError,
+  installDesktopUpdate,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
   resolveDesktopUpdateButtonAction,
 } from "./desktopUpdate.logic";
+
+it("shows a refused install as failed when the updater returns to downloaded", () => {
+  const state: DesktopUpdateState = {
+    ...baseState,
+    status: "downloaded",
+    availableVersion: "1.1.0",
+    downloadedVersion: "1.1.0",
+    message: "Install refused",
+    errorContext: "install",
+    canRetry: true,
+  };
+  expect(getDesktopUpdateButtonTooltip(state)).toBe("Install failed for 1.1.0. Click to retry.");
+});
+
+it("reports an install refused after the desktop accepts it", async () => {
+  const downloaded: DesktopUpdateState = {
+    ...baseState,
+    status: "downloaded",
+    downloadedVersion: "1.1.0",
+  };
+  const failed: DesktopUpdateState = {
+    ...downloaded,
+    message: "OSStatus error -60006.",
+    errorContext: "install",
+  };
+  const listeners = new Set<(state: DesktopUpdateState) => void>();
+  const emit = (state: DesktopUpdateState) => listeners.forEach((listener) => listener(state));
+  const install = installDesktopUpdate({
+    onUpdateState: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    installUpdate: async () => {
+      emit(failed);
+      return { accepted: true, completed: false, state: downloaded };
+    },
+  });
+  let settled = false;
+  void install.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  emit(failed);
+  expect(getDesktopUpdateInstallError(await install)).toBe("OSStatus error -60006.");
+  expect(listeners.size).toBe(0);
+});
 
 const baseState: DesktopUpdateState = {
   installPolicy: "restart-when-idle",
@@ -100,6 +152,21 @@ describe("desktop update button state", () => {
     expect(getDesktopUpdateButtonTooltip({ ...state, notAppliedVersion: "1.1.0" })).toBe(
       "Update 1.1.0 did not apply. Click to retry.",
     );
+  });
+
+  it("never calls a build on the other track up to date", () => {
+    // A Stable build whose switch to Nightly did not finish; the updater discards every release.
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "up-to-date",
+      channel: "nightly",
+      currentVersion: "0.1.5",
+      checkedAt: "2026-11-18T00:00:00.000Z",
+    };
+    expect(getDesktopUpdateButtonTooltip(state)).not.toBe("Up to date");
+    expect(
+      getDesktopUpdateButtonTooltip({ ...state, currentVersion: "0.1.6-nightly.20261118.1" }),
+    ).toBe("Up to date");
   });
 
   it("prefers a newly available release over a stale downloaded version", () => {

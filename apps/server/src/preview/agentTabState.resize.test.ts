@@ -7,13 +7,13 @@ it("rejects an undrawn fixed resize and its retry", async () => {
     const tab = {
       desktop: {},
       page: { viewportSize: () => null },
-      setting: { mode: "fill" } as import("@goat/contracts").PreviewViewportSetting,
+      setting: { _tag: "fill" } as import("@goat/contracts").PreviewViewportSetting,
       desktopViewport: { width: 500, height: 500 },
       desktopViewportChanges: 0,
       desktopResize: Promise.withResolvers<void>(),
       desktopResizeUndrawn: false,
     };
-    const size = { mode: "freeform", width: 900, height: 700 } as const;
+    const size = { _tag: "freeform", width: 900, height: 700 } as const;
     const attempt = () =>
       measuredResize(
         tab,

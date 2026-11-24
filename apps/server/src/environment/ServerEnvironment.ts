@@ -271,6 +271,7 @@ export const make = Effect.gen(function* () {
         retainedLocalSpace: true,
         provenanceProjection: true,
         derivedCap: 1000,
+        turnMemory: true,
         scopeMoves: true,
         scopeMoveReceipts: true,
         originFilter: true,
@@ -282,7 +283,12 @@ export const make = Effect.gen(function* () {
         hubDiagnostics: true,
         siteNotes: true,
         ...(importRuntime._tag === "Some"
-          ? { importProvider: true, importTurnStartFit: true, asideImport: true }
+          ? {
+              importProvider: true,
+              importTurnStartFit: true,
+              asideImport: true,
+              codexImportUpdates: true,
+            }
           : {}),
       },
       repositoryIdentity: true,

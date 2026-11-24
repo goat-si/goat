@@ -1917,12 +1917,12 @@ it.layer(
           yield* PubSub.publish(changes, refreshedProvider);
           yield* Fiber.join(persisted);
           const cachedProvider = yield* readProviderStatusCache(filePath);
-
           assert.deepStrictEqual(
             cachedProvider,
             withBundledCompatibility({
               ...refreshedProvider,
               models: [...initialProvider.models],
+              modelsRetained: true,
             }),
           );
         }).pipe(Effect.provide(runtimeServices));

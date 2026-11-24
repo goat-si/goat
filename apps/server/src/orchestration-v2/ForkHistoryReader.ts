@@ -11,7 +11,7 @@ import type { IdAllocatorV2 } from "@goat/provider-core/server/IdAllocator";
 import * as Effect from "effect/Effect";
 import type { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { forkHistoryItemBytes, type ForkHistoryPage } from "./ForkHistoryPage.ts";
-import { unsentManualContinuationSource } from "./manualContinuation.ts";
+import { unsentManualContinuationSource } from "@goat/shared/orchestrationV2ManualContinuation";
 
 const HISTORY_BYTES = 256 * 1024;
 const HISTORY_ITEMS = 256;

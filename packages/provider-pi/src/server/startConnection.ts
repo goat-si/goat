@@ -1,5 +1,7 @@
 import * as Exit from "effect/Exit";
+import { retainPiDiscovery } from "./retainPiDiscovery.ts";
 import type { ProviderDriverKind } from "@goat/contracts";
+import type * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
 import { AgentScope, type AgentScopeShape } from "@goat/shared/AgentScope";
@@ -17,6 +19,7 @@ export const startPiConnection = Effect.fnUntraced(function* ({
   profile,
   input,
   cwd,
+  host,
   agentScope,
   spawner,
   driver,
@@ -27,6 +30,7 @@ export const startPiConnection = Effect.fnUntraced(function* ({
   profile: PiRuntimeProfile;
   input: ProviderAdapter.ProviderAdapterV2OpenSessionInput;
   cwd: string;
+  host: ProviderHost.ProviderHost["Service"];
   agentScope: AgentScopeShape;
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   driver: ProviderDriverKind;
@@ -62,6 +66,7 @@ export const startPiConnection = Effect.fnUntraced(function* ({
         }),
     ),
   );
+  yield* retainPiDiscovery(host, connection.exited, scope);
   // Detached children can keep stdout open after Pi exits.
   if (scopeUnit !== undefined) {
     yield* connection.exited.pipe(

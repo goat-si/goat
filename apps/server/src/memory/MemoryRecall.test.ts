@@ -41,6 +41,8 @@ import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Projection from "../orchestration-v2/ProjectionStore.ts";
 import * as Repository from "../project/RepositoryIdentityResolver.ts";
 import * as Settings from "../serverSettings.ts";
+import receiptsMigration from "../persistence/Migrations/185_TurnMemoryReceipts.ts";
+import { recordTurnMemory } from "./TurnMemoryReceipts.ts";
 import * as Recall from "./MemoryRecall.ts";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
@@ -233,6 +235,146 @@ it.effect(
         ["user"],
       );
     }).pipe(Effect.provide(live)),
+);
+
+it.effect(
+  "records only this run's confirmed returns and redacts, bounds and deletes its receipts",
+  () =>
+    Effect.gen(function* () {
+      yield* setupThreads;
+      yield* save(14, { kind: "user" }, "release decision user");
+      const recall = yield* Recall.MemoryRecall;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TABLE orchestration_v2_events(thread_id TEXT, event_type TEXT)`;
+      yield* sql`CREATE TABLE orchestration_v2_projection_turn_items(thread_id TEXT, run_id TEXT, type TEXT, payload_json TEXT, ordinal INTEGER DEFAULT 1)`;
+      yield* receiptsMigration;
+      const runId = M.RunId.make("memory-run");
+      const result = yield* recall.recall(
+        { query: "release decision" },
+        Effect.void,
+        caller,
+        runId,
+      );
+      const parsed = { memorySpaceId: Fixture.space, threadId: caller.threadId, runId };
+      const service = yield* Service.MemoryService;
+      const inspect = (input: M.TurnMemoryInput) => service.inspectTurn(input, Effect.void);
+      const query = "release decision";
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items(thread_id,run_id,type,payload_json) VALUES (
+        ${caller.threadId}, ${runId}, 'dynamic_tool', ${JSON.stringify({ toolName: "goat.goat_call", input: { path: "memory.recall", args: { query } } })})`;
+      yield* recordTurnMemory(
+        sql,
+        caller.threadId,
+        runId,
+        Fixture.space,
+        "automatic",
+        result.items.slice(0, 1),
+      );
+      const trace = yield* inspect(parsed);
+      assert.deepStrictEqual(
+        trace.events.map((e) => e.kind),
+        ["recall", "automatic"],
+      );
+      assert.strictEqual(trace.events[0]?.query, query);
+      assert.deepStrictEqual(
+        trace.events[0]?.items.map((i) => i.revisionId),
+        result.items.map((i) => i.revisionId),
+      );
+      assert.isTrue(trace.events[0]?.items.every((i) => i.excerpt?.includes("release decision")));
+      const stored = yield* sql`SELECT * FROM turn_memory_receipts`;
+      assert.notInclude(JSON.stringify(stored), query);
+      assert.isEmpty((yield* inspect({ ...parsed, runId: M.RunId.make("previous") })).events);
+      const initial = result.items[0]!;
+      yield* service.upsert(
+        {
+          ...Fixture.upsert(720),
+          memoryId: initial.memoryId,
+          expectedHeads: [initial.revisionId],
+          payload: { text: "replacement", evidence: [], derivedFromMemoryRevisions: [] },
+        },
+        Effect.void,
+      );
+      const amended = yield* inspect(parsed);
+      assert.strictEqual(amended.events[0]?.items[0]?.revisionId, initial.revisionId);
+      assert.strictEqual(amended.events[0]?.items[0]?.excerpt, null);
+      yield* service.forget(
+        {
+          memorySpaceId: Fixture.space,
+          memoryId: initial.memoryId,
+          operationId: M.MemoryOperationId.make(Fixture.id(721)),
+          expectedHeads: [],
+        },
+        Effect.void,
+      );
+      const unavailable = yield* inspect(parsed);
+      assert.strictEqual(unavailable.events[0]?.query, null);
+      assert.isEmpty(unavailable.events[0]?.items);
+      for (let n = 0; n < 35; n++)
+        yield* recordTurnMemory(sql, caller.threadId, runId, Fixture.space, "recall", []);
+      const limited = yield* inspect(parsed);
+      assert.isTrue(limited.truncated);
+      assert.lengthOf(limited.events, 32);
+      yield* sql`INSERT INTO orchestration_v2_events VALUES(${caller.threadId},'thread.deleted')`;
+      yield* recordTurnMemory(sql, caller.threadId, runId, Fixture.space, "recall", []);
+      assert.isEmpty((yield* inspect(parsed)).events);
+    }).pipe(Effect.provide(live)),
+);
+
+it.effect("limits the encoded turn memory response with multibyte excerpts (#3801)", () =>
+  Effect.gen(function* () {
+    yield* setupThreads;
+    yield* save(14, { kind: "user" }, "memory " + "🦊".repeat(128));
+    const recall = yield* Recall.MemoryRecall;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_v2_events(thread_id TEXT, event_type TEXT)`;
+    yield* receiptsMigration;
+    const runId = M.RunId.make("byte-budget-run");
+    const result = yield* recall.recall({ query: "memory" }, Effect.void, caller);
+    const ref = result.items[0];
+    assert.isDefined(ref);
+    if (!ref) return;
+    for (let n = 0; n < 32; n++)
+      yield* recordTurnMemory(
+        sql,
+        caller.threadId,
+        runId,
+        Fixture.space,
+        "automatic",
+        Array(20).fill(ref),
+      );
+    const service = yield* Service.MemoryService;
+    const trace = yield* service.inspectTurn(
+      { memorySpaceId: Fixture.space, threadId: caller.threadId, runId },
+      Effect.void,
+    );
+    assert.isAtMost(Buffer.byteLength(JSON.stringify(trace), "utf8"), 64 * 1024);
+    assert.isTrue(trace.truncated);
+  }).pipe(Effect.provide(live)),
+);
+
+it.effect("does not treat a failed receipt write as a complete empty history (#3801)", () =>
+  Effect.gen(function* () {
+    yield* setupThreads;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_v2_events(thread_id TEXT, event_type TEXT)`;
+    yield* receiptsMigration;
+    yield* sql`CREATE TRIGGER fail_receipt BEFORE INSERT ON turn_memory_receipts BEGIN SELECT RAISE(FAIL, 'injected receipt failure'); END`;
+    const runId = M.RunId.make("failed-receipt");
+    yield* recordTurnMemory(sql, caller.threadId, runId, Fixture.space, "automatic", []);
+    const service = yield* Service.MemoryService;
+    const result = yield* service.inspectTurn(
+      { memorySpaceId: Fixture.space, threadId: caller.threadId, runId },
+      Effect.void,
+    );
+    assert.isTrue(Reflect.get(result, "incomplete"));
+    yield* sql`CREATE TRIGGER fail_receipt_marker BEFORE INSERT ON turn_memory_receipt_failures BEGIN SELECT RAISE(FAIL, 'injected marker failure'); END`;
+    const fallbackRun = M.RunId.make("failed-marker");
+    yield* recordTurnMemory(sql, caller.threadId, fallbackRun, Fixture.space, "automatic", []);
+    const fallback = yield* service.inspectTurn(
+      { memorySpaceId: Fixture.space, threadId: caller.threadId, runId: fallbackRun },
+      Effect.void,
+    );
+    assert.isTrue(Reflect.get(fallback, "incomplete"));
+  }).pipe(Effect.provide(live)),
 );
 
 it.effect("finds a topic after conversational question words", () =>

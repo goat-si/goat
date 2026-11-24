@@ -6,7 +6,6 @@ import {
   type RetainedContextPayloads,
   useRetainedContextPayloads,
 } from "./chat/composerContextUndo";
-
 import type { ServerProviderSkill } from "@goat/contracts";
 import type { Editor } from "@tiptap/core";
 import { redoDepth, undoDepth } from "@tiptap/pm/history";
@@ -14,9 +13,7 @@ import { NodeSelection } from "@tiptap/pm/state";
 import { createElement, createRef, useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
-
 import { act, fakeTimers, render } from "../../test/render";
-
 import { flatToMarkdown, pmToFlat, serializeEditorDoc } from "~/composer-rich-text-doc";
 import { isMacPlatform } from "~/lib/utils";
 import { registerCommands } from "~/shortcuts/dispatcher";
@@ -26,7 +23,6 @@ import {
   type ComposerPromptEditorHandle,
   type ComposerPromptEditorProps,
 } from "./ComposerPromptEditor";
-
 vi.mock(import("../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   const { compileResolvedKeybindingsConfig, DEFAULT_KEYBINDINGS } =
@@ -42,13 +38,11 @@ vi.mock(import("../state/server"), async (original) => {
     ),
   };
 });
-
 const babysit: ServerProviderSkill = {
   name: "babysit",
   path: "/skills/babysit/SKILL.md",
   enabled: true,
 };
-
 async function replaceDomText(editor: Editor, text: string, isComposing = false) {
   await act(async () => {
     const node = editor.view.dom.querySelector("p")?.firstChild;
@@ -67,7 +61,6 @@ async function replaceDomText(editor: Editor, text: string, isComposing = false)
     );
   });
 }
-
 function typeText(editor: Editor, from: number, to: number, text: string) {
   const insert = () => editor.state.tr.insertText(text, from, to);
   if (
@@ -78,7 +71,6 @@ function typeText(editor: Editor, from: number, to: number, text: string) {
     editor.view.dispatch(insert());
   }
 }
-
 function textWithMark(editor: Editor, name: string) {
   const text: string[] = [];
   editor.state.doc.descendants((node) => {
@@ -88,7 +80,6 @@ function textWithMark(editor: Editor, name: string) {
   });
   return text;
 }
-
 it.each([
   { value: "clean _build and node", code: [] },
   { value: "clean `_build` and `node", code: ["_build"] },
@@ -104,7 +95,6 @@ it.each([
   expect(textWithMark(editor, "italic")).toEqual([]);
   expect(textWithMark(editor, "code")).toEqual(code);
 });
-
 it.each([
   { mark: "bold", key: "b", marker: "**" },
   { mark: "italic", key: "i", marker: "*" },
@@ -127,7 +117,6 @@ it.each([
   );
   expect(textWithMark(editor, mark)).toEqual(["now"]);
 });
-
 it.each([
   { key: "i", caret: 10, expected: "ship it **n*X*ow** done" },
   { key: "i", caret: 9, expected: "ship it *X***now** done" },
@@ -155,7 +144,6 @@ it.each([
     await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
   },
 );
-
 it.each([
   { word: "ship", prefix: "", source: ["**ship**"] },
   { word: "path\\", prefix: "", source: [] },
@@ -207,12 +195,27 @@ it.each([
         to: prefixText.length + word.length + 1,
       });
     });
-
     // Whether the selection spans shown markers or not, Mod+B removes the bold.
     await userEvent.keyboard(modB);
     await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(value));
   },
 );
+
+it("distinguishes text edits from caret moves in change notifications", async () => {
+  const onChange = vi.fn<ComposerPromptEditorProps["onChange"]>();
+  await using screen = await mountEditor("", true, [], onChange);
+  await act(async () => {
+    screen.editor.commands.focus("end");
+  });
+  await vi.waitFor(() => expect(document.activeElement).toBe(screen.editor.view.dom));
+  await userEvent.keyboard("/mod ab");
+  expect(onChange.mock.lastCall?.[0]).toBe("/mod ab");
+  expect(onChange.mock.lastCall?.[5]).toBe(true);
+
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(onChange.mock.lastCall?.[0]).toBe("/mod ab");
+  expect(onChange.mock.lastCall?.[5]).toBe(false);
+});
 
 // The mocked server keybindings bind Command-Up and Command-Down to thread navigation.
 it("leaves Command-arrow thread navigation bindings to the app on macOS", async () => {
@@ -231,12 +234,9 @@ it("leaves Command-arrow thread navigation bindings to the app on macOS", async 
   using _listener = {
     [Symbol.dispose]: () => window.removeEventListener("keydown", onWindowKeyDown),
   };
-
   await userEvent.keyboard("{Meta>}{ArrowUp}{ArrowDown}{/Meta}");
-
   expect(reachedApp).toEqual(["ArrowUp", "ArrowDown"]);
 });
-
 it.each([
   ["e", false, false],
   ["i", false, false],
@@ -285,7 +285,6 @@ it.each([
     expect(serializeEditorDoc(editor.state.doc).value).toBe(declinedCapture ? "`word`" : "word");
   },
 );
-
 it.each([false, true])(
   "composes an umlaut without wrapping the preedit text (rich text: %s)",
   async (richTextEnabled) => {
@@ -305,7 +304,6 @@ it.each([false, true])(
     expect(serializeEditorDoc(editor.state.doc).value).toBe("ö");
   },
 );
-
 it("lets composition replace selected text without surrounding it", async () => {
   await using screen = await mountEditor("word");
   const { editor } = screen;
@@ -316,7 +314,6 @@ it("lets composition replace selected text without surrounding it", async () => 
   });
   expect(serializeEditorDoc(editor.state.doc).value).toBe('"');
 });
-
 it.each([
   { at: "inside bold", selection: 5, composed: "**bo漢ld** after", bold: ["bo漢ld"] },
   {
@@ -372,7 +369,6 @@ it.each([
   expect(value()).toBe(row.composed);
   expect(textWithMark(editor, "bold")).toEqual(row.bold);
 });
-
 it("keeps unknown dollar names editable when restoring and pasting a draft", async () => {
   const value = "echo $HOME $PATH $anything $notaskill $20 $20k $babysit ";
   await using screen = await mountEditor(value, true, [babysit]);
@@ -393,7 +389,6 @@ it("keeps unknown dollar names editable when restoring and pasting a draft", asy
   expect(editor.state.doc.textContent).toBe(value.replace("$babysit", ""));
   expect(serializeEditorDoc(editor.state.doc).value).toBe(value);
 });
-
 // regression: #25180 Tiptap's paste rules styled the pasted text a second time
 it.each([
   "Read https://example.com/_handle_/status/1 and open src/__test__.tsx",
@@ -408,7 +403,6 @@ it.each([
   });
   expect(serializeEditorDoc(editor.state.doc).value).toBe(pasted);
 });
-
 it.each(["x\r\n\r\ny", "x\r\ry"])(
   "pastes %j with the same blank line as x\\n\\ny",
   async (text) => {
@@ -428,7 +422,6 @@ it.each(["x\r\n\r\ny", "x\r\ry"])(
     expect(serializeEditorDoc(editor.state.doc).value).toBe("x\n\ny");
   },
 );
-
 it("keeps the caret inside unknown dollar text across rich and plain remounts", async () => {
   const value = "echo $HOME now";
   await using screen = await mountEditor(value);
@@ -447,7 +440,6 @@ it("keeps the caret inside unknown dollar text across rich and plain remounts", 
   });
   expect(serializeEditorDoc(editor.state.doc).value).toBe("echo $HOXYME now");
 });
-
 it("moves over, deletes, and copies a skill token as one unit", async () => {
   const value = "use $babysit now";
   await using screen = await mountEditor(value, true, [babysit]);
@@ -464,7 +456,6 @@ it("moves over, deletes, and copies a skill token as one unit", async () => {
   expect(editor.state.selection.from).toBe(before);
   await userEvent.keyboard("{ArrowRight}");
   expect(editor.state.selection.from).toBe(after);
-
   const clipboardData = new DataTransfer();
   await act(async () => {
     editor.commands.selectAll();
@@ -473,12 +464,10 @@ it("moves over, deletes, and copies a skill token as one unit", async () => {
     );
   });
   expect(clipboardData.getData("text/plain")).toBe(value);
-
   await placeCaret(after);
   await userEvent.keyboard("{Backspace}");
   expect(serializeEditorDoc(editor.state.doc).value).toBe("use  now");
 });
-
 async function focusAt(editor: Editor, position: number | "end") {
   // ProseMirror rewrites the DOM caret 20ms after focus. Run that now, or it
   // can undo the first key before ProseMirror reads the native move.
@@ -489,7 +478,6 @@ async function focusAt(editor: Editor, position: number | "end") {
   await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
   vi.runOnlyPendingTimers();
 }
-
 describe("Markdown markers around styled text", () => {
   it.each([
     { keys: "{Backspace}", expected: "**** after" },
@@ -511,7 +499,6 @@ describe("Markdown markers around styled text", () => {
     await userEvent.keyboard("{End}");
     await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
   });
-
   it.each([
     {
       name: "deleting the opening markers removes bold",
@@ -618,7 +605,6 @@ describe("Markdown markers around styled text", () => {
       expect(textWithMark(editor, name)).toEqual(marks[name as keyof typeof marks] ?? []);
     }
   });
-
   it("shows nested formatting as Markdown and restores it when the caret leaves", async () => {
     const value = "**a *b* c** d";
     await using screen = await mountEditor(value);
@@ -632,7 +618,6 @@ describe("Markdown markers around styled text", () => {
     expect(textWithMark(editor, "italic")).toEqual(["b"]);
     expect(serializeEditorDoc(editor.state.doc).value).toBe(value);
   });
-
   it("undoes a marker edit in one step without an extra step for showing markers", async () => {
     await using screen = await mountEditor("**bold** after");
     const { editor } = screen;
@@ -734,7 +719,6 @@ describe("Markdown markers around styled text", () => {
     expect(editor.state.doc.textContent).toBe("bold after?");
     expect(textWithMark(editor, "bold")).toEqual(["bold"]);
   });
-
   it("keeps bold around a skill pasted inside it", async () => {
     await using screen = await mountEditor("**helloworld** after", true, [babysit]);
     const { editor } = screen;
@@ -753,7 +737,6 @@ describe("Markdown markers around styled text", () => {
     expect(textWithMark(editor, "bold")).toEqual(["hello", "world"]);
   });
 });
-
 const file = {
   type: "file",
   id: "file-1",
@@ -762,14 +745,12 @@ const file = {
   sizeBytes: 5,
   file: new File(["notes"], "notes.txt", { type: "text/plain" }),
 } satisfies ComposerFileAttachment;
-
 describe("composer context undo lifetime", () => {
   async function mountComposer(destinationValue = "", disabled = false) {
     const initialValue = `Draft A ${formatInlineContextReference(fileContextReference(file))}`;
     const editorRef = createRef<ComposerPromptEditorHandle>();
     let current: { value: string; files: ComposerFileAttachment[] };
     let retained: RetainedContextPayloads;
-
     function Composer({ targetKey }: { targetKey: string }) {
       const [drafts, setDrafts] = useState<
         Record<string, { value: string; files: ComposerFileAttachment[] }>
@@ -820,7 +801,6 @@ describe("composer context undo lifetime", () => {
       } satisfies ComposerPromptEditorProps;
       return createElement(ComposerPromptEditor, editorProps);
     }
-
     await using stack = new AsyncDisposableStack();
     const screen = stack.use(await render(createElement(Composer, { targetKey: "a" })));
     const editor = () => editorIn(screen.container);
@@ -847,20 +827,17 @@ describe("composer context undo lifetime", () => {
       },
     });
   }
-
   it("restores a deleted chip and its file bytes on same-draft undo, then releases them on unmount", async () => {
     await using composer = await mountComposer();
     await composer.deleteDraft();
     expect(composer.draft()).toEqual({ value: "", files: [] });
     const retained = composer.retained();
     expect(retained.files.get(fileContextReference(file).contextId)?.file).toBe(file.file);
-
     await composer.show("a");
     await composer.undo();
     expect(serializeEditorDoc(composer.editor().state.doc).value).toBe(composer.initialValue);
     expect(composer.draft()).toEqual({ value: composer.initialValue, files: [file] });
     expect(composer.draft().files[0]?.file).toBe(file.file);
-
     await composer.deleteDraft();
     await composer.unmount();
     expect(retained.files.size).toBe(0);
@@ -887,13 +864,11 @@ describe("composer context undo lifetime", () => {
       expect(composer.draft()).toEqual({ value: "", files: [] });
       const retained = composer.retained();
       expect(retained.files.get(fileContextReference(file).contextId)?.file).toBe(file.file);
-
       await composer.show("b");
       expect(retained.files.size).toBe(0);
       await composer.undo();
       expect(serializeEditorDoc(composer.editor().state.doc).value).toBe(destinationValue);
       expect(composer.draft()).toEqual({ value: destinationValue, files: [] });
-
       await composer.show("a");
       await composer.undo();
       expect(serializeEditorDoc(composer.editor().state.doc).value).toBe("");
@@ -901,7 +876,6 @@ describe("composer context undo lifetime", () => {
     },
   );
 });
-
 describe("an Arabic line", () => {
   async function focusEnd(editor: Editor) {
     // ProseMirror rewrites the DOM caret 20ms after focus. Run that now, or it
@@ -913,7 +887,6 @@ describe("an Arabic line", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
     vi.runOnlyPendingTimers();
   }
-
   it("walks back through inline code and its backticks with ArrowRight", async () => {
     const value = "اكتب `sumBy` الان";
     await using screen = await mountEditor(value);
@@ -935,7 +908,6 @@ describe("an Arabic line", () => {
     expect(sawSource).toBe(true);
     expect(textWithMark(editor, "code")).toEqual(["sumBy"]);
   });
-
   it("shows the backticks on either side of inline code it is editing", async () => {
     await using screen = await mountEditor("اكتب `sumBy` الان");
     const { editor } = screen;
@@ -955,7 +927,6 @@ describe("an Arabic line", () => {
     expect(open.right).toBeLessThanOrEqual(word.left + 1);
     expect(close.left).toBeGreaterThanOrEqual(word.right - 1);
   });
-
   it("starts the next line on the right", async () => {
     await using screen = await mountEditor("اكتب الدالة");
     const { editor } = screen;
@@ -968,7 +939,6 @@ describe("an Arabic line", () => {
     );
   });
 });
-
 it("formats selected text as inline code when typed backticks surround it", async () => {
   await using screen = await mountEditor("hello tail");
   const { editor } = screen;
@@ -980,7 +950,6 @@ it("formats selected text as inline code when typed backticks surround it", asyn
   await act(async () => editor.commands.setTextSelection(editor.state.doc.content.size - 1));
   expect(textWithMark(editor, "code")).toEqual(["hello"]);
 });
-
 it("reopens a long draft scrolled to its caret without taking focus", async () => {
   const style = document.head.appendChild(document.createElement("style"));
   style.textContent =
@@ -995,3 +964,50 @@ it("reopens a long draft scrolled to its caret without taking focus", async () =
   const caret = editor.view.coordsAtPos(editor.state.selection.head);
   expect(caret.bottom).toBeLessThanOrEqual(scroller.getBoundingClientRect().bottom - 48 + 1);
 });
+it.each(["none", "caret", "selection"] as const)(
+  "keeps the reading position when a draft rewraps (focus: %s)",
+  async (focus) => {
+    const focused = focus !== "none";
+    const value = "A long wrapped paragraph should keep the sentence being read in view. ".repeat(
+      100,
+    );
+    const style = document.head.appendChild(document.createElement("style"));
+    style.textContent = ".composer-tiptap { width: 700px; max-height: 160px; overflow-y: auto; }";
+    using _style = { [Symbol.dispose]: () => style.remove() };
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    const scroller = editor.view.dom;
+    await vi.waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(500));
+    if (focused) await focusAt(editor, 2000);
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    const box = scroller.getBoundingClientRect();
+    const position = editor.view.posAtCoords({
+      left: box.left + box.width / 2,
+      top: box.top + 25,
+    })!;
+    const before = editor.view.coordsAtPos(position.pos).top - box.top;
+    if (focused) await focusAt(editor, position.pos);
+    if (focus === "selection") {
+      editor.commands.setTextSelection({ from: position.pos, to: position.pos + 20 });
+    }
+    document.dispatchEvent(new Event("selectionchange"));
+    const selection = editor.state.selection.toJSON();
+    for (const width of [420, 700]) {
+      // The panel toggle shortcut reaches the focused editor before the width changes.
+      if (focused) {
+        scroller.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "b", ctrlKey: true, altKey: true, bubbles: true }),
+        );
+      }
+      scroller.style.width = `${width}px`;
+      await vi.waitFor(() => {
+        const after =
+          editor.view.coordsAtPos(position.pos).top - scroller.getBoundingClientRect().top;
+        expect(Math.abs(after - before)).toBeLessThan(25);
+      });
+      expect(editor.state.selection.toJSON()).toEqual(selection);
+      expect(editor.view.hasFocus()).toBe(focused);
+    }
+  },
+);

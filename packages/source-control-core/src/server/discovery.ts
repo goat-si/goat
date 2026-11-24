@@ -357,7 +357,10 @@ const unavailableInstallHint = Effect.fn("discovery.unavailableInstallHint")(fun
     return installHint;
   }
   const resolveExecutable = yield* SpawnExecutableResolution;
-  const path = resolveExecutable(executable, platform, yield* HostProcess.Environment);
+  const hostEnvironment = yield* HostProcess.Environment;
+  const path = yield* Effect.promise(async () =>
+    resolveExecutable(executable, platform, hostEnvironment),
+  );
   const architecture = yield* HostProcess.Architecture;
   return `\`${path ?? executable}\` is built for another CPU architecture, so this ${architecture} machine cannot run it. Remove or replace it. ${installHint}`;
 });

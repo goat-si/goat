@@ -12,6 +12,7 @@ import {
   getDesktopUpdateIdleDescription,
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateInstallError,
+  installDesktopUpdate,
   getDesktopUpdateStatusText,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -102,8 +103,7 @@ export function AboutVersionSection() {
         setIsUpdateActionPending(false);
         return;
       }
-      void bridge
-        .installUpdate()
+      void installDesktopUpdate(bridge)
         .then((result) => {
           const message = getDesktopUpdateInstallError(result);
           if (message) throw new Error(message);

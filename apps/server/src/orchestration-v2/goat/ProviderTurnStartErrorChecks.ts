@@ -8,3 +8,16 @@ export const isCloudTaskSourceError = Schema.is(CloudSource.CloudTaskSourceError
 export const isProviderAdapterOpenSessionError = Schema.is(
   ProviderAdapter.ProviderAdapterOpenSessionError,
 );
+
+export function hasUnknownProviderOutcome(error: unknown): boolean {
+  const seen = new Set<object>();
+  while (typeof error === "object" && error !== null && !seen.has(error)) {
+    seen.add(error);
+    if ("category" in error && error.category === "request-deadline") return true;
+    error = "cause" in error ? error.cause : undefined;
+  }
+  return false;
+}
+
+export const AMBIGUOUS_RESUME_MESSAGE =
+  "GOAT could not confirm whether the provider received the previous message. Send a message to continue.";

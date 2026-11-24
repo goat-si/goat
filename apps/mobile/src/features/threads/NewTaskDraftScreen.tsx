@@ -91,6 +91,7 @@ import { resolveDraftShareTransfer } from "./new-task-project-selection";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import {
   draftContextPlacement,
+  newTaskModelUnavailableMessage,
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
 } from "./new-task-context-presentation";
@@ -98,12 +99,9 @@ import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
-
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-
 // A draft has no thread projection yet, so it never carries cloud follow-up limits.
 const DRAFT_CLOUD_STATE = deriveCloudTaskState(null);
-
 export function NewTaskDraftScreen(props: {
   readonly flowKey?: string;
   readonly initialProjectRef?: {
@@ -853,7 +851,6 @@ export function NewTaskDraftScreen(props: {
     void KeyboardController.dismiss({ animated: true });
     navigation.navigate(routeName);
   };
-
   const environmentControl = (
     <DraftEnvironmentControl
       connectionState={connectionState}
@@ -998,7 +995,10 @@ export function NewTaskDraftScreen(props: {
         <View className="flex-1 justify-end gap-3 p-4">
           {environmentControl}
           <Text className="text-foreground-muted">
-            Your draft is saved on this device. Connect to an environment to choose its first model.
+            {newTaskModelUnavailableMessage(
+              environmentConnected && !!selectedEnvironmentServerConfig,
+              selectedEnvironmentLabel,
+            )}
           </Text>
           <ComposerEditor
             draftKey={flow.draftKey}

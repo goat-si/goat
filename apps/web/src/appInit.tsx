@@ -48,6 +48,7 @@ import { getRouter, type AppRouter } from "./router";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { resolveThreadRouteTarget } from "./threadRoutes";
+import { guardDomAgainstPageTranslation } from "./lib/pageTranslationGuard";
 
 /** Writes appearance settings onto the document, touching only the groups that changed. */
 function startClientAppearance(): void {
@@ -153,6 +154,8 @@ export function startAppServices(): AppRouter {
     syncDocumentElectronPlatformClasses(navigator.platform);
     syncDocumentWindowControlsOverlayClass();
   }
+
+  guardDomAgainstPageTranslation();
 
   startClientAppearance();
   startI18n();

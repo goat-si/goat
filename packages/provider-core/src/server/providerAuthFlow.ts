@@ -33,6 +33,7 @@ export interface ProviderAuthFlowContext {
     respond?: (response: ProviderAuthResponse) => Effect.Effect<void, ProviderSetupError>,
     complete?: (callbackUrl: string) => Effect.Effect<void, ProviderSetupError>,
   ) => Effect.Effect<void>;
+  readonly retainInteractionOnFailure?: Effect.Effect<void>;
   readonly verifying: Effect.Effect<void>;
 }
 
@@ -49,6 +50,7 @@ interface Flow {
   readonly id: string;
   readonly owner: string;
   readonly expiresAt: number;
+  retainInteractionOnFailure?: boolean;
   complete?: ((callbackUrl: string) => Effect.Effect<void, ProviderSetupError>) | undefined;
   fiber?: Fiber.Fiber<void>;
   responseFiber?: Fiber.Fiber<void, ProviderSetupError>;
@@ -327,6 +329,9 @@ export const make = Effect.fn("ProviderAuthFlow.make")(function* (options: {
                   message: "Complete sign-in to continue.",
                 });
               }),
+              retainInteractionOnFailure: Effect.sync(() => {
+                flow.retainInteractionOnFailure = true;
+              }),
               verifying: Effect.gen(function* () {
                 flow.respond = undefined;
                 flow.complete = undefined;
@@ -369,7 +374,9 @@ export const make = Effect.fn("ProviderAuthFlow.make")(function* (options: {
                     if (options.refreshMethodsAfterAuth) yield* refreshMethods;
                     yield* publish(flow, {
                       phase: Exit.isSuccess(result) ? "succeeded" : "failed",
-                      interaction: null,
+                      ...(Exit.isFailure(result) && flow.retainInteractionOnFailure
+                        ? {}
+                        : { interaction: null }),
                       authorizationUrl: null,
                       expiresAt: null,
                       message: Exit.isSuccess(result)

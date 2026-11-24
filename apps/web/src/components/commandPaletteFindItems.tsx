@@ -12,6 +12,7 @@ export function appendFindItems(
   activeThreadKey: string | null,
   activeThreadCanFind: boolean,
   previewFindAvailable: boolean,
+  previewFindLabel: string,
 ) {
   if (activeThreadKey !== null && activeThreadCanFind) {
     actionItems.push({
@@ -31,7 +32,7 @@ export function appendFindItems(
     actionItems.push({
       kind: "action",
       value: "find-in-browser-page",
-      title: "Find in browser page",
+      title: previewFindLabel,
       searchTerms: ["find", "search", "browser", "page"],
       icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "preview.find",

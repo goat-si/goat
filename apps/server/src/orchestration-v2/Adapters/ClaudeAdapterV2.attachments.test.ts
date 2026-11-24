@@ -505,7 +505,7 @@ describe("ClaudeAdapterV2 attachments", () => {
             },
           });
 
-          assert.equal(offeredMessages[1]?.priority, "now");
+          assert.equal(offeredMessages[1]?.priority, "next");
           assert.deepEqual(offeredMessages[1]?.message.content, expectedContent);
           const documentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
           for (const scenario of [

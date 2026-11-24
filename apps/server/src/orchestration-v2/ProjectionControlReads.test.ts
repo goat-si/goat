@@ -1,3 +1,4 @@
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
@@ -385,7 +386,10 @@ it.effect.each(storageCases)(
         ]);
       }).pipe(
         Effect.provide(
-          Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
+          Layer.merge(
+            ProviderTurnControlService.layer.pipe(Layer.provide(McpAppModelContext.layerEmpty)),
+            RuntimeRequestService.layer,
+          ).pipe(
             Layer.provide(
               Layer.merge(
                 layerSessions,

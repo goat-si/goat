@@ -45,7 +45,6 @@ const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
   readonly provider: ProviderInstanceId;
   readonly model: string;
 }> = [];
-export const FAVORITES_PROVIDER_FILTER = "@favorites";
 // Servers that predate `migrateModelPreferences` drop it and keep reporting null favorites.
 const attemptedMigrationGenerations = new Map<EnvironmentId, number>();
 
@@ -90,6 +89,7 @@ export type ThreadSettingsSessionValue = {
   readonly reportedModelSelection: ModelSelection | null;
   readonly providerExpansionOverrides: ReadonlySet<string>;
   readonly hasLegacyModels: boolean;
+  readonly favoritesOnly: boolean;
   readonly providerFilter: string | null;
   readonly searchQuery: string;
   readonly showLegacy: boolean;
@@ -97,6 +97,7 @@ export type ThreadSettingsSessionValue = {
   readonly isApplied: (option: ModelOption) => boolean;
   /** Applies the model now; false when it cannot be used. */
   readonly selectModel: (option: ModelOption) => boolean;
+  readonly setFavoritesOnly: (favoritesOnly: boolean) => void;
   readonly setProviderFilter: (providerKey: string | null) => void;
   readonly setSearchQuery: (query: string) => void;
   readonly setShowLegacy: (showLegacy: boolean) => void;
@@ -272,6 +273,7 @@ export function ThreadSettingsSessionProvider(
     });
   };
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [providerExpansionOverrides, setProviderExpansionOverrides] = useState<ReadonlySet<string>>(
@@ -358,9 +360,7 @@ export function ThreadSettingsSessionProvider(
   const environmentId = props.environmentId;
   // Like the web picker's open tab: scanning every provider would spawn a probe per provider.
   const scannedInstanceId =
-    providerFilter !== null && providerFilter !== FAVORITES_PROVIDER_FILTER
-      ? ProviderInstanceId.make(providerFilter)
-      : props.providerInstanceId;
+    providerFilter !== null ? ProviderInstanceId.make(providerFilter) : props.providerInstanceId;
   const workspaceScan =
     props.cwd && scannedInstanceId ? { instanceId: scannedInstanceId, cwd: props.cwd } : null;
 
@@ -384,12 +384,14 @@ export function ThreadSettingsSessionProvider(
     favoritesLoaded,
     providerExpansionOverrides,
     hasLegacyModels,
+    favoritesOnly,
     providerFilter,
     searchQuery,
     showLegacy: showLegacyToggle,
     applyOptionChange,
     isApplied,
     selectModel,
+    setFavoritesOnly,
     setProviderFilter,
     setSearchQuery,
     setShowLegacy: setShowLegacyToggle,

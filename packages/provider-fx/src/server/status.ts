@@ -16,6 +16,7 @@ import {
   FX_DEFAULT_MODEL_SLUG,
   FX_DRIVER_KIND,
   FX_EFFORT_OPTION_DESCRIPTOR,
+  FX_FULL_ACCESS_MODE_ID,
   FX_SUPPORTED_RUNTIME_MODES,
 } from "./acpSupport.ts";
 import {
@@ -34,11 +35,13 @@ import {
   resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 
-const FX_PRESENTATION = {
+const fxPresentation = (fullAccess: boolean) => ({
   displayName: "fx",
   showInteractionModeToggle: false,
-  supportedRuntimeModes: FX_SUPPORTED_RUNTIME_MODES,
-} as const;
+  supportedRuntimeModes: fullAccess
+    ? [...FX_SUPPORTED_RUNTIME_MODES, "full-access" as const]
+    : FX_SUPPORTED_RUNTIME_MODES,
+});
 const FX_MODEL_CAPABILITIES = createModelCapabilities({
   optionDescriptors: [FX_EFFORT_OPTION_DESCRIPTOR],
 });
@@ -81,11 +84,12 @@ const snapshot = (
   probe: ProviderProbeResult,
   defaultModel?: string,
   listed?: ReadonlyArray<string>,
+  fullAccess = false,
 ): ServerProviderDraft => ({
   ...buildServerProvider({
     // Gives the snapshot its version advisory; fx runs no enrichment pass.
     driver: FX_DRIVER_KIND,
-    presentation: FX_PRESENTATION,
+    presentation: fxPresentation(fullAccess),
     enabled: settings.enabled,
     checkedAt,
     models: fxModels(settings, defaultModel, listed),
@@ -134,6 +138,7 @@ const FxStatus = Schema.fromJsonString(
   Schema.Struct({
     auth: Schema.optional(Schema.String),
     model: Schema.optional(Schema.String),
+    modes: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String }))),
   }),
 );
 const decodeFxStatus = Schema.decodeUnknownOption(FxStatus);
@@ -246,6 +251,8 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
     { installed: true, version, auth, ...probe },
     defaultModel,
     Option.getOrUndefined(listed),
+    Option.getOrUndefined(status)?.modes?.some((mode) => mode.id === FX_FULL_ACCESS_MODE_ID) ??
+      false,
   );
 });
 

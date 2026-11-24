@@ -82,6 +82,7 @@ const credentialFixture = (
     }),
   );
   const host = ProviderHost.ProviderHost.of({
+    compatibility: () => Effect.undefined,
     paths: {
       cwd: "/fixture",
       baseDir: "/fixture",

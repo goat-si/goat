@@ -17,7 +17,11 @@ function readCatalog(locale: string): Record<string, string> {
 }
 
 function gtCalls() {
-  const literals: Array<{ readonly file: string; readonly source: string }> = [];
+  const literals: Array<{
+    readonly file: string;
+    readonly source: string;
+    readonly context: string | undefined;
+  }> = [];
   const nonLiterals: string[] = [];
   const files = NodeFS.readdirSync(NodePath.join(mobileRoot, "src"), { recursive: true })
     .map(String)
@@ -27,8 +31,13 @@ function gtCalls() {
     for (const call of text.matchAll(/(?<![.\w])gt\(\s*/g)) {
       const rest = text.slice((call.index ?? 0) + call[0].length);
       const literal = /^"((?:[^"\\\n]|\\.)*)"/.exec(rest);
-      if (literal) literals.push({ file, source: JSON.parse(literal[0]) });
-      else nonLiterals.push(`${file}: ${rest.slice(0, 40)}`);
+      if (!literal) {
+        nonLiterals.push(`${file}: ${rest.slice(0, 40)}`);
+        continue;
+      }
+      // GT hashes a string together with its $context, as gt("Copy", { $context: "verb" }).
+      const context = /^\s*,\s*\{\s*\$context:\s*"([^"]*)"/.exec(rest.slice(literal[0].length));
+      literals.push({ file, source: JSON.parse(literal[0]), context: context?.[1] });
     }
   }
   return { literals, nonLiterals };
@@ -41,8 +50,12 @@ describe("mobile translation catalogs", () => {
 
     expect(nonLiterals).toEqual([]);
     expect(literals.length).toBeGreaterThan(0);
-    const mismatches = literals.flatMap(({ file, source }) => {
-      const key = hashSource({ source, dataFormat: "ICU" });
+    const mismatches = literals.flatMap(({ file, source, context }) => {
+      const key = hashSource({
+        source,
+        ...(context === undefined ? {} : { context }),
+        dataFormat: "ICU",
+      });
       return english[key] === source ? [] : [`${file}: "${source}" needs ${key}`];
     });
     expect(mismatches).toEqual([]);

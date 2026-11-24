@@ -129,7 +129,7 @@ export interface ScannedDir {
     | readonly {
         readonly path: string;
         readonly records: readonly UsageRecord[];
-        readonly malformedRecords: number;
+        readonly malformedRecords: readonly number[];
         readonly historyPage?: { readonly entry: CachedFile; readonly version: number };
       }[]
     | null;
@@ -146,6 +146,7 @@ const sourceRank = { ok: 0, partial: 1, failed: 2, missing: 3 } satisfies Record
 export function resolveSourceOwners(
   sources: readonly ScannedDir[],
   filesByDir: readonly Iterable<NonNullable<ScannedDir["files"]>[number]>[],
+  inWindow: (timestampMs: number) => boolean,
 ) {
   const owners = new Map<string, { index: number; status: UsageSource["status"] }>();
   const scans = sources.map((source, index) => {
@@ -154,9 +155,10 @@ export function resolveSourceOwners(
     let skippedFiles = 0;
     let malformedRecords = 0;
     for (const file of files) {
-      if (file.records.length > 0) scannedFiles++;
-      else skippedFiles++;
-      malformedRecords += file.malformedRecords;
+      const malformed = file.malformedRecords.filter(inWindow).length;
+      if (file.records.some((record) => inWindow(record.timestampMs))) scannedFiles++;
+      else if (malformed > 0) skippedFiles++;
+      malformedRecords += malformed;
     }
     const status =
       source.files === null && scannedFiles === 0
@@ -309,7 +311,7 @@ export function makeFileRecordReader(
     format: TranscriptUsageFormat<unknown>,
   ): Effect.fn.Return<{
     readonly records: readonly UsageRecord[];
-    readonly malformedRecords: number;
+    readonly malformedRecords: readonly number[];
     readonly failed?: true;
     readonly update?: { readonly entry: CachedFile; readonly replaces: CachedFile | undefined };
   }> {
@@ -344,7 +346,7 @@ export function makeFileRecordReader(
     if (parsed === null)
       return {
         records: cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [],
-        malformedRecords: cached?.provider === provider ? cached.malformedRecords : 0,
+        malformedRecords: cached?.provider === provider ? cached.malformedRecords : [],
         failed: true,
       };
 
@@ -420,4 +422,21 @@ export function makeFileRecordReader(
     };
   });
   return readFileRecords;
+}
+
+export function makeWithinDir(
+  dir: string,
+  path: Path.Path,
+  isWithinDirectory: (filePath: string, dir: string) => boolean,
+) {
+  const foldersWithin = new Map<string, boolean>();
+  return (filePath: string) => {
+    const folder = path.dirname(filePath);
+    let within = foldersWithin.get(folder);
+    if (within === undefined) {
+      within = isWithinDirectory(folder, dir);
+      foldersWithin.set(folder, within);
+    }
+    return within;
+  };
 }

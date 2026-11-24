@@ -1,3 +1,4 @@
+import { registerTokenUsageChecks } from "./tokenUsageChecks.ts";
 import { registerPiModelTailChecks } from "./modelAndRollbackTailChecks.ts";
 import { assert, it } from "@effect/vitest";
 import { NodeId, ProviderTurnId, ThreadId } from "@goat/contracts";
@@ -34,6 +35,15 @@ export function registerPiModelAndRollbackChecks({
   runtimePolicy: typeof Fixture.runtimePolicy;
   layerTest: typeof Fixture.layerTest;
 }) {
+  registerTokenUsageChecks({
+    makeFakePi,
+    openRuntime,
+    startTurn,
+    THREAD_ID,
+    modelSelection,
+    runtimePolicy,
+    layerTest,
+  });
   /* oxlint-disable goat/no-em-dash-copy -- Matches the Pi extension protocol. */
   it.effect("does not claim a matching dialog from an unrelated Pi tool", () =>
     Effect.gen(function* () {

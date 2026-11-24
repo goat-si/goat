@@ -88,8 +88,3 @@ export function isClaudeProviderContinuationTurn(
 ): boolean {
   return input.message.createdBy === "agent" && input.message.creationSource === "provider";
 }
-
-export const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) => {
-  const { memoryContext: _body, ...rest } = input;
-  return rest;
-};

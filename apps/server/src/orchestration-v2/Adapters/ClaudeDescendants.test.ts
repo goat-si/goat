@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -43,6 +45,41 @@ it.effect("samples one process table per interval however many CLIs it tracks", 
     const afterStop = state.reads;
     yield* TestClock.adjust("10 seconds");
     assert.equal(state.reads, afterStop);
+  }),
+);
+
+it.effect("samples a CLI only while it works and reads its tree once when its turn settles", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([]);
+    const { track } = yield* sampler;
+    const first = track(100);
+    const second = track(200);
+    yield* TestClock.adjust("1 second");
+    const working = state.reads;
+    yield* second.settle;
+    assert.equal(state.reads, working + 1);
+    yield* first.settle;
+    assert.equal(state.reads, working + 2);
+    yield* TestClock.adjust("10 seconds");
+    assert.equal(state.reads, working + 2);
+
+    first.work();
+    yield* TestClock.adjust("1 second");
+    assert.isAbove(state.reads, working + 2);
+  }),
+);
+
+it.effect("stops a job its settled turn left once the idle CLI exits", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([row(100, 1, "A")]);
+    const tracker = (yield* sampler).track(100);
+    state.rows = [row(100, 1, "A"), row(200, 100, "B")];
+    yield* tracker.settle;
+    yield* TestClock.adjust("10 seconds");
+    // The CLI exited; its job was re-parented to launchd.
+    state.rows = [row(200, 1, "B")];
+    yield* tracker.stop;
+    assert.deepEqual(state.killed, [200]);
   }),
 );
 
@@ -133,5 +170,36 @@ it.effect("a failed read between samples keeps what the last whole table showed"
     state.rows = [row(200, 1, "B")];
     yield* tracker.stop;
     assert.deepEqual(state.killed, [200]);
+  }),
+);
+
+it.effect("serializes process table reads for polling and explicit refresh", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let active = 0;
+    let maxActive = 0;
+    let reads = 0;
+    const sampler = yield* makeClaudeDescendantSampler({
+      interval: "1 hour",
+      readTable: Effect.gen(function* () {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        if (++reads === 1) {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+        }
+        active--;
+        return Option.some([]);
+      }),
+      kill: () => {},
+    });
+    const tracker = sampler.track(100);
+    yield* Deferred.await(started);
+    const refresh = yield* Effect.forkChild(tracker.refresh, { startImmediately: true });
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(refresh);
+    yield* tracker.stop;
+    assert.equal(maxActive, 1);
   }),
 );

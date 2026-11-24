@@ -1,4 +1,4 @@
-import { RunId, ThreadId } from "@goat/contracts";
+import { RunId, ThreadId, type MemoryContextSnapshot } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -35,5 +35,20 @@ export const makeMemoryRefreshFactory = Effect.gen(function* () {
       ),
     );
 
-  return makeRefreshMemoryContext;
+  return (threadId: ThreadId, runId: RunId) => ({
+    refreshMemoryContext: makeRefreshMemoryContext(threadId, runId),
+    onMemoryDeliveryUncertain: (snapshot: MemoryContextSnapshot) =>
+      Option.isSome(memorySnapshot) && memorySnapshot.value.recordDeliveryUncertain
+        ? memorySnapshot.value.recordDeliveryUncertain(threadId, runId, snapshot.memorySpaceId)
+        : Effect.void,
+    onMemoryDelivered: (snapshot: MemoryContextSnapshot) =>
+      Option.isSome(memorySnapshot) && memorySnapshot.value.recordDelivery
+        ? memorySnapshot.value.recordDelivery(
+            threadId,
+            runId,
+            snapshot.memorySpaceId,
+            snapshot.items.map(({ memoryId, revisionId }) => ({ memoryId, revisionId })),
+          )
+        : Effect.void,
+  });
 });

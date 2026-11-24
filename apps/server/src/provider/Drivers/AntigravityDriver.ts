@@ -7,8 +7,10 @@ import {
   AntigravitySettings,
   ProviderDriverKind,
   ProviderSetupError,
+  RuntimeMode,
   settingsSecretLiteral,
 } from "@goat/contracts";
+import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import {
@@ -21,10 +23,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient } from "effect/http";
 import * as AcpErrors from "effect-acp/errors";
@@ -36,6 +41,7 @@ import {
 } from "../../textGeneration/AntigravityTextGeneration.ts";
 import { makeAntigravityAuth, type AntigravityAuth } from "../AntigravityAuth.ts";
 import * as AntigravityInstallation from "../AntigravityInstallation.ts";
+import { brokenRuntimeError } from "../providerCompatibility.ts";
 import * as AntigravityUsage from "./AntigravityUsage.ts";
 import {
   antigravityAuthConfigIssue,
@@ -49,7 +55,7 @@ import {
   type AntigravityAuthConfig,
 } from "../antigravityAuthSupport.ts";
 import {
-  antigravityCliSessionMode,
+  antigravitySessionMode,
   antigravityModelOptions,
   antigravityThinkingConfig,
   makeAntigravityAcpRuntime,
@@ -84,7 +90,13 @@ const DRIVER = ProviderDriverKind.make("antigravity");
 const decodeSettings = Schema.decodeSync(AntigravitySettings);
 const isNodeRuntimeUnavailableError = Schema.is(NodeRuntimeUnavailableError);
 const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
+const isProviderSetupError = Schema.is(ProviderSetupError);
 const isAcpErrorDetails = Schema.is(Schema.Struct({ details: Schema.String }));
+const RememberedRuntimeModes = Schema.fromJsonString(
+  Schema.Struct({ authMethod: Schema.String, modes: Schema.Array(RuntimeMode) }),
+);
+const decodeRememberedRuntimeModes = Schema.decodeUnknownOption(RememberedRuntimeModes);
+const encodeRememberedRuntimeModes = Schema.encodeSync(RememberedRuntimeModes);
 const REFRESH_FAILED =
   "Could not refresh Antigravity models. The previous model list is unchanged.";
 const PYTHON_SOCKS_REQUIRED = "python-socks is required to use a SOCKS proxy";
@@ -184,6 +196,18 @@ export const AntigravityDriver: ProviderDriver<
       ),
     );
     const profileDirectory = directories.profile;
+    // Only a session reports whether agy offers Auto, so keep the last answer across restarts.
+    const runtimeModesPath = path.join(profileDirectory, "goat-runtime-modes.json");
+    const rememberedRuntimeModes = yield* fileSystem.readFileString(runtimeModesPath).pipe(
+      Effect.map((contents) =>
+        decodeRememberedRuntimeModes(contents).pipe(
+          Option.filter((saved) => saved.authMethod === auth.authMethod),
+          Option.map((saved) => saved.modes),
+          Option.getOrUndefined,
+        ),
+      ),
+      Effect.orElseSucceed(() => undefined),
+    );
     for (const directory of [
       directories.runtimeTemp,
       path.join(profileDirectory, "antigravity-acp", "tmp"),
@@ -232,10 +256,14 @@ export const AntigravityDriver: ProviderDriver<
         ),
       );
     });
-    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
+    const prepareSpawn = Effect.fn("AntigravityDriver.prepareSpawn")(function* (
       input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
     ): Effect.fn.Return<
-      AcpSessionRuntime.AcpSessionRuntime["Service"],
+      {
+        executable: AntigravityInstallation.AntigravityExecutable;
+        spawn: AcpSessionRuntime.AcpSpawnInput;
+        userHome: string;
+      },
       AcpErrors.AcpError | ProviderSetupError,
       Scope.Scope
     > {
@@ -292,11 +320,9 @@ export const AntigravityDriver: ProviderDriver<
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
-      const runtime = yield* makeAntigravityAcpRuntime({
-        ...input,
-        runtimeVersion: executable.version,
-        authMethod: auth.authMethod,
-        childProcessSpawner: spawner,
+      return {
+        executable,
+        userHome,
         spawn: buildAntigravityAcpSpawnInput({
           installation: executable,
           profile: runtimeProfile,
@@ -308,7 +334,40 @@ export const AntigravityDriver: ProviderDriver<
           auth,
           runtimeTempDirectory,
         }),
+      };
+    });
+
+    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
+      input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
+    ) {
+      const { executable, spawn, userHome } = yield* prepareSpawn(input);
+      const runtime = yield* makeAntigravityAcpRuntime({
+        ...input,
+        runtimeVersion: executable.version,
+        authMethod: auth.authMethod,
+        childProcessSpawner: spawner,
+        spawn,
       }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
+      const startCompatible = Effect.fn("AntigravityDriver.startCompatible")(function* () {
+        const version = (yield* runtime.initialize()).agentInfo?.version;
+        const advisory = version ? yield* installation.compatibility(version) : undefined;
+        const refused =
+          version &&
+          brokenRuntimeError({
+            instanceId,
+            name: "Antigravity",
+            version,
+            advisory,
+            action:
+              executable.source === "managed"
+                ? "Update it in Antigravity setup"
+                : `Update the Antigravity executable at ${executable.executablePath}`,
+          });
+        if (refused) {
+          return yield* new AcpErrors.AcpTransportError({ detail: refused.detail, cause: refused });
+        }
+        return yield* runtime.start();
+      });
       return {
         ...runtime,
         getEvents: () =>
@@ -323,10 +382,17 @@ export const AntigravityDriver: ProviderDriver<
             ),
           ),
         ...(executable.harnessPath === null
-          ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
+          ? {
+              setMode: (modeId: string) =>
+                runtime.getModeState.pipe(
+                  Effect.flatMap((modeState) =>
+                    runtime.setMode(antigravitySessionMode(modeId, modeState)),
+                  ),
+                ),
+            }
           : {}),
         start: () =>
-          runtime.start().pipe(
+          startCompatible().pipe(
             Effect.tap((started) => Effect.sync(() => startedProfiles.set(started, userHome))),
             Effect.tapError((cause): Effect.Effect<void> =>
               input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
@@ -384,6 +450,107 @@ export const AntigravityDriver: ProviderDriver<
       };
     });
 
+    const codeLogin = Effect.fn("AntigravityDriver.codeLogin")(function* (input: {
+      readonly onAuthorizationUrl: (url: string) => Effect.Effect<void, AcpErrors.AcpError>;
+    }) {
+      if (auth.authMethod !== "oauth-personal") return undefined;
+      const environment = yield* currentEnvironment;
+      const resolved = yield* installation
+        .resolve(settings.binaryPath, environment)
+        .pipe(Effect.option);
+      if (Option.isSome(resolved) && resolved.value.harnessPath !== null) return undefined;
+      const cwd = yield* fileSystem
+        .makeTempDirectoryScoped({ prefix: "goat-antigravity-login-" })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderSetupError({
+                instanceId,
+                operation: "start",
+                detail: "Could not create an Antigravity setup workspace.",
+                cause,
+              }),
+          ),
+        );
+      const { executable, spawn } = yield* prepareSpawn({
+        cwd,
+        mcpServers: [],
+        sessionEnvironment: environment,
+      });
+      if (executable.harnessPath !== null) return undefined;
+      const failed = (detail: string, cause?: unknown) =>
+        new ProviderSetupError({ instanceId, operation: "start", detail, cause });
+      const { DISPLAY: _display, WAYLAND_DISPLAY: _wayland, ...env } = spawn.env ?? {};
+      const child = yield* spawner
+        .spawn(
+          ChildProcess.make(spawn.command, [...spawn.args, "--login"], {
+            cwd,
+            env,
+            extendEnv: false,
+            shell: false,
+          }),
+        )
+        .pipe(Effect.mapError((cause) => failed("Could not start Antigravity sign-in.", cause)));
+      const code = yield* Deferred.make<string>();
+      let submitted = false;
+      const stdin = yield* Stream.fromEffect(Deferred.await(code)).pipe(
+        Stream.map((response) => `${response}\n`),
+        Stream.encodeText,
+        Stream.run(child.stdin),
+        Effect.forkScoped,
+      );
+      let pending = "";
+      const handleLine = (line: string) =>
+        line.trim().startsWith("https://accounts.google.com/")
+          ? input.onAuthorizationUrl(line.trim())
+          : Effect.void;
+      const output = yield* child.stdout.pipe(
+        Stream.decodeText(),
+        Stream.runForEach((chunk) =>
+          Effect.gen(function* () {
+            const lines = `${pending}${chunk}`.split("\n");
+            pending = lines.pop() ?? "";
+            if (pending.length > 16384 || lines.some((line) => line.length > 16384)) {
+              return yield* new AcpErrors.AcpTransportError({
+                detail: "Antigravity sign-in output is too large.",
+                cause: undefined,
+              });
+            }
+            yield* Effect.forEach(lines, handleLine, { discard: true });
+          }),
+        ),
+        Effect.andThen(Effect.suspend(() => handleLine(pending))),
+        Effect.forkScoped,
+      );
+      const stderr = yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+      return {
+        submit: (response: string) =>
+          Effect.sync(() => {
+            submitted = true;
+          }).pipe(Effect.andThen(Deferred.succeed(code, response)), Effect.asVoid),
+        completed: Effect.gen(function* () {
+          yield* Fiber.join(output).pipe(
+            Effect.mapError((cause) =>
+              failed("Antigravity returned an invalid Google sign-in link.", cause),
+            ),
+          );
+          const exitCode = yield* child.exitCode.pipe(
+            Effect.mapError((cause) => failed("Antigravity sign-in stopped unexpectedly.", cause)),
+          );
+          if (Number(exitCode) !== 0 || !submitted)
+            return yield* failed(
+              "Antigravity could not finish Google sign-in. Start sign-in again.",
+            );
+          yield* Fiber.join(stdin).pipe(
+            Effect.mapError((cause) => failed("Could not deliver the sign-in code.", cause)),
+          );
+          yield* Fiber.join(stderr).pipe(
+            Effect.mapError((cause) => failed("Antigravity sign-in stopped unexpectedly.", cause)),
+          );
+        }),
+      };
+    });
+
     const publishCatalog = Effect.fn("AntigravityDriver.publishCatalog")(function* (
       started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
       runtime: Pick<
@@ -392,6 +559,7 @@ export const AntigravityDriver: ProviderDriver<
       >,
     ) {
       yield* provider.onSessionStarted(started, undefined, startedProfiles.get(started));
+      yield* authFlow.onSignedInElsewhere;
       yield* Stream.runForEach(runtime.getEvents(), (event) => {
         if (event._tag === "EventStreamBarrier") {
           return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
@@ -428,6 +596,7 @@ export const AntigravityDriver: ProviderDriver<
         ),
       onSignedOut: (runtime) => provider.onSignedOut(runtime.userHome),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
+      codeLogin,
     });
 
     // The probe must not spawn. The agent is a PyInstaller one-file bundle
@@ -487,6 +656,17 @@ export const AntigravityDriver: ProviderDriver<
       clearUsage: usage.clear,
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
       currentProfile,
+      ...(rememberedRuntimeModes ? { rememberedRuntimeModes } : {}),
+      rememberRuntimeModes: (modes) =>
+        writeFileStringAtomically({
+          filePath: runtimeModesPath,
+          contents: encodeRememberedRuntimeModes({ authMethod: auth.authMethod, modes }),
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.catch(() => Effect.logWarning("Could not save Antigravity permission modes.")),
+        ),
       supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -524,17 +704,15 @@ export const AntigravityDriver: ProviderDriver<
       ),
       profileDirectory,
       onSessionStarted: (started, cwd) =>
-        provider.onSessionStarted(started, cwd, startedProfiles.get(started)),
-      onSessionEvent: (event) => {
+        provider
+          .onSessionStarted(started, cwd, startedProfiles.get(started))
+          .pipe(Effect.andThen(authFlow.onSignedInElsewhere)),
+      onSessionEvent: (event, cwd) => {
         if (event._tag === "ConfigOptionsUpdated") {
           return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
         }
         return event._tag === "AvailableCommandsUpdated"
-          ? provider.onAvailableCommands(
-              event.availableCommands,
-              undefined,
-              eventProfiles.get(event),
-            )
+          ? provider.onAvailableCommands(event.availableCommands, cwd, eventProfiles.get(event))
           : Effect.void;
       },
       continuationRequests,
@@ -598,7 +776,11 @@ export const AntigravityDriver: ProviderDriver<
                 : cause._tag === "ProviderSetupError" &&
                     (cause.operation === "configure" || cause.operation === "start")
                   ? cause.detail
-                  : refreshFailureDetail(cause),
+                  : cause._tag === "AcpTransportError" &&
+                      isProviderSetupError(cause.cause) &&
+                      cause.cause.operation === "runtime"
+                    ? cause.cause.detail
+                    : refreshFailureDetail(cause),
               cause,
             }),
       ),
@@ -620,6 +802,7 @@ export const AntigravityDriver: ProviderDriver<
                 discoverAntigravitySkills({
                   cwd,
                   userHome: resolveAntigravityUserHome(platform, environment, homeDirectory),
+                  profileDirectory,
                 }),
               ),
               Effect.provideService(FileSystem.FileSystem, fileSystem),

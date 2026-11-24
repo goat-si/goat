@@ -138,6 +138,7 @@ export interface CursorAgentSdkSession {
     CursorContextUsage | undefined,
     CursorAgentSdkRunnerError
   >;
+  readonly runCheckpointed?: (runId: string) => Effect.Effect<boolean, CursorAgentSdkRunnerError>;
   readonly close: Effect.Effect<void, CursorAgentSdkRunnerError>;
 }
 
@@ -452,7 +453,7 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
 
   return CursorAgentSdkRunner.of({
     open: Effect.fn("CursorAgentSdkRunner.open")(function* (input) {
-      const { Agent, createAgentPlatform } = yield* Effect.try({
+      const { Agent, CursorAgentPlatform, createAgentPlatform } = yield* Effect.try({
         try: sdk.load,
         catch: (cause) => runnerError(cause, `agent.${input.operation}`),
       });
@@ -476,28 +477,32 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
 
       // Cursor uses cwd for both execution and store lookup; a moved thread keeps its original store.
       const storeCwd = input.storeCwd;
-      const storePlatform =
-        input.operation === "resume" &&
-        storeCwd !== undefined &&
-        storeCwd !== input.options.local?.cwd
-          ? yield* Effect.tryPromise({
-              try: () =>
-                createAgentPlatform({
-                  workspaceRef: storeCwd,
-                  ...(input.options.local?.store === undefined
-                    ? {}
-                    : { localStore: input.options.local.store }),
-                }),
-              catch: (cause) => runnerError(cause, "agent.resume"),
-            })
-          : undefined;
+      const cwd = input.options.local?.cwd;
+      const workspaceRef = storeCwd ?? (Array.isArray(cwd) ? cwd[0] : cwd);
+      const storePlatform = yield* Effect.tryPromise({
+        try: async () => {
+          const shared = await createAgentPlatform({
+            ...(workspaceRef === undefined ? {} : { workspaceRef }),
+            ...(input.options.local?.store === undefined
+              ? {}
+              : { localStore: input.options.local.store }),
+          });
+          // The SDK caches models on its workspace platform; retain the stores with a fresh cache.
+          return new CursorAgentPlatform(
+            shared.store,
+            shared.checkpointStore,
+            shared.eventStore,
+            shared.eventNotifier,
+            workspaceRef ?? process.cwd(),
+          );
+        },
+        catch: (cause) => runnerError(cause, `agent.${input.operation}`),
+      });
       const agent = yield* Effect.tryPromise({
         try: () =>
           input.operation === "create"
-            ? Agent.create(input.options)
-            : storePlatform === undefined
-              ? Agent.resume(input.agentId, input.options)
-              : storePlatform.resumeAgent(input.agentId, input.options),
+            ? storePlatform.createAgent(input.options)
+            : storePlatform.resumeAgent(input.agentId, input.options),
         catch: (cause) => runnerError(cause, `agent.${input.operation}`),
       });
 
@@ -510,13 +515,13 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
         },
       });
 
-      const cwd =
+      const runCwd =
         typeof input.options.local?.cwd === "string"
           ? input.options.local.cwd
           : input.options.local?.cwd?.[0];
       const runOptions = {
         runtime: "local" as const,
-        ...(cwd === undefined ? {} : { cwd }),
+        ...(runCwd === undefined ? {} : { cwd: runCwd }),
         ...(input.options.local?.store === undefined ? {} : { store: input.options.local.store }),
       };
       let abandonedRunRecoveryAvailable = input.operation === "resume";
@@ -827,6 +832,17 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
             return usage === undefined || usage.maxTokens === 0 ? undefined : usage;
           }),
         ),
+        runCheckpointed: (runId) =>
+          Effect.tryPromise({
+            try: async () => {
+              const run = await storePlatform.store.getRun(agent.agentId, runId);
+              return (
+                run?.latestCheckpointRef?.blobId !== undefined &&
+                run.latestCheckpointRef.blobId !== run.startCheckpointRef?.blobId
+              );
+            },
+            catch: (cause) => runnerError(cause, "agent.run.get"),
+          }),
         close: log({
           direction: "outgoing",
           stage: "decoded",

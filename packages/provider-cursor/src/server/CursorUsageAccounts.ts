@@ -18,6 +18,7 @@ import * as Semaphore from "effect/Semaphore";
 import {
   CURSOR_ACCOUNT_CACHE_FILE_NAME,
   CURSOR_ACCOUNT_TTL_MS,
+  CURSOR_MIN_FETCH_SPAN_MS,
   cursorFetchFloor,
   cursorFetchRange,
   decodeCursorAccountCaches,
@@ -68,6 +69,7 @@ const make = Effect.gen(function* () {
   /** Failed refreshes share the cache TTL to prevent repeated requests; null means no login. */
   const failures = new Map<string, { readonly atMs: number; readonly error: string | null }>();
   const refreshes = new Map<string, Deferred.Deferred<void>>();
+  const fetchSpans = new Map<string, number>();
 
   const ensureLoaded = yield* Effect.cached(
     fileSystem.readFileString(cachePath).pipe(
@@ -116,55 +118,73 @@ const make = Effect.gen(function* () {
     nowMs: number,
     withHistoryPruneGuard: UsageHistoryPruneGuard | undefined,
   ) {
-    const fetchMissing = (cache: CursorAccountCache | undefined) => {
-      const range = cursorFetchRange(cache, retentionStartMs, nowMs);
-      return accountReader
-        .read(credential, range.sinceMs, range.untilMs)
-        .pipe(Effect.map((result) => ({ range, result })));
-    };
-    let base = caches.get(credentialKey);
-    let fetched = yield* fetchMissing(base);
-    if (
-      base !== undefined &&
-      fetched.result.accountKey !== null &&
-      fetched.result.accountKey !== base.accountKey
-    ) {
-      caches.delete(credentialKey);
-      cacheDirty = true;
-      base = undefined;
-      fetched = yield* fetchMissing(base);
-    }
-    const { range, result } = fetched;
-    if (result.missing || result.error !== null || result.accountKey === null) {
-      failures.set(credentialKey, {
-        atMs: nowMs,
-        error: result.missing || result.error !== null ? result.error : CURSOR_ACCOUNT_READ_ERROR,
-      });
+    const floor = cursorFetchFloor(nowMs, retentionStartMs);
+    let checkedAccount = false;
+    let span = fetchSpans.get(credentialKey) ?? Number.POSITIVE_INFINITY;
+    let widening = true;
+    let widened = false;
+    for (;;) {
+      const base = caches.get(credentialKey);
+      const range = cursorFetchRange(base, retentionStartMs, nowMs, span);
+      const result = yield* accountReader.read(credential, range.sinceMs, range.untilMs);
+      if (
+        !checkedAccount &&
+        base !== undefined &&
+        result.accountKey !== null &&
+        result.accountKey !== base.accountKey
+      ) {
+        caches.delete(credentialKey);
+        cacheDirty = true;
+        checkedAccount = true;
+        continue;
+      }
+      checkedAccount = true;
+      if (result.missing || result.error !== null || result.accountKey === null) {
+        span = Math.max(CURSOR_MIN_FETCH_SPAN_MS, (range.untilMs - range.sinceMs) / 2);
+        fetchSpans.set(credentialKey, span);
+        if (widened) {
+          widened = false;
+          widening = false;
+          continue;
+        }
+        failures.set(credentialKey, {
+          atMs: nowMs,
+          error: result.missing || result.error !== null ? result.error : CURSOR_ACCOUNT_READ_ERROR,
+        });
+        yield* schedulePersist;
+        return;
+      }
+      const accountKey = result.accountKey;
+      const commit = (authorized: boolean) =>
+        Effect.sync(() => {
+          const merged = mergeCursorFetch(
+            base,
+            accountKey,
+            range,
+            result.records,
+            nowMs,
+            retentionStartMs,
+            authorized,
+          );
+          caches.set(credentialKey, merged.cache);
+          failures.delete(credentialKey);
+          if (merged.changed) cacheDirty = true;
+        });
+      const wouldPrune =
+        base?.records.some((record) => record.timestampMs < retentionStartMs) ?? false;
+      yield* wouldPrune && withHistoryPruneGuard !== undefined
+        ? withHistoryPruneGuard(commit)
+        : commit(!wouldPrune);
       yield* schedulePersist;
-      return;
+      const updated = caches.get(credentialKey);
+      if (updated !== undefined && updated.sinceMs <= floor && updated.untilMs >= nowMs) break;
+      widened = widening && Number.isFinite(span);
+      if (widened) {
+        span *= 2;
+        fetchSpans.set(credentialKey, span);
+      }
     }
-    const accountKey = result.accountKey;
-    const commit = (authorized: boolean) =>
-      Effect.sync(() => {
-        const merged = mergeCursorFetch(
-          base,
-          accountKey,
-          range,
-          result.records,
-          nowMs,
-          retentionStartMs,
-          authorized,
-        );
-        caches.set(credentialKey, merged.cache);
-        failures.delete(credentialKey);
-        if (merged.changed) cacheDirty = true;
-      });
-    const wouldPrune =
-      base?.records.some((record) => record.timestampMs < retentionStartMs) ?? false;
-    yield* wouldPrune && withHistoryPruneGuard !== undefined
-      ? withHistoryPruneGuard(commit)
-      : commit(!wouldPrune);
-    yield* schedulePersist;
+    fetchSpans.delete(credentialKey);
   }, refreshLock.withPermit);
 
   const startRefresh = (

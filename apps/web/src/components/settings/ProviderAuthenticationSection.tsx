@@ -359,7 +359,7 @@ export function ProviderAuthenticationSection({
                   output={interaction.output}
                   outputOffset={interaction.outputOffset}
                   onResponse={(response) => {
-                    if (readOnly || !auth?.flowId) return;
+                    if (readOnly || !auth?.flowId || auth.phase !== "waiting") return;
                     for (
                       let offset = 0;
                       offset < Math.max(1, response.data.length);

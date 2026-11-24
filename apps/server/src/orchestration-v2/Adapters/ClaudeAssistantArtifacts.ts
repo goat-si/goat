@@ -20,6 +20,8 @@ export function buildAssistantArtifacts(input: {
   readonly startedAt: DateTime.Utc;
   readonly completedAt: DateTime.Utc;
   readonly streaming?: boolean | undefined;
+  readonly finalAnswer?: boolean;
+  readonly createdAt?: DateTime.Utc;
 }): {
   readonly node: OrchestrationV2ExecutionNode;
   readonly message: OrchestrationV2ConversationMessage;
@@ -72,7 +74,7 @@ export function buildAssistantArtifacts(input: {
       text: input.text,
       attachments: [],
       streaming: input.streaming ?? false,
-      createdAt: input.completedAt,
+      createdAt: input.createdAt ?? input.completedAt,
       updatedAt: input.completedAt,
     },
     turnItem: {
@@ -91,6 +93,7 @@ export function buildAssistantArtifacts(input: {
       completedAt: input.streaming ? null : input.completedAt,
       updatedAt: input.completedAt,
       type: "assistant_message",
+      ...(input.finalAnswer ? { phase: "final_answer" as const } : {}),
       messageId,
       text: input.text,
       streaming: input.streaming ?? false,

@@ -9,7 +9,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-export const claudeLaunchArgParseOptions = { valueFlags: ["append-system-prompt"] };
+export { claudeLaunchArgParseOptions } from "../../provider/Drivers/ClaudePluginLaunchArgs.ts";
+import {
+  claudeLaunchArgParseOptions,
+  claudeLaunchArgPluginDirectories,
+} from "../../provider/Drivers/ClaudePluginLaunchArgs.ts";
+export const claudeLaunchArgPlugins = (args: string | undefined) =>
+  claudeLaunchArgPluginDirectories(args).map((path) => ({ type: "local" as const, path }));
 
 export class ClaudeAppendSystemPromptFileError extends Schema.TaggedError<ClaudeAppendSystemPromptFileError>()(
   "ClaudeAppendSystemPromptFileError",

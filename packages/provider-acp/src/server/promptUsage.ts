@@ -1,6 +1,28 @@
 import type { OrchestrationV2ProviderTurn, TurnTokenUsage } from "@goat/contracts";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
+/** A prompt-steered turn spans several prompts, each reporting its own usage. */
+export function addAcpUsage(
+  total: EffectAcpSchema.Usage | undefined,
+  usage: EffectAcpSchema.Usage | null | undefined,
+): EffectAcpSchema.Usage | undefined {
+  if (usage == null) return total;
+  if (total === undefined) return usage;
+  const optional = (left: number | null | undefined, right: number | null | undefined) =>
+    left == null && right == null ? {} : { value: (left ?? 0) + (right ?? 0) };
+  const thought = optional(total.thoughtTokens, usage.thoughtTokens);
+  const cachedRead = optional(total.cachedReadTokens, usage.cachedReadTokens);
+  const cachedWrite = optional(total.cachedWriteTokens, usage.cachedWriteTokens);
+  return {
+    totalTokens: total.totalTokens + usage.totalTokens,
+    inputTokens: total.inputTokens + usage.inputTokens,
+    outputTokens: total.outputTokens + usage.outputTokens,
+    ...("value" in thought ? { thoughtTokens: thought.value } : {}),
+    ...("value" in cachedRead ? { cachedReadTokens: cachedRead.value } : {}),
+    ...("value" in cachedWrite ? { cachedWriteTokens: cachedWrite.value } : {}),
+  };
+}
+
 /**
  * Maps one per-turn usage sample (flavors with reportsPerTurnPromptUsage)
  * directly onto TurnTokenUsage: the response's counters already cover exactly
@@ -18,9 +40,7 @@ export function acpPerTurnPromptUsage(
   const inputTokens = geminiUsage
     ? usage.inputTokens + (usage.cachedReadTokens ?? 0)
     : usage.inputTokens;
-  const outputTokens = geminiUsage
-    ? usage.outputTokens + (usage.thoughtTokens ?? 0)
-    : usage.outputTokens;
+  const outputTokens = usage.outputTokens;
   // TurnTokenUsage contract: input includes cache read + write and reasoning
   // is a subset of output, so clamp counters that exceed their parent and
   // drop the ones the agent left unset. Cache writes are capped at whatever

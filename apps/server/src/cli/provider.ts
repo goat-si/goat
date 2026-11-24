@@ -20,6 +20,8 @@ import {
 } from "@goat/contracts";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { BUNDLED_MODEL_MANIFEST } from "../provider/ModelManifest.ts";
+import { resolveProviderCompatibility } from "../provider/providerCompatibility.ts";
 import { DevinCloudCli } from "@goat/provider-devin-cloud/server";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import * as Config from "effect/Config";
@@ -99,6 +101,10 @@ export const readOnlyHost = (
   settings: ServerSettings,
 ) =>
   ProviderHost.ProviderHost.of({
+    compatibility: (driver, version) =>
+      Effect.succeed(
+        resolveProviderCompatibility(BUNDLED_MODEL_MANIFEST.compatibility, driver, version),
+      ),
     paths: {
       cwd,
       baseDir,

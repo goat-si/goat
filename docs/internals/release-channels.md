@@ -90,7 +90,7 @@ Three checks hold the rule:
 
 - `build-desktop-artifact` runs the built server's `--version` and fails unless it equals the bundle version, on every platform and in every build, local or CI.
 - The nightly prepare job stamps the base into its checkout and runs `check-release-version.ts --candidate <version> --published-tags <file>`: the version must sort above the newest stable and the previous build of its channel. A stable promotion also fails when the nightly's base differs from the next stable base.
-- The CLI and desktop jobs verify the runtime archive (`smoke-cli-archive --expect-version`) and the bundled archives (`validateSshRuntimeArchives`) against the same version.
+- The CLI jobs verify each published runtime archive with `smoke-cli-archive --expect-version`. A custom desktop build that embeds archives also checks them against its version with `validateSshRuntimeArchives`.
 
 ## Publishing gate
 

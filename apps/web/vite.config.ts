@@ -148,6 +148,8 @@ const browserTestProject = {
       "@daypicker/react/locale/ru",
       "@daypicker/react/locale/zh-CN",
       "@effect/vitest",
+      "@pierre/diffs/ssr",
+      "effect/testing",
       "effect/Hash",
       "effect/RcMap",
       "@legendapp/list/react-native",

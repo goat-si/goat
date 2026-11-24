@@ -30,7 +30,9 @@ import {
   type MarkdownImageBlock,
   type MarkdownLinkOccurrence,
   type MarkdownStyle,
+  type TextSelectionMenuConfig,
 } from "react-native-enriched-markdown";
+import { useGT } from "../i18n/I18nProvider";
 import { codeFenceRenderer, streamingFenceCode } from "./codeBlockMarkdown";
 import { HighlightedCodeBlock, OpenFenceCodeContext } from "./HighlightedCodeBlock";
 import { MermaidCodeBlock } from "./MermaidCodeBlock";
@@ -60,6 +62,7 @@ function codeBlockElement(
   markdownStyle: MarkdownStyle,
   mathRenderingEnabled: boolean,
   scheme: HighlightScheme,
+  selectionMenuConfig: TextSelectionMenuConfig,
 ): ReactElement | undefined {
   const renderer = codeFenceRenderer(block.language, mathRenderingEnabled);
   if (renderer.kind === "mermaid") {
@@ -79,6 +82,7 @@ function codeBlockElement(
         selectable
         selectionColor={textStyle.selectionColor}
         selectionHandleColor={textStyle.selectionHandleColor}
+        selectionMenuConfig={selectionMenuConfig}
       />
     ) : undefined;
   }
@@ -99,6 +103,18 @@ function codeBlockElement(
 }
 
 export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
+  const gt = useGT();
+  const selectionMenuConfig = useMemo<TextSelectionMenuConfig>(
+    () => ({
+      copy: { label: gt("Copy", { $context: "verb" }) },
+      copyAsMarkdown: { label: gt("Copy as Markdown") },
+      copyImageUrl: {
+        label: gt("Copy Image URL"),
+        pluralLabels: { other: gt("Copy {count} Image URLs", { count: "{count}" }) },
+      },
+    }),
+    [gt],
+  );
   const { renderImage, resolveImageSource, fileEmbedLabel } = props;
   const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
   const { markdown, fileHrefs } = useMemo(() => {
@@ -259,9 +275,17 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           baseMarkdownStyle,
           mathRenderingEnabled,
           themeAppearance,
+          selectionMenuConfig,
         ),
     }),
-    [renderImage, props.textStyle, baseMarkdownStyle, mathRenderingEnabled, themeAppearance],
+    [
+      renderImage,
+      props.textStyle,
+      baseMarkdownStyle,
+      mathRenderingEnabled,
+      themeAppearance,
+      selectionMenuConfig,
+    ],
   );
   const resolveNativeImageSource = useRetryingImageSource(resolveImageSource);
   // Enriched asks about each image once, so a moved loopback address needs a fresh native view.
@@ -322,6 +346,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
             flavor="github"
             selectable
             selectionClipboard={selectionClipboard}
+            selectionMenuConfig={selectionMenuConfig}
             selectionColor={props.textStyle.selectionColor}
             selectionHandleColor={props.textStyle.selectionHandleColor}
             md4cFlags={{

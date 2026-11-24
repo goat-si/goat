@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
+import { AuthOrchestrationOperateScope, ScheduledTaskNotificationPolicy } from "@goat/contracts";
 import { FormField, SelectRow } from "./ScheduledTaskFormFields";
 import { ScheduledTaskContextSections } from "./ScheduledTaskContextSections";
 import { ScheduledTaskNotificationPolicySection } from "./ScheduledTaskNotificationPolicySection";
@@ -7,7 +7,6 @@ import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-tas
 import { scheduledMemoryAccess } from "./scheduledTaskPresentation";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
-import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { readEnvironmentScope } from "../../state/session";
 import type {
   EnvironmentId,
@@ -314,12 +313,12 @@ export function SettingsScheduledTaskEditRouteScreen() {
 }
 
 function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }) {
+  const taskEditor = useScheduledTaskEditor();
   const { editor, voiceOwnerKey, readEditor, setEditor, hasChanges, draftForEnvironment } =
-    useScheduledTaskEditor();
+    taskEditor;
   const { availableTargets } = useSettingsEnvironmentFilter();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const [saving, setSaving] = useState(false);
   // Set once the save lands, so the removal guard lets the editor close.
   const saved = useRef(false);
   const ownerKey = editor ? `${voiceOwnerKey}:${editor.environmentId}` : null;
@@ -359,15 +358,15 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
     onChangeDraftMessage: (text) => {
       if (readEditor()?.environmentId === editor?.environmentId) setPrompt(text);
     },
-    disabled: saving,
+    disabled: taskEditor.saving,
   });
-  const preventRemove = hasChanges || saving;
+  const preventRemove = hasChanges || taskEditor.saving;
   usePreventRemove(preventRemove, ({ data }) => {
     if (saved.current) {
       navigation.dispatch(data.action);
       return;
     }
-    if (saving) {
+    if (taskEditor.saving) {
       Dialog.alert("Saving task", "Wait for the task to finish saving before leaving.");
       return;
     }
@@ -423,8 +422,8 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
             }
             availableTargets={availableTargets}
             draft={editor.draft}
-            saving={saving}
-            setSaving={setSaving}
+            saving={taskEditor.saving}
+            setSaving={taskEditor.setSaving}
             dictationPending={voiceInput.blocksSubmission}
             promptField={
               <ScheduledTaskPromptField
@@ -432,12 +431,12 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
                 onChange={setPrompt}
                 selection={selection}
                 onChangeSelection={setSelection}
-                disabled={saving}
+                disabled={taskEditor.saving}
                 voiceInput={voiceInput}
               />
             }
             setDraft={(draft) => {
-              if (!saving) setEditor({ ...editor, draft });
+              if (!taskEditor.saving) setEditor({ ...editor, draft });
             }}
             onSaved={() => {
               saved.current = true;
@@ -754,6 +753,7 @@ function TaskForm({
                   display={Platform.OS === "ios" ? "spinner" : "default"}
                   onDismiss={() => setTimePickerOpen(false)}
                   onValueChange={(_, selected) => {
+                    if (Platform.OS === "android") setTimePickerOpen(false);
                     const timeOfDay = `${String(selected.getHours()).padStart(2, "0")}:${String(selected.getMinutes()).padStart(2, "0")}`;
                     setDraft({ ...draft, schedule: { ...draft.schedule, timeOfDay } });
                   }}

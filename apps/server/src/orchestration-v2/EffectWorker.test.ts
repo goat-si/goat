@@ -105,6 +105,7 @@ function layerExecutorFor(input: {
     Layer.succeed(
       ProviderTurnControlService.ProviderTurnControlServiceV2,
       ProviderTurnControlService.ProviderTurnControlServiceV2.of({
+        applyThreadTitle: () => Effect.void,
         interrupt: input.interrupt ?? (() => Effect.void),
         steer: input.steer ?? (() => Effect.void),
         interruptAndAwaitTerminal: (request) =>

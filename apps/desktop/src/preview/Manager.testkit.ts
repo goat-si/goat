@@ -269,3 +269,70 @@ export const makeTestPictureInPictureWindow = (
   };
   return { pictureInPictureWindow, send, webContentsListeners };
 };
+
+export const makeAttachingGuest = (webviewSend: Electron.WebContents["send"], id: number) => {
+  const listeners = new Map<string, () => void>();
+  const attach = vi.fn();
+  const detach = vi.fn();
+  const sendCommand = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+    async () => undefined,
+  );
+  const detachListeners = new Set<() => void>();
+  let chromiumDetaches = 0;
+  let destroyed = false;
+  const wc = {
+    id,
+    isDestroyed: () => destroyed,
+    isDevToolsOpened: () => {
+      if (destroyed) throw new TypeError("Object has been destroyed");
+      return false;
+    },
+    getType: () => "webview",
+    getURL: () => "http://localhost:5173/README.md",
+    getTitle: () => "README.md",
+    isLoadingMainFrame: () => true,
+    getZoomFactor: () => 1,
+    setZoomFactor: vi.fn(),
+    setAudioMuted: vi.fn(),
+    isCurrentlyAudible: () => false,
+    on: vi.fn(),
+    off: vi.fn(),
+    once: (event: string, listener: () => void) => {
+      listeners.set(event, listener);
+    },
+    ipc: { on: vi.fn(), off: vi.fn() },
+    send: webviewSend,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    setIgnoreMenuShortcuts: vi.fn(),
+    setWindowOpenHandler: vi.fn(),
+    debugger: {
+      isAttached: () => attach.mock.calls.length > detach.mock.calls.length + chromiumDetaches,
+      attach,
+      detach,
+      sendCommand,
+      on: (event: string, listener: () => void) => {
+        if (event === "detach") detachListeners.add(listener);
+      },
+      off: (event: string, listener: () => void) => {
+        if (event === "detach") detachListeners.delete(listener);
+      },
+    },
+  };
+  /** Chromium dropping the debugger without a detach() call. */
+  const chromiumDetach = () => {
+    chromiumDetaches += 1;
+    // Snapshot like an EventEmitter, so a listener added during emit waits for the next one.
+    for (const listener of Array.from(detachListeners)) listener();
+  };
+  return {
+    wc: wc as unknown as Electron.WebContents,
+    attach,
+    detach,
+    sendCommand,
+    chromiumDetach,
+    destroy: () => {
+      destroyed = true;
+      listeners.get("destroyed")?.();
+    },
+  };
+};

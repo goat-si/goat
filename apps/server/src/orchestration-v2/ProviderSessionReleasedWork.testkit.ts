@@ -1,6 +1,7 @@
 import * as TestClock from "effect/testing/TestClock";
 import { assert, it } from "@effect/vitest";
 import {
+  MessageId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
@@ -16,6 +17,9 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as Layer from "effect/Layer";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import { layerTestDatabase } from "./ProviderSessionManager.persistence.testkit.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -609,6 +613,88 @@ export function registerReleasedBackgroundWorkChecks({
               idleTimeoutMs: 60_000,
               ...(release === "server shutdown" ? {} : { backgroundTasksEndWithProcess: false }),
             }),
+          ),
+        );
+      }),
+  );
+
+  it.effect.each(["runtime_error", "detach"] as const)(
+    "notes lost background work only when release is %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const state = yield* Ref.make(emptyState);
+        yield* Effect.gen(function* () {
+          const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+          const sink = yield* EventSink.EventSinkV2;
+          const ids = yield* IdAllocator.IdAllocatorV2;
+          const projections = yield* ProjectionStore.ProjectionStoreV2;
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const { threadId, providerSessionId, providerThreads, seededToolCalls } =
+            yield* openSessionWithBackgroundCommand("provider-exit-note");
+          const now = yield* DateTime.now;
+          const runId = ids.derive.run({ threadId, ordinal: 1 });
+          const rootNodeId = ids.derive.rootNode({ runId });
+          yield* sink.write({
+            events: [
+              {
+                id: yield* ids.allocate.event({ threadId }),
+                type: "run.created",
+                threadId,
+                runId,
+                nodeId: rootNodeId,
+                driver: CODEX_DRIVER,
+                occurredAt: now,
+                payload: {
+                  id: runId,
+                  threadId,
+                  ordinal: 1,
+                  providerInstanceId: modelSelection.instanceId,
+                  modelSelection,
+                  providerThreadId: providerThreads[0].id,
+                  userMessageId: MessageId.make("exit-note"),
+                  rootNodeId,
+                  activeAttemptId: null,
+                  status: "completed",
+                  requestedAt: now,
+                  startedAt: now,
+                  completedAt: now,
+                  checkpointId: null,
+                  contextHandoffId: null,
+                },
+              },
+            ],
+          });
+          if (reason === "detach")
+            yield* manager.detach({ providerSessionId, threadId, detail: "Workspace changed." });
+          else yield* manager.release({ providerSessionId, reason: "runtime_error" });
+          const run = (yield* projections.getThreadRecords(threadId, ["runs"])).runs.find(
+            (item) => item.id === runId,
+          );
+          const continuation = yield* outbox.get(`effect:restart-continuation:${runId}`);
+          if (reason === "detach") {
+            assert.isUndefined(run?.restartCancelledBackgroundWork);
+            assert.isTrue(Option.isNone(continuation));
+          } else {
+            assert.deepStrictEqual(run?.restartCancelledBackgroundWork, [
+              { kind: "shell", label: "python3 -m http.server (id dev-server)", id: "dev-server" },
+              {
+                kind: "task",
+                label: "mcp__goat__goat_worktree_handoff",
+                id: seededToolCalls.cutOff.id,
+              },
+            ]);
+            assert.deepStrictEqual(Option.getOrUndefined(continuation)?.request, {
+              type: "provider-runtime.continue",
+              sourceRunId: runId,
+              cause: "provider_exit",
+            });
+          }
+        }).pipe(
+          Effect.provide(
+            Layer.merge(
+              layerTest({ state, idleTimeoutMs: 60_000, capabilities: ExclusiveCapabilities }),
+              EffectOutbox.layer.pipe(Layer.provide(layerTestDatabase)),
+            ),
           ),
         );
       }),

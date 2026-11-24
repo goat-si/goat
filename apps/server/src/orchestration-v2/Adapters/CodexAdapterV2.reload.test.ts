@@ -587,6 +587,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
                   id: f.nativeThreadId,
                   historyMode: "paginated",
                   status: { type: "notLoaded" },
+                  cwd: CODEX_TEST_RUNTIME_POLICY.cwd,
                 },
               },
             },

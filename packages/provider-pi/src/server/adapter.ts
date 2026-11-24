@@ -4,7 +4,7 @@ import { recheckPiSelection } from "./selectionDrift.ts";
 import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
 import { adoptLivePiSession, isLivePiSession } from "./sessionIdentity.ts";
 import { piViewedImagePath } from "./viewedImagePath.ts";
-import { tokenUsageFromStats } from "./tokenUsage.ts";
+import { piMessageTokenUsage, tokenUsageFromStats } from "./tokenUsage.ts";
 import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
 import { makeEarlyNativeWork } from "./earlyNativeWork.ts";
 import { makeActivationRecovery } from "./activationRecovery.ts";
@@ -110,11 +110,9 @@ export interface PiAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
-
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
 const PI_COMPACTING_PROMPT_REJECTION = "Cannot submit a prompt while compaction is in progress";
-
 export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   options: PiAdapterV2Options,
 ) {
@@ -132,9 +130,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
-
   const protocolError = makePiProtocolError(driver);
-
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver,
@@ -184,6 +180,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           profile,
           input,
           cwd,
+          host,
           agentScope,
           spawner,
           driver,
@@ -544,13 +541,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.onInterrupt(() => connection.terminate),
           ),
       );
-
-      const readTokenUsage = (fallbackUsedTokens: number | null, updatedAt: DateTime.Utc) =>
+      const readTokenUsage = (turn: ActivePiTurn, updatedAt: DateTime.Utc) =>
         request({ type: "get_session_stats" }, 2_000).pipe(
-          Effect.map((stats) => tokenUsageFromStats(stats, fallbackUsedTokens, updatedAt)),
+          Effect.map((stats) =>
+            tokenUsageFromStats(
+              stats,
+              turn.latestCompactionAfterTokens,
+              updatedAt,
+              turn.lastMessageUsage,
+            ),
+          ),
           Effect.orElseSucceed(() => undefined),
         );
-
       /**
        * Pi attaches the current message's cumulative usage to every streaming update (0.84.2+).
        */
@@ -558,6 +560,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         /* Provider events include streaming deltas; avoid a span for each update. */
         Effect.fnUntraced(function* (turn: ActivePiTurn, usage: unknown) {
           const usedTokens = nonNegativeInteger(usage, "totalTokens");
+          if (usedTokens !== undefined && usedTokens > 0)
+            turn.lastMessageUsage = piMessageTokenUsage(usage);
           if (
             usedTokens === undefined ||
             usedTokens === 0 ||
@@ -568,9 +572,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             return;
           }
           turn.lastLiveUsedTokens = usedTokens;
-          const inputTokens = nonNegativeInteger(usage, "input");
-          const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
-          const outputTokens = nonNegativeInteger(usage, "output");
           const updatedAt = yield* DateTime.now;
           yield* emit({
             type: "provider_turn.updated",
@@ -581,9 +582,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               tokenUsage: {
                 usedTokens,
                 maxTokens: contextWindow,
-                ...(inputTokens === undefined ? {} : { inputTokens }),
-                ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-                ...(outputTokens === undefined ? {} : { outputTokens }),
+                ...turn.lastMessageUsage,
                 updatedAt: DateTime.formatIso(updatedAt),
               },
             },
@@ -1479,7 +1478,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           retainedNativeTurnIds: branch?.reachedStop === true ? branch.userEntryIds : undefined,
         };
       });
-
       const finalizeTurn = Effect.fnUntraced(function* (state: PiThreadState, readUsage = true) {
         const turn = state.activeTurn;
         if (turn === null) return;
@@ -1517,9 +1515,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   }).pipe(Effect.as(null)),
                 ),
               );
-        const tokenUsage = readUsage
-          ? yield* readTokenUsage(turn.latestCompactionAfterTokens, completedAt)
-          : undefined;
+        const tokenUsage = readUsage ? yield* readTokenUsage(turn, completedAt) : undefined;
         const failure = interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
         yield* emit({
           type: "provider_turn.updated",
@@ -2672,6 +2668,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           return sessionEntity;
         },
         events: Stream.fromQueue(events),
+        backgroundTasksEndWithProcess: true,
         hasPendingBackgroundWork: Effect.sync(() => pendingWake !== null),
         hasPendingBackgroundWorkForThread: (providerThread) =>
           Effect.sync(
@@ -2815,6 +2812,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
+              lastMessageUsage: undefined,
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               compactionCancelled: false,
@@ -3174,7 +3172,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             );
             return {
               providerThread: state.providerThread,
-              providerTurns: [],
               messages,
               runtimeRequests: [],
             };

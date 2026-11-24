@@ -536,6 +536,7 @@ export function layerWithRegistry<Error>(
         Layer.mergeAll(
           layerDatabase,
           layerStores,
+          McpAppModelContext.layerEmpty,
           layerProviderSessionManagerProvided,
           layerEventSinkProvided,
           layerServerConfig,
@@ -567,6 +568,7 @@ export function layerWithRegistry<Error>(
         layerEventSinkProvided,
         IdAllocator.layer,
         layerStores,
+        ThreadCommandExecutor.layer,
       ),
     ),
   );

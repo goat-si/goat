@@ -93,7 +93,9 @@ it.effect.each(["bound", "pinned", "legacy", "fresh_session", "promoted", "ordin
               targetRunId: active.id,
             });
             yield* worker.drain();
-            assert.deepEqual(steered, ["Scheduled follow-up"]);
+            assert.deepEqual(steered, [
+              '[GOAT: scheduled task "schedule:queued" sent this prompt, not the user typing in this chat.]\n\nScheduled follow-up',
+            ]);
             const delivered = yield* orchestrator.getThreadProjection(threadId);
             assert.equal(delivered.messages.find((row) => row.id === messageId)?.runId, active.id);
             assert.equal(

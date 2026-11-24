@@ -196,7 +196,7 @@ export function shouldPrepareLegacyImportHandoff(input: {
   readonly legacyImportItemCount: number;
 }): boolean {
   const provider = input.providerThread;
-  const hasNativeHistory = provider?.driver === "acpRegistry" && provider.nativeThreadRef !== null;
+  const hasNativeHistory = provider !== undefined && provider.nativeThreadRef !== null;
   return (
     input.historyOrigin === "v1_import" &&
     !hasNativeHistory &&
@@ -378,5 +378,19 @@ export function lastDeliveredRunForProviderThread(
       run.providerThreadId === providerThreadId &&
       (run.status === "completed" ||
         projection.providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)),
+  );
+}
+
+export function isImportedNativeSession(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "providerTurns" | "contextHandoffs">,
+  providerThread: OrchestrationV2ProviderThread,
+): boolean {
+  return (
+    projection.thread.historyOrigin === "v1_import" &&
+    !projection.providerTurns.some((turn) => turn.providerThreadId === providerThread.id) &&
+    !projection.contextHandoffs.some(
+      (handoff) =>
+        handoff.toProviderThreadId === providerThread.id && handoff.strategy === "manual_context",
+    )
   );
 }

@@ -98,6 +98,7 @@ export function makeLocalCommandHarness(input: {
   readonly writeFailure?: unknown;
   readonly failReadsAfterRunning?: boolean;
   readonly recoveryReadFailure?: string;
+  readonly rejectedHistoryWithPendingWork?: boolean;
   readonly memory?: {
     readonly policy: () => Effect.Effect<MemorySnapshot.MemorySnapshotPolicy>;
     readonly select: MemorySnapshot.MemorySnapshot["Service"]["forThread"];
@@ -570,6 +571,9 @@ export function makeLocalCommandHarness(input: {
                   },
                   ensureThread: () => Effect.succeed(providerThread),
                   resumeThread: () => Effect.succeed(projection.providerThreads[0]),
+                  ...(input.rejectedHistoryWithPendingWork
+                    ? { hasPendingBackgroundWorkForThread: () => Effect.succeed(true) }
+                    : {}),
                   ...(input.manualResume?.supported === true
                     ? { resumeInterruptedTurn: () => Effect.void }
                     : {}),
@@ -751,14 +755,22 @@ export function makeLocalCommandHarness(input: {
               projection.runs.find((candidate) => candidate.id === id),
             ),
           getTurnStartHistory: () =>
-            input.previousTurn?.supersededTurn || input.manualResume !== undefined
-              ? Effect.succeed([])
-              : Effect.fail(
-                  new ProjectionStore.ProjectionStoreReadError({
-                    threadId,
-                    cause: input.historyReadFailureAfterFallback,
-                  }),
-                ),
+            input.rejectedHistoryWithPendingWork
+              ? Effect.succeed([
+                  {
+                    type: "error",
+                    nodeId: projection.runs[0]?.rootNodeId,
+                    failure: { code: "invalid_encrypted_content", message: "history rejected" },
+                  },
+                ] as never)
+              : input.previousTurn?.supersededTurn || input.manualResume !== undefined
+                ? Effect.succeed([])
+                : Effect.fail(
+                    new ProjectionStore.ProjectionStoreReadError({
+                      threadId,
+                      cause: input.historyReadFailureAfterFallback,
+                    }),
+                  ),
         }),
         ...(input.memory === undefined
           ? []

@@ -1,3 +1,4 @@
+import type * as EffectAcpSchema from "effect-acp/compat";
 import type {
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
@@ -33,6 +34,7 @@ export const AcpProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
+    supportsNativeResume: false,
     supportsActiveSteering: false,
     supportsSteeringByInterruptRestart: true,
     supportsQueuedMessages: true,
@@ -109,6 +111,7 @@ export const AcpProviderCapabilitiesV2 = {
 export function negotiatedCapabilities(
   base: OrchestrationV2ProviderCapabilities,
   started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
+  steersWithPrompt = false,
 ): OrchestrationV2ProviderCapabilities {
   const agent = started.initializeResult.agentCapabilities ?? {};
   const session = agent.sessionCapabilities;
@@ -128,6 +131,10 @@ export function negotiatedCapabilities(
       canReadThreadSnapshot: canLoad,
       canForkThread: canFork,
       canForkFromTurn: false,
+    },
+    turns: {
+      ...base.turns,
+      supportsActiveSteering: base.turns.supportsActiveSteering || steersWithPrompt,
     },
     tools: {
       ...base.tools,
@@ -218,3 +225,23 @@ export const ACP_PROMPT_ACTIVITY_UPDATES: ReadonlySet<string> = new Set([
   "compaction_update",
   "compaction_summary_chunk",
 ]);
+
+export function acpCanSwitchModelInSession(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  models: EffectAcpSchema.SessionModelState | null | undefined,
+): boolean {
+  return findModelConfigOption(configOptions) !== undefined || models != null;
+}
+
+export const readAcpCapabilities = Effect.fn("AcpAdapter.readCapabilities")(function* (
+  flavor: Pick<
+    import("./adapterFlavor.ts").AcpAdapterV2Flavor,
+    "supportsNativeGoals" | "capabilities"
+  >,
+) {
+  if (flavor.supportsNativeGoals === undefined) return flavor.capabilities;
+  return {
+    ...flavor.capabilities,
+    turns: { ...flavor.capabilities.turns, supportsNativeGoals: yield* flavor.supportsNativeGoals },
+  };
+});

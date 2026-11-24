@@ -18,19 +18,12 @@ Antigravity setup.
 
 ### Sign in from a remote device
 
-Google returns to a `127.0.0.1` address. It can finish directly when your browser is
-on the environment's machine. From another device, the final page will usually
-fail to load because the sign-in listener is on the environment.
+Google finishes on an Antigravity page that shows a code. Paste that code, or the
+page's full address, into the code field in the client where you started sign-in.
+This works the same from any device.
 
-Copy the full return address, including everything after `?`, into the return URL
-field in the client where you started sign-in, then choose
-**Continue**. Keep the original address; do not replace it with the server's
-hostname. Only that GOAT sign-in session can finish the attempt. If it expires,
-retry sign-in and use the new link.
-
-The return URL contains a temporary sign-in code. Paste it only into the setup
-field. A successful callback page alone does not confirm account access; wait for
-GOAT's confirmation.
+The code is temporary. Paste it only into the setup field. The page alone does not
+confirm account access; wait for GOAT's confirmation.
 
 ### Other sign-in methods
 
@@ -52,11 +45,9 @@ account.
 ## Runtime installation
 
 Managed installation supports Apple Silicon and Intel macOS, Linux x64 or ARM64,
-and Windows x64 or ARM64. When Google's release channel is unreachable, every one
-of these installs the 1.4.5 runtime GOAT tested, except musl Linux: that runtime is
-built for glibc, so musl Linux installs only Google's native CLI, and while the
-channel is down setup reports that no release is available. Allow several GB of free disk space,
-especially on Linux.
+and Windows x64 or ARM64. It installs Google's native CLI when the release channel
+is available. Antigravity runtimes older than 1.5 are incompatible; update them in
+provider settings. Allow several GB of free disk space, especially on Linux.
 On Linux ARM64, Google's runtime needs a kernel with 4 KiB memory pages, so it
 does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.
 
@@ -66,12 +57,15 @@ Install [Antigravity CLI](https://antigravity.google/docs/getting-started) on th
 Set **Binary path** to its `agy` executable and update it yourself.
 Leave the field blank to use the managed runtime, or a compatible executable on
 `PATH` if no managed runtime is installed.
+On Windows, **Binary path** can also be a `.cmd` or `.bat` script that only sets
+variables and runs `agy_acp_server.exe` by its full path or a `%~dp0`-relative
+path. Keep `localharness_external.exe` beside that executable.
 
 ### Update the managed runtime
 
 When provider update checks find a newer Antigravity release, choose **Update
-Antigravity** in provider settings. Updating from the 1.4.5 runtime moves to Google's
-native CLI, and you may need to sign in again. Threads already running finish on
+Antigravity** in provider settings. A 1.4.5 runtime installed earlier no longer
+runs; updating moves it to Google's native CLI, and you may need to sign in again. Threads already running finish on
 their original runtime; new sessions use the update. If the new release fails its
 check, the previous runtime stays in use. See
 [Install GOAT](./install.md) for when GOAT looks for updates.
@@ -105,8 +99,10 @@ wins in this order: `.gemini/skills`, `.agents/skills`, `.agent/skills`. See
 [commands and skills](./composer.md#commands-and-skills) for invoking them.
 
 Skills for every project go in `~/.gemini/config/skills` or
-`~/.gemini/antigravity-cli/skills`. Antigravity does not read `~/.agents/skills`,
-so a skill there only appears when the project itself is your home directory.
+`~/.gemini/antigravity-cli/skills`. Antigravity does not read `~/.agents/skills`
+on its own; to share a folder like that one, list it in `~/.gemini/config/skills.json`
+or a project's `.agents/skills.json`. GOAT shows the declared skills, honoring
+`inherits`, `include_only`, and `exclude`.
 
 Antigravity receives images and audio directly, and reads PDFs and text files as
 documents. With the managed runtime on macOS and Linux, an MP4 video up to 20 MiB
@@ -143,12 +139,15 @@ Before removing a managed runtime, disable its instances and cancel any active
 installation. Clear any explicit binary path pointing into that runtime. Removal
 is refused while the runtime is in use.
 
+Use `/compact` to summarize a long conversation when your Antigravity runtime
+advertises the command. If it is unavailable, update Antigravity in provider settings
+or send `/clear` when you need a fresh context.
+
 ## Run a native goal
 
 When your Antigravity runtime offers `/goal`, send `/goal` followed by a verifiable
 objective. Antigravity keeps working until it completes the goal or you cancel it.
-If you still use the older 1.4.5 runtime, update Antigravity in provider settings,
-then refresh provider status.
+If the command is unavailable, update Antigravity in provider settings and refresh provider status.
 
 Use Stop to interrupt a running goal, then ask Antigravity to stop pursuing it
 before starting more work. Ordinary follow-ups wait until the running turn ends.

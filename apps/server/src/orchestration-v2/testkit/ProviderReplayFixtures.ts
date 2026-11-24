@@ -108,6 +108,7 @@ export interface ReplayFixtureRun<
   readonly materializeWorkspace?: (
     transcript: ProviderReplayTranscript,
     workspace: string,
+    fixtureName: string,
   ) => Effect.Effect<ProviderReplayTranscript, WorkspaceError>;
 }
 
@@ -127,7 +128,7 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
   const transcript = yield* input.harness.decodeTranscript(
     input.materializeWorkspace === undefined
       ? replayTranscript
-      : yield* input.materializeWorkspace(replayTranscript, workspace),
+      : yield* input.materializeWorkspace(replayTranscript, workspace, input.fixtureName),
   );
   const materialized = yield* materializeFixtureInput({
     scenario: input.fixtureName,

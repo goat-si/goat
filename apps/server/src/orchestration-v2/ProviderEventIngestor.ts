@@ -1,3 +1,4 @@
+import { agentModeSelectionUpdate } from "./agentModeSelectionUpdate.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { providerTurnAnalyticsProperties } from "./providerTurnAnalytics.ts";
 import { handedOffSurvivorTurns } from "./goat/CodexSurvivorHandoff.ts";
@@ -32,7 +33,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
-
 import { AgentScope } from "@goat/shared/AgentScope";
 import { withCommandActions, compactUndefined } from "./ProviderEventCommandActions.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
@@ -51,7 +51,6 @@ import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
 import { withWriterFallback } from "./readerOverloadFallback.ts";
-
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
   {
@@ -65,7 +64,6 @@ export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEven
     return `Failed to normalize provider event ${this.providerEvent.type} for thread ${this.threadId}.`;
   }
 }
-
 export class ProviderEventPublishError extends Schema.TaggedError<ProviderEventPublishError>()(
   "ProviderEventPublishError",
   {
@@ -86,13 +84,11 @@ const isLockTimeout = (error: EventSink.EventSinkV2Error) =>
   SqlError.isSqlError(error.cause) && error.cause.reason._tag === "LockTimeoutError";
 const retryLockTimeout = <A, R>(write: Effect.Effect<A, EventSink.EventSinkV2Error, R>) =>
   Effect.retry(write, { while: isLockTimeout, times: 2 });
-
 export const ProviderEventIngestorV2Error = Schema.Union([
   ProviderEventNormalizeError,
   ProviderEventPublishError,
 ]);
 export type ProviderEventIngestorV2Error = typeof ProviderEventIngestorV2Error.Type;
-
 export interface ProviderTurnAnalyticsContext {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
@@ -111,7 +107,6 @@ export interface ProviderTurnOrigin {
   readonly scheduled: boolean;
   readonly subagent: boolean;
 }
-
 export class ProviderTurnAnalytics extends Context.Reference<{
   readonly record: (properties: Readonly<Record<string, unknown>>) => Effect.Effect<void>;
 }>("goat/orchestration-v2/ProviderTurnAnalytics", {
@@ -540,6 +535,10 @@ export const layer: Layer.Layer<
                 }),
               ];
             }
+            case "thread_model_selection.updated": {
+              const update = yield* agentModeSelectionUpdate(projections, input.event);
+              return update === null ? [] : [yield* makeDomainEvent(input, update)];
+            }
             case "provider_session.updated":
               return [
                 yield* makeDomainEvent(input, {
@@ -728,8 +727,9 @@ export const layer: Layer.Layer<
             }
             case "background_work.updated":
               return [];
+            case "background_work.lost":
             case "command_output.delta":
-              // Live output is routed to the command output hub before ingestion.
+              // The session manager handles these before ingestion.
               return [];
             case "turn.terminal":
               const dismissed = yield* dismissNativeUserInputs(
@@ -985,7 +985,9 @@ export const layer: Layer.Layer<
               (effect) =>
                 input.event.type === "app_thread.created"
                   ? threadCommands.withLock(input.event.appThread.id, effect)
-                  : effect,
+                  : input.event.type === "thread_model_selection.updated"
+                    ? threadCommands.withLock(input.event.threadId, effect)
+                    : effect,
               withWriterFallback,
             ),
         ),

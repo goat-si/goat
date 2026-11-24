@@ -172,6 +172,43 @@ it("presents stable gallery pages while originals resolve independently", async 
   }
 });
 
+it("opens a non-progressive gallery when another image is missing", async () => {
+  harness.progressive = false;
+  harness.finished = false;
+  harness.preview.mockClear();
+  harness.alert.mockClear();
+  const gallery = ["selected.png", "missing.png"].map((path): FilePreviewItem => ({
+    kind: "image",
+    name: path,
+    environmentId: EnvironmentId.make("environment"),
+    resource: { _tag: "media-file", threadId: ThreadId.make("thread"), path },
+  }));
+  const selected = gallery[0];
+  if (!selected) throw new Error("Missing selected image");
+  harness.refresh
+    .mockReset()
+    .mockResolvedValueOnce("https://signed.test/selected.png")
+    .mockRejectedValueOnce(new Error("missing"));
+  const onRequestClose = vi.fn();
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () =>
+      root.render(
+        <FilePreviewModal source={{ ...selected, gallery }} onRequestClose={onRequestClose} />,
+      ),
+    );
+    expect(harness.preview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        gallery: [expect.objectContaining({ uri: "https://signed.test/selected.png" })],
+      }),
+    );
+    expect(onRequestClose).not.toHaveBeenCalled();
+    expect(harness.alert).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 it("updates the existing iOS gallery by identifier and ignores completion after unmount", async () => {
   const { FilePreview } = await import("./FilePreview.ios");
   const opening = Promise.withResolvers<void>();

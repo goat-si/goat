@@ -66,6 +66,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             reply("message.list", { data: [], cursor: {} }),
             out("session.command", { sessionID: SESSION, name: "goal", text: control }),
             reply("session.command", null),
+            // The command runs the model, so the idle-command probe finds the session running.
+            out("session.active"),
+            replyData("session.active", { [SESSION]: { type: "running" } }),
             event("session.text.ended", {
               sessionID: SESSION,
               assistantMessageID: "msg_legacy_goal",
@@ -153,6 +156,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             reply("message.list", { data: [], cursor: {} }),
             out("session.command", { sessionID: SESSION, name: "goal", text: "Write proof.txt" }),
             reply("session.command", null),
+            out("session.active"),
+            replyData("session.active", { [SESSION]: { type: "running" } }),
             event("rpc.opencode.goal.changed", { sessionID: SESSION, goal: nativeGoal("active") }),
             event("session.execution.succeeded", { sessionID: SESSION }),
             out("rpc.call", "<any>"),

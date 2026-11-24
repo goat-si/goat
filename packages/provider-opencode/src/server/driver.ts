@@ -305,10 +305,14 @@ export const OpenCodeDriver: ProviderDriver<
       );
     const resolveExecutable = yield* SpawnExecutableResolution;
     const platform = yield* HostProcess.Platform;
-    const localExecutableIdentity = (env: NodeJS.ProcessEnv) => {
-      const path = resolveExecutable(effectiveConfig.binaryPath, platform, env);
-      if (path === undefined) return Effect.succeed({ path: effectiveConfig.binaryPath });
-      return fileSystem.stat(path).pipe(
+    const localExecutableIdentity = Effect.fn("OpenCodeDriver.localExecutableIdentity")(function* (
+      env: NodeJS.ProcessEnv,
+    ) {
+      const path = yield* Effect.promise(async () =>
+        resolveExecutable(effectiveConfig.binaryPath, platform, env),
+      );
+      if (path === undefined) return { path: effectiveConfig.binaryPath };
+      return yield* fileSystem.stat(path).pipe(
         Effect.map((stat) => ({
           path,
           dev: String(stat.dev),
@@ -318,7 +322,7 @@ export const OpenCodeDriver: ProviderDriver<
         })),
         Effect.orElseSucceed(() => ({ path })),
       );
-    };
+    });
     const executableIdentity = (env: NodeJS.ProcessEnv) =>
       effectiveConfig.serverUrl.trim().length > 0
         ? Effect.succeed(null)
@@ -676,6 +680,7 @@ export const OpenCodeDriver: ProviderDriver<
               loadOpenCode2Models,
               loadOpenCode2Skills,
               environment,
+              host.compatibility,
             ).pipe(
               Effect.annotateLogs({ providerInstanceId: instanceId }),
               Effect.annotateSpans({ providerInstanceId: instanceId }),

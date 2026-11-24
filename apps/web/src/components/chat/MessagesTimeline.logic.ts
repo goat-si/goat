@@ -19,6 +19,7 @@ import {
 import {
   formatCommandActionsLabel,
   commandVerb,
+  commandlessCommandLabel,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
@@ -101,7 +102,7 @@ import {
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
-import { isWindowsAbsolutePath } from "@goat/shared/path";
+import { isHostPath } from "@goat/shared/path";
 import {
   attachTurnThreadCards,
   turnThreadTargetsEqual,
@@ -185,6 +186,11 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
       ? `${commandVerb(liveActivityToolStatus(entry.toolLifecycleStatus, false))} ${command}`
       : command;
   }
+  const commandless = commandlessCommandLabel(
+    entry,
+    liveActivityToolStatus(entry.toolLifecycleStatus, false),
+  );
+  if (commandless) return commandless;
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
     const searchLabel =
@@ -258,7 +264,7 @@ export function workEntryReadOutput(
       workEntryReadRawPaths(entry as WorkLogEntry)
         .map((path) => {
           const trimmed = path.trim().replaceAll("\\", "/");
-          if (!workspaceRoot || trimmed.startsWith("/") || isWindowsAbsolutePath(trimmed)) {
+          if (!workspaceRoot || isHostPath(trimmed)) {
             return trimmed;
           }
           const root = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -302,7 +308,7 @@ export function liveWorkEntryLabel(
   if (command) {
     return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
-  return workEntryDisplayLabel(entry, workspaceRoot);
+  return commandlessCommandLabel(entry, status) ?? workEntryDisplayLabel(entry, workspaceRoot);
 }
 
 export function workEntryIsVisibleInGroup(
@@ -430,7 +436,8 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       runId: RunId;
-      label: string;
+      status: TurnFoldStatus;
+      duration: string | null;
       expanded: boolean;
     }
   | {
@@ -573,6 +580,8 @@ function viewedImagesRows(
     : [{ kind: "viewed-images", id: `${groupId}:viewed-images`, createdAt, paths }];
 }
 
+export type TurnFoldStatus = "worked" | "stopped" | "continued";
+
 interface TurnFold {
   runId: RunId;
   anchorEntryId: string;
@@ -580,7 +589,8 @@ interface TurnFold {
   hiddenEntryIds: ReadonlySet<string>;
   /** Every entry in the segment, including the cards a fold never hides. */
   entryIds: ReadonlySet<string>;
-  label: string;
+  status: TurnFoldStatus;
+  duration: string | null;
 }
 
 interface SupersededAttemptFold {
@@ -955,14 +965,6 @@ function deriveTurnFolds(input: {
               lastEntryEnd,
           );
     const duration = elapsedMs !== null ? formatDuration(elapsedMs) : null;
-    const label = isLatestInterruptedTurn
-      ? duration
-        ? `You stopped after ${duration}`
-        : "You stopped this response"
-      : duration
-        ? `Worked for ${duration}`
-        : "Worked";
-
     // The top row keeps the whole turn's time, steers included. Work after a
     // steer folds under its own row below that steer, keyed apart from the run
     // so each segment opens on its own.
@@ -975,7 +977,8 @@ function deriveTurnFolds(input: {
       createdAt: group.startBoundary ?? firstEntry.createdAt,
       hiddenEntryIds: segmentHiddenIds(firstSegment),
       entryIds: new Set(firstSegment.map((entry) => entry.id)),
-      label,
+      status: isLatestInterruptedTurn ? "stopped" : "worked",
+      duration,
     });
     for (const [index, { startIndex, steer }] of group.steerSegments.entries()) {
       const entries = group.entries.slice(startIndex, group.steerSegments[index + 1]?.startIndex);
@@ -992,7 +995,8 @@ function deriveTurnFolds(input: {
         createdAt: steer.createdAt,
         hiddenEntryIds: segmentHiddenIds(entries),
         entryIds: new Set(entries.map((entry) => entry.id)),
-        label: segmentMs !== null ? `Continued for ${formatDuration(segmentMs)}` : "Continued",
+        status: "continued",
+        duration: segmentMs !== null ? formatDuration(segmentMs) : null,
       });
     }
   }
@@ -1181,6 +1185,7 @@ function deriveTimelineTurnFolds(input: TimelineFoldInput) {
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun?: TimelineLatestRun | null;
+  usageLimitRunId?: RunId | null;
   runningRunId?: RunId | null;
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
@@ -1201,6 +1206,7 @@ export function deriveMessagesTimelineRows(input: {
 }): MessagesTimelineRow[] {
   const isWorking = timelineIsWorking(input);
   const timelineEntries = timelineRowEntries(input, isWorking);
+
   const embeddedResultRunIds = new Set<RunId>();
   for (const entry of timelineEntries) {
     if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
@@ -1229,7 +1235,11 @@ export function deriveMessagesTimelineRows(input: {
   );
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
-  const itemizedRunIds = itemizedFailedRunIds(timelineEntries, failedRunIds);
+  const itemizedRunIds = itemizedFailedRunIds(
+    timelineEntries,
+    failedRunIds,
+    input.usageLimitRunId ?? null,
+  );
   const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
   const retainedAssistantReplyIds = retainedAssistantReplyEntryIds(timelineEntries);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(
@@ -1513,7 +1523,8 @@ export function deriveMessagesTimelineRows(input: {
         ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
-        label: turnFold.label,
+        status: turnFold.status,
+        duration: turnFold.duration,
         expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
       });
     }
@@ -1925,12 +1936,18 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
+  const latestTimelineEntry = timelineEntries.at(-1);
+  const replyIsStreaming =
+    latestTimelineEntry?.kind === "message" &&
+    latestTimelineEntry.message.role === "assistant" &&
+    latestTimelineEntry.message.streaming;
   const hasWorkingRow = nextRows.some((row) => row.kind === "working");
   if (isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
   }
   if (
     isWorking &&
+    !replyIsStreaming &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     !compactionOnlyRunFinished &&
@@ -2157,7 +2174,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       const nextAnchors = bf.deferredWorkItemIds ?? [];
       return (
         a.createdAt === bf.createdAt &&
-        a.label === bf.label &&
+        (a.kind === "turn-fold" && bf.kind === "turn-fold"
+          ? a.status === bf.status && a.duration === bf.duration
+          : a.kind === "attempt-fold" && bf.kind === "attempt-fold" && a.label === bf.label) &&
         a.expanded === bf.expanded &&
         anchors.length === nextAnchors.length &&
         anchors.every((id, index) => id === nextAnchors[index])

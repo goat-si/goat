@@ -1,3 +1,4 @@
+import { makeMemoryReadHandlers } from "./memory/MemoryReadHandlers.ts";
 import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
 import { speechStreamingCapabilities } from "./speech/SpeechCapabilities.ts";
 import {
@@ -38,7 +39,8 @@ import * as MemoryService from "./memory/MemoryService.ts";
 import { memorySessionPermit } from "./wsMemorySessionPermit.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
-import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
+import { makeMemoryImportHandlers } from "./wsMemoryImportHandlers.ts";
+export { makeMemoryImportHandlers } from "./wsMemoryImportHandlers.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
 import * as NotesService from "./notes/NotesService.ts";
 import { makeNoteRpcHandlersForSurface, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
@@ -62,7 +64,6 @@ import {
   EnvironmentAuthorizationError,
   FilesystemBrowseError,
   GitCommandError,
-  MemoryImportRpcError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
@@ -429,33 +430,6 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
-const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
-
-/** Shared by the installed websocket route and the transport integration harness. */
-export const makeMemoryImportHandlers = <E>(
-  liveScopes: Effect.Effect<ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>, E>,
-  capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
-) =>
-  Effect.gen(function* () {
-    const permit = memorySessionPermit(liveScopes, capturedScopes, [
-      "memory:write",
-      "filesystem:read",
-    ]);
-    const memory = yield* MemoryService.MemoryService;
-    const runtime = yield* Effect.serviceOption(ProviderMemoryImportRuntime);
-    return WsMemoryImportRpcGroup.middleware(RpcInstrumentation).of({
-      [WS_METHODS.memoryImportProvider]: (input) =>
-        (runtime._tag === "Some"
-          ? memory
-              .importProvider(input, permit)
-              .pipe(Effect.provideService(ProviderMemoryImportRuntime, runtime.value))
-          : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" }))
-        ).pipe(
-          Effect.mapError((error) => (isMemoryImportRpcError(error) ? error : memoryError(error))),
-        ),
-    });
-  });
-
 const ServerWsRpcGroup = RpcAuthorization.AuthorizedWsRpcGroup.middleware(RpcInstrumentation);
 // Validate the full handler map, but register smaller groups to bound layer inference.
 const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
@@ -1231,10 +1205,7 @@ export const layerWsRpc = (
           memory.search(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryList]: (input) =>
           memory.list(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryRead]: (input) =>
-          memory.read(input, memoryRead).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryHistory]: (input) =>
-          memory.history(input, memoryRead).pipe(Effect.mapError(memoryError)),
+        ...makeMemoryReadHandlers(memory, memorySync, memoryRead, memorySource),
         [WS_METHODS.memoryHubDiagnostics]: (input) =>
           memorySync.hubDiagnostics(input, memoryRead).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memorySyncStatus]: (input) =>
@@ -1242,8 +1213,6 @@ export const layerWsRpc = (
         ...makeMemoryMutationHandlers(memory, currentSession, memoryRead, memoryWrite),
         [WS_METHODS.memoryRevertResolution]: (input) =>
           memory.revertResolution(input, memoryWrite).pipe(Effect.mapError(memoryError)),
-        [WS_METHODS.memoryReadSource]: (input) =>
-          memory.readSource(input, memorySource).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryHubSettingsGet]: (input) =>
           memorySync.getHubSettings(input, memorySettings).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryHubSettingsUpdate]: (input) =>

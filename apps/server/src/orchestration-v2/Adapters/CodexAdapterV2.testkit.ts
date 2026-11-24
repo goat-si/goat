@@ -1,3 +1,4 @@
+import { withThreadNames, withThreadSetupReads } from "./CodexReplay.testkit.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
@@ -270,6 +271,14 @@ const decodeCodexAppServerReplayTranscript = Schema.decodeUnknownEffect(
   CodexReplay.CodexAppServerReplayTranscript,
 );
 
+/** Names Codex receives through thread/name/set, one per thread in the order its first turn starts. */
+export function withReplayTitles<T extends ProviderReplayTranscript>(
+  transcript: T,
+  titles: ReadonlyArray<string>,
+): T {
+  return { ...transcript, metadata: { ...transcript.metadata, goatReplayTitles: titles } };
+}
+
 export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness<
   CodexReplay.CodexAppServerReplayTranscript,
   CodexOrchestratorReplayHarnessError
@@ -295,8 +304,13 @@ export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness
         if (replayGate !== undefined) {
           yield* Effect.addFinalizer(() => Effect.sync(() => replayGate.releaseAll()));
         }
+        const titles = transcript.metadata?.goatReplayTitles;
+        const threadTitles =
+          Array.isArray(titles) && titles.every((title) => typeof title === "string")
+            ? titles
+            : [`Replay fixture: ${transcript.scenario}`];
         const driver = yield* CodexReplay.makeReplayDriver(
-          transcript,
+          withThreadSetupReads(withThreadNames(transcript, threadTitles)),
           replayGate === undefined
             ? {}
             : {

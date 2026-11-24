@@ -32,6 +32,7 @@ export function makeAsyncSubagents(callbacks: {
   let latest: ReadonlyArray<unknown> = [];
   const update = Effect.fnUntraced(function* (id: string, entry: Tracked, run: unknown) {
     const children = field(run, "children");
+    let childrenSettled = true;
     for (const child of Array.isArray(children) ? children.slice(0, 256) : []) {
       const childId = string(child, "id"),
         agent = string(child, "agent");
@@ -44,6 +45,8 @@ export function makeAsyncSubagents(callbacks: {
         status === undefined
       )
         continue;
+      if (status === "running" || status === "pending" || status === "waiting")
+        childrenSettled = false;
       const model = string(child, "model");
       const key = `${status}:${model ?? ""}`;
       if (entry.emitted.get(childId)?.key === key) continue;
@@ -60,6 +63,7 @@ export function makeAsyncSubagents(callbacks: {
       status === "waiting"
     )
       return;
+    if (!childrenSettled) return;
     for (const { member } of entry.emitted.values()) {
       if (["running", "pending", "waiting"].includes(member.status))
         yield* callbacks.member(entry.turn, entry.toolCallId, {

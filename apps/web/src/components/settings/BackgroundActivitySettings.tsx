@@ -58,8 +58,6 @@ const BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS: Record<BackgroundActivityProfile
   "battery-saver": msg("Also pauses background probes when the host or client is on battery."),
 };
 
-const ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION = msg("Uses custom intervals.");
-
 const BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES: ReadonlyArray<{
   readonly key:
     | "pauseWhenHostLocked"
@@ -68,10 +66,10 @@ const BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES: ReadonlyArray<{
     | "pauseWhenOnBattery";
   readonly label: string;
 }> = [
-  { key: "pauseWhenHostLocked", label: "Pause when host is locked" },
-  { key: "pauseWhenHostLowPower", label: "Pause on host low power" },
-  { key: "pauseWhenClientLowPower", label: "Pause on client low power" },
-  { key: "pauseWhenOnBattery", label: "Pause on battery" },
+  { key: "pauseWhenHostLocked", label: msg("Pause when host is locked") },
+  { key: "pauseWhenHostLowPower", label: msg("Pause on host low power") },
+  { key: "pauseWhenClientLowPower", label: msg("Pause on client low power") },
+  { key: "pauseWhenOnBattery", label: msg("Pause on battery") },
 ];
 
 function resetBackgroundActivitySettings() {
@@ -348,9 +346,9 @@ export function BackgroundActivitySettingsRow() {
   const backgroundActivityProfileOption = resolveBackgroundActivityProfileOption(settings);
   const backgroundActivityDescription =
     backgroundActivityProfileOption === "advanced"
-      ? `${ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION} Shared policy: ${m(
-          BACKGROUND_ACTIVITY_PROFILE_LABELS[activeBackgroundActivityProfile],
-        )}.`
+      ? gt("Uses custom intervals. Shared policy: {profile}.", {
+          profile: m(BACKGROUND_ACTIVITY_PROFILE_LABELS[activeBackgroundActivityProfile]),
+        })
       : m(BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS[resolvedBackgroundActivity.profile]);
   const canResetBackgroundActivity = !Equal.equals(
     settings.backgroundActivity,
@@ -419,7 +417,7 @@ export function BackgroundActivitySettingsRow() {
               <SelectItem hideIndicator value="advanced" disabled={!isEnvironmentScope}>
                 {isEnvironmentScope
                   ? m(BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced)
-                  : `${m(BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced)} (one environment)`}
+                  : gt("Advanced (one environment)")}
               </SelectItem>
             </SelectPopup>
           </Select>

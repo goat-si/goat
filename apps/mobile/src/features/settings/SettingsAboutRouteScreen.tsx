@@ -5,17 +5,18 @@ import Constants from "expo-constants";
 import { BRAND_CHANNEL_LABEL } from "@goat/shared/brandChannels";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { useRef, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Linking, Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { resolveMobileBrandChannel } from "../../lib/mobileBranding";
 import { useDeadlinePassed } from "../../lib/clock";
+import { I18nProvider, useGT } from "../../i18n/I18nProvider";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
-  registerHiddenUpdateTap,
+  isAppUpdatePending,
   runAppUpdateCheck,
 } from "../updates/app-updates";
 import { SettingsRow } from "./components/SettingsRow";
@@ -23,6 +24,14 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
 
 export function SettingsAboutRouteScreen() {
+  return (
+    <I18nProvider>
+      <AboutScreen />
+    </I18nProvider>
+  );
+}
+
+function AboutScreen() {
   const insets = useSafeAreaInsets();
 
   return (
@@ -41,16 +50,23 @@ export function SettingsAboutRouteScreen() {
 }
 
 function AppSettingsSection() {
+  const gt = useGT();
   const [checkState, setCheckState] = useState<{
     readonly state: AppUpdateCheckState;
     // "Up to date" is a confirmation that fades back to idle.
     readonly settledUntil: number | null;
-  }>({ state: "idle", settledUntil: null });
+  }>(() => ({ state: isAppUpdatePending() ? "ready" : "idle", settledUntil: null }));
   const confirmationExpired = useDeadlinePassed(checkState.settledUntil);
   const updateState =
     checkState.state === "current" && confirmationExpired ? "idle" : checkState.state;
   const updateInFlight = useRef(false);
-  const hiddenUpdateTapCount = useRef(0);
+  const betaChannel = Platform.select({
+    ios: { label: "TestFlight", url: "https://testflight.apple.com/join/4PXeSgXv" },
+    android: {
+      label: "Firebase App Distribution",
+      url: "https://appdistribution.firebase.dev/i/b6f930a2e01c9f53",
+    },
+  });
 
   const version = Constants.expoConfig?.version ?? "0.0.0";
   // Match app.config.ts's production fallback to avoid mislabeling builds as development.
@@ -63,15 +79,15 @@ function AppSettingsSection() {
   const busy =
     updateState === "checking" || updateState === "downloading" || updateState === "restarting";
 
-  async function checkForUpdate() {
+  async function checkForUpdate(install = false) {
     // disabled updates next render; the ref blocks same-frame double taps.
     if (updateInFlight.current) return;
     updateInFlight.current = true;
     // Failures arrive through onFailure; the settled result only matters for unlocking.
     await settlePromise(() =>
       runAppUpdateCheck({
-        applyMode: "immediate",
-        onFailure: (message) => Dialog.alert("Update failed", message),
+        applyMode: install ? "immediate" : "manual",
+        onFailure: (message) => Dialog.alert(gt("Update failed"), message),
         onStateChange: (state) =>
           setCheckState({
             state,
@@ -80,15 +96,6 @@ function AppSettingsSection() {
       }),
     );
     updateInFlight.current = false;
-  }
-
-  function handleVersionPress() {
-    if (!updateCheckAvailable || updateInFlight.current) return;
-    const tap = registerHiddenUpdateTap(hiddenUpdateTapCount.current);
-    hiddenUpdateTapCount.current = tap.nextCount;
-    if (tap.shouldCheck) {
-      void checkForUpdate();
-    }
   }
 
   const statusLabel =
@@ -133,18 +140,35 @@ function AppSettingsSection() {
         target="SettingsOpenSourceLicenses"
       />
       <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
+      {versionRow}
       {updateCheckAvailable ? (
-        <Pressable
-          accessibilityLabel={`Version ${versionLabel}`}
-          accessibilityRole="text"
+        <SettingsRow
+          icon="arrow.clockwise"
+          label={gt("Check for app updates")}
           disabled={busy}
-          onPress={handleVersionPress}
-        >
-          {versionRow}
-        </Pressable>
-      ) : (
-        versionRow
-      )}
+          onPress={() => void checkForUpdate()}
+        />
+      ) : null}
+      {updateCheckAvailable && updateState === "ready" ? (
+        <SettingsRow
+          icon="arrow.down.circle"
+          label={gt("Install app update")}
+          disabled={busy}
+          onPress={() => void checkForUpdate(true)}
+        />
+      ) : null}
+      {Application.applicationId === "si.goat.mobile" && betaChannel ? (
+        <SettingsRow
+          icon="arrow.up.right"
+          label={gt("Check beta builds")}
+          value={betaChannel.label}
+          onPress={() =>
+            void Linking.openURL(betaChannel.url).catch(() =>
+              Dialog.alert(gt("Could not open beta builds"), betaChannel.url),
+            )
+          }
+        />
+      ) : null}
     </SettingsSection>
   );
 }

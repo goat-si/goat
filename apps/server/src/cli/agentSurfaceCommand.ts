@@ -41,9 +41,31 @@ export interface InputReader {
   readonly file: (path: string) => string;
 }
 
+const MAX_INPUT_BYTES = 16 * 1024 * 1024;
+
+export function readBoundedInput(fd: number, limit = MAX_INPUT_BYTES): string {
+  const chunks: Array<Buffer> = [];
+  let total = 0;
+  while (true) {
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, limit + 1 - total));
+    const count = NodeFS.readSync(fd, chunk, 0, chunk.length, null);
+    if (count === 0) return Buffer.concat(chunks, total).toString("utf8");
+    total += count;
+    if (total > limit) throw new Error(`Input exceeds ${limit} bytes.`);
+    chunks.push(chunk.subarray(0, count));
+  }
+}
+
 export const nodeInputReader: InputReader = {
-  stdin: () => NodeFS.readFileSync(0, "utf8"),
-  file: (path) => NodeFS.readFileSync(path, "utf8"),
+  stdin: () => readBoundedInput(0),
+  file: (path) => {
+    const fd = NodeFS.openSync(path, "r");
+    try {
+      return readBoundedInput(fd);
+    } finally {
+      NodeFS.closeSync(fd);
+    }
+  },
 };
 
 /**

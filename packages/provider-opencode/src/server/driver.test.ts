@@ -12,6 +12,7 @@ import {
 } from "@goat/contracts";
 import type { OpenCodeSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -222,7 +223,9 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
   it.effect("never starts a 1.x server for an OpenCode 2 instance", () =>
     Effect.gen(function* () {
       serverStarts.length = 0;
-      const instance = yield* create({}, noHttp);
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(SpawnExecutableResolution, async () => undefined),
+      );
       yield* Effect.flip(
         instance.textGeneration.generateThreadTitle({
           cwd: process.cwd(),
@@ -904,10 +907,11 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
           )
         : undefined;
       yield* TestClock.adjust("5 minutes");
+      const recoveredFromStream = recovery ? Array.from(yield* Fiber.join(recovery))[0] : undefined;
       const recovered = yield* instance.snapshot.getSnapshot;
       const expectedReads = !scenario.enabled ? 0 : shouldRecover ? 2 : 1;
       assert.strictEqual(usageReads, expectedReads);
-      if (recovery) assert.deepStrictEqual(Array.from(yield* Fiber.join(recovery)), [recovered]);
+      if (recovery) assert.deepStrictEqual(recoveredFromStream, recovered);
       assert.strictEqual(
         recovered.usageLimits?.unavailable?.reason,
         shouldRecover ? undefined : initialReason,

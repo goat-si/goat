@@ -18,7 +18,6 @@ import {
   type OrchestrationV2ThreadProjection,
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
-  type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpFailure,
@@ -60,6 +59,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import {
+  delegatedTaskRun,
+  taskStatusForRun,
+  taskResultTransfer,
+  pageIncludesTerminalTaskResult,
+} from "./delegatedTaskResult.ts";
 import { timelineItemsWithinBudget } from "./threadReadItems.ts";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
@@ -85,12 +90,17 @@ import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { capabilityModelOption, listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
-import { overrideOptionSelections } from "./modelOptionOverrides.ts";
-import { advertisedModel } from "./ModelSelectionValidation.ts";
-import { invalidOptionSelections, knownOptions } from "./ModelSelectionValidation.ts";
+import { antigravityDelegatedModel, delegatedOptions } from "./antigravityDelegatedModel.ts";
+import {
+  advertisedModel,
+  invalidOptionSelections,
+  knownOptions,
+} from "./ModelSelectionValidation.ts";
 import {
   delegatedTaskProgress,
   subagentResultForRun,
+  delegatedTaskReportRuns,
+  SUBAGENT_RESULT_TURN_ITEM_TYPES,
 } from "@goat/provider-core/server/subagentProjection";
 import { captureRpcMemoryGrantCeiling } from "../auth/RpcAuthorization.ts";
 import {
@@ -249,49 +259,6 @@ function advertisedOptionDescriptors(
   });
 }
 
-function taskStatusForRun(
-  run: Pick<OrchestrationV2Run, "status" | "restartCancelledBackgroundWork"> | undefined,
-): OrchestratorMcpDelegateTaskResult["status"] {
-  switch (run === undefined ? undefined : runOutcome(run)) {
-    case "queued":
-      return "queued";
-    case "waiting":
-      return "waiting";
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "cancelled":
-    case "rolled_back":
-      return "cancelled";
-    case "interrupted":
-      return "interrupted";
-    case "preparing":
-    case "starting":
-    case "running":
-    case undefined:
-      return "running";
-  }
-}
-function delegatedTaskRun(
-  childProjection: Pick<OrchestrationV2ThreadProjection, "runs" | "contextTransfers">,
-  task: OrchestrationV2Subagent,
-): OrchestrationV2Run | undefined {
-  const taskRun = childProjection.runs.find((run) => run.delegatedTaskId === task.id);
-  if (taskRun !== undefined) return taskRun;
-  const spawnTransfer = childProjection.contextTransfers.find(
-    (transfer) =>
-      transfer.type === "subagent_spawn" &&
-      transfer.sourceThreadId === task.threadId &&
-      transfer.targetThreadId === task.childThreadId,
-  );
-  if (spawnTransfer === undefined) {
-    return childProjection.runs[0];
-  }
-  return spawnTransfer.targetRunId === null
-    ? undefined
-    : childProjection.runs.find((run) => run.id === spawnTransfer.targetRunId);
-}
 function hasPendingChildRuns(
   childProjection: Pick<OrchestrationV2ThreadProjection, "runs">,
   delegatedRun: OrchestrationV2Run | undefined,
@@ -388,64 +355,6 @@ function directAppOwnedChildTasks(
       task.origin === "app_owned" &&
       task.childThreadId === target.thread.id,
   );
-}
-
-// The child's transfers include the results it sent, so the parent's transfers are never read.
-function taskResultTransfer(
-  parentThreadId: ThreadId,
-  child: Pick<OrchestrationV2ThreadProjection, "runs" | "contextTransfers">,
-  task: OrchestrationV2Subagent,
-) {
-  const originalRun = delegatedTaskRun(child, task);
-  const resultRunIds = new Set(
-    child.runs
-      .filter(
-        (run) =>
-          run.delegatedTaskId === task.id ||
-          (originalRun?.delegatedTaskId === undefined && run.delegatedTaskId === undefined),
-      )
-      .map((run) => run.id),
-  );
-  if (originalRun !== undefined) resultRunIds.add(originalRun.id);
-  return child.contextTransfers.find(
-    (transfer) =>
-      transfer.type === "subagent_result" &&
-      transfer.sourceThreadId === task.childThreadId &&
-      transfer.targetThreadId === parentThreadId &&
-      ((transfer.sourcePoint.runId !== undefined && resultRunIds.has(transfer.sourcePoint.runId)) ||
-        (transfer.sourcePoint.runId === undefined && originalRun?.delegatedTaskId === undefined)),
-  );
-}
-
-function pageIncludesTerminalTaskResult(input: {
-  readonly parentThreadId: ThreadId;
-  readonly items: ReadonlyArray<OrchestratorMcpThreadTimelineItem>;
-  readonly task: OrchestrationV2Subagent;
-  readonly target: Pick<
-    OrchestrationV2ThreadProjection,
-    "thread" | "runs" | "contextTransfers" | "messages" | "turnItems"
-  >;
-}): boolean {
-  const transfer = taskResultTransfer(input.parentThreadId, input.target, input.task);
-  if (transfer === undefined) return false;
-  const run =
-    transfer.sourcePoint.runId === undefined
-      ? delegatedTaskRun(input.target, input.task)
-      : input.target.runs.find((run) => run.id === transfer.sourcePoint.runId);
-  if (run === undefined || !isTerminalTaskStatus(taskStatusForRun(run))) return false;
-
-  const result = subagentResultForRun(input.target, run);
-  if (result.messageId === null && result.turnItemId === null) return false;
-
-  return input.items.some((item) => {
-    if (item.sourceThreadId !== input.target.thread.id) return false;
-    const matchesResult =
-      (result.turnItemId !== null && item.itemId === result.turnItemId) ||
-      (result.messageId !== null &&
-        item.type === "assistant_message" &&
-        item.messageId === result.messageId);
-    return matchesResult && item.text !== null && !item.textTruncated;
-  });
 }
 
 function latestTerminalResultRun(
@@ -962,9 +871,10 @@ const make = Effect.gen(function* () {
     }
 
     const inheritedSelection = input.parent.thread.modelSelection;
-    const requestedModel = input.target?.model;
+    const antigravityTarget = antigravityDelegatedModel(provider, input.target?.model);
     const model =
-      requestedModel ??
+      antigravityTarget?.model ??
+      input.target?.model ??
       (instanceId === inheritedSelection.instanceId
         ? inheritedSelection.model
         : provider?.models[0]?.slug);
@@ -975,14 +885,13 @@ const make = Effect.gen(function* () {
       );
     }
     if (
-      requestedModel !== undefined &&
-      provider !== undefined &&
+      input.target?.model !== undefined &&
       provider.models.length > 0 &&
-      advertisedModel(provider, requestedModel) === undefined
+      advertisedModel(provider, model) === undefined
     ) {
       return yield* failure(
         "model_unavailable",
-        `Model ${requestedModel} is not advertised by provider ${instanceId}.`,
+        `Model ${input.target?.model} is not advertised by provider ${instanceId}.`,
       );
     }
     const advertised = advertisedModel(provider, model);
@@ -1001,7 +910,7 @@ const make = Effect.gen(function* () {
       instanceId === inheritedSelection.instanceId &&
       (advertised?.slug ?? model) ===
         (advertisedModel(provider, inheritedSelection.model)?.slug ?? inheritedSelection.model);
-    const options = overrideOptionSelections(
+    const options = delegatedOptions(
       inheritsOptions
         ? knownOptions(
             withLegacyUltracodeEffort(descriptors, inheritedSelection.options),
@@ -1009,6 +918,7 @@ const make = Effect.gen(function* () {
           )
         : undefined,
       requestedOptions,
+      antigravityTarget?.thinking,
     );
     return {
       modelSelection: { instanceId, model, ...(options === undefined ? {} : { options }) },
@@ -1228,9 +1138,15 @@ const make = Effect.gen(function* () {
           : delegatedTaskAwaitsWork(followupRuns, childControls, taskResultRun)
             ? "waiting_for_children"
             : "result_available";
+    const reportRuns =
+      task.result === null && taskResultRun !== undefined
+        ? delegatedTaskReportRuns(childControls, taskResultRun)
+        : [];
     const resultRunIds = [
       ...new Set(
-        [taskResultRun?.id, terminalRun?.id].filter((id): id is RunId => id !== undefined),
+        [taskResultRun?.id, terminalRun?.id, ...reportRuns.map((run) => run.id)].filter(
+          (id): id is RunId => id !== undefined,
+        ),
       ),
     ];
     const resultRecords = yield* threadManagement
@@ -1238,7 +1154,7 @@ const make = Effect.gen(function* () {
         messageRoles: ["assistant"],
         messageRunIds: resultRunIds,
         turnItemRunIds: resultRunIds,
-        turnItemTypes: ["assistant_message", "error", "system_notice"],
+        turnItemTypes: SUBAGENT_RESULT_TURN_ITEM_TYPES,
       })
       .pipe(Effect.mapError(threadManagementFailure));
     const childProjection = {
@@ -1318,7 +1234,7 @@ const make = Effect.gen(function* () {
       task.result !== null
         ? task.result
         : taskResultRun !== undefined && isTerminalTaskStatus(status)
-          ? subagentResultForRun(childProjection, taskResultRun).text
+          ? subagentResultForRun({ ...childProjection, runs: reportRuns }, taskResultRun).text
           : null;
     const resultTransfers = childControls.contextTransfers.filter(
       (transfer) =>
@@ -1343,7 +1259,7 @@ const make = Effect.gen(function* () {
     const latestTerminalSummary = canExposeTaskRunResult(terminalRun)
       ? terminalRun.id === childRun?.id
         ? derivedResult
-        : subagentResultForRun(childProjection, terminalRun).text
+        : subagentResultForRun({ ...childProjection, runs: [] }, terminalRun).text
       : null;
     const resultContextTransferId = resultTransfer?.id ?? null;
     const latestTerminalResultContextTransferId = resultTransferForRun(terminalRun)?.id ?? null;
@@ -3393,13 +3309,25 @@ const make = Effect.gen(function* () {
         for (const task of tasks) {
           const transfer = taskResultTransfer(parent.thread.id, target, task);
           const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
-          const resultRunIds = resultRunId === undefined ? [] : [resultRunId];
+          const resultRun = target.runs.find((run) => run.id === resultRunId);
+          const userRecords = yield* threadManagement
+            .getThreadRecords(target.thread.id, ["messages"], {
+              messageRoles: ["user"],
+              messageRunIds: target.runs.map((run) => run.id),
+            })
+            .pipe(Effect.mapError(threadManagementFailure));
+          const reportRuns =
+            resultRun === undefined
+              ? []
+              : delegatedTaskReportRuns({ ...target, messages: userRecords.messages }, resultRun);
+          const resultRunIds =
+            resultRunId === undefined ? [] : [resultRunId, ...reportRuns.map((run) => run.id)];
           const resultRecords = yield* threadManagement
             .getThreadRecords(target.thread.id, ["messages", "turnItems"], {
               messageRoles: ["assistant"],
               messageRunIds: resultRunIds,
               turnItemRunIds: resultRunIds,
-              turnItemTypes: ["assistant_message", "error"],
+              turnItemTypes: SUBAGENT_RESULT_TURN_ITEM_TYPES,
             })
             .pipe(Effect.mapError(threadManagementFailure));
           if (
@@ -3407,7 +3335,11 @@ const make = Effect.gen(function* () {
               parentThreadId: parent.thread.id,
               items,
               task,
-              target: { ...target, ...resultRecords },
+              target: {
+                ...target,
+                ...resultRecords,
+                messages: [...userRecords.messages, ...resultRecords.messages],
+              },
             })
           ) {
             yield* readTask(

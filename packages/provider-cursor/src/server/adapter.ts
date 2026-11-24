@@ -1,4 +1,5 @@
-import type { InteractionUpdate, RunResult, SDKUserMessage, ToolCall } from "@cursor/sdk";
+import { isResumeFailureAfterTurnEnded, terminalStatus } from "./cursorTurnStatus.ts";
+import type { InteractionUpdate, SDKUserMessage, ToolCall } from "@cursor/sdk";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cursorToolFailed } from "./toolPresentation.ts";
 import { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
@@ -11,7 +12,6 @@ import {
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2PlanArtifact,
-  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
@@ -32,7 +32,6 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -77,6 +76,7 @@ import {
   type ActiveCursorTextStream,
   type ActiveCursorTurn,
 } from "./activeTurn.ts";
+import { CursorProviderCapabilitiesV2 } from "./capabilities.ts";
 import { classifyCursorModelRejection } from "./modelRejection.ts";
 import { makeCommandOutputGate } from "./commandOutputGate.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
@@ -93,103 +93,7 @@ export const CURSOR_DRIVER_KIND = CursorAgentSdk.CURSOR_PROVIDER;
 export const CURSOR_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CURSOR_DRIVER_KIND);
 const DEFAULT_CURSOR_SETTINGS = Schema.decodeSync(CursorSettings)({});
 
-export const CursorProviderCapabilitiesV2 = {
-  sessions: {
-    supportsMultipleProviderThreadsPerSession: false,
-    supportsModelSwitchInSession: true,
-    supportsProviderSwitchingViaHandoff: true,
-    supportsRuntimeModeSwitchInSession: false,
-    pendingRequestsSurviveRestart: false,
-  },
-  threads: {
-    canCreateEmptyThread: true,
-    canReadThreadSnapshot: true,
-    canRollbackThread: false,
-    canForkThread: false,
-    canForkFromTurn: false,
-    canForkFromSubagentThread: false,
-    exposesNativeThreadId: true,
-  },
-  turns: {
-    exposesNativeTurnId: true,
-    emitsTurnStarted: true,
-    emitsTurnCompleted: true,
-    supportsInterrupt: true,
-    supportsActiveSteering: true,
-    // A steer can move a foreground subagent to the background. Mailbox wakes
-    // stay queued so a notification does not cut into the live turn.
-    activeSteeringInterruptsTools: true,
-    activeSteeringAcceptsAttachments: false,
-    supportsSteeringByInterruptRestart: true,
-    supportsQueuedMessages: true,
-    terminalStatusQuality: "strong",
-  },
-  streaming: {
-    streamsAssistantText: true,
-    streamsReasoning: true,
-    streamsToolOutput: true,
-    streamsPlanText: true,
-    emitsMessageCompleted: true,
-  },
-  tools: {
-    exposesToolItemIds: true,
-    emitsToolStarted: true,
-    emitsToolCompleted: true,
-    emitsToolOutput: true,
-    supportsMcpTools: true,
-    supportsDynamicToolCallbacks: false,
-  },
-  approvals: {
-    supportsCommandApproval: false,
-    supportsFileReadApproval: false,
-    supportsFileChangeApproval: false,
-    supportsApplyPatchApproval: false,
-    approvalsHaveNativeRequestIds: false,
-    approvalCallbacksAreLiveOnly: false,
-    approvalsCanOriginateFromSubagents: false,
-  },
-  planning: {
-    emitsPlanUpdated: true,
-    emitsTodoList: true,
-    emitsProposedPlan: true,
-    supportsStructuredQuestions: false,
-    planDeltasHaveItemIds: true,
-  },
-  subagents: {
-    supportsSubagents: true,
-    exposesSubagentThreadIds: false,
-    emitsSubagentLifecycle: true,
-    canWaitForSubagents: true,
-    canCloseSubagents: false,
-    canForkSubagentThread: false,
-  },
-  context: {
-    acceptsSystemContext: false,
-    acceptsDeveloperContext: false,
-    acceptsSyntheticUserContext: true,
-    canGenerateSummaries: true,
-    canConsumeHandoffSummaries: true,
-    supportsDeltaHandoff: true,
-    supportsFullThreadHandoff: true,
-    maxRecommendedHandoffChars: null,
-  },
-  checkpointing: {
-    appCanCheckpointFilesystem: true,
-    supportsNestedCheckpointScopes: true,
-    providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
-    providerCanReadConversationSnapshot: true,
-  },
-  identity: {
-    nativeThreadIds: "strong",
-    nativeTurnIds: "strong",
-    nativeItemIds: "weak",
-    nativeRequestIds: "none",
-  },
-  runtimePolicy: {
-    enforcement: "native",
-  },
-} satisfies OrchestrationV2ProviderCapabilities;
+export { CursorProviderCapabilitiesV2 } from "./capabilities.ts";
 
 function providerSession(input: {
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
@@ -212,12 +116,9 @@ function providerSession(input: {
   };
 }
 
-// After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
-const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
-  "Agent turn stopped after repeated resume attempts made no progress";
-
 interface CursorLiveAgent {
   readonly cwd: string | null;
+  readonly model: string;
   readonly mcpAuthorization: string | undefined;
   readonly mcpEndpoint: string | undefined;
   /** The Cua Driver the agent was opened with (`cuaDriverKey`); empty when none. */
@@ -234,6 +135,7 @@ export interface CursorAdapterV2Options extends SessionEnv.SessionAuth {
   readonly environment: SessionEnv.Source;
   /** The model catalog this key at this backend was last checked with, if any. */
   readonly getModels?: SessionEnv.CatalogModels;
+  readonly getSdkModels?: SessionEnv.CatalogSdkModels;
 }
 
 export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
@@ -285,6 +187,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         } | null>(null);
         const warnedUnsupportedSandbox = yield* Ref.make(false);
         const activeTurn = yield* Ref.make<ActiveCursorTurn | null>(null);
+        let deliveredRuntime: { agent: string; instructions: string } | undefined;
         const planIds = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact["id"]>());
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
@@ -903,6 +806,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             context.turnEnded = false;
           }
           switch (update.type) {
+            case "summary-completed":
+              if (update.failed !== true) {
+                context.compacted = true;
+                deliveredRuntime = undefined;
+              }
+              return;
             case "text-delta":
               // Earlier commentary must not hide a later standalone transport dump.
               if (context.assistant.current === null) {
@@ -1040,6 +949,23 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          if (input.context.prompt !== undefined) {
+            const checkpointed =
+              input.status === "completed" ||
+              (yield* (
+                input.context.session.runCheckpointed?.(input.context.run.runId) ??
+                Effect.succeed(false)
+              ).pipe(Effect.orElseSucceed(() => false)));
+            if (checkpointed) yield* input.context.input.inputDelivery?.accepted() ?? Effect.void;
+          }
+          const delivered = input.context.runtimeInstructions.value;
+          if (input.context.compacted) deliveredRuntime = undefined;
+          else if (delivered !== undefined) {
+            deliveredRuntime =
+              input.status === "completed"
+                ? { agent: input.context.run.agentId, instructions: delivered }
+                : undefined;
+          }
           yield* outputGate.wakeAll;
           const completedAt = yield* DateTime.now;
           for (const tool of input.context.tools.values()) {
@@ -1146,31 +1072,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           yield* Deferred.succeed(input.context.completed, undefined);
         });
 
-        const isResumeFailureAfterTurnEnded = (context: ActiveCursorTurn, result: RunResult) =>
-          context.turnEnded &&
-          result.status === "error" &&
-          result.error?.message === CURSOR_RESUME_NO_PROGRESS_MESSAGE;
-
-        const terminalStatus = (
-          context: ActiveCursorTurn,
-          result: RunResult,
-        ): Extract<
-          OrchestrationV2ProviderTurn["status"],
-          "completed" | "interrupted" | "failed" | "cancelled"
-        > => {
-          if (context.interrupted) {
-            return "interrupted";
-          }
-          switch (result.status) {
-            case "finished":
-              return "completed";
-            case "cancelled":
-              return "cancelled";
-            case "error":
-              return isResumeFailureAfterTurnEnded(context, result) ? "completed" : "failed";
-          }
-        };
-
         const resolveWorkspaceMcpServers = (cwd: string | null) =>
           cwd === null
             ? Effect.succeed({})
@@ -1211,6 +1112,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             openInput.operation === "resume" &&
             existing.nativeThreadId === openInput.agentId &&
             existing.cwd === openInput.runtimePolicy.cwd &&
+            existing.model === openInput.modelSelection.model &&
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
             existing.mcpEndpoint === mcpSession?.endpoint &&
             existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver) &&
@@ -1226,6 +1128,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
             models: adapterOptions.getModels?.(apiKey, env) ?? [],
+            sdkModels: adapterOptions.getSdkModels?.(apiKey, env) ?? [],
             runtimePolicy: openInput.runtimePolicy,
             platform,
             threadId: openInput.threadId,
@@ -1257,6 +1160,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (openInput.operation === "create") memoryToolClaims.delete(sdkSession.agentId);
           const next = {
             cwd: openInput.runtimePolicy.cwd,
+            model: openInput.modelSelection.model,
             nativeThreadId: sdkSession.agentId,
             storeCwd,
             session: sdkSession,
@@ -1274,10 +1178,16 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           config: McpProviderSession.McpProviderSessionConfig | undefined,
           memoryClaim: { claimed: boolean },
           interrupted: CursorRunPrompt | undefined,
+          runtimeDelivery: { value: string | undefined },
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
-            return { message: "/compress", prompt: undefined };
+            return {
+              message: "/compress",
+              prompt: undefined,
+              receipt: Effect.void,
+              uncertain: Effect.void,
+            };
           }
           const newText = yield* providerMessageTextWithAttachmentPaths({
             text: yield* resolveCursorSkillText(
@@ -1333,20 +1243,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               detail: "Cursor turn requires non-empty text or attachments.",
             });
           }
-          const snapshot = turnInput.refreshMemoryContext
-            ? yield* turnInput.refreshMemoryContext()
-            : turnInput.memoryContext;
-          const memory =
-            snapshot === undefined
-              ? undefined
-              : yield* Effect.try({
-                  try: () => MemoryContext.memoryContextText(snapshot),
-                  catch: () =>
-                    new ProviderAdapter.ProviderAdapterProtocolError({
-                      driver: CursorAgentSdk.CURSOR_PROVIDER,
-                      detail: "Invalid memory context frame",
-                    }),
-                });
+          const {
+            text: memory,
+            receipt,
+            uncertain,
+          } = yield* MemoryContext.promptMemory(turnInput, CursorAgentSdk.CURSOR_PROVIDER);
           const agent = yield* Ref.get(liveAgent);
           const availability = McpProviderSession.memoryToolAvailability(config);
           const hasMemoryTools = availability.read || availability.write || availability.source;
@@ -1357,16 +1258,22 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             memoryClaim.claimed = true;
             memoryToolClaims.add(nativeId);
           } else memoryToolClaims.delete(nativeId);
+          const runtimeInstructions = buildCursorRuntimeInstructions(config, {
+            harness: "Cursor",
+            model: turnInput.modelSelection.model,
+            computerUse:
+              agent !== null &&
+              agent.cuaDriverKey !== "" &&
+              McpProviderSession.carriesComputerUseSkill(config),
+          });
+          runtimeDelivery.value =
+            deliveredRuntime?.agent === nativeId &&
+            deliveredRuntime.instructions === runtimeInstructions
+              ? undefined
+              : runtimeInstructions;
           const text = [
             userText,
-            buildCursorRuntimeInstructions(config, {
-              harness: "Cursor",
-              model: turnInput.modelSelection.model,
-              computerUse:
-                agent !== null &&
-                agent.cuaDriverKey !== "" &&
-                McpProviderSession.carriesComputerUseSkill(config),
-            }),
+            runtimeDelivery.value,
             announceMemoryTools
               ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
               : undefined,
@@ -1375,6 +1282,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             .filter((part) => part !== undefined)
             .join("\n\n");
           return {
+            receipt,
+            uncertain,
             message: images.length === 0 ? text : ({ text, images } satisfies SDKUserMessage),
             prompt,
           };
@@ -1411,12 +1320,24 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const interrupted = yield* Ref.get(interruptedPrompt);
             const previous =
               interrupted?.agent === agent.nativeThreadId ? interrupted.prompt : undefined;
-            const { message, prompt } = yield* resolveUserMessage(
+            const runtimeDelivery: { value: string | undefined } = { value: undefined };
+            const { message, prompt, receipt, uncertain } = yield* resolveUserMessage(
               turnInput,
               mcpSession,
               memoryClaim,
               previous,
+              runtimeDelivery,
             );
+            let delivery = receipt;
+            let unknownDelivery = uncertain;
+            yield* unknownDelivery;
+            let memorySettled = false;
+            const settleMemory = (accepted: boolean) =>
+              Effect.suspend(() => {
+                if (memorySettled) return Effect.void;
+                memorySettled = true;
+                return accepted ? delivery : Effect.void;
+              });
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
             const sdkRun = yield* agent.session
@@ -1426,9 +1347,18 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 prepareMessage: () =>
                   Effect.gen(function* () {
                     const config = yield* mcpSessions.read(turnInput.threadId);
+                    const prepared = yield* resolveUserMessage(
+                      turnInput,
+                      config,
+                      memoryClaim,
+                      previous,
+                      runtimeDelivery,
+                    );
+                    delivery = prepared.receipt;
+                    unknownDelivery = prepared.uncertain;
+                    yield* unknownDelivery;
                     return {
-                      message: (yield* resolveUserMessage(turnInput, config, memoryClaim, previous))
-                        .message,
+                      message: prepared.message,
                       mcpServers: { ...workspaceMcpServers, ...cursorMcpServers(config) },
                     };
                   }).pipe(
@@ -1444,20 +1374,28 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   model: cursorSdkModelSelection(
                     turnInput.modelSelection,
                     adapterOptions.getModels?.(apiKey, env) ?? [],
+                    adapterOptions.getSdkModels?.(apiKey, env) ?? [],
                   ),
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
                   mcpServers,
                 },
-                onDelta: (update) => {
-                  if (context === null) {
-                    return Effect.sync(() => {
-                      pendingUpdates.push(update);
-                    });
-                  }
-                  return handleInteractionUpdate(context, update);
-                },
+                onDelta: (update) =>
+                  settleMemory(true).pipe(
+                    Effect.andThen(
+                      Effect.suspend(() => {
+                        if (context === null)
+                          return Effect.sync(() => {
+                            pendingUpdates.push(update);
+                          });
+                        return handleInteractionUpdate(context, update);
+                      }),
+                    ),
+                  ),
               })
-              .pipe(Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)));
+              .pipe(
+                Effect.tapError(() => settleMemory(false)),
+                Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)),
+              );
             if (prompt !== undefined) yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
             if (prompt !== undefined) yield* Ref.set(interruptedPrompt, null);
             const startedAt = yield* DateTime.now;
@@ -1491,6 +1429,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 nextSegment: 0,
               },
               prompt,
+              runtimeInstructions: runtimeDelivery,
+              compacted: prompt === undefined,
               interrupted: false,
               finalized: false,
               turnEnded: false,
@@ -1555,6 +1495,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                     const transportFailure = context.assistantReply.failure;
                     const status =
                       transportFailure === undefined ? terminalStatus(context, result) : "failed";
+                    yield* settleMemory(status === "completed");
                     yield* finalizeTurn({
                       context,
                       status,
@@ -1582,6 +1523,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               ),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
+                  yield* settleMemory(false);
                   if (context !== null) {
                     yield* finalizeTurn({
                       context,
@@ -1893,7 +1835,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   status: "idle" as const,
                   updatedAt: now,
                 },
-                providerTurns: [],
                 messages: projectedMessages,
                 runtimeRequests: [],
                 providerPayload: {

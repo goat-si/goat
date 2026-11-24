@@ -8,7 +8,7 @@ import type {
   RunId,
 } from "@goat/contracts";
 
-import { unsentManualContinuationSource } from "./manualContinuation.ts";
+import { unsentManualContinuationSource } from "./orchestrationV2ManualContinuation.ts";
 
 // GOAT records delivery on attempts; these fixtures translate upstream turn evidence into that model.
 const run = (id: string, manualContinuationOfRunId?: string) =>

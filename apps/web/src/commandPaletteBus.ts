@@ -34,3 +34,13 @@ export function isCommandPaletteOpen(): boolean {
     typeof document !== "undefined" && document.querySelector("[data-command-palette]") !== null
   );
 }
+
+let paletteOpener: HTMLElement | null = null;
+
+export function captureCommandPaletteOpener(): void {
+  paletteOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
+export function getCommandPaletteOpener(): HTMLElement | null {
+  return document.activeElement?.closest("[data-command-palette]") ? paletteOpener : null;
+}

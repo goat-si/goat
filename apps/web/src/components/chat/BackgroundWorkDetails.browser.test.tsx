@@ -29,3 +29,26 @@ it("opens a background command's details from the banner", async () => {
   await expect.element(page.getByText("python audit.py", { exact: true })).toBeVisible();
   await expect.element(page.getByText(/Started/)).toBeVisible();
 });
+
+it("shows a waiting subagent in background details", async () => {
+  const task = {
+    taskId: "subagent-task",
+    kind: "subagent" as const,
+    description: "Review refactor diffs",
+    childThreadId: ThreadId.make("child"),
+  };
+  const banner = backgroundWorkBannerItem({
+    threadId: ThreadId.make("thread"),
+    tasks: [task],
+    stopDisabled: false,
+    stopping: false,
+    onStop: async () => {},
+    onOpenThread: () => {},
+  });
+  if (!banner) throw new Error("Background banner missing");
+  await using screen = await render(<ComposerBannerStack items={[banner]} />);
+  await screen.getByRole("button", { name: "Details", exact: true }).click();
+  await expect
+    .element(page.getByRole("dialog").getByText("Waiting", { exact: true }))
+    .toBeVisible();
+});

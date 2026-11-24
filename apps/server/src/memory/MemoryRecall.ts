@@ -3,6 +3,8 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
+import { recordTurnMemory } from "./TurnMemoryReceipts.ts";
 import * as Schema from "effect/Schema";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Projection from "../orchestration-v2/ProjectionStore.ts";
@@ -39,6 +41,7 @@ export class MemoryRecall extends Context.Service<
       input: M.MemoryRecallInput,
       permit: Effect.Effect<void, Service.MemoryAccessError>,
       caller?: M.ScopedThreadRef,
+      runId?: M.RunId,
     ) => Effect.Effect<M.MemoryRecallResult, Service.MemoryServiceError>;
   }
 >()("goat/memory/MemoryRecall") {}
@@ -46,6 +49,7 @@ export class MemoryRecall extends Context.Service<
 export const layer = Layer.effect(
   MemoryRecall,
   Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
     const store = yield* Store.MemoryStore;
     const service = yield* Service.MemoryService;
     const sync = yield* Sync.MemorySyncService;
@@ -58,6 +62,7 @@ export const layer = Layer.effect(
       input: M.MemoryRecallInput,
       permit: Effect.Effect<void, Service.MemoryAccessError>,
       caller?: M.ScopedThreadRef,
+      runId?: M.RunId,
     ) {
       const value = yield* decodeRecallInput(input, {
         onExcessProperty: "error",
@@ -318,6 +323,16 @@ export const layer = Layer.effect(
           );
           yield* permit;
           yield* service.consumeReturned(space, caller, selected);
+          if (caller && runId)
+            yield* recordTurnMemory(
+              sql,
+              caller.threadId,
+              runId,
+              space,
+              "recall",
+              result.items,
+              value.query,
+            );
           return result;
         }),
         { finalGuard: guard },

@@ -114,3 +114,31 @@ export const CLAUDE_MCP_ELICITATION_OPTIONS: ReadonlyArray<ProviderApprovalOptio
   { decision: "acceptForSession", label: "Always allow this session" },
   { decision: "accept", label: "Approve" },
 ];
+
+export function claudeRemovalDecision(
+  toolName: string,
+  permissionMode: PermissionMode,
+  callbackOptions: Pick<
+    Parameters<CanUseTool>[2],
+    "decisionReason" | "matchedAskRule" | "toolUseID"
+  >,
+): PermissionResult | undefined {
+  const reason = NodeUtil.stripVTControlCharacters(callbackOptions.decisionReason ?? "").trim();
+  if (
+    toolName !== "Bash" ||
+    permissionMode !== "bypassPermissions" ||
+    callbackOptions.matchedAskRule !== undefined ||
+    !(
+      /^Dangerous rm(?:dir)?\b/i.test(reason) ||
+      /\bdangerous removal\b/i.test(reason) ||
+      reason === "This shell -c script runs rm and could not be checked" ||
+      reason === "A permission rule denies a command in this shell -c script"
+    )
+  )
+    return undefined;
+  return {
+    behavior: "deny",
+    toolUseID: callbackOptions.toolUseID,
+    message: `Claude Code's removal safety check denied this command; the user did not reject it. The command did not run. Do not bypass the check by splitting the removal, putting it in a script, or using another tool or shell. If the warning below supplies a safe rewrite, use it and let the same check evaluate it. Otherwise continue the rest of the task without the removal and tell the user what you needed to delete and why. Warning: ${reason}`,
+  };
+}

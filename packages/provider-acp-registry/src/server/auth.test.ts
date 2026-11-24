@@ -54,6 +54,7 @@ const catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"] = {
   resolve: () => Effect.succeed(resolved),
   search: () => Effect.die("unused"),
   prepare: () => Effect.die("unused"),
+  prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
   uninstallManagedBinary: () => Effect.die("unused"),
 };
 
@@ -432,6 +433,21 @@ it.effect("does not report authentication when post-login verification fails", (
     yield* h.phase("failed");
     assert.deepEqual(h.changed, []);
     assert.isTrue(h.killed());
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("keeps failed login output in the owner's terminal", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness(terminalMethod);
+    yield* h.controller.start("owner");
+    yield* h.phase("waiting");
+    h.data("Connect to the VPN, then sign in again.\r\n");
+    h.exit(1);
+    const failed = yield* h.phase("failed");
+    assert.strictEqual(failed.interaction?.type, "terminal");
+    if (failed.interaction?.type === "terminal")
+      assert.include(failed.interaction.output, "Connect to the VPN");
+    assert.deepEqual(h.changed, []);
   }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 

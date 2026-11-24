@@ -21,6 +21,7 @@ import {
   MAX_PROVIDER_FAILURE_MESSAGE_LENGTH,
   ContextHandoffBudgetError,
   ContextHandoffBackgroundWorkError,
+  CodexContextRestoreError,
 } from "./failure.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -137,6 +138,16 @@ it("names how the provider process exited and the stage it failed in, without it
     makeProviderFailure({ cause: { _tag: "AcpProcessExitedError", code: 1 } }).message,
     "The provider process exited with code 1. Check the server logs for the provider's output, then retry the turn.",
   );
+  const denied = makeProviderFailure({
+    cause: {
+      _tag: "CodexAppServerProcessExitedError",
+      code: 1,
+      stderr: "Error: Operation not permitted (os error 1) at /Users/private/Desktop",
+    },
+  }).message;
+  assert.include(denied, "The provider process exited with code 1. It was denied access");
+  assert.include(denied, "Files and Folders");
+  assert.notInclude(denied, "/Users/private");
 });
 
 it("tells the user to sign in only when an ACP agent answers auth_required", () => {
@@ -336,3 +347,28 @@ it.effect("keys terminal failure items by provider turn across retries and fallb
     assert.equal(firstAttempt.ordinal, 101);
   }).pipe(Effect.provide(IdAllocator.layer)),
 );
+
+it("shows only fixed Codex context restore guidance through the run failure", () => {
+  for (const [reason, expected] of [
+    ["failed", "Codex could not restore context after compaction. Retry the turn."],
+    [
+      "capacity",
+      "Codex context restoration capacity exceeded; restart the provider session before retrying.",
+    ],
+  ] as const) {
+    const cause = new ProviderAdapter.ProviderAdapterTurnStartError({
+      driver: ProviderDriverKind.make("codex"),
+      threadId: ThreadId.make("thread:restore-error"),
+      providerThreadId: ProviderThreadId.make("provider-thread:restore-error"),
+      runId: RunId.make("run:restore-error"),
+      cause: new CodexContextRestoreError({ reason }),
+    });
+    assert.equal(makeProviderFailure({ cause: Cause.fail(cause) }).message, expected);
+  }
+  const secret = "raw provider token secret";
+  const cause = {
+    _tag: "ProviderAdapterTurnStartError",
+    cause: { _tag: "CodexContextRestoreError", reason: secret, message: secret },
+  };
+  assert.notInclude(makeProviderFailure({ cause }).message, secret);
+});

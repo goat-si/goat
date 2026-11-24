@@ -1,3 +1,4 @@
+import { liveClaudeQueryFixture, wp4Memory } from "./ClaudeMemoryDelivery.testkit.ts";
 import { monitorFrames } from "./ClaudeMonitorFrames.testkit.ts";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
@@ -17,9 +18,7 @@ import { verifyClaudeReceipt } from "./ClaudeReceipt.testkit.ts";
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { beforeEach } from "vite-plus/test";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
-import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as M from "@goat/contracts";
-import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -27,7 +26,6 @@ import type {
   ElicitationRequest,
   Query as ClaudeQuery,
   SDKMessage,
-  SDKResultMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -82,7 +80,6 @@ import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
-import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
 import { AgentSurfaceToolkit } from "../../mcp/toolkits/agentSurface/tools.ts";
@@ -966,6 +963,15 @@ describe("ClaudeAdapterV2 resumeThread", () => {
           },
         });
         assert.equal(missing.nativeThreadRef?.nativeId, "native-thread-missing");
+
+        // An imported session's history lives only in its transcript.
+        const missingImport = yield* Effect.flip(
+          runtime.resumeThread({
+            providerThread: { ...missing, id: providerThread.id },
+            importedNativeSession: true,
+          }),
+        );
+        assert.equal(missingImport._tag, "ProviderAdapterResumeThreadError");
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
@@ -2015,6 +2021,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* start("/unrestricted");
         assert.equal(harness.getOpenedOptions()?.permissionMode, "bypassPermissions");
         assert.equal(harness.getOpenedOptions()?.allowDangerouslySkipPermissions, true);
+        const removal = yield* Effect.promise(() =>
+          harness.getOpenedOptions()!.canUseTool!(
+            "Bash",
+            { command: "rm -rf target" },
+            {
+              signal: new AbortController().signal,
+              toolUseID: "removal-check",
+              requestId: "removal-check",
+              decisionReason: "Claude Code can't rule out a dangerous removal.",
+            },
+          ),
+        );
+        assert.equal(removal?.behavior, "deny");
         // Forwarded asks (including ask rules and settings fallback) still need a decision
         // before queued init/status frames arrive.
         for (const { phase, frame } of [
@@ -3399,7 +3418,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               attachments: [],
             },
           });
-          assert.equal(harness.offeredMessages[1]?.priority, "now");
+          assert.equal(harness.offeredMessages[1]?.priority, "next");
         }
         const partialText = "The audit covers the `integ";
         if (!queryExits)
@@ -4406,7 +4425,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   );
 
   it.effect.each([
-    { cooldown: " (reset after 1h2m3s)", seconds: 3723 },
+    { cooldown: " (reset after 1h2m3s)", seconds: 3723, untyped: true },
     { cooldown: " (reset after 4m 6s) (last error: rate limited)", seconds: 246 },
     { cooldown: " (last error: upstream (reset after 1h))", seconds: 0 },
     { cooldown: " (reset after 1m) (last error: upstream (reset after 1h))", seconds: 60 },
@@ -4425,9 +4444,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachments: [],
         }),
       );
-      // An API-key session reports a gateway 429 only as text, with no rate_limit_info.
       const result = `API Error: Request rejected (429) · All credentials for model claude-opus-5-5 are cooling down${input.cooldown}`;
       yield* Queue.offerAll(harness.sdkMessages, [
+        ...("untyped" in input
+          ? [
+              claudeSdkFrame({
+                type: "rate_limit_event",
+                rate_limit_info: { status: "rejected", isUsingOverage: false },
+                uuid: "00000000-0000-4000-8000-000000000650",
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            ]
+          : []),
         makeAssistantErrorFrame({
           uuid: "00000000-0000-4000-8000-000000000654",
           error: "rate_limit",
@@ -4455,7 +4483,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       );
     }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect("keeps the measured context when a usage limit ends the turn", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -4520,7 +4547,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.deepEqual(reportedContext, [2]);
     }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect.each(["ttl", "terminal"] as const)(
     "releases the legacy Claude turn input body (%s)",
     (mode) =>
@@ -4581,7 +4607,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const failOffers = yield* Deferred.make<void>();
           const harness = yield* makeWakeHarnessWithOptions({
             offer: (message) => {
-              if (message.priority !== "now") return Effect.void;
+              if (message.priority !== "next") return Effect.void;
               if (failure === "concurrent-offer")
                 return Queue.offer(offersEntered, undefined).pipe(
                   Effect.andThen(Deferred.await(failOffers)),
@@ -4638,7 +4664,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           };
           if (failure === "prior-success") {
             yield* harness.runtime.steerTurn(steerInput);
-            assert.equal(harness.offeredMessages[1]?.priority, "now");
+            assert.equal(harness.offeredMessages[1]?.priority, "next");
           }
           steering = true;
           const steer = yield* harness.runtime
@@ -4733,82 +4759,83 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         : [],
     );
 
-  it.effect("reports context from final stream usage when the request starts at zero", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeWakeHarness;
-      yield* harness.runtime.startTurn(
-        makeClaudeTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now: yield* DateTime.now,
-          attemptId: RunAttemptId.make("attempt-zero-start-usage"),
-          modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "gateway-model" },
-          text: "Continue.",
-          attachments: [],
-        }),
-      );
-      // Some Anthropic-compatible proxies report zero usage at message_start
-      // and the real counts on the final message_delta.
-      const frames = [
-        usageStreamFrame({
-          type: "message_start",
-          message: { id: "msg_first", usage: zeroUsage },
-        }),
-        usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000670", zeroUsage),
-        usageStreamFrame(
-          {
+  it.effect.each([zeroUsage, undefined, null, {}])(
+    "reports final usage from partial starts: %s",
+    (startUsage) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-zero-start-usage"),
+            modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "gateway-model" },
+            text: "Continue.",
+            attachments: [],
+          }),
+        );
+        // Some Anthropic-compatible proxies report zero usage at message_start
+        // and the real counts on the final message_delta.
+        const frames = [
+          usageStreamFrame({
+            type: "message_start",
+            message: { id: "msg_first", usage: startUsage },
+          }),
+          usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000670", zeroUsage),
+          usageStreamFrame(
+            {
+              type: "message_delta",
+              delta: { stop_reason: "tool_use", stop_sequence: null },
+              usage: { ...zeroUsage, input_tokens: 999_999, output_tokens: 9 },
+            },
+            "child-tool",
+          ),
+          usageStreamFrame({
             type: "message_delta",
             delta: { stop_reason: "tool_use", stop_sequence: null },
-            usage: { ...zeroUsage, input_tokens: 999_999, output_tokens: 9 },
-          },
-          "child-tool",
-        ),
-        usageStreamFrame({
-          type: "message_delta",
-          delta: { stop_reason: "tool_use", stop_sequence: null },
-          usage: { ...zeroUsage, input_tokens: 37_939, output_tokens: 184 },
-        }),
-        usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000671", zeroUsage),
-        usageStreamFrame({
-          type: "message_start",
-          message: { id: "msg_second", usage: zeroUsage },
-        }),
-        usageSnapshotFrame("msg_second", "00000000-0000-4000-8000-000000000672", zeroUsage),
-        usageStreamFrame({
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { input_tokens: null, output_tokens: 12 },
-        }),
-        usageStreamFrame({
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { input_tokens: 37_939, output_tokens: 12 },
-        }),
-        claudeSdkFrame({
-          ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
-          modelUsage: { "gateway-model": { contextWindow: 1_048_576 } },
-        }),
-      ];
-      for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
-      const terminal = yield* Queue.take(harness.terminalReceipts);
-      assert.equal(terminal.status, "completed");
-      assert.deepEqual(reportedContextTokens(harness.events), [38_123, 37_951, 37_951]);
-      assert.equal(
-        harness.runtime.getModelContextWindow?.({
-          ...CLAUDE_TEST_MODEL_SELECTION,
-          model: "gateway-model",
-        }),
-        1_048_576,
-      );
-      const updates = harness.events.flatMap((event) =>
-        event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
-          ? [event.providerTurn.tokenUsage.maxTokens]
-          : [],
-      );
-      assert.deepEqual(updates, [null, null, 1_048_576]);
-    }).pipe(Effect.provide(layerAdapterTest)),
+            usage: { ...zeroUsage, input_tokens: 37_939, output_tokens: 184 },
+          }),
+          usageSnapshotFrame("msg_first", "00000000-0000-4000-8000-000000000671", zeroUsage),
+          usageStreamFrame({
+            type: "message_start",
+            message: { id: "msg_second", usage: zeroUsage },
+          }),
+          usageSnapshotFrame("msg_second", "00000000-0000-4000-8000-000000000672", zeroUsage),
+          usageStreamFrame({
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { input_tokens: null, output_tokens: 12 },
+          }),
+          usageStreamFrame({
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { input_tokens: 37_939, output_tokens: 12 },
+          }),
+          claudeSdkFrame({
+            ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
+            modelUsage: { "gateway-model": { contextWindow: 1_048_576 } },
+          }),
+        ];
+        for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
+        const terminal = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(terminal.status, "completed");
+        assert.deepEqual(reportedContextTokens(harness.events), [38_123, 37_951, 37_951]);
+        assert.equal(
+          harness.runtime.getModelContextWindow?.({
+            ...CLAUDE_TEST_MODEL_SELECTION,
+            model: "gateway-model",
+          }),
+          1_048_576,
+        );
+        const updates = harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
+            ? [event.providerTurn.tokenUsage.maxTokens]
+            : [],
+        );
+        assert.deepEqual(updates, [null, null, 1_048_576]);
+      }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect("merges cumulative stream usage into the message_start counts", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -4871,7 +4898,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.deepEqual(reportedContextTokens(harness.events), [1_211, 1_230, 1_075, 400]);
     }).pipe(Effect.provide(layerAdapterTest)),
   );
-
   it.effect("shows a hook-dropped Claude prompt once and skips info-level lines", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -9241,6 +9267,36 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ),
           "idle progress",
         );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: "idle-shell",
+            tool_use_id: IDLE_BASH,
+            description: "git log -5",
+            is_backgrounded: true,
+            parent_task_id: TASK_ID,
+            task_type: "local_bash",
+            uuid: "00000000-0000-4000-8000-000000000960",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.pendingBackgroundTasks?.some(
+                  (task) => task.taskId === "idle-shell",
+                ) === true,
+            ),
+          "idle shell task",
+        );
+        const shell = harness.events
+          .findLast((event) => event.type === "provider_thread.updated")
+          ?.providerThread.pendingBackgroundTasks?.find((task) => task.taskId === "idle-shell");
+        assert.equal(shell?.command, "git log -5");
         const routing = subagentRouting(harness.events, [STRADDLING_BASH, IDLE_BASH]);
         assert.deepEqual(routing.assistantTexts(routing.childThreadId), ["Still auditing."]);
         const straddling = latestToolItem(STRADDLING_BASH);
@@ -11472,6 +11528,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "system",
           subtype: "task_started",
           task_id: SUBAGENT_TASK_ID,
+          run_id: "run-1",
           tool_use_id: SUBAGENT_TOOL_USE_ID,
           description: "Sleep then echo done token",
           subagent_type: "general-purpose",
@@ -11495,6 +11552,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "system",
           subtype: "task_started",
           task_id: SUBAGENT_TASK_ID,
+          run_id: "run-2",
           tool_use_id: RESUME_TOOL_USE_ID,
           description: "Sleep then echo done token",
           is_backgrounded: true,
@@ -11513,7 +11571,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           uuid: "00000000-0000-4000-8000-000000000506",
           session_id: WAKE_NATIVE_SESSION,
         });
-
         const harness = yield* makeWakeHarness;
         const now = yield* DateTime.now;
         const subagentEvents = () =>
@@ -11525,7 +11582,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               { type: "subagent.updated" }
             > => event.type === "subagent.updated",
           );
-
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
             threadId: harness.threadId,
@@ -11549,7 +11605,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           () => harness.terminalEvents().length === 1,
           "first turn terminal",
         );
-
         yield* Queue.offer(harness.sdkMessages, firstNotification);
         yield* harness.awaitUntil(
           () => harness.continuationRequests.length === 1,
@@ -11582,7 +11637,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(subagentEvents().at(-1)?.subagent.status, "completed");
         assert.equal(subagentEvents().at(-1)?.subagent.result, FIRST_SUMMARY);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
-
         yield* Queue.offer(
           harness.sdkMessages,
           claudeSdkFrame({
@@ -11710,6 +11764,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const finalSubagent = subagentEvents().at(-1)?.subagent;
         assert.equal(finalSubagent?.status, "completed");
         assert.equal(finalSubagent?.result, SECOND_SUMMARY);
+        const results = new Map(
+          harness.events.flatMap((event) =>
+            event.type === "message.updated" &&
+            [FIRST_SUMMARY, SECOND_SUMMARY].includes(event.message.text)
+              ? [[event.message.id, event.message.text] as const]
+              : [],
+          ),
+        );
+        assert.deepEqual([...results.values()], [FIRST_SUMMARY, SECOND_SUMMARY]);
         assert.equal(finalSubagent?.runId, "run-attempt-claude-wake-9c");
         const reopenIndex = harness.events.findIndex(
           (event) =>
@@ -15356,7 +15419,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           },
         });
         const attachmentNote = `\n\n[Attached file "requirements.pdf" is saved at: ${path.join(harness.attachmentsDir, attachmentRelativePath(attachment)!)}]`;
-        assert.equal(harness.offeredMessages[1]?.priority, "now");
+        assert.equal(harness.offeredMessages[1]?.priority, "next");
         assert.deepEqual(harness.offeredMessages[1]?.message.content, [
           { type: "text", text: `${leadingText}${attachmentNote}` },
           { type: "text", text: `/implement the fixes${attachmentNote}` },
@@ -15680,163 +15743,232 @@ describe("ClaudeAdapterV2 query message stream", () => {
   );
 });
 
-const wp4Memory = () =>
-  MemoryContext.packMemoryContext({
-    memorySpaceId: M.MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: M.MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: M.MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: M.EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <untrusted> 'quoted' \"data\"",
-      },
-    ],
-  })!;
-
-const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function* (
-  config: McpProviderSession.McpProviderSessionConfig,
-  nativeSessionId: string,
-  currentMemoryPolicy: McpSessionRegistry.McpSessionRegistry["Service"]["currentMemoryPolicy"] = () =>
-    Effect.succeed(undefined),
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-    prefix: `goat-${config.threadId}-`,
-  });
-  const offers: SDKUserMessage[] = [];
-  const sdkMessages = yield* Queue.unbounded<SDKMessage>();
-  const registrations: Array<Record<string, unknown>> = [];
-  const opened: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions[] = [];
-  let closes = 0;
-  const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-    instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-    settings: DEFAULT_CLAUDE_SETTINGS,
-    environment: {},
-    attachmentsDir,
-    fileSystem,
-    path: yield* Path.Path,
-    random: yield* SecureRandom.SecureRandom,
-    idAllocator: yield* IdAllocator.IdAllocatorV2,
-    queryRunner: {
-      allocateSessionId: Effect.succeed(nativeSessionId),
-      open: (input) =>
-        Effect.sync(() => {
-          opened.push(input.options);
-          return {
-            messages: Stream.fromQueue(sdkMessages),
-            offer: (message) =>
-              Effect.sync(() => {
-                offers.push(message);
-              }),
-            setMcpServers: (servers) =>
-              Effect.sync(() => {
-                registrations.push(servers);
-              }),
-            setModel: () => Effect.void,
-            applyFlagSettings: () => Effect.void,
-            setPermissionMode: () => Effect.void,
-            backgroundTasks: () => Effect.succeed(false),
-            stopTask: () => Effect.void,
-            interrupt: Effect.void,
-            close: Effect.sync(() => void closes++),
-          } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
-        }),
-      forkSession: () => Effect.die("unused"),
-      subagentLaunchToolUseId: () => Effect.succeed(null),
-      assertComplete: Effect.void,
-    },
-  }).pipe(
-    Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
-      issue: () => Effect.die("unused"),
-      resolve: () => Effect.succeed(undefined),
-      touch: () => Effect.void,
-      revokeProviderSession: () => Effect.void,
-      revokeThread: () => Effect.void,
-      revokeAll: Effect.void,
-      subscribeChanges: Effect.die("unused"),
-      inspect: () => Effect.undefined,
-      currentMemoryPolicy,
-    }),
-  );
-  const sessions = yield* McpProviderSessions.McpProviderSessions;
-  yield* sessions.set(config);
-  const runtime = yield* adapter.openSession({
-    threadId: config.threadId,
-    providerSessionId: ProviderSessionId.make(`${config.threadId}-session`),
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-  });
-  const terminals = yield* Queue.unbounded<void>();
-  const approvalRequested = yield* Deferred.make<void>();
-  yield* runtime.events.pipe(
-    Stream.runForEach((event) => {
-      if (event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending")
-        return Deferred.succeed(approvalRequested, undefined);
-      return event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void;
-    }),
-    Effect.forkScoped,
-  );
-  const providerThread = yield* runtime.ensureThread({
-    threadId: config.threadId,
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-  });
-  const finish = Effect.fn("claudeTest.finishLiveTurn")(function* (
-    message: SDKUserMessage,
-    uuid: SDKResultMessage["uuid"],
-    beforeResult: ReadonlyArray<SDKMessage> = [],
-  ) {
-    yield* Queue.offer(sdkMessages, { ...message, session_id: nativeSessionId });
-    for (const frame of beforeResult) yield* Queue.offer(sdkMessages, frame);
-    yield* Queue.offer(sdkMessages, {
-      type: "result",
-      subtype: "success",
-      is_error: false,
-      duration_ms: 0,
-      duration_api_ms: 0,
-      num_turns: 1,
-      result: "done",
-      stop_reason: "end_turn",
-      total_cost_usd: 0,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
-        inference_geo: "fixture",
-        iterations: [],
-        server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
-        service_tier: "standard",
-        speed: "standard",
-      },
-      modelUsage: {},
-      permission_denials: [],
-      uuid,
-      session_id: nativeSessionId,
-      terminal_reason: "completed",
-    });
-  });
-  return {
-    offers,
-    registrations,
-    opened,
-    sessions,
-    runtime,
-    providerThread,
-    terminals,
-    approvalRequested,
-    finish,
-    get closes() {
-      return closes;
-    },
-  };
-});
-
 describe("Claude WP4 memory delivery", () => {
+  it.effect("does not record a root prompt stopped before Claude reads it (#3836)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("root-unread");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "fixture",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "root-unread-native",
+          () => Effect.undefined,
+          true,
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        let uncertain = 0;
+        const input = {
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make("root-unread"),
+            text: "unread",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              uncertain++;
+            }),
+        };
+        yield* fixture.runtime.startTurn(input);
+        assert.equal(uncertain, 1);
+        yield* fixture.runtime.interruptTurn({
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${input.attemptId}`,
+          }),
+        });
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 0);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+  it.effect("does not record an unread steer when stopped behind a tool (#3801)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("receipt-stop");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "receipt-stop-native",
+          () => Effect.succeed(undefined),
+          true,
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const input = {
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make("receipt-stop"),
+            text: "hello",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }),
+        };
+        const providerTurnId = allocator.derive.providerTurn({
+          driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${input.attemptId}`,
+        });
+        yield* fixture.runtime.startTurn(input);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "assistant",
+            session_id: "receipt-stop-native",
+            user_message_uuid: fixture.offers[0]?.uuid,
+            uuid: "00000000-0000-4000-8000-000000000124",
+            parent_tool_use_id: null,
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "message-tool",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "tool-held",
+                  name: "Bash",
+                  input: { command: "echo fixture" },
+                },
+              ],
+            },
+          }),
+        );
+        yield* Deferred.await(fixture.toolStarted);
+        yield* fixture.runtime.steerTurn({
+          runId: input.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId,
+          message: { ...input.message, text: "unread" },
+        });
+        yield* fixture.runtime.interruptTurn({
+          providerThread: fixture.providerThread,
+          providerTurnId,
+        });
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 1);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+  it.effect("records a steer only after Claude accepts it (#3801)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("receipt-steer");
+        const fixture = yield* liveClaudeQueryFixture(
+          {
+            environmentId: EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential",
+            providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          },
+          "receipt-native",
+        );
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        let receipts = 0;
+        const received = yield* Queue.unbounded<void>();
+        const makeInput = (attempt: string) => ({
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: fixture.providerThread,
+            now: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+            attemptId: RunAttemptId.make(attempt),
+            text: "hello",
+            attachments: [],
+          }),
+          refreshMemoryContext: () => Effect.succeed(wp4Memory()),
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              receipts++;
+            }).pipe(Effect.andThen(Queue.offer(received, undefined)), Effect.asVoid),
+        });
+        const start = makeInput("receipt-first");
+        yield* fixture.runtime.startTurn(start);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: fixture.offers[0]?.uuid,
+            state: "started",
+          }),
+        );
+        yield* Queue.take(received);
+        yield* fixture.runtime.steerTurn({
+          runId: start.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${start.attemptId}`,
+          }),
+          message: { ...start.message, text: "unread" },
+        });
+        assert.equal(receipts, 1);
+        yield* fixture.finish(fixture.offers[0]!, "00000000-0000-4000-8000-000000000121");
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 1);
+        const next = makeInput("receipt-second");
+        yield* fixture.runtime.startTurn(next);
+        yield* fixture.emit(
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: fixture.offers[2]?.uuid,
+            state: "started",
+          }),
+        );
+        yield* Queue.take(received);
+        yield* fixture.runtime.steerTurn({
+          runId: next.runId,
+          threadId,
+          providerThread: fixture.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${next.attemptId}`,
+          }),
+          message: { ...next.message, text: "accepted" },
+        });
+        assert.equal(receipts, 2);
+        yield* fixture.finish(
+          Object.assign({}, fixture.offers[3]!, { user_message_uuid: fixture.offers[3]!.uuid }),
+          "00000000-0000-4000-8000-000000000122",
+        );
+        yield* Queue.take(fixture.terminals);
+        assert.equal(receipts, 3);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
   it.effect("refreshes both message builders and credentials while retaining the live query", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -15929,7 +16061,7 @@ describe("Claude WP4 memory delivery", () => {
           }),
           message: { ...base.message, text: "steer" },
         });
-        assert.equal(offers[1]?.priority, "now");
+        assert.equal(offers[1]?.priority, "next");
         assert.include(JSON.stringify(offers[1]?.message.content), "&lt;untrusted&gt;");
         yield* finish(offers[0]!);
         yield* Queue.take(terminals);
@@ -16071,130 +16203,6 @@ describe("Claude WP4 memory delivery", () => {
         });
         assert.equal(offers.length, 6);
         assert.notInclude(JSON.stringify(offers[5]?.message.content), "external_goat_memory");
-      }).pipe(Effect.provide(layerAdapterTest)),
-    ),
-  );
-});
-describe("ClaudeAdapterV2 computer use", () => {
-  const cuaDriver: M.CuaDriverMcpConfiguration = {
-    command: "/resources/cua-driver",
-    args: ["mcp", "--socket", "/tmp/cua.sock"],
-    environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
-    socketPath: "/tmp/cua.sock",
-  };
-  const session = (threadId: ThreadId): McpProviderSession.McpProviderSessionConfig => ({
-    environmentId: EnvironmentId.make("fixture"),
-    threadId,
-    providerSessionId: "cua-credential",
-    providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-    endpoint: "http://127.0.0.1:43123/mcp",
-    authorizationHeader: "Bearer fixture-cua",
-    browserToolsAvailable: false,
-    grantedScopes: [],
-  });
-
-  it("attaches the driver beside goat and preapproves it only outside read-only sandboxes", () => {
-    const attached = { ...session(ThreadId.make("cua-overrides")), cuaDriver };
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession: attached,
-      readOnlySandbox: false,
-    });
-    assert.deepEqual(overrides.mcpServers?.["cua-driver"], {
-      type: "stdio",
-      command: "/resources/cua-driver",
-      args: ["mcp", "--socket", "/tmp/cua.sock"],
-      env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
-    });
-    assert.include(overrides.allowedTools ?? [], "mcp__cua-driver__*");
-
-    const readOnly = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession: attached,
-      readOnlySandbox: true,
-      allowedTools: ["mcp__cua-driver__click"],
-    });
-    assert.isUndefined(readOnly.mcpServers?.["cua-driver"]);
-    assert.isFalse(
-      (readOnly.allowedTools ?? []).some((tool) => tool.startsWith("mcp__cua-driver__")),
-    );
-
-    const detached = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession: session(ThreadId.make("cua-overrides")),
-      readOnlySandbox: false,
-    });
-    assert.isUndefined(detached.mcpServers?.["cua-driver"]);
-    assert.notInclude(detached.allowedTools ?? [], "mcp__cua-driver__*");
-  });
-
-  it.effect("attaches and detaches the driver on a live query at the next turn", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const threadId = ThreadId.make("cua-claude");
-        const config = session(threadId);
-        const fixture = yield* liveClaudeQueryFixture(config, "cua-claude-native");
-        const { offers, registrations, opened, sessions, runtime, providerThread, terminals } =
-          fixture;
-        // Permission checks run while the turn is active, as Claude asks during one.
-        const turn = (ordinal: number, whileActive: Effect.Effect<void> = Effect.void) =>
-          Effect.gen(function* () {
-            yield* runtime.startTurn(
-              makeClaudeTestTurnInput({
-                threadId,
-                providerThread,
-                now: yield* DateTime.now,
-                attemptId: RunAttemptId.make(`cua-claude-${ordinal}`),
-                text: `turn ${ordinal}`,
-                attachments: [],
-              }),
-            );
-            const offered = offers[offers.length - 1]!;
-            yield* whileActive;
-            yield* fixture.finish(offered, `00000000-0000-4000-8000-00000000010${ordinal}`);
-            yield* Queue.take(terminals);
-            return offered;
-          });
-        const expectPermission = (behavior: "allow" | "deny") =>
-          Effect.promise(() =>
-            opened[0]!.canUseTool!(
-              "mcp__cua-driver__click",
-              {},
-              {
-                signal: new AbortController().signal,
-                toolUseID: `fixture-${behavior}`,
-                requestId: `fixture-${behavior}`,
-              },
-            ),
-          ).pipe(
-            Effect.map((result) => {
-              assert.equal(result?.behavior, behavior);
-              if (behavior === "deny")
-                assert.include(JSON.stringify(result), "Computer use is not attached");
-            }),
-          );
-        const mentionsComputerUse = (message: SDKUserMessage) =>
-          JSON.stringify(message.message.content).includes("<computer_use>");
-
-        // Opened before computer use was enabled: no driver, no instructions.
-        const first = yield* turn(1, expectPermission("deny"));
-        assert.isUndefined(opened[0]?.mcpServers?.["cua-driver"]);
-        assert.notInclude(JSON.stringify(opened[0]?.systemPrompt), "<computer_use>");
-        assert.isFalse(mentionsComputerUse(first));
-
-        // Enabled while the process lives: the next turn attaches it in place.
-        yield* sessions.set({ ...config, cuaDriver });
-        const second = yield* turn(2, expectPermission("allow"));
-        assert.equal(opened.length, 1);
-        assert.equal(fixture.closes, 0);
-        assert.deepEqual(Object.keys(registrations[0] ?? {}).toSorted(), ["cua-driver", "goat"]);
-        assert.isTrue(mentionsComputerUse(second));
-        const third = yield* turn(3);
-        assert.equal(registrations.length, 1);
-        assert.isFalse(mentionsComputerUse(third));
-
-        // Disabled: the driver leaves the live process and its tools are denied.
-        yield* sessions.set(config);
-        yield* turn(4, expectPermission("deny"));
-        assert.equal(opened.length, 1);
-        assert.deepEqual(Object.keys(registrations[1] ?? {}), ["goat"]);
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );

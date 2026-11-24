@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { createComputerUseHistoryCommand } from "@goat/client-runtime/state/computer-use-history";
 import type {
@@ -30,6 +31,7 @@ export function ComputerUseHistorySection(props: HistoryProps) {
 }
 
 function ComputerUseHistoryContent(props: HistoryProps) {
+  const gt = useGT();
   const canRead = useAtomValue(command.permissionAtom(props.environmentId));
   const request = useAtomCommand(command, { reportFailure: false });
   const [entries, setEntries] = useState<ReadonlyArray<typeof ComputerUseHistoryEntry.Type>>([]);
@@ -68,13 +70,13 @@ function ComputerUseHistoryContent(props: HistoryProps) {
   };
   if (props.hideWithoutPermission && !canRead) return null;
   return (
-    <section aria-label="Computer use history">
+    <section aria-label={gt("Computer use history")}>
       {entries.length > 0 ? (
         <ComputerUseHistoryRows entries={entries} />
       ) : loaded ? (
-        <p>No input history.</p>
+        <p>{gt("No input history.")}</p>
       ) : null}
-      {failed ? <p role="alert">Could not load input history.</p> : null}
+      {failed ? <p role="alert">{gt("Could not load input history.")}</p> : null}
       {!loaded || cursor !== null ? (
         <Button
           variant="ghost"
@@ -82,7 +84,7 @@ function ComputerUseHistoryContent(props: HistoryProps) {
           disabled={!canRead || loading}
           onClick={() => void load()}
         >
-          {loading ? "Loading…" : loaded ? "Load more" : "Show input history"}
+          {loading ? gt("Loading…") : loaded ? gt("Load more") : gt("Show input history")}
         </Button>
       ) : null}
     </section>

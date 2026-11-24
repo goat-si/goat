@@ -36,7 +36,7 @@ export const isPermanentRecoveryError = (error: unknown) => {
     Schema.isSchemaError(error.cause)
   );
 };
-export const OWNED_RECOVERY_RETRY = {
+const OWNED_RECOVERY_RETRY = {
   schedule: OWNED_RECONNECT_SCHEDULE,
   while: (error: unknown) => !isPermanentRecoveryError(error),
 };
@@ -44,3 +44,16 @@ export class OpenCode2ServerExitedError extends Schema.TaggedError<OpenCode2Serv
   "OpenCode2ServerExitedError",
   {},
 ) {}
+
+export const whileAlive = <A, E, R>(
+  processExit: Effect.Effect<unknown> | undefined,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  processExit === undefined
+    ? effect
+    : effect.pipe(
+        Effect.retry(OWNED_RECOVERY_RETRY),
+        Effect.raceFirst(
+          processExit.pipe(Effect.andThen(Effect.fail(new OpenCode2ServerExitedError()))),
+        ),
+      );

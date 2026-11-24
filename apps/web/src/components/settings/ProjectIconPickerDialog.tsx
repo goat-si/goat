@@ -1,15 +1,11 @@
-import * as Schema from "effect/Schema";
 import { deriveProjectIdentity } from "../../projectIdentity";
 import { ProjectMonogram } from "../ProjectMonogram";
-import {
-  ProjectMonogramText,
-  type ProjectIconColor,
-  type ProjectIconOverride,
-} from "@goat/contracts";
+import type { ProjectIconColor, ProjectIconOverride } from "@goat/contracts";
 import { createElement, useState } from "react";
 import {
   filterProjectIconNames,
   firstEmoji,
+  isValidProjectMonogram,
   PROJECT_EMOJIS,
   PROJECT_ICON_COLORS,
   projectIconColorClassName,
@@ -31,7 +27,6 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 const DEFAULT_ICON = "folder-code";
-const isMonogramText = Schema.is(ProjectMonogramText);
 
 function PickerIcon({ name }: { name: string }) {
   const icon = lucideIconByName(name);
@@ -102,7 +97,7 @@ function ProjectIconPickerBody({
   const icons = filterProjectIconNames(query);
   const selectedColorClassName = projectIconColorClassName(color);
   const monogram = letters.normalize("NFKC").trim().toUpperCase();
-  const validMonogram = isMonogramText(monogram);
+  const validMonogram = isValidProjectMonogram(monogram);
   const save = () => {
     if (mode === "monogram" && !validMonogram) return;
     onSelect(

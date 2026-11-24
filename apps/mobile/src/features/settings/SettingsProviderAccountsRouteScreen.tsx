@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { ClaudeAccountControls } from "./ClaudeAccountControls";
 import { AddClaudeAccount } from "./AddClaudeAccount";
 import {
@@ -24,14 +25,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { type StaticScreenProps } from "@react-navigation/native";
 import { useRef, useState, type ReactNode } from "react";
-import {
-  Linking,
-  Pressable,
-  ScrollView,
-  TextInput,
-  View,
-  type ScrollViewInstance,
-} from "react-native";
+import { Pressable, ScrollView, TextInput, View, type ScrollViewInstance } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -352,17 +346,19 @@ function ProviderAccount({
                 {interaction.output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")}
               </Text>
             </ScrollView>
-            {field("input", "Terminal response", true)}
-            <SettingsActionRow
-              icon="arrow.up"
-              label="Send response"
-              disabled={disabled}
-              onPress={() => {
-                void send({ type: "terminal", data: `${values.input ?? ""}\r` }).then((sent) => {
-                  if (sent) setDraft({ id: "", values: {} });
-                });
-              }}
-            />
+            {active ? field("input", "Terminal response", true) : null}
+            {active ? (
+              <SettingsActionRow
+                icon="arrow.up"
+                label="Send response"
+                disabled={disabled}
+                onPress={() => {
+                  void send({ type: "terminal", data: `${values.input ?? ""}\r` }).then((sent) => {
+                    if (sent) setDraft({ id: "", values: {} });
+                  });
+                }}
+              />
+            ) : null}
           </>
         ) : null}
         {interaction?.type === "credentials" ? (
@@ -441,7 +437,8 @@ function ProviderAccount({
                 !(await send({ type: "browser", action: "accept" }))
               )
                 return;
-              await Linking.openURL(url);
+              if (!(await tryOpenExternalUrl(url, "provider-auth")))
+                setError("Could not open the sign-in page.");
             })().catch(() => setError("Could not open the sign-in page."));
           }}
         />
@@ -451,9 +448,9 @@ function ProviderAccount({
           icon="globe"
           label="Open docs"
           onPress={() => {
-            void Linking.openURL(provider.setup!.documentationUrl!).catch(() =>
-              setError("Could not open the provider docs."),
-            );
+            void tryOpenExternalUrl(provider.setup!.documentationUrl!).then((opened) => {
+              if (!opened) setError("Could not open the provider docs.");
+            });
           }}
         />
       ) : active && state?.flowId ? (

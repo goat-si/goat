@@ -76,7 +76,7 @@ it.live(
         },
       });
       const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
+        runtimeMode: "approval-required",
         interactionMode: "default",
         cwd: process.cwd(),
       });
@@ -204,7 +204,7 @@ it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           providerSessionId: ProviderSessionId.make("fx-relative"),
           modelSelection: { instanceId, model: "default" },
           runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
+            runtimeMode: "approval-required",
             interactionMode: "default",
             cwd: workspace,
           }),

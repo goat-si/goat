@@ -20,6 +20,7 @@ import {
 } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "../Adapters/CodexAdapterV2.testkit.ts";
+import { withThreadNames, withThreadSetupReads } from "../Adapters/CodexReplay.testkit.ts";
 import {
   type CursorAgentSdkReplayTranscript,
   CursorOrchestratorReplayHarness,
@@ -139,7 +140,7 @@ const readClaudeCancelledSubagentResumeTranscript = Effect.fn(
               ...frame.message.message,
               content: [
                 "Note: the GOAT server restarted, and this background work was cancelled before it finished. It will not report back on its own, so resume or restart what you still need and wait for its result:",
-                "- subagent: Audit src/math.ts (id a44c0ed810da9e4f3)",
+                "- subagent: Audit src/math.ts (id a44c0ed810da9e4f3; resume it with SendMessage to 'a44c0ed810da9e4f3')",
                 "",
                 "User message:",
                 frame.message.message.content,
@@ -291,7 +292,12 @@ describe("orchestrator replay recovery", () => {
           );
           yield* fs.makeDirectory(tempDir, { recursive: true });
           const dbPath = path.join(tempDir, "state.sqlite");
-          const driver = yield* CodexReplay.makeReplayDriver(transcript);
+          // The frames the shared harness adds: setup config reads and the thread's name.
+          const driver = yield* CodexReplay.makeReplayDriver(
+            withThreadSetupReads(
+              withThreadNames(transcript, ["Replay fixture: provider_thread_resume"]),
+            ),
+          );
           const materialized = yield* materializeFixtureInput({
             scenario: "provider_thread_resume",
             fixtureInput: {

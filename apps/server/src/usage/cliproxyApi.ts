@@ -49,6 +49,9 @@ const AuthFile = Schema.Struct({
   ),
 });
 const AuthFiles = Schema.Struct({ files: Schema.Array(AuthFile) });
+const AuthFileModels = Schema.Struct({
+  models: Schema.Array(Schema.Struct({ id: Schema.String })),
+});
 const ApiResponse = Schema.Struct({ status_code: Schema.Number, body: Schema.String });
 const CodexWindow = Schema.Struct({
   used_percent: Schema.Number,
@@ -112,6 +115,7 @@ const CreditList = Schema.Struct({
 });
 
 const decodeAuthFiles = Schema.decodeUnknownEffect(AuthFiles);
+const decodeAuthFileModels = Schema.decodeUnknownEffect(AuthFileModels);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeApiResponse = Schema.decodeUnknownEffect(ApiResponse);
 const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(CreditList));
@@ -432,6 +436,19 @@ export const makeCliproxyApi = Effect.gen(function* () {
     return (yield* decodeAuthFiles(response)).files;
   });
 
+  const routedModels = Effect.fn("CliproxyApi.routedModels")(function* (
+    config: UsageLimitSourceConfig,
+    account: AuthFile,
+  ) {
+    const response = yield* management(
+      config,
+      `auth-files/models?name=${encodeURIComponent(account.id)}`,
+    );
+    return (yield* decodeAuthFileModels(response)).models.flatMap(({ id }) =>
+      id.trim() ? [id.trim()] : [],
+    );
+  });
+
   const apiCall = Effect.fn("CliproxyApi.apiCall")(function* (
     config: UsageLimitSourceConfig,
     account: AuthFile,
@@ -492,14 +509,33 @@ export const makeCliproxyApi = Effect.gen(function* () {
           : new UsageLimitSourceError({ detail: "The hub could not list accounts." }),
       ),
     );
-    return yield* Effect.forEach(
-      accounts.flatMap((account) => {
-        const provider = HUB_PROVIDERS.get(account.provider);
-        return provider && !account.disabled ? [{ account, provider }] : [];
-      }),
-      ({ account, provider }) => readAccount(config, account, provider),
-      { concurrency: 4 },
+    const readable = accounts.flatMap((account) => {
+      const provider = HUB_PROVIDERS.get(account.provider);
+      return provider && !account.disabled ? [{ account, provider }] : [];
+    });
+    const [readings, models] = yield* Effect.all(
+      [
+        Effect.forEach(
+          readable,
+          ({ account, provider }) => readAccount(config, account, provider),
+          { concurrency: 4 },
+        ),
+        Effect.forEach(
+          readable,
+          ({ account }) =>
+            routedModels(config, account).pipe(
+              Effect.timeoutOption("2 seconds"),
+              Effect.orElseSucceed(() => Option.none()),
+            ),
+          { concurrency: 4 },
+        ),
+      ],
+      { concurrency: 2 },
     );
+    return readings.map((reading, index) => {
+      const listed = models[index];
+      return listed && Option.isSome(listed) ? { ...reading, models: listed.value } : reading;
+    });
   });
 
   const consume = Effect.fn("CliproxyApi.consume")(function* (

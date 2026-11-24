@@ -1,3 +1,6 @@
+import { resolveProviderCompatibility } from "../providerCompatibility.ts";
+import { BUNDLED_MODEL_MANIFEST } from "../ModelManifest.ts";
+import { ProviderDriverKind } from "@goat/contracts";
 // @effect-diagnostics preferSchemaOverJson:off -- The mock agent reads its error fixture as a raw JSON environment value.
 import { expect } from "@effect/vitest";
 import { ProviderInstanceId, type AntigravitySettings } from "@goat/contracts";
@@ -69,6 +72,7 @@ export const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     name: string,
     options:
       | {
+          agentVersion?: string;
           loginRequired?: boolean;
           initialMode?: string;
           newSessionErrorData?: unknown;
@@ -93,6 +97,7 @@ export const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       executablePath,
       [
         "#!/bin/sh",
+        `export GOAT_ACP_AGENT_VERSION=${shellQuote(typeof options === "boolean" ? "1.5.12" : (options.agentVersion ?? "1.5.12"))}`,
         ...(loginRequired
           ? [`printf '%s\\n' ${shellQuote(ANTIGRAVITY_AUTH_STDOUT_PREFIX + authorizationUrl)}`]
           : []),
@@ -152,6 +157,14 @@ export const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const layerInstallation = Layer.mock(AntigravityInstallation.AntigravityInstallation)({
     managedDirectory: root,
+    compatibility: (version) =>
+      Effect.succeed(
+        resolveProviderCompatibility(
+          BUNDLED_MODEL_MANIFEST.compatibility,
+          ProviderDriverKind.make("antigravity"),
+          version,
+        ),
+      ),
     resolve: (_binaryPath, environment) =>
       Effect.gen(function* () {
         resolutions.push(environment?.PATH);

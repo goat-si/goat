@@ -135,6 +135,8 @@ import {
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   isPreviewableComposerVideo,
+  clipboardHtmlImageContent,
+  imagesToAttachBesidePastedText,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
 import {
@@ -250,7 +252,7 @@ import {
 } from "./composerScrollGesture";
 import { observeResize } from "~/lib/observeResize";
 import { ContextWindowMeter } from "./ContextWindowMeter";
-import { ComposerAttachAction } from "./ComposerAttachAction";
+import { ComposerAttachButton, ComposerAttachInput } from "./ComposerAttachAction";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { settleThreadContextsForAgent } from "~/lib/threadContextRoute";
@@ -999,6 +1001,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     trigger: composerTrigger,
     setTrigger: setComposerTrigger,
+    followCaret: followComposerCaret,
     resolveTrigger: resolveComposerTrigger,
     dismissTrigger: dismissComposerTrigger,
     resetTrigger: resetComposerTrigger,
@@ -1052,11 +1055,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const composerAttachInputRef = useRef<HTMLInputElement>(null);
   const composerReplyTargetRef = useComposerReplyTarget(composerFormRef, composerRef);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const providerInputRejectedRef = useRef(false);
   const composerSelectLockRef = useRef(false);
-  const composerMenuOpenRef = useRef(false);
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const composerBlurFrameRef = useRef<number | null>(null);
@@ -1179,7 +1182,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerMenuItems.find((item) => item.id === activeComposerMenuItemId) ?? null;
 
   useLayoutEffect(() => {
-    composerMenuOpenRef.current = composerMenuOpen;
     composerMenuItemsRef.current = composerMenuItems;
     activeComposerMenuItemRef.current = activeComposerMenuItem;
   });
@@ -1584,15 +1586,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     expandedCursor: number,
     cursorAdjacentToMention: boolean,
     contextIds: string[],
+    textChanged: boolean,
   ) => {
     expandComposerForEditorChange();
     refreshWorkspaceSnapshotOnTyping();
+    const trigger = cursorAdjacentToMention
+      ? null
+      : detectComposerTrigger(nextPrompt, expandedCursor);
+    const updateTrigger = textChanged ? setComposerTrigger : followComposerCaret;
     if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
       if (activePendingProgress.activeQuestion.allowCustomAnswer === false) return;
       setComposerCursor(nextCursor);
-      setComposerTrigger(
-        cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
-      );
+      updateTrigger(trigger);
       onChangeActivePendingUserInputCustomAnswer(
         activePendingProgress.activeQuestion.id,
         nextPrompt,
@@ -1691,9 +1696,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerDraftFiles(attachmentDraftTarget, attachmentChanges.filesToRestore);
     }
     setComposerCursor(nextCursor);
-    setComposerTrigger(
-      cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
-    );
+    updateTrigger(trigger);
   };
   const onPromptChangeStable = useStableCallback(onPromptChange);
 
@@ -2151,7 +2154,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerPreviewAnnotations,
       composerReviewComments,
       composerEditorRef,
-      composerMenuOpenRef,
       composerMenuItemsRef,
       activeComposerMenuItemRef,
       setComposerDraftPrompt,
@@ -2488,6 +2490,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingIsResponding ||
       (pendingUserInputs.length > 0 && !activePendingProgress?.activeQuestion) ||
       projectSelectionRequired ||
+      voice.isVoiceActive ||
       (options?.citationCommentAnchor && !composerEditorRef.current)
     ) {
       return false;
@@ -2519,7 +2522,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const insertComposerTextStable = useStableCallback(insertComposerText);
-
   const insertAttachmentReferences = (
     references: ReadonlyArray<ComposerContextReference>,
     selection?: { start: number; end: number },
@@ -2550,7 +2552,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
     });
   };
-
   const { addComposerAttachments, removeComposerImage, foldPastedText } =
     useComposerAttachmentIntake({
       activeThreadId,
@@ -2578,10 +2579,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       insertAttachmentReferences,
     });
   const composerAttachAction = showComposerAttachAction ? (
-    <ComposerAttachAction
-      addComposerAttachments={addComposerAttachments}
-      focusComposer={focusComposer}
-    />
+    <ComposerAttachButton onOpenPicker={() => composerAttachInputRef.current?.click()} />
   ) : null;
   const composerContextWindowMeter = settings.contextWindowMeterHidden ? null : (
     <span data-resting-fixed-control className="flex shrink-0 items-center">
@@ -2656,12 +2654,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       getModelDisabledReason={getModelDisabledReason}
     />
   );
-
   const onComposerCommandKeyStable = useStableCallback(onComposerCommandKey);
   const isPathQueryActiveStable = useStableCallback(
     () => resolveActiveComposerTrigger().trigger?.kind === "path",
   );
-
   const insertComposerTextAtEnd: ChatComposerHandle["insertTextAtEnd"] = (text, options) => {
     const inserted = insertComposerText(text, "end", options);
     if (inserted && isComposerCollapsedMobile) {
@@ -2671,7 +2667,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return inserted;
   };
   const insertComposerTextAtEndStable = useStableCallback(insertComposerTextAtEnd);
-
   const addComposerFoldersStable = useComposerFolderDrop({
     environmentId,
     primaryEnvironmentId,
@@ -2679,16 +2674,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     insertAtEnd: insertComposerTextAtEndStable,
     focus: focusComposer,
   });
-
   const onComposerPaste: ComposerPromptEditorProps["onPaste"] = (event, importSnapshot) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
+    const htmlImageContent =
+      activeThreadId && files.length > 0 && plainText.length > 0
+        ? clipboardHtmlImageContent(event.clipboardData.getData("text/html"))
+        : "none";
     if (
       folders.length > 0 ||
       (activeThreadId &&
         files.length > 0 &&
-        shouldHandleComposerAttachmentPaste({ files, plainText }))
+        shouldHandleComposerAttachmentPaste({
+          files,
+          plainText,
+          bypassAutoAttachment,
+          htmlIsOnlyImage: htmlImageContent === "only-image",
+        }))
     ) {
       event.preventDefault();
       event.stopPropagation();
@@ -2719,12 +2722,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
-
     if ((readPastedComposerContext(event.clipboardData)?.records.length ?? 0) > 0) return;
+    const imagesBesideText = imagesToAttachBesidePastedText({
+      files,
+      plainText,
+      bypassAutoAttachment,
+      htmlHasImageAndText: htmlImageContent === "image-and-text",
+    });
+    if (imagesBesideText.length > 0) void addComposerAttachments(imagesBesideText);
     if (!foldPastedText(plainText, bypassAutoAttachment)) {
       return;
     }
-
     event.preventDefault();
     event.stopPropagation();
   };
@@ -2743,7 +2751,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     return setContextInsertionHandler(composerDraftTarget, insertContextReferencesAtCaretStable);
   }, [composerDraftTarget, insertContextReferencesAtCaretStable, setContextInsertionHandler]);
-
   // Capture drops before the editor; mention handlers own native propagation and moves.
   const composerMentionDragHandlers = makeComposerMentionDragHandlers({
     insertMentionAtEnd: (text) =>
@@ -2768,7 +2775,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
     },
   });
-
   useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs) => {
     const records = refs.flatMap((ref) => {
       const record = droppedThreadContextRecord(ref, readThreadShell(ref));
@@ -2811,7 +2817,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerDraftThreadContexts(composerDraftTarget, routed);
     }
   });
-
   const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLFormElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
     event.stopPropagation();
@@ -2819,7 +2824,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
     setIsDragOverComposer(false);
   };
-
   // Escape can cancel without dragleave; clear highlights on bubbling dragend.
   useEffect(() => {
     if (!isDragOverComposer) return;
@@ -2868,14 +2872,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
   };
   const scheduleComposerCollapseCheckStable = useStableCallback(scheduleComposerCollapseCheck);
-
   // Question dismissal unmounts focused controls without firing blur.
   const activePendingUserInputRequestId = activePendingUserInput?.requestId ?? null;
   useEffect(() => {
     if (activePendingUserInputRequestId !== null) return;
     scheduleComposerCollapseCheckStable();
   }, [activePendingUserInputRequestId, scheduleComposerCollapseCheckStable]);
-
   useEffect(() => {
     return () => {
       if (composerBlurFrameRef.current !== null) {
@@ -2889,7 +2891,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
     };
   }, []);
-
   const openModelPicker = () => {
     if (composerControlsHidden) {
       if (composerBlurFrameRef.current !== null) {
@@ -2902,7 +2903,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsComposerModelPickerOpen(true);
   };
   const openModelPickerStable = useStableCallback(openModelPicker);
-
   useImperativeHandle(
     composerRef,
     () => ({
@@ -2940,6 +2940,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pendingDraftWork.has(attachmentTargetKey),
       insertTextAtEnd: insertComposerTextAtEndStable,
       pasteTextAtEnd: (text: string, options) => {
+        if (voice.isVoiceActive) return false;
         const shortcutArmed = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
         const bypassAutoAttachment = options?.bypassAutoAttachment === true || shortcutArmed;
         const promptLength = promptRef.current.length;
@@ -3178,6 +3179,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       pendingUserInputs.length,
       projectSelectionRequired,
       setComposerDraftReplyTo,
+      voice.isVoiceActive,
       applyPromptReplacementStable,
       isComposerModelPickerOpen,
       openModelPickerStable,
@@ -3207,7 +3209,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setIsComposerScrollCollapsed,
     ],
   );
-
   // Built outside the form's JSX so typing, which rebuilds that JSX, leaves them cached.
   const composerAttachmentMediaRow =
     !isComposerCollapsedMobile &&
@@ -3252,7 +3253,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onRemoveFile={removeComposerFileFromDraft}
       />
     ) : null;
-
   return (
     <form
       ref={composerReplyTargetRef}
@@ -3266,7 +3266,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           target.closest('button, a, input, select, [role="button"], [role="menuitem"]'),
         );
         if (isInteractive) return;
-
         setIsComposerScrollCollapsed(false);
         if (isComposerResting && !target.closest('[data-testid="composer-editor"]')) {
           event.preventDefault();
@@ -3326,6 +3325,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
+      {showComposerAttachAction ? (
+        <ComposerAttachInput
+          ref={composerAttachInputRef}
+          addComposerAttachments={addComposerAttachments}
+          focusComposer={focusComposer}
+        />
+      ) : null}
       {composerControlsCollapsed && restingControlsHost
         ? createPortal(
             <div
@@ -3500,7 +3506,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               </div>
             ) : null}
-
             <div
               ref={(node) => {
                 setComposerMenuAnchor(node);
@@ -3536,7 +3541,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </ComposerCommandMenuLayer>
               )}
-
               <div role="status" aria-atomic="true" className="sr-only">
                 {composerSuggestionsVisible && composerMenuItems.length === 0
                   ? isComposerMenuLoading
@@ -3564,7 +3568,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </ComposerCommandMenuLayer>
               )}
-
               {!isComposerCollapsedMobile &&
                 pendingUserInputs.length === 0 &&
                 editingQueuedAttachments !== null &&
@@ -3574,11 +3577,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onRemove={onRemoveEditingQueuedAttachment}
                   />
                 )}
-
               {composerAttachmentMediaRow}
-
               {composerAttachmentFileList}
-
               <div
                 className={cn("relative", isComposerResting && "flex min-w-0 items-center gap-1")}
                 style={

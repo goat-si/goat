@@ -45,6 +45,18 @@ export function getThreadErrorBannerMessage(error: string): string {
     : error;
 }
 
+export function resolveThreadErrorBanner(
+  isServerThread: boolean,
+  localServerError: string | null,
+  localDraftError: string | null,
+  runtimeError: string | null,
+) {
+  const threadError = isServerThread ? (localServerError ?? runtimeError) : localDraftError;
+  const sessionDismissal =
+    isServerThread && runtimeError !== null && threadError === runtimeError ? runtimeError : null;
+  return { threadError, sessionDismissal };
+}
+
 export function getThreadErrorBannerKey(threadKey: string, error: string | null): string | null {
   return error === null ? null : `${threadKey}\u0000${error}`;
 }

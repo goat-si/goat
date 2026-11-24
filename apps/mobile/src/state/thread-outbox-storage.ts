@@ -21,7 +21,11 @@ function trackInFlightWrite(operation: Promise<void>): Promise<void> {
 /** Waits for in-flight writes before app-update restart. */
 export async function flushThreadOutboxWrites(): Promise<void> {
   while (inFlightWrites.size > 0) {
-    await Promise.allSettled(inFlightWrites);
+    const results = await Promise.allSettled(inFlightWrites);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) throw failure.reason;
   }
 }
 

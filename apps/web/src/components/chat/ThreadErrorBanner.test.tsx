@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
+  resolveThreadErrorBanner,
   getThreadErrorBannerMessage,
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
@@ -42,4 +43,42 @@ describe("ThreadErrorBanner", () => {
       ),
     ).toBe(true);
   });
+});
+
+it("does not persist dismissals of local errors", () => {
+  const input = {
+    isServerThread: true,
+    localServerError: "Local failure",
+    localDraftError: null,
+    runtimeError: null,
+  };
+  const local = resolveThreadErrorBanner(
+    input.isServerThread,
+    input.localServerError,
+    input.localDraftError,
+    input.runtimeError,
+  );
+  dismissThreadErrorBannerForSession(
+    local.sessionDismissal === null
+      ? null
+      : getThreadErrorBannerKey("local-repeat", local.sessionDismissal),
+  );
+  expect(
+    isThreadErrorBannerDismissedForSession(
+      local.sessionDismissal === null
+        ? null
+        : getThreadErrorBannerKey("local-repeat", local.sessionDismissal),
+    ),
+  ).toBe(false);
+  expect(
+    resolveThreadErrorBanner(
+      input.isServerThread,
+      input.localServerError,
+      input.localDraftError,
+      input.runtimeError,
+    ).threadError,
+  ).toBe("Local failure");
+  expect(resolveThreadErrorBanner(true, null, null, "Runtime failure").sessionDismissal).toBe(
+    "Runtime failure",
+  );
 });

@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { claudeRemovalDecision } from "./ClaudeApproval.ts";
 import { claudeApprovalPresentation, permissionResultFromDecision } from "./ClaudeAdapterV2.ts";
 
 describe("ClaudeAdapterV2 approval presentation", () => {
@@ -108,4 +109,24 @@ describe("ClaudeAdapterV2 session permissions", () => {
       },
     ]);
   });
+});
+
+it("rejects Claude's dangerous removal checks in full access without rejecting user ask rules", () => {
+  const reason = "Claude Code can't rule out a dangerous removal.";
+  const input = {
+    toolName: "Bash",
+    permissionMode: "bypassPermissions" as const,
+    callbackOptions: { decisionReason: reason, toolUseID: "remove" },
+  };
+  assert.equal(
+    claudeRemovalDecision(input.toolName, input.permissionMode, input.callbackOptions)?.behavior,
+    "deny",
+  );
+  assert.isUndefined(
+    claudeRemovalDecision(input.toolName, input.permissionMode, {
+      ...input.callbackOptions,
+      matchedAskRule: { source: "userSettings", toolName: "Bash", ruleContent: "rm:*" },
+    }),
+  );
+  assert.isUndefined(claudeRemovalDecision(input.toolName, "default", input.callbackOptions));
 });

@@ -56,7 +56,7 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
     label: settingsScopeEnvironmentLabel(environment, environments),
     connected: environment.connection.phase === "connected",
   }));
-  const { checks, testConnection } = useHostConnectionChecks(targets);
+  const { checks, runningKeys, testConnection } = useHostConnectionChecks(targets);
   const hostEnvironments = connectedEnvironments.map((environment) => ({
     environmentId: environment.environmentId,
     label: environment.label,
@@ -108,6 +108,7 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
   const listActions = {
     busy: !canConfigure || projectScope || busy,
     checks,
+    runningKeys,
     testConnection: async (host: SshDeviceHostConfig) => {
       const results = await testConnection(host);
       if (!results) return;
@@ -226,6 +227,7 @@ function DeviceHostList({
   onEdit,
   onRemove,
   checks,
+  runningKeys,
   testConnection,
 }: {
   environments: ReadonlyArray<DeviceHostEnvironment>;
@@ -235,6 +237,7 @@ function DeviceHostList({
   onEdit: (host: SshDeviceHostConfig) => void;
   onRemove: (host: SshDeviceHostConfig) => void;
   checks: ReturnType<typeof useHostConnectionChecks>["checks"];
+  runningKeys: ReadonlySet<string>;
   testConnection: ReturnType<typeof useHostConnectionChecks>["testConnection"];
 }) {
   const { environments: scopeEnvironments } = useSettingsScope();
@@ -318,8 +321,9 @@ function DeviceHostList({
         const { environmentId, status, check, summary, error } = first;
         const platforms =
           (check?.status === "connected" ? check.platforms : undefined) ?? summary?.platforms ?? [];
+        const checking = runningKeys.has(deviceHostConnectionKey(host));
         const progress =
-          check?.status === "pending"
+          checking || check?.status === "pending"
             ? "Checking connection…"
             : status?.status === "installing"
               ? "Installing device support…"
@@ -331,12 +335,14 @@ function DeviceHostList({
             result.check?.status === "failed" ||
             (result.check?.status !== "local" && result.status?.status === "failed"),
         );
-        const pending = results.some(
-          (result) =>
-            result.check?.status === "pending" ||
-            result.status?.status === "installing" ||
-            result.status?.status === "starting",
-        );
+        const pending =
+          checking ||
+          results.some(
+            (result) =>
+              result.check?.status === "pending" ||
+              result.status?.status === "installing" ||
+              result.status?.status === "starting",
+          );
         const ready = results.every(
           (result) =>
             result.check?.status === "connected" ||
@@ -354,15 +360,19 @@ function DeviceHostList({
           ? [
               {
                 key: "connection",
-                label: failed.length
-                  ? "Connection failed"
-                  : pending
-                    ? "Checking connections"
-                    : ready
-                      ? "Connected"
-                      : "Connection not checked",
-                warning: failed.length > 0,
-                icon: failed.length ? (
+                label: checking
+                  ? "Checking connections"
+                  : failed.length
+                    ? "Connection failed"
+                    : pending
+                      ? "Checking connections"
+                      : ready
+                        ? "Connected"
+                        : "Connection not checked",
+                warning: !checking && failed.length > 0,
+                icon: checking ? (
+                  <Spinner size="xs" />
+                ) : failed.length ? (
                   <TriangleAlertIcon className="size-3.5" />
                 ) : pending ? (
                   <Spinner size="xs" />
@@ -371,7 +381,9 @@ function DeviceHostList({
                 ) : (
                   <CircleIcon className="size-3.5" />
                 ),
-                detail: failed.length ? (
+                detail: checking ? (
+                  "Checking connections…"
+                ) : failed.length ? (
                   <div className="space-y-1">
                     {failed.map((result) => (
                       <p key={result.environmentId}>
@@ -573,9 +585,7 @@ function DeviceHostList({
             <Button
               size="sm"
               variant="outline"
-              disabled={
-                busy || (canRetry ? retrying !== null : compact ? pending : progress !== null)
-              }
+              disabled={busy || (canRetry ? retrying !== null : pending || progress !== null)}
               onClick={() => {
                 if (canRetry) retryHost(environmentId, host.id);
                 else void testConnection(host);

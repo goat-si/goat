@@ -1,7 +1,8 @@
+import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { SheetCloseButton } from "../../../components/ui/SheetHeader";
 import { useNavigation } from "@react-navigation/native";
 import { useState } from "react";
-import { Linking, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 import { Button } from "../../../components/ui/Button";
@@ -35,7 +36,7 @@ export function SettingsLegalDocumentExternalHeaderButton({
     <IconButton
       accessibilityLabel="Open legal documents in external browser"
       icon="safari"
-      onPress={() => void Linking.openURL(safeExternalUrl).catch(() => undefined)}
+      onPress={() => void tryOpenExternalUrl(safeExternalUrl)}
     />
   );
 }
@@ -67,7 +68,7 @@ export function SettingsLegalDocumentRouteScreen({
   );
 
   const openExternalUrl = (url: string) => {
-    void Linking.openURL(url).catch(() => undefined);
+    void tryOpenExternalUrl(url);
   };
   if (loadError) {
     return (

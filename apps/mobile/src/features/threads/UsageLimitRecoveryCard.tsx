@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { Button } from "../../components/ui/Button";
 import { limitRecoveryOwnsSnooze } from "@goat/client-runtime/state/thread-execution";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -13,7 +14,7 @@ import {
 import * as Clipboard from "expo-clipboard";
 import * as DateTime from "effect/DateTime";
 import { useState } from "react";
-import { Linking, View } from "react-native";
+import { View } from "react-native";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useDeadlinePassed } from "../../lib/clock";
@@ -44,6 +45,15 @@ export function UsageLimitRecoveryCard({
   const recovery = thread.limitRecovery;
   const scheduled =
     recovery?.runId === runId && recovery?.resetAt === resetAt && recovery?.autoResume;
+  const resumes = canSchedule && scheduled;
+  const displayAt =
+    resumes &&
+    resetAt &&
+    thread.snoozedUntil &&
+    Date.parse(thread.snoozedUntil) > Date.parse(resetAt)
+      ? thread.snoozedUntil
+      : resetAt;
+  const displayPassed = useDeadlinePassed(displayAt === null ? null : Date.parse(displayAt));
   const code = thread.runtime?.lastErrorCode;
   const workspaceLimit = code === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || code === CHATGPT_USAGE_LIMIT_CODE;
@@ -116,11 +126,8 @@ export function UsageLimitRecoveryCard({
                   )
                   .finally(() => setActionPending(false));
               else
-                void Linking.openURL(CHATGPT_USAGE_URL)
-                  .then(
-                    () => setStatus(null),
-                    () => setStatus("open-failed"),
-                  )
+                void tryOpenExternalUrl(CHATGPT_USAGE_URL)
+                  .then((opened) => setStatus(opened ? null : "open-failed"))
                   .finally(() => setActionPending(false));
             }}
           />
@@ -136,14 +143,16 @@ export function UsageLimitRecoveryCard({
       {!chatGptLimit || resetAt ? (
         <Text className="text-sm text-warning-foreground">
           {resetAt
-            ? `Usage limit resets ${DateTime.toDateUtc(DateTime.makeUnsafe(resetAt)).toLocaleString()}.`
+            ? `Usage limit ${resumes && !displayPassed ? "resumes" : resetPassed ? "reset" : "resets"} ${DateTime.toDateUtc(DateTime.makeUnsafe(resumes && !displayPassed ? (displayAt ?? resetAt) : resetAt)).toLocaleString()}.`
             : "The provider did not report a reset time. Retry manually when your limit is available."}
         </Text>
       ) : null}
       {canSchedule ? (
         <View className="flex-row flex-wrap gap-2">
           <Button
-            label={scheduled ? "Cancel auto-resume" : "Resume at reset"}
+            label={
+              scheduled ? "Cancel auto-resume" : resetPassed ? "Resume now" : "Resume at reset"
+            }
             tone="secondary"
             disabled={pending}
             onPress={() => void toggle("resume")}

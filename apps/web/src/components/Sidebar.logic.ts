@@ -1486,19 +1486,19 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  const waiting: ThreadStatusPill = {
+    label: "Waiting",
+    colorClass: "text-sidebar-muted-foreground",
+    dotClass: "bg-sidebar-muted-foreground",
+    pulse: false,
+  };
   if (
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
-    (thread.runtime?.status === "starting" && thread.latestRunStartHeld === true) ||
-    backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
-  ) {
-    return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    };
-  }
+    (thread.runtime?.status === "starting" && thread.latestRunStartHeld === true)
+  )
+    return waiting;
 
+  // A failed run goes to the inbox even while background work holds the thread.
   if (hasUnseenRunFailure(thread)) {
     return {
       label: "Failed",
@@ -1507,6 +1507,8 @@ export function resolveThreadStatusPill(input: {
       pulse: false,
     };
   }
+
+  if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return waiting;
 
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&

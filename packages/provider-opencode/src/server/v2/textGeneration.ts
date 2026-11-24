@@ -17,7 +17,7 @@ import {
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import { requireOpenCodeMemoryIsolation } from "../memoryIsolation.ts";
-import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { openCodeVariant } from "../variant.ts";
 import * as NodeURL from "node:url";
 import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
@@ -26,6 +26,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { brokenVersionDetail } from "@goat/provider-core/server/ProviderHost";
 import { isProviderNativeImageAttachment } from "@goat/provider-core/server/attachmentPrompt";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
@@ -99,7 +100,7 @@ const runOnServer = Effect.fn("Opencode2TextGeneration.runOnServer")(function* (
         cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
       });
   }
-  const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant");
+  const variant = openCodeVariant(input.modelSelection);
   const outcome = yield* Deferred.make<Outcome>();
   let sessionId: string | undefined;
   let rejected = false;
@@ -301,14 +302,36 @@ export const make = Effect.fn("OpenCode2TextGeneration.make")(function* (
   const fs = yield* FileSystem.FileSystem;
   const server = yield* OpenCode2Server.OpenCode2Server;
   const host = yield* ProviderHost.ProviderHost;
-  const runSelected = <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) =>
-    (TextGenerationOperations.isMemoryOperation(input.operation)
-      ? server.withMemoryConnection(
-          input.operation,
-          input.modelSelection.model.split("/")[0] ?? "",
-          (connection) => runOnServer(connection, input),
-        )
-      : server.withConnection((connection) => runOnServer(connection, input))
+  const runSelected = <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) => {
+    const run = Effect.fn("OpenCode2TextGeneration.checkedRun")(function* (
+      connection: OpenCode2Server.OpenCode2Connection,
+    ) {
+      const detail = brokenVersionDetail({
+        name: "OpenCode",
+        version: connection.version,
+        advisory: yield* host.compatibility(
+          ProviderDriverKind.make("opencode"),
+          connection.version,
+        ),
+      });
+      if (detail !== undefined)
+        return yield* new TextGenerationError({
+          operation: input.operation,
+          detail,
+          ...(TextGenerationOperations.isMemoryOperation(input.operation)
+            ? { cause: new MemoryGenerationRunnerError({ code: "unavailable" }) }
+            : {}),
+        });
+      return yield* runOnServer(connection, input);
+    });
+    return (
+      TextGenerationOperations.isMemoryOperation(input.operation)
+        ? server.withMemoryConnection(
+            input.operation,
+            input.modelSelection.model.split("/")[0] ?? "",
+            run,
+          )
+        : server.withConnection(run)
     ).pipe(
       Effect.timeoutOrElse({
         duration: GENERATION_TIMEOUT,
@@ -344,6 +367,7 @@ export const make = Effect.fn("OpenCode2TextGeneration.make")(function* (
         ),
       ),
     );
+  };
   return TextGenerationOperations.fromRunner(
     "OpenCode2TextGeneration",
     TextGenerationOperations.withoutInvestigation("OpenCode", (input) =>

@@ -43,7 +43,10 @@ import {
   makeClaudeCodeModelRoutes,
   resolveClaudeModelSettingsKey,
 } from "../ClaudeCodeModelRoutes.ts";
-import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
+import {
+  resolveClaudeModelCatalog,
+  scopeClaudeUpgradeMessageToChannel,
+} from "../ClaudeModelCatalog.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -308,9 +311,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       env: NodeJS.ProcessEnv,
     ) {
       const resolveExecutable = yield* SpawnExecutableResolution;
+      const hostPlatform = yield* HostProcess.Platform;
       const executable =
-        resolveExecutable(effectiveConfig.binaryPath, yield* HostProcess.Platform, env) ??
-        effectiveConfig.binaryPath;
+        (yield* Effect.promise(async () =>
+          resolveExecutable(effectiveConfig.binaryPath, hostPlatform, env),
+        )) ?? effectiveConfig.binaryPath;
       const key = `${yield* makeClaudeCapabilitiesCacheKey(effectiveConfig, stateDir, env)}\0${executable}`;
       yield* Ref.set(probeEnvironment, env);
       return (yield* Cache.get(capabilitiesProbeCache, key)).capabilities;
@@ -382,6 +387,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
               enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
             }),
+          ),
+          Effect.flatMap((enrichedSnapshot) =>
+            modelCatalog.pipe(
+              Effect.map((catalog) =>
+                scopeClaudeUpgradeMessageToChannel(catalog, enrichedSnapshot),
+              ),
+            ),
           ),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),

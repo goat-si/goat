@@ -18,6 +18,7 @@ import {
   acpScopedNativeId,
   makeAcpAdapterV2,
   type AcpAdapterV2RuntimeInput,
+  type AcpAdapterV2Flavor,
 } from "@goat/provider-acp/server/adapter";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
@@ -28,8 +29,12 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Latch from "effect/Latch";
+import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -52,6 +57,7 @@ const isProviderAdapterProtocolError = Schema.is(ProviderAdapter.ProviderAdapter
 
 const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   readonly environment: (runtimeOrdinal: number) => Readonly<Record<string, string>>;
+  readonly watchPromptOutcome?: AcpAdapterV2Flavor["watchPromptOutcome"];
   readonly runtimeMode?: "full-access" | "approval-required";
   readonly wrapPrompt?: (
     prompt: AcpSessionRuntime.AcpSessionRuntime["Service"]["prompt"],
@@ -59,6 +65,7 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   readonly cancelled?: Deferred.Deferred<void>;
   readonly followAgentWorkState?: boolean;
   readonly recognizedBackground?: boolean;
+  readonly sessionScope?: Scope.Scope;
 }) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const natives: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
@@ -86,6 +93,9 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
       driver: ACP_TEST_DRIVER,
       capabilities: AcpProviderCapabilitiesV2,
       promptInactivityTimeout: "15 minutes",
+      ...(input.watchPromptOutcome === undefined
+        ? {}
+        : { watchPromptOutcome: input.watchPromptOutcome }),
       ...(input.followAgentWorkState === true ? { followAgentWorkState: true } : {}),
       ...(input.recognizedBackground === true
         ? {
@@ -110,12 +120,15 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
     cwd: process.cwd(),
   });
   const modelSelection = { instanceId, model: "default" } as const;
-  const runtime = yield* adapter.openSession({
+  const opened = adapter.openSession({
     threadId,
     providerSessionId: ProviderSessionId.make("provider-session-acp-prompt-inactivity"),
     modelSelection,
     runtimePolicy,
   });
+  const runtime = yield* input.sessionScope === undefined
+    ? opened
+    : opened.pipe(Effect.provideService(Scope.Scope, input.sessionScope));
   const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
   const startTurn = (ordinal: number) =>
     DateTime.now.pipe(
@@ -337,6 +350,33 @@ describe("ACP prompt inactivity", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect("ends a running tool when its session closes mid-prompt", () =>
+    Effect.gen(function* () {
+      const sessionScope = yield* Scope.make();
+      const harness = yield* makePromptInactivityHarness({
+        sessionScope,
+        environment: () => ({ GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: "other" }),
+      });
+      const tracked = (event: ProviderAdapter.ProviderAdapterV2Event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call";
+      yield* harness.startTurn(1);
+      yield* harness.runtime.events.pipe(Stream.filter(tracked), Stream.runHead);
+      yield* Scope.close(sessionScope, Exit.void);
+      const ended = yield* harness.runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            tracked(event) &&
+            event.type === "turn_item.updated" &&
+            event.turnItem.status !== "pending" &&
+            event.turnItem.status !== "running",
+        ),
+        Stream.runHead,
+      );
+      assert.isTrue(Option.isSome(ended));
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("fails a prompt its agent leaves silent past the inactivity timeout", () =>
     Effect.gen(function* () {
       const harness = yield* makePromptInactivityHarness({
@@ -370,6 +410,102 @@ describe("ACP prompt inactivity", () => {
       assert.include(silent?.failure?.message, "15 minutes");
       assert.equal(next?.status, "completed");
       assert.lengthOf(harness.natives, 2);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  // regression: #34160 a turn failed as silent right after the computer woke from sleep
+  it.effect.each([
+    { label: "a timer due during sleep fires on wake", timerCountsSleep: true, asleep: "2 hours" },
+    { label: "the host wakes before the deadline", timerCountsSleep: true, asleep: "9 minutes" },
+    {
+      label: "timers pause while only wall time jumps",
+      timerCountsSleep: false,
+      asleep: "2 hours",
+    },
+  ] as const)(
+    "does not count host sleep as prompt inactivity when $label",
+    ({ timerCountsSleep, asleep }) =>
+      Effect.gen(function* () {
+        const testClock = yield* TestClock.testClockWith(Effect.succeed);
+        const awake = yield* Latch.make(true);
+        let wallJumpMillis = 0;
+        // macOS and Windows timers count sleep and fire on the first tick after wake; on Linux
+        // timers pause while the wall clock jumps.
+        const hostClock: TestClock.TestClock = {
+          ...testClock,
+          currentTimeMillisUnsafe: () => testClock.currentTimeMillisUnsafe() + wallJumpMillis,
+          currentTimeMillis: Effect.sync(
+            () => testClock.currentTimeMillisUnsafe() + wallJumpMillis,
+          ),
+          sleep: (duration) => testClock.sleep(duration).pipe(Effect.andThen(awake.await)),
+        };
+        yield* Effect.gen(function* () {
+          const harness = yield* makePromptInactivityHarness({
+            environment: (runtimeOrdinal) =>
+              runtimeOrdinal === 1 ? { GOAT_ACP_HANG_PROMPT_FOREVER: "1" } : {},
+          });
+          yield* harness.startTurn(1);
+          yield* TestClock.adjust("5 minutes");
+          yield* harness.emitUpdate({
+            sessionId: "mock-session-1",
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: "Still working." },
+            },
+          });
+          if (timerCountsSleep) {
+            yield* awake.close;
+            yield* TestClock.adjust(asleep);
+            yield* awake.open;
+          } else {
+            wallJumpMillis = Duration.toMillis(asleep);
+          }
+          yield* TestClock.adjust(Duration.millis(15 * 60_000 - 1));
+          assert.isTrue(yield* harness.nextTurnRejected(2));
+
+          yield* TestClock.adjust("2 minutes");
+          yield* harness.startTurn(2);
+          const [silent, next] = yield* harness.terminals(2);
+          assert.equal(silent?.status, "failed");
+          assert.equal(next?.status, "completed");
+        }).pipe(Effect.provideService(Clock.Clock, hostClock));
+      }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("reports the outcome recorded by a silent prompt", () =>
+    Effect.gen(function* () {
+      const badGateway = {
+        class: "provider_error",
+        message: "Bad Gateway: Failed to connect to backend API",
+        code: "502 Bad Gateway",
+        retryable: true,
+      } as const;
+      const harness = yield* makePromptInactivityHarness({
+        environment: () => ({ GOAT_ACP_HANG_PROMPT_FOREVER: "1" }),
+        watchPromptOutcome: () =>
+          Effect.succeed((_result, options) =>
+            Effect.succeed(options?.retired ? badGateway : undefined),
+          ),
+      });
+      yield* harness.startTurn(1);
+      yield* TestClock.adjust("15 minutes");
+      const [silent] = yield* harness.terminals(1);
+      assert.equal(silent?.status, "failed");
+      assert.deepEqual(silent?.failure, badGateway);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("retires a silent prompt when its outcome check dies", () =>
+    Effect.gen(function* () {
+      const harness = yield* makePromptInactivityHarness({
+        environment: () => ({ GOAT_ACP_HANG_PROMPT_FOREVER: "1" }),
+        watchPromptOutcome: () => Effect.succeed(() => Effect.die("session log unreadable")),
+      });
+      yield* harness.startTurn(1);
+      yield* TestClock.adjust("15 minutes");
+      const [silent] = yield* harness.terminals(1);
+      assert.equal(silent?.status, "failed");
+      assert.include(silent?.failure?.message, "15 minutes");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

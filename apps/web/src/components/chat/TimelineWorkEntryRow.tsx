@@ -32,6 +32,8 @@ import {
 } from "@goat/client-runtime/work-log/computer-use";
 import { claudeSkillInvocation } from "@goat/shared/toolActivity";
 import { memo, use, useState, type KeyboardEvent } from "react";
+import { useNoticeCutOff } from "./useNoticeCutOff";
+
 import {
   workEntryDisplayIndicatesToolFailure,
   workEntrySignalsSevereFailure,
@@ -244,6 +246,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
   const [expanded, setExpanded] = useState(
     () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
   );
+  const noticeMessage =
+    workEntry.structuredPayload?.type === "system_notice"
+      ? workEntry.structuredPayload.message
+      : null;
+  const { labelRef, noticeCutOff } = useNoticeCutOff(noticeMessage);
   const onInitialOutputReady = () => {
     if (groupView) groupView.onContentReady?.(workEntry.id);
     else props.onContentReady?.();
@@ -457,19 +464,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     workEntry.projectedItem !== undefined &&
     turnItemNeedsDetailFetch(workEntry.projectedItem.item);
   const hasHistory = hasComputerUseHistory(workEntry.projectedItem?.item);
+
   const canExpandProjectedItem =
     hasHistory ||
-    (plainOutput !== undefined
-      ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
-      : workEntry.projectedItem === undefined
-        ? canExpand
-        : isReasoning
-          ? Boolean(workEntry.detail?.trim())
-          : Boolean(
-              viewedImage ||
-              workEntry.questionAnswer ||
-              turnItemHasDetail(workEntry.projectedItem.item),
-            ));
+    ((noticeMessage === null || noticeCutOff) &&
+      (plainOutput !== undefined
+        ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
+        : workEntry.projectedItem === undefined
+          ? canExpand
+          : isReasoning
+            ? Boolean(workEntry.detail?.trim())
+            : Boolean(
+                viewedImage ||
+                workEntry.questionAnswer ||
+                turnItemHasDetail(workEntry.projectedItem.item),
+              )));
   const iconWrapperClass = cn(
     "flex size-4 items-center justify-center",
     showWarningIndicator
@@ -512,7 +521,6 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         tabIndex: 0 as const,
         "aria-label": accessibleDisplayText,
         "aria-expanded": expanded,
-        onClick: toggleExpanded,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (!e.repeat && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
@@ -520,14 +528,15 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           }
         },
       }
-    : {};
+    : undefined;
 
   return (
     <WorkLogRow
       data-work-entry-id={workEntry.id}
       data-v2-item-type={workEntry.projectedItem?.item.type}
       data-v2-item-visibility={workEntry.projectedItem?.visibility}
-      {...rowToggleProps}
+      onClick={canExpandProjectedItem ? toggleExpanded : undefined}
+      toggle={rowToggleProps}
       icon={
         <span
           className={iconWrapperClass}
@@ -553,13 +562,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           <p className="flex min-w-0 w-full items-baseline gap-1.5 text-work-log">
             {changedFilesTooltip !== null && !isReasoning && threadLabel === null ? (
               <Tooltip>
-                <TooltipTrigger render={<span className={labelClassName} />}>
+                <TooltipTrigger render={<span ref={labelRef} className={labelClassName} />}>
                   {previewText}
                 </TooltipTrigger>
                 <TooltipPopup className="whitespace-pre-line">{changedFilesTooltip}</TooltipPopup>
               </Tooltip>
             ) : (
-              <span className={labelClassName}>
+              <span ref={labelRef} className={labelClassName}>
                 {isReasoning && !expanded ? (
                   <ChatMarkdown
                     inline
@@ -586,6 +595,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                 )}
               </span>
             )}
+
             {answerPreview ? (
               <span
                 className={cn(
@@ -609,6 +619,12 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       }
       trailing={
         <>
+          {noticeMessage === null ? (
+            <TimelineRowTimestamp
+              createdAt={workEntry.createdAt}
+              timestampFormat={timestampFormat}
+            />
+          ) : null}
           {createdThread ? (
             <button
               type="button"
@@ -668,7 +684,6 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               />
             </span>
           ) : null}
-          <TimelineRowTimestamp createdAt={workEntry.createdAt} timestampFormat={timestampFormat} />
         </>
       }
     >

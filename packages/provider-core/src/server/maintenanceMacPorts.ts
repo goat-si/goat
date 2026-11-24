@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { resolveCommandPath } from "@goat/shared/shell";
 import { normalizeCommandPath } from "./maintenanceCommandPaths.ts";
 import { runProbe } from "./maintenanceProbe.ts";
 import type { ProviderMaintenanceResolutionContext } from "./maintenanceResolver.ts";
@@ -17,15 +16,25 @@ export const resolveMacPortsOwner = Effect.fn("resolveMacPortsOwner")(function* 
   if (context.platform === "win32") return null;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const siblingPort = path.join(path.dirname(context.resolvedCommandPath), "port");
-  const portPath = (yield* fileSystem.exists(siblingPort).pipe(Effect.orElseSucceed(() => false)))
-    ? siblingPort
-    : yield* resolveCommandPath("port", { env: context.env });
-  if (!portPath) return null;
-  const prefix = `${normalizeCommandPath(path.dirname(path.dirname(portPath)))}/`;
-  if (!normalizeCommandPath(context.realCommandPath).startsWith(prefix)) return null;
-  const output = yield* runProbe(portPath, ["provides", context.realCommandPath], context.env);
-  const name = output ? /\bis provided by: (\S+)/.exec(output)?.[1] : undefined;
-  if (name === undefined) return null;
-  return /^[\w.+-]+$/.test(name) ? name : "";
+  const commandPaths = [...new Set([context.resolvedCommandPath, context.realCommandPath])];
+  const portPaths = new Set<string>();
+  for (const commandPath of commandPaths) {
+    for (let dir = path.dirname(commandPath); ; dir = path.dirname(dir)) {
+      portPaths.add(path.join(dir, "bin", "port"));
+      if (path.dirname(dir) === dir) break;
+    }
+  }
+  for (const portPath of portPaths) {
+    if (!(yield* fileSystem.exists(portPath).pipe(Effect.orElseSucceed(() => false)))) continue;
+    const prefix = `${normalizeCommandPath(path.dirname(path.dirname(portPath)))}/`;
+    const owned = commandPaths.filter((commandPath) =>
+      normalizeCommandPath(commandPath).startsWith(prefix),
+    );
+    if (owned.length === 0) continue;
+    const output = yield* runProbe(portPath, ["provides", ...owned], context.env);
+    if (output === null) return "";
+    const name = /\bis provided by: (\S+)/.exec(output)?.[1];
+    if (name !== undefined) return /^[\w.+-]+$/.test(name) ? name : "";
+  }
+  return null;
 });

@@ -23,6 +23,8 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { annotateAgentServers } from "./agentPortOwners.ts";
+import { parseLsofOutput } from "./portListenerParsing.ts";
 
 export class PortDiscovery extends Context.Service<
   PortDiscovery,
@@ -38,6 +40,7 @@ export class PortDiscovery extends Context.Service<
       listener: (servers: ReadonlyArray<DiscoveredLocalServer>) => Effect.Effect<void>,
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly retain: Effect.Effect<void, never, Scope.Scope>;
+    readonly retainAgent: Effect.Effect<void, never, Scope.Scope>;
     readonly registerTerminalProcesses: (input: {
       readonly threadId: string;
       readonly terminalId: string;
@@ -177,66 +180,6 @@ const projectWebProbeSnapshot = (
   return [...visibleByServer.values()].toSorted((left, right) => left.port - right.port);
 };
 
-const parseLsofOutput = (
-  raw: string,
-  terminalByProcessId: ReadonlyMap<number, TerminalProcessOwner> = new Map(),
-): ReadonlyArray<DiscoveredLocalServer> => {
-  const seen = new Map<string, DiscoveredLocalServer>();
-  let pid: number | null = null;
-  let processName: string | null = null;
-
-  for (const line of raw.split("\n")) {
-    if (line.length === 0) continue;
-    const tag = line.charAt(0);
-    const value = line.slice(1);
-    if (tag === "p") {
-      const parsed = Number.parseInt(value, 10);
-      pid = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-      processName = null;
-      continue;
-    }
-    if (tag === "c") {
-      processName = value.trim() || null;
-      continue;
-    }
-    if (tag === "n") {
-      const portMatch = parsePortFromLsofName(value);
-      if (portMatch == null) continue;
-      const url = `http://localhost:${portMatch}`;
-      const key = `localhost:${portMatch}`;
-      const terminal = pid === null ? null : (terminalByProcessId.get(pid) ?? null);
-      const existing = seen.get(key);
-      if (existing) {
-        if (terminal === null) seen.set(key, { ...existing, terminal: null });
-        continue;
-      }
-      seen.set(key, {
-        host: "localhost",
-        port: portMatch,
-        url,
-        processName,
-        pid,
-        terminal,
-      });
-    }
-  }
-
-  return Array.from(seen.values()).toSorted((a, b) => a.port - b.port);
-};
-
-const parsePortFromLsofName = (name: string): number | null => {
-  const trimmed = name.split(" ", 1)[0]?.trim() ?? "";
-  if (trimmed.length === 0) return null;
-  const lastColon = trimmed.lastIndexOf(":");
-  if (lastColon < 0) return null;
-  const hostPart = trimmed.slice(0, lastColon);
-  const portPart = trimmed.slice(lastColon + 1);
-  if (!LSOF_LOCAL_HOST_TOKENS.has(hostPart)) return null;
-  const port = Number.parseInt(portPart, 10);
-  if (!Number.isFinite(port) || port <= 0 || port >= 65536) return null;
-  return port;
-};
-
 const parseWindowsListenerLine = (
   line: string,
 ): {
@@ -368,7 +311,8 @@ const serversEqual = (
       a.processName !== b.processName ||
       a.pid !== b.pid ||
       a.terminal?.threadId !== b.terminal?.threadId ||
-      a.terminal?.terminalId !== b.terminal?.terminalId
+      a.terminal?.terminalId !== b.terminal?.terminalId ||
+      a.agent?.threadId !== b.agent?.threadId
     ) {
       return false;
     }
@@ -391,6 +335,9 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     terminalProcesses: new Map(),
     retainCount: 0,
   });
+  let runningAgents = 0;
+  let agentScanPending = true;
+  const agentOwners = new Map<number, ThreadId | null>();
   const webProbeCacheRef = yield* Ref.make<ReadonlyMap<string, WebProbeCacheEntry>>(new Map());
   const scanSemaphore = yield* Semaphore.make(1);
   const lsofMissingRef = yield* Ref.make(false);
@@ -486,7 +433,12 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       const terminal = owner === null ? null : (terminalByProcessId.get(owner.pid) ?? null);
       const existing = seen.get(port);
       if (existing && (existing.pid !== null || owner === null)) {
-        if (terminal === null) seen.set(port, { ...existing, terminal: null });
+        if (terminal === null || existing.pid !== owner?.pid)
+          seen.set(port, {
+            ...existing,
+            terminal: null,
+            pid: existing.pid === owner?.pid ? existing.pid : null,
+          });
         continue;
       }
       seen.set(port, {
@@ -598,7 +550,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     }
     yield* Ref.set(webProbeCacheRef, nextCache);
     return {
-      discovered: servers.filter((server) => server.terminal !== null),
+      discovered: servers.filter((server) => server.terminal !== null || server.agent != null),
       configured,
     } satisfies WebProbeSnapshot;
   });
@@ -670,7 +622,10 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
         terminalByProcessId.set(processId, registration.owner);
       }
     }
-    if (terminalByProcessId.size === 0 && configuredUrls.length === 0) {
+    const scanAgents =
+      hostPlatform !== "win32" &&
+      (runningAgents > 0 || agentScanPending || [...agentOwners.values()].some(Boolean));
+    if (terminalByProcessId.size === 0 && configuredUrls.length === 0 && !scanAgents) {
       return { discovered: [], configured: new Map() } satisfies WebProbeSnapshot;
     }
     if (hostPlatform === "win32") {
@@ -703,8 +658,25 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
         yield* probeWebServers(listeners ?? [], configuredUrls),
       );
     }
+    const addAgentOwners = (servers: ReadonlyArray<DiscoveredLocalServer>) =>
+      scanAgents
+        ? Effect.suspend(() => {
+            agentScanPending = false;
+            return annotateAgentServers({
+              servers,
+              platform: hostPlatform,
+              fileSystem,
+              runner: processRunner,
+              cache: agentOwners,
+              retry: () => {
+                agentScanPending = true;
+              },
+            });
+          })
+        : Effect.succeed(servers);
     const fromProc = yield* scanProcListeners(terminalByProcessId);
-    if (fromProc !== null) return yield* probeWebServers(fromProc, configuredUrls);
+    if (fromProc !== null)
+      return yield* probeWebServers(yield* addAgentOwners(fromProc), configuredUrls);
     const recoverLsofProbeFailure = recoverProcessProbeFailure("lsof");
     if (yield* Ref.get(lsofMissingRef)) return yield* probeWebServers([], configuredUrls);
     const lsofResult = yield* processRunner
@@ -728,12 +700,13 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
           ProcessTimeoutError: recoverLsofProbeFailure,
         }),
       );
-    if (lsofResult !== null) return yield* probeWebServers(lsofResult, configuredUrls);
+    if (lsofResult !== null)
+      return yield* probeWebServers(yield* addAgentOwners(lsofResult), configuredUrls);
     // A missing lsof makes a bounded, partial /proc owner walk the only available discovery.
     const withoutLsof = (yield* Ref.get(lsofMissingRef))
       ? yield* scanProcListeners(terminalByProcessId)
       : null;
-    return yield* probeWebServers(withoutLsof ?? [], configuredUrls);
+    return yield* probeWebServers(yield* addAgentOwners(withoutLsof ?? []), configuredUrls);
   });
 
   const scanSnapshot = (configuredUrls: ReadonlyArray<string>) =>
@@ -804,6 +777,8 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     if (!idle) return;
     yield* scanSemaphore.withPermits(1)(
       Effect.gen(function* () {
+        agentOwners.clear();
+        agentScanPending = true;
         yield* Ref.set(socketOwnersRef, new Map());
         yield* Ref.set(socketOwnerMissesRef, new Map());
       }),
@@ -814,6 +789,21 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     acquireRetention(),
     () => releaseRetention,
   );
+
+  const retainAgent = Effect.gen(function* () {
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        runningAgents++;
+        agentScanPending = true;
+      }),
+      () =>
+        Effect.sync(() => {
+          runningAgents--;
+          agentScanPending = true;
+        }),
+    );
+    yield* retain;
+  });
 
   const subscribe: PortDiscovery["Service"]["subscribe"] = Effect.fn("PortDiscovery.subscribe")(
     (input, listener) =>
@@ -870,6 +860,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     scan: scanOnce,
     subscribe,
     retain,
+    retainAgent,
     registerTerminalProcesses,
     unregisterTerminal,
   });

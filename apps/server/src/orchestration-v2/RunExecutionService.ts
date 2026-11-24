@@ -198,8 +198,7 @@ export const runPrepareInput = (
   input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnPrepareInput>[0],
 ) => ({ ...runMemoryPrepareInput(input), ...runTurnPrepareInput(input) });
 
-export interface RunExecutionServiceV2StartRootRunInput {
-  readonly refreshMemoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["refreshMemoryContext"];
+export interface RunExecutionServiceV2StartRootRunInput extends ProviderAdapter.TurnMemoryHooks {
   readonly cloudSource?: import("@goat/contracts").OrchestrationV2CloudTask["source"];
   readonly reattach?: boolean;
   readonly resume?: boolean;
@@ -1537,7 +1536,11 @@ export const layer: Layer.Layer<
                           ).pipe(Effect.as(false)),
                       ),
                     );
-                    if (handedOff) return;
+                    if (handedOff) {
+                      // Its tool calls, the handoff's own among them, died with that process.
+                      yield* endWorkLostAfterRootRun(completedAt);
+                      return;
+                    }
                   }
                   yield* Effect.logWarning("orchestration V2 provider event ingestion failed", {
                     runId: input.run.id,
@@ -1564,13 +1567,13 @@ export const layer: Layer.Layer<
                           })
                           .pipe(
                             Effect.as(true),
-                            Effect.catchCauseIf(
-                              (interruptCause) => !Cause.hasInterruptsOnly(interruptCause),
-                              (interruptCause) =>
-                                Effect.logWarning(
-                                  "orchestration V2 failed to interrupt turn after ingestion failure",
-                                  { runId: input.run.id, cause: interruptCause },
-                                ).pipe(Effect.as(false)),
+                            // An adapter whose session scope is closing exits interrupted. That is
+                            // its fiber, not this one: Effect never hands a fiber its own interrupt.
+                            Effect.catchCause((interruptCause) =>
+                              Effect.logWarning(
+                                "orchestration V2 failed to interrupt turn after ingestion failure",
+                                { runId: input.run.id, cause: interruptCause },
+                              ).pipe(Effect.as(false)),
                             ),
                             // A failed interrupt leaves the stored turn running so the next start
                             // retries it. The snapshot is cached before it is published, so it may
@@ -1686,21 +1689,10 @@ export const layer: Layer.Layer<
           }),
         );
         yield* touchMcpCredential;
-        const appContext = (yield* mcpAppModelContext
-          .forThread(input.run.threadId)
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("Failed to read MCP app model context.", { cause }).pipe(
-                Effect.as([]),
-              ),
-            ),
-          )).map((entry) => ({
-          // The item id alone is unique and needs no escaping; server and
-          // tool names are free text that would break the tag Codex wraps
-          // the context in.
-          key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
-          text: entry.text,
-        }));
+        const appContext = yield* McpAppModelContext.forProvider(
+          mcpAppModelContext,
+          input.run.threadId,
+        );
         const compact =
           input.message.attachments.length === 0 &&
           input.message.text.trim().toLowerCase() === "/compact";
@@ -1737,9 +1729,7 @@ export const layer: Layer.Layer<
         );
         const turnInput = {
           ...(inputDelivery === undefined ? {} : { inputDelivery }),
-          ...(input.reattach === true || input.refreshMemoryContext === undefined
-            ? {}
-            : { refreshMemoryContext: input.refreshMemoryContext }),
+          ...ProviderAdapter.turnMemoryHooks(input),
           ...(input.cloudSource === undefined ? {} : { cloudSource: input.cloudSource }),
           ...(input.cloudLaunchSource === undefined
             ? {}

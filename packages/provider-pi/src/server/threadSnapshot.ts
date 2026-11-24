@@ -4,5 +4,5 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 export function piThreadSnapshot(
   providerThread: OrchestrationV2ProviderThread,
 ): ProviderAdapter.ProviderAdapterV2ThreadSnapshot {
-  return { providerThread, providerTurns: [], messages: [], runtimeRequests: [] };
+  return { providerThread, messages: [], runtimeRequests: [] };
 }

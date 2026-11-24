@@ -26,6 +26,7 @@ export const CAPABILITIES = Schema.decodeSync(OrchestrationV2ProviderCapabilitie
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
+    supportsNativeResume: false,
     supportsActiveSteering: false,
     supportsSteeringByInterruptRestart: false,
     supportsQueuedMessages: true,

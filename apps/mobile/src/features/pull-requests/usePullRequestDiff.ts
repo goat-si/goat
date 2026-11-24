@@ -7,8 +7,8 @@ import {
   type PullRequestSummary,
 } from "@goat/contracts";
 import { RegistryContext, useAtomRefresh, useAtomValue } from "@effect/atom-react";
-import { Atom } from "effect/reactivity";
-import { useContext, useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { Atom, type AsyncResult } from "effect/reactivity";
+import { useContext, useLayoutEffect, useMemo, useState } from "react";
 
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
@@ -104,23 +104,27 @@ export function usePullRequestDiff(
   const key = JSON.stringify(target);
   const firstPageAtom = composerPullRequests.diff(target);
   const currentFirstPage = useEnvironmentQuery(firstPageAtom).data;
+  const firstPageResult = useAtomValue(firstPageAtom);
+  const registry = useContext(RegistryContext);
   const refreshFirstPage = useAtomRefresh(firstPageAtom);
   const { refreshing, onRefresh } = usePullToRefresh(firstPageAtom);
   const [state, setState] = useState<{
     key: string;
     cursor: string | null;
     pages: readonly PullRequestDiffPage[];
+    reloadedFrom?: AsyncResult.AsyncResult<unknown, unknown>;
   }>({ key, cursor: null, pages: NO_PAGES });
   const cursor = state.key === key ? state.cursor : null;
-  const query = useEnvironmentQuery(
+  const reloadedFrom = state.key === key ? state.reloadedFrom : undefined;
+  const pageAtom = (pageCursor: string | null) =>
     composerPullRequests.diff({
       ...target,
-      input: { ...target.input, ...(cursor ? { cursor } : {}) },
-    }),
-  );
+      input: { ...target.input, ...(pageCursor ? { cursor: pageCursor } : {}) },
+    });
+  const query = useEnvironmentQuery(pageAtom(cursor));
   const loaded = state.key === key ? state.pages : NO_PAGES;
   const pages = query.data ? retainPullRequestDiffPage(loaded, cursor, query.data) : loaded;
-  if (state.key !== key || state.pages !== pages) setState({ key, cursor, pages });
+  if (state.key !== key || state.pages !== pages) setState({ key, cursor, pages, reloadedFrom });
 
   const paged = getCachedPullRequestDiffPages(pages, key, terminology);
   const firstPage = pages[0]?.result ?? currentFirstPage;
@@ -138,7 +142,6 @@ export function usePullRequestDiff(
     pageReadable ? composerPullRequests.withheldDiffAdvertised(fileTarget) : UNADVERTISED,
   );
   const paths = readable && loads.key === fileKey ? loads.paths : NO_PATHS;
-  const registry = useContext(RegistryContext);
   const answers = useAtomValue(
     paths.length === 0
       ? NO_WITHHELD_ANSWERS
@@ -192,28 +195,26 @@ export function usePullRequestDiff(
   }, [answers, fileKey, offset, paged, readable, retained]);
   const patch = useMemo(() => pages.map((page) => page.result.patch).join("\n"), [pages]);
   const nextCursor = pages.at(-1)?.result.nextCursor ?? null;
+  const reloadStarting = reloadedFrom !== undefined && firstPageResult === reloadedFrom;
   const canLoadMore =
-    nextCursor !== null && nextCursor !== cursor && !query.isPending && query.error === null;
-  const loadMore = useCallback(() => {
+    nextCursor !== null &&
+    nextCursor !== cursor &&
+    !query.isPending &&
+    query.error === null &&
+    !reloadStarting;
+  const loadMore = () => {
     if (!canLoadMore) return;
-    setState({ key, cursor: nextCursor, pages });
-  }, [canLoadMore, key, nextCursor, pages, setState]);
-  const { error, refresh: refreshPage } = query;
-  const refresh = useCallback(() => {
-    if (cursor !== null && error !== null) {
-      refreshPage();
-      return;
-    }
-    setState({ key, cursor: null, pages: NO_PAGES });
-    refreshFirstPage();
-  }, [cursor, error, refreshPage, key, refreshFirstPage, setState]);
-  const onPullRefresh = useCallback(() => {
-    setState({ key, cursor: null, pages: NO_PAGES });
-    onRefresh();
-  }, [key, onRefresh, setState]);
+    if (reloadedFrom !== undefined) registry.refresh(pageAtom(nextCursor));
+    setState({ key, cursor: nextCursor, pages, reloadedFrom });
+  };
+  const reload = (refreshFirst: () => void) => {
+    setState({ key, cursor: null, pages: NO_PAGES, reloadedFrom: firstPageResult });
+    refreshFirst();
+  };
   return {
     ...query,
-    refresh,
+    refresh: () => reload(refreshFirstPage),
+    retry: query.refresh,
     parsed,
     loadWithheldFile,
     withheldRefetching,
@@ -223,6 +224,6 @@ export function usePullRequestDiff(
     canLoadMore,
     loadMore,
     refreshing,
-    onPullRefresh,
+    onPullRefresh: () => reload(onRefresh),
   };
 }

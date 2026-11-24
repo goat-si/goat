@@ -25,6 +25,7 @@ export const reserveClaudePdfBudget = (
       pages: 0,
       bytes: 0,
       delivered: false,
+      refunded: false,
       commit() {
         if (this.delivered) return;
         this.delivered = true;
@@ -32,6 +33,12 @@ export const reserveClaudePdfBudget = (
         budget.pending.bytes -= this.bytes;
         budget.committed.pages += this.pages;
         budget.committed.bytes += this.bytes;
+      },
+      refund() {
+        if (!this.delivered || this.refunded) return;
+        this.refunded = true;
+        budget.committed.pages -= this.pages;
+        budget.committed.bytes -= this.bytes;
       },
     })),
     (reservation) =>
@@ -41,3 +48,18 @@ export const reserveClaudePdfBudget = (
         budget.pending.bytes -= reservation.bytes;
       }).pipe(Effect.andThen(persist)),
   );
+
+const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = [
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+type SupportedClaudeImageMimeType = (typeof SUPPORTED_CLAUDE_IMAGE_MIME_TYPES)[number];
+const supportedClaudeImageMimeTypes = new Set<string>(SUPPORTED_CLAUDE_IMAGE_MIME_TYPES);
+
+export function isSupportedClaudeImageMimeType(
+  mimeType: string,
+): mimeType is SupportedClaudeImageMimeType {
+  return supportedClaudeImageMimeTypes.has(mimeType);
+}

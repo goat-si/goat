@@ -5,7 +5,10 @@ const GOAT_CODEX_LAUNCH_ARGS_ENV = "GOAT_CODEX_LAUNCH_ARGS";
 export const resolveCodexLaunchArgs = (
   launchArgs?: string,
   environment: NodeJS.ProcessEnv = process.env,
-) => environment[GOAT_CODEX_LAUNCH_ARGS_ENV]?.trim() || launchArgs?.trim() || "";
+) => {
+  const override = environment[GOAT_CODEX_LAUNCH_ARGS_ENV];
+  return override?.trim() ? override : launchArgs?.trim() || "";
+};
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
@@ -26,8 +29,9 @@ const SHARED_INLINE_PREFIXES = ["--config=", "-c=", "--enable=", "--disable=", "
 const filterLaunchArgs = (args: ReadonlyArray<string>, exec: boolean) => {
   const kept: Array<string> = [];
   for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
+    const rawArg = args[index];
+    if (rawArg === undefined) continue;
+    const arg = rawArg.replace(/^(-[cp])(?=[^=])/u, "$1=");
     if (exec && (arg === "--strict-config" || arg === "--oss")) kept.push(arg);
     else if (SHARED_VALUE_FLAGS.has(arg) || (exec && arg === "--local-provider")) {
       const value = args[index + 1];
@@ -44,18 +48,19 @@ const filterLaunchArgs = (args: ReadonlyArray<string>, exec: boolean) => {
   return kept;
 };
 
-export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => {
-  const args = filterLaunchArgs(codexLaunchArgv(launchArgs), true);
-  const hooks = new Set(["hooks", "codex_hooks"]);
-  return [
-    ...args.filter((arg, index) => {
-      if (arg.startsWith("--enable=")) return !hooks.has(arg.slice("--enable=".length));
-      if (arg === "--enable") return !hooks.has(args[index + 1] ?? "");
-      return !(args[index - 1] === "--enable" && hooks.has(arg));
-    }),
-    ...routeArgs,
-  ];
-};
+const mcpDisabledFeatures = new Set(["apps", "connectors", "plugins"]);
+const execDisabledFeatures = new Set([...mcpDisabledFeatures, "hooks", "codex_hooks"]);
+const omitFeatureEnables = (args: ReadonlyArray<string>, features: ReadonlySet<string>) =>
+  args.filter((arg, index) => {
+    if (arg.startsWith("--enable=")) return !features.has(arg.slice("--enable=".length));
+    if (arg === "--enable") return !features.has(args[index + 1] ?? "");
+    return !(args[index - 1] === "--enable" && features.has(arg));
+  });
+
+export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => [
+  ...omitFeatureEnables(filterLaunchArgs(codexLaunchArgv(launchArgs), true), execDisabledFeatures),
+  ...routeArgs,
+];
 
 export const codexMcpListLaunchArgs = (args: ReadonlyArray<string>) =>
-  filterLaunchArgs(args, false);
+  omitFeatureEnables(filterLaunchArgs(args, false), mcpDisabledFeatures);

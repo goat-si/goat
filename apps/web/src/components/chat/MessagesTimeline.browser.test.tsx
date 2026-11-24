@@ -4,7 +4,7 @@ import { environmentThreadDetails } from "../../state/threads";
 import { AudioPreview } from "../files/AudioPreview";
 import { onTestFinished } from "vite-plus/test";
 import { stubGlobal } from "../../../test/render";
-import { cdp, userEvent } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import {
   NodeId,
   ProviderDriverKind,
@@ -39,8 +39,6 @@ import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import { toastManager } from "../ui/toast";
 import type { CitedHistory } from "./citationProcedure";
-import type { TimelineNavigation } from "./timelineViewport";
-import { rememberTimelinePosition } from "./timelineScrollAnchoring";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found" as string | null,
@@ -197,9 +195,72 @@ describe("MessagesTimeline work rows", () => {
       }
     },
   );
+
+  it("keeps expanded tool output outside the row's toggle button", async () => {
+    setup();
+    await using screen = await renderTimeline([
+      work("tool-command", {
+        label: "Ran command",
+        tone: "tool",
+        itemType: "command_execution",
+        command: "npm test",
+        detail: "TOOL_OUTPUT_MARKER",
+      }),
+    ]);
+    const toggle = screen.button(/npm test/);
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const output = [...document.querySelectorAll("pre")].find((pre) =>
+      pre.textContent?.includes("TOOL_OUTPUT_MARKER"),
+    );
+    expect(output).toBeDefined();
+    expect(output!.closest('[role="button"]')).toBeNull();
+    expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")).toContain(output);
+  });
 });
 
 describe("MessagesTimeline messages", () => {
+  it("keeps the visible sentence in a long message when the chat width changes", async () => {
+    setup();
+    const size = { width: window.innerWidth, height: window.innerHeight };
+    onTestFinished(() => page.viewport(size.width, size.height));
+    await page.viewport(1200, 1400);
+    const props = { ...baseProps(), liveFollowEnabled: false };
+    const paragraphs = Array.from(
+      { length: 30 },
+      (_, index) =>
+        `Paragraph ${index + 1}. ${"A side panel should not move the sentence being read out of view. ".repeat(5)}`,
+    );
+    await using screen = await renderTimeline(
+      [message(paragraphs.join("\n\n"), { role: "assistant" })],
+      props,
+    );
+    screen.container.style.width = "900px";
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    const target = page.getByText(paragraphs[15]!.trim(), { exact: true }).element();
+    await vi.waitFor(() => {
+      expect(viewport.scrollHeight).toBeGreaterThan(1000);
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2);
+    });
+    await props.listRef.current!.scrollToOffset({
+      offset:
+        viewport.scrollTop +
+        target.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top -
+        24,
+      animated: false,
+    });
+    viewport.dispatchEvent(new Event("scroll"));
+    const before = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+    expect(Math.abs(before - 24)).toBeLessThan(2);
+    for (const width of [500, 900]) {
+      screen.container.style.width = `${width}px`;
+      await vi.waitFor(() => {
+        const after = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+        expect(Math.abs(after - before)).toBeLessThan(30);
+      });
+    }
+  });
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
     const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");
@@ -770,125 +831,6 @@ describe("MessagesTimeline attachments", () => {
       void props.listRef.current!.scrollToIndex({ index: 20, animated: false });
     });
     await vi.waitFor(() => expect(one!.isConnected).toBe(false));
-  });
-});
-
-describe("MessagesTimeline thread find", () => {
-  // Opening find is navigation; on a list already showing the thread the open
-  // action navigates, so the list itself releases follow only when it starts
-  // showing a thread whose find is already open.
-  function renderObserved() {
-    const navigations: TimelineNavigation[] = [];
-    const base = baseProps();
-    const element = (next: Partial<TimelineProps>) => (
-      <MessagesTimeline
-        {...base}
-        timelineEntries={[message("Where is the sidebar fix?")]}
-        onViewportAttach={(viewport) =>
-          viewport.subscribe((navigation) => navigations.push(navigation))
-        }
-        {...next}
-      />
-    );
-    return { navigations, element };
-  }
-  const released = { source: "command", releasesFollow: true };
-
-  it("releases follow once when it starts showing a thread whose find is open", async () => {
-    setup();
-    const { navigations, element } = renderObserved();
-    await using screen = await renderElement(element({}));
-    expect(navigations).toEqual([]);
-
-    const other = "environment-local:thread-find-open";
-    await screen.rerender(element({ routeThreadKey: other, findOpen: true }));
-    expect(navigations).toEqual([released]);
-    await screen.rerender(element({ routeThreadKey: other, findOpen: false }));
-    await screen.rerender(element({ routeThreadKey: other, findOpen: true }));
-    expect(navigations).toEqual([released]);
-  });
-
-  it("releases follow once when it mounts on a thread whose find is open", async () => {
-    setup();
-    const { navigations, element } = renderObserved();
-    await using screen = await renderElement(element({ findOpen: true }));
-    await screen.rerender(element({ findOpen: true }));
-    expect(navigations).toEqual([released]);
-  });
-
-  it("still restores the position of a thread it switches to whose find is open", async () => {
-    setup();
-    const base = baseProps();
-    const other = "environment-local:thread-find-open-positioned";
-    const replies = Array.from({ length: 40 }, (_, index) =>
-      message(`Reply ${index}\n\n${"line\n\n".repeat(8)}`, { role: "assistant" }, `r-${index}`),
-    );
-    rememberTimelinePosition(
-      other,
-      { rowId: "entry-r-20", offsetWithinRow: 0, scrollOffset: 0, atEnd: false },
-      false,
-    );
-    await using screen = await renderElement(
-      <MessagesTimeline {...base} timelineEntries={[message("Short thread")]} />,
-    );
-    await screen.rerender(
-      <MessagesTimeline
-        {...base}
-        routeThreadKey={other}
-        timelineEntries={replies}
-        liveFollowEnabled={false}
-        findOpen
-      />,
-    );
-    const viewport = base.listRef.current!.getScrollableNode()!;
-    await vi.waitFor(() => {
-      const row = screen.container.querySelector('[data-timeline-row-id="entry-r-20"]');
-      expect(row).not.toBeNull();
-      expect(
-        Math.abs(row!.getBoundingClientRect().top - viewport.getBoundingClientRect().top),
-      ).toBeLessThanOrEqual(2);
-    });
-  });
-  it("reveals find's match, not the remembered row, on a thread it switches to", async () => {
-    setup();
-    const base = baseProps();
-    const other = "environment-local:thread-find-open-match";
-    const replies = Array.from({ length: 40 }, (_, index) =>
-      message(
-        `${index === 5 ? "Needle here" : `Reply ${index}`}\n\n${"line\n\n".repeat(8)}`,
-        { role: "assistant" },
-        `r-${index}`,
-      ),
-    );
-    rememberTimelinePosition(
-      other,
-      { rowId: "entry-r-20", offsetWithinRow: 0, scrollOffset: 0, atEnd: false },
-      false,
-    );
-    await using screen = await renderElement(
-      <MessagesTimeline {...base} timelineEntries={[message("Short thread")]} />,
-    );
-    await screen.rerender(
-      <MessagesTimeline
-        {...base}
-        routeThreadKey={other}
-        timelineEntries={replies}
-        liveFollowEnabled={false}
-        findOpen
-        findExpanded
-        findQuery="Needle"
-        activeFindMatch={{ entryId: "entry-r-5", runId: null, occurrence: 0 }}
-      />,
-    );
-    const viewport = base.listRef.current!.getScrollableNode()!;
-    await vi.waitFor(() => {
-      const row = screen.container.querySelector('[data-timeline-row-id="entry-r-5"]');
-      expect(row).not.toBeNull();
-      const bounds = viewport.getBoundingClientRect();
-      const top = row!.getBoundingClientRect().top;
-      expect(top).toBeGreaterThanOrEqual(bounds.top);
-      expect(top).toBeLessThan(bounds.bottom);
-    });
   });
 });
 

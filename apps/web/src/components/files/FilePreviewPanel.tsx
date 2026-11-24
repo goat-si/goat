@@ -1291,7 +1291,7 @@ export default function FilePreviewPanel({
             workspaceRoot={cwd}
             environmentId={environmentId}
             threadRef={threadRef}
-            readResult={isMedia || isPdf ? null : file.data}
+            readResult={isMedia || isPdf || isDocument ? null : file.data}
             onRefresh={refreshOpenFile}
           />
           {absolutePath && canOpenIn ? (

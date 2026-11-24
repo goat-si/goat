@@ -248,7 +248,10 @@ it.effect.each(["darwin", "linux"] as const)(
       }
     }).pipe(
       Effect.provide(SourceControlDiscovery.layer.pipe(Layer.provide(layerDiscovery(runProcess)))),
-      Effect.provideService(SpawnExecutableResolution, (command) => `/usr/local/bin/${command}`),
+      Effect.provideService(
+        SpawnExecutableResolution,
+        async (command) => `/usr/local/bin/${command}`,
+      ),
       Effect.provideService(HostProcess.Platform, platform),
       Effect.provideService(HostProcess.Architecture, "arm64"),
     );

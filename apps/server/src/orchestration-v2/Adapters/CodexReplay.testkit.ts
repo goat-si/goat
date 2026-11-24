@@ -203,6 +203,198 @@ const withRequestId = (
     ? { ...entry, frame: { ...entry.frame, id } }
     : entry;
 
+const outboundFrame = (entry: CodexReplay.CodexAppServerReplayEntry | undefined) =>
+  entry?.type === "expect_outbound" && Predicate.isObject(entry.frame) ? entry.frame : undefined;
+
+export function withThreadNames(
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+  titles: readonly string[],
+): CodexReplay.CodexAppServerReplayTranscript {
+  const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [];
+  let offset = 0;
+  let ids = new Map<number, number>();
+  let named = new Set<unknown>();
+  let titleIndex = 0;
+  // Only root threads GOAT starts turns on get a name; Codex starts subagent turns itself.
+  const rootThreads = new Set(
+    transcript.entries.flatMap((entry) => {
+      const frame = outboundFrame(entry);
+      return frame?.method === "turn/start" && Predicate.isObject(frame.params)
+        ? [frame.params.threadId]
+        : [];
+    }),
+  );
+  for (const [index, entry] of transcript.entries.entries()) {
+    const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
+    if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
+      entries.push(entry);
+      continue;
+    }
+    if (entry.type === "expect_outbound" && typeof frame.method === "string") {
+      if (frame.method === "initialize") {
+        offset = 0;
+        ids = new Map();
+        named = new Set();
+        titleIndex = 0;
+      }
+      const params = Predicate.isObject(frame.params) ? frame.params : {};
+      if (frame.method === "thread/name/set") named.add(params.threadId);
+      const nextFrame =
+        frame.method === "config/read" || frame.method === "thread/goal/get"
+          ? outboundFrame(
+              transcript.entries
+                .slice(index + 1)
+                .find((candidate) => candidate.type === "expect_outbound"),
+            )
+          : undefined;
+      // A turn's quiet check reads goals after the name; a /goal command reads before naming.
+      const quietCheckRead =
+        frame.method === "thread/goal/get" &&
+        rootThreads.has(params.threadId) &&
+        nextFrame?.method !== "thread/goal/set" &&
+        nextFrame?.method !== "thread/goal/clear";
+      const turnParams =
+        frame.method === "turn/start" || quietCheckRead
+          ? params
+          : frame.method === "config/read" &&
+              nextFrame?.method === "turn/start" &&
+              Predicate.isObject(nextFrame.params)
+            ? nextFrame.params
+            : undefined;
+      if (turnParams !== undefined && !named.has(turnParams.threadId)) {
+        named.add(turnParams.threadId);
+        const name = titles[titleIndex++] ?? titles.at(-1) ?? "Codex continuation test";
+        const id = frame.id + offset;
+        entries.push(
+          {
+            type: "expect_outbound",
+            label: "thread/name/set",
+            frame: {
+              id,
+              method: "thread/name/set",
+              params: { threadId: turnParams.threadId, name },
+            },
+          },
+          { type: "emit_inbound", label: "thread/name/set", frame: { id, result: {} } },
+        );
+        offset++;
+      }
+      ids.set(frame.id, frame.id + offset);
+      entries.push(withRequestId(entry, frame.id + offset));
+      continue;
+    }
+    const mapped = ids.get(frame.id);
+    entries.push(
+      entry.type === "emit_inbound" && frame.method === undefined && mapped !== undefined
+        ? withRequestId(entry, mapped)
+        : entry,
+    );
+  }
+  return { ...transcript, entries };
+}
+
+// The requests a turn's quiet check sends before it reloads a thread.
+const QUIET_CHECK_METHODS = new Set([
+  "thread/goal/get",
+  "thread/backgroundTerminals/list",
+  "thread/loaded/list",
+  "thread/read",
+]);
+
+/**
+ * Inserts the stdio MCP config/read the adapter sends before each thread/start, thread/fork and
+ * thread/resume that carries config, and before a turn's reload; a held rejoin sends none.
+ */
+export function withThreadSetupReads(
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+): CodexReplay.CodexAppServerReplayTranscript {
+  const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [];
+  let offset = 0;
+  let ids = new Map<number, number>();
+  let pendingRead = false;
+  let previousMethod = "";
+  let previousId = -1;
+  let failed = "";
+  for (const [index, entry] of transcript.entries.entries()) {
+    const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
+    if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
+      entries.push(entry);
+      continue;
+    }
+    if (entry.type === "expect_outbound" && typeof frame.method === "string") {
+      if (frame.method === "initialize") {
+        offset = 0;
+        ids = new Map();
+        pendingRead = false;
+      }
+      const params = Predicate.isObject(frame.params) ? frame.params : {};
+      const nextFrame = outboundFrame(
+        transcript.entries
+          .slice(index + 1)
+          .find((candidate) => candidate.type === "expect_outbound"),
+      );
+      // An unload followed by a resume reads between them; a reload reads before unsubscribing.
+      const reload =
+        frame.method === "thread/unsubscribe" &&
+        nextFrame?.method === "thread/resume" &&
+        QUIET_CHECK_METHODS.has(previousMethod);
+      const setup =
+        ["thread/start", "thread/resume", "thread/fork"].includes(frame.method) &&
+        (frame.method !== "thread/resume" || "config" in params);
+      if (frame.method === "config/read") pendingRead = previousMethod !== "thread/start";
+      else if (setup && pendingRead) pendingRead = false;
+      else if (
+        (reload || setup) &&
+        failed !== frame.method &&
+        previousMethod !== "thread/unarchive"
+      ) {
+        const id = frame.id + offset;
+        entries.push(
+          {
+            type: "expect_outbound",
+            label: "config/read",
+            frame: {
+              id,
+              method: "config/read",
+              params: { cwd: params.cwd ?? null, includeLayers: false },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "config/read",
+            frame: { id, result: { config: {}, origins: {} } },
+          },
+        );
+        offset++;
+        if (reload) pendingRead = true;
+      } else if (!reload && !setup) pendingRead = false;
+      previousMethod = frame.method;
+      previousId = frame.id;
+      failed = "";
+      ids.set(frame.id, frame.id + offset);
+      entries.push(withRequestId(entry, frame.id + offset));
+      continue;
+    }
+    // Retried inside the same call without a new read: a closing thread's resume and an old
+    // Codex's refused threadSource.
+    if (
+      entry.type === "emit_inbound" &&
+      frame.id === previousId &&
+      Predicate.isObject(frame.error) &&
+      typeof frame.error.message === "string" &&
+      /\bis closing\b|thread.?source/iu.test(frame.error.message)
+    )
+      failed = previousMethod;
+    const mapped = ids.get(frame.id);
+    entries.push(
+      entry.type === "emit_inbound" && frame.method === undefined && mapped !== undefined
+        ? withRequestId(entry, mapped)
+        : entry,
+    );
+  }
+  return { ...transcript, entries };
+}
+
 /** Every turn/start follows a config/read; inserts that exchange and shifts later client ids. */
 function withConfigReadBeforeTurnStart(
   entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
@@ -254,6 +446,10 @@ function withConfigReadBeforeTurnStart(
 
 export function withConfigReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
+  includeSetup = true,
+  title = "Codex continuation test",
 ): CodexReplay.CodexAppServerReplayTranscript {
-  return { ...transcript, entries: withConfigReadBeforeTurnStart(transcript.entries) };
+  const named = withThreadNames(transcript, [title]);
+  const setup = includeSetup ? withThreadSetupReads(named) : named;
+  return { ...setup, entries: withConfigReadBeforeTurnStart(setup.entries) };
 }

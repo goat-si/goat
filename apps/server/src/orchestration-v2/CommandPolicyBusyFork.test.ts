@@ -7,6 +7,9 @@ import * as CommandPolicy from "./CommandPolicy.ts";
 it.effect("only opted-in adapters fork a completed boundary while the source runs", () =>
   Effect.gen(function* () {
     const policy = yield* CommandPolicy.CommandPolicyV2;
+    // Codex opts in itself, so the unset case starts from its threads without the flag.
+    const { canForkWhileSourceRunning: _codexOptIn, ...threads } =
+      CodexProviderCapabilitiesV2.threads;
     const decide = (flag: boolean | undefined, status: "completed" | "running") =>
       policy.decideForkExecution({
         commandId: CommandId.make("busy-fork"),
@@ -15,12 +18,13 @@ it.effect("only opted-in adapters fork a completed boundary while the source run
         capabilities: {
           ...CodexProviderCapabilitiesV2,
           threads: {
-            ...CodexProviderCapabilitiesV2.threads,
+            ...threads,
             ...(flag === undefined ? {} : { canForkWhileSourceRunning: flag }),
           },
         },
         sameProvider: true,
         hasStrongNativeSource: true,
+        hasNativeTurnBoundary: true,
         sourceRunStatus: status,
         fromSpecificTurn: true,
         crossWorkspace: false,

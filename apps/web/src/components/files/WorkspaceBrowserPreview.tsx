@@ -1,11 +1,15 @@
 import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import { useState } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { Spinner } from "~/components/ui/spinner";
+import { DownloadIcon } from "~/components/solar";
+import { toastManager } from "~/components/ui/toast";
 
 import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { refreshedRevision, workspaceAssetResource } from "./filePreviewMode";
 import { usePdfViewState } from "./pdf/usePdfViewState";
+import { FILE_SURFACE_SUBHEADER_CLASS, FileSurfaceAction } from "./fileSurfaceChrome";
 
 /**
  * HTML runs in a sandboxed frame with an opaque origin, so a page cannot reach
@@ -22,6 +26,7 @@ export function WorkspaceBrowserPreview(props: {
   readonly refreshRequestId: number;
 }) {
   const pdf = isPdfPreviewFile(props.absolutePath);
+  const [saving, setSaving] = useState(false);
   const resource = workspaceAssetResource({
     kind: pdf ? "media-file" : "workspace-file",
     threadRef: props.threadRef,
@@ -66,15 +71,51 @@ export function WorkspaceBrowserPreview(props: {
     );
   }
   return (
-    <BrowserDocumentFrame
-      src={`${assetUrl.url}${revisionSuffix}`}
-      documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${revision}`}
-      documentId={documentId}
-      pdfViewState={pdfViewState}
-      title={props.title}
-      pdf={pdf}
-      onRetry={refreshAssetUrl}
-      threadRef={props.threadRef}
-    />
+    <>
+      {pdf ? (
+        <div className={FILE_SURFACE_SUBHEADER_CLASS} data-glass-layer>
+          <span className="min-w-0 flex-1" />
+          <FileSurfaceAction
+            label={saving ? "Preparing file…" : "Save file"}
+            disabled={saving}
+            onPress={() => {
+              setSaving(true);
+              void (async () => {
+                const url = await refreshAssetUrl();
+                if (!url) throw new Error("Reconnect to the environment and try again.");
+                const response = await fetch(url);
+                if (!response.ok) throw new Error("The file could not be loaded. Try again.");
+                const downloadUrl = URL.createObjectURL(await response.blob());
+                setTimeout(() => URL.revokeObjectURL(downloadUrl), 30_000);
+                const anchor = document.createElement("a");
+                anchor.href = downloadUrl;
+                anchor.download = props.title.split(/[\\/]/).at(-1) || props.title;
+                anchor.click();
+              })()
+                .catch((cause: unknown) =>
+                  toastManager.add({
+                    type: "error",
+                    title: "Could not save file",
+                    description: cause instanceof Error ? cause.message : "Please try again.",
+                  }),
+                )
+                .finally(() => setSaving(false));
+            }}
+          >
+            <DownloadIcon className="size-3.5" />
+          </FileSurfaceAction>
+        </div>
+      ) : null}
+      <BrowserDocumentFrame
+        src={`${assetUrl.url}${revisionSuffix}`}
+        documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${revision}`}
+        documentId={documentId}
+        pdfViewState={pdfViewState}
+        title={props.title}
+        pdf={pdf}
+        onRetry={refreshAssetUrl}
+        threadRef={props.threadRef}
+      />
+    </>
   );
 }

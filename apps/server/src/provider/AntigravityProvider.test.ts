@@ -1,14 +1,14 @@
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { describe, expect, it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
-  ANTIGRAVITY_DEFAULT_MODEL,
   AntigravitySettings,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type RuntimeMode,
   type ServerProviderUsageLimits,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -33,6 +33,7 @@ import {
   buildAntigravityModelsFromSession,
   makeAntigravityProvider,
 } from "./AntigravityProvider.ts";
+import { modelConfig, modelOptions, sessionSetupResult } from "./AntigravityProvider.testkit.ts";
 
 const decodeSettings = Schema.decodeSync(AntigravitySettings);
 const instanceId = ProviderInstanceId.make("antigravity-test");
@@ -53,51 +54,6 @@ const initializeResult = {
   },
 } satisfies EffectAcpSchema.InitializeResponse;
 
-const modelOptions = [
-  { value: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
-  { value: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)" },
-  { value: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
-  { value: "gemini-3.7-flash-high", name: "Gemini 3.7 Flash (High)" },
-  { value: "gemini-3.7-flash-medium", name: "Gemini 3.7 Flash (Medium)" },
-  { value: "gemini-3.7-flash-low", name: "Gemini 3.7 Flash (Low)" },
-  { value: "gemini-3.6-flash-high", name: "Gemini 3.6 Flash (High)" },
-  { value: "gemini-3.6-flash-medium", name: "Gemini 3.6 Flash (Medium)" },
-  { value: "gemini-3.6-flash-low", name: "Gemini 3.6 Flash (Low)" },
-  { value: "gemini-pro-agent", name: "Gemini 3.1 Pro (High)" },
-  { value: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro (Low)" },
-];
-
-const modelConfig = {
-  id: "model",
-  name: "Model",
-  category: "model",
-  type: "select",
-  currentValue: "gemini-3.7-flash-high",
-  options: modelOptions,
-} satisfies EffectAcpSchema.SessionConfigOption;
-
-const sessionSetupResult = {
-  sessionId: "session-1",
-  models: {
-    currentModelId: "gemini-3.7-flash-high",
-    availableModels: modelOptions.map((option) => ({ modelId: option.value, name: option.name })),
-  },
-  configOptions: [
-    modelConfig,
-    {
-      id: "mode",
-      name: "Session Mode",
-      category: "mode",
-      type: "select",
-      currentValue: "default",
-      options: [
-        { value: "default", name: "Default" },
-        { value: "yolo", name: "YOLO" },
-      ],
-    },
-  ],
-} satisfies EffectAcpSchema.NewSessionResponse;
-
 const started = {
   sessionId: "session-1",
   initializeResult,
@@ -115,25 +71,27 @@ const expectedCommands = [
   { name: "logout", description: "Sign out of Google" },
 ];
 
-const layerTest = ProviderHostLive.layer.pipe(
-  Layer.provide(
-    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-      getEnvironmentId: Effect.succeed(EnvironmentId.make("memory-host-fixture")),
-    }),
-  ),
-  Layer.provideMerge(
-    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-      shouldRunScopeWork: () => Effect.succeed(false),
-    }),
-  ),
-  Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provide(
-    ServerConfig.layerTest(process.cwd(), { prefix: "goat-antigravity-provider-test-" }).pipe(
-      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+const makeLayerTest = (background: boolean) =>
+  ProviderHostLive.layer.pipe(
+    Layer.provide(
+      Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("memory-host-fixture")),
+      }),
     ),
-  ),
-);
+    Layer.provideMerge(
+      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+        shouldRunScopeWork: () => Effect.succeed(background),
+      }),
+    ),
+    Layer.provideMerge(ServerSettings.layerTest()),
+    Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-antigravity-provider-test-" }).pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  );
+const layerTest = makeLayerTest(false);
 
 type ProbeError = EffectAcpErrors.AcpError | ProviderSetupError;
 
@@ -146,8 +104,10 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly clearUsage?: Effect.Effect<void>;
     readonly currentProfile?: Effect.Effect<string>;
     readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
+    readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   } = {},
 ) {
+  const savedRuntimeModes = yield* Ref.make<ReadonlyArray<ReadonlyArray<RuntimeMode>>>([]);
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
   const probeCalls = yield* Ref.make(0);
   const safetyCalls = yield* Ref.make(0);
@@ -164,6 +124,10 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
       ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
+      ...(options.rememberedRuntimeModes
+        ? { rememberedRuntimeModes: options.rememberedRuntimeModes }
+        : {}),
+      rememberRuntimeModes: (modes) => Ref.update(savedRuntimeModes, (saved) => [...saved, modes]),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -198,109 +162,35 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     initialUpdate,
     initialize,
     nextPublish,
+    savedRuntimeModes,
   };
 });
 
-describe("Antigravity model catalog", () => {
-  it("uses legacy session models only when model config is absent", () => {
-    const fromLegacy = buildAntigravityModelsFromSession({
-      models: sessionSetupResult.models,
-    });
-    expect(fromLegacy).toEqual(buildAntigravityModelsFromSession(sessionSetupResult));
-    expect(
-      buildAntigravityModelsFromSession({
-        ...sessionSetupResult,
-        configOptions: [{ ...modelConfig, options: [] }],
+it.layer(makeLayerTest(true))("Antigravity periodic checks", (it) => {
+  it.effect("keeps a ready snapshot during a transient failed check and accepts sign-out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, "/workspace");
+        const checked = yield* Deferred.make<void>();
+        yield* Ref.set(
+          harness.probe,
+          Deferred.succeed(checked, undefined).pipe(
+            Effect.andThen(
+              Effect.fail(EffectAcpErrors.AcpRequestError.internalError("probe failed")),
+            ),
+          ),
+        );
+        yield* TestClock.adjust("5 minutes");
+        yield* Deferred.await(checked);
+        expect((yield* harness.provider.snapshot.getSnapshot).status).toBe("ready");
+        yield* harness.provider.onSignedOut();
+        yield* TestClock.adjust("30 seconds");
+        expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
       }),
-    ).toEqual([]);
-  });
-
-  it("flattens native option groups without combining distinct model IDs", () => {
-    const models = buildAntigravityModelsFromSession({
-      configOptions: [
-        {
-          ...modelConfig,
-          currentValue: "gemini-pro-agent",
-          options: [
-            { groupId: "Flash", name: "Flash", options: [modelOptions[3]!, modelOptions[4]!] },
-            { groupId: "Pro", name: "Pro", options: [modelOptions[9]!, modelOptions[3]!] },
-          ],
-        },
-      ],
-    });
-    expect(models.map((model) => model.slug)).toEqual([
-      "gemini-3.7-flash-high",
-      "gemini-3.7-flash-medium",
-      "gemini-pro-agent",
-    ]);
-    expect(models.find((model) => model.isDefault)?.slug).toBe("gemini-pro-agent");
-    expect(models.find((model) => model.aliases?.includes(ANTIGRAVITY_DEFAULT_MODEL))?.slug).toBe(
-      "gemini-pro-agent",
-    );
-  });
-
-  it("labels models that share a display name with their IDs", () => {
-    const models = buildAntigravityModelsFromSession({
-      configOptions: [
-        {
-          ...modelConfig,
-          currentValue: "gemini-3.8-flash",
-          options: [
-            { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
-            { value: "gemini-3.8-flash-preview", name: "Gemini 3.8 Flash" },
-          ],
-        },
-      ],
-    });
-    expect(models.map((model) => model.name)).toEqual([
-      "Gemini 3.8 Flash",
-      "Gemini 3.8 Flash (gemini-3.8-flash-preview)",
-    ]);
-  });
-
-  it("offers each model the thinking levels it reported when selected", () => {
-    const thinking = (currentValue: string) =>
-      ({
-        id: "thinking_level",
-        name: "Thinking Level",
-        category: "thought_level",
-        type: "select",
-        currentValue,
-        options: [
-          { value: "low", name: "Low" },
-          { value: "high", name: "High" },
-        ],
-      }) satisfies EffectAcpSchema.SessionConfigOption;
-    const models = buildAntigravityModelsFromSession(
-      {
-        configOptions: [
-          {
-            ...modelConfig,
-            currentValue: "gemini",
-            options: [
-              { value: "gemini", name: "Gemini" },
-              { value: "claude", name: "Claude" },
-              { value: "plain", name: "Plain" },
-              { value: "unseen", name: "Unseen" },
-            ],
-          },
-          thinking("high"),
-        ],
-      },
-      new Map([
-        ["claude", thinking("low")],
-        ["plain", null],
-      ]),
-    );
-    const thinkingOf = (slug: string) =>
-      models.find((model) => model.slug === slug)?.capabilities?.optionDescriptors?.[0];
-
-    expect(thinkingOf("gemini")).toMatchObject({ id: "thinking_level", currentValue: "high" });
-    expect(thinkingOf("claude")).toMatchObject({ id: "thinking_level", currentValue: "low" });
-    expect(thinkingOf("plain")).toBeUndefined();
-    expect(thinkingOf("unseen")).toMatchObject({ id: "thinking_level" });
-    expect(thinkingOf("unseen")).not.toHaveProperty("currentValue");
-  });
+    ),
+  );
 });
 
 it.layer(layerTest)("Antigravity provider snapshots", (it) => {
@@ -325,7 +215,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("treats initialize as installation proof, not account or model discovery", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -362,21 +251,63 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
-  it.effect("does not offer Auto, so Auto threads fall back to Supervised", () =>
+  it.effect("offers Auto only while the session advertises it", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
         yield* harness.initialize;
-        // Antigravity has no automatic review; the shared ACP policy would approve every request.
-        expect((yield* harness.provider.snapshot.getSnapshot).supportedRuntimeModes).toEqual([
+        const modes = harness.provider.snapshot.getSnapshot.pipe(
+          Effect.map((snapshot) => snapshot.supportedRuntimeModes),
+        );
+        const withoutAuto = ["approval-required", "auto-accept-edits", "full-access"];
+        const startedWithAuto = {
+          ...started,
+          sessionSetupResult: {
+            ...sessionSetupResult,
+            modes: {
+              currentModeId: "default",
+              availableModes: [
+                { id: "default", name: "Default" },
+                { id: "auto", name: "Auto" },
+              ],
+            },
+          },
+        };
+        expect(yield* modes).toEqual(withoutAuto);
+        yield* harness.provider.onSessionStarted(startedWithAuto);
+        expect(yield* modes).toEqual([
           "approval-required",
           "auto-accept-edits",
+          "auto",
           "full-access",
         ]);
+        yield* harness.provider.onSessionStarted(started);
+        expect(yield* modes).toEqual(withoutAuto);
+        yield* harness.provider.onSessionStarted(startedWithAuto);
+        yield* harness.provider.onSignedOut();
+        expect(yield* modes).toEqual(withoutAuto);
+        const withAuto: ReadonlyArray<RuntimeMode> = [
+          "approval-required",
+          "auto-accept-edits",
+          "auto",
+          "full-access",
+        ];
+        expect(yield* Ref.get(harness.savedRuntimeModes)).toEqual([
+          withAuto,
+          withoutAuto,
+          withAuto,
+          withoutAuto,
+        ]);
+
+        // A restart offers what the last session advertised before any session starts.
+        const restarted = yield* makeHarness({ rememberedRuntimeModes: withAuto });
+        yield* restarted.initialize;
+        expect(yield* restarted.provider.snapshot.getSnapshot).toMatchObject({
+          supportedRuntimeModes: withAuto,
+        });
       }),
     ),
   );
-
   it.effect("publishes session metadata and native commands without another health probe", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -407,7 +338,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect(
     "a sign-out from another home clears the current profile, since every home shares the credentials",
     () =>
@@ -429,7 +359,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         }),
       ),
   );
-
   it.effect("old session events cannot replace the current profile catalog", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -463,7 +392,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("a sign-out is not lost when the home changes while it is applied", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -488,7 +416,19 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
+  it.effect("shows a thread session's native commands in that workspace's snapshot", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* harness.initialize;
+      yield* harness.provider.snapshotForCwd("/workspace", []);
+      // The thread adapter reports the cwd on session start; command updates arrive without one.
+      yield* harness.provider.onSessionStarted(started, "/workspace");
+      yield* harness.provider.onAvailableCommands(commands);
+      expect((yield* harness.provider.snapshotForCwd("/workspace")).slashCommands).toEqual(
+        expectedCommands,
+      );
+    }),
+  );
   it.effect("clears all account metadata on sign-out and authentication failure", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -528,7 +468,6 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
-
   it.effect("replaces live model choices and accepts an empty catalog", () =>
     Effect.scoped(
       Effect.gen(function* () {

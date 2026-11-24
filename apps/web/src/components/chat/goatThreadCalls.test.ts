@@ -189,7 +189,15 @@ describe("findSendingCall", () => {
       expanded: false,
     });
     const rows: MessagesTimelineRow[] = [
-      { kind: "turn-fold", id: "turn", createdAt: "", runId, label: "", expanded: true },
+      {
+        kind: "turn-fold",
+        id: "turn",
+        createdAt: "",
+        runId,
+        status: "worked",
+        duration: null,
+        expanded: true,
+      },
       attemptFold("attempt-1"),
       attemptFold("attempt-2"),
     ];
@@ -210,7 +218,15 @@ describe("findSendingCall", () => {
   it("goes past an open turn and an open attempt to the closed tool group holding the call", () => {
     const runId = RunId.make("run-1");
     const rows: MessagesTimelineRow[] = [
-      { kind: "turn-fold", id: "turn", createdAt: "", runId, label: "", expanded: true },
+      {
+        kind: "turn-fold",
+        id: "turn",
+        createdAt: "",
+        runId,
+        status: "worked",
+        duration: null,
+        expanded: true,
+      },
       {
         kind: "attempt-fold",
         id: "attempt",
@@ -316,13 +332,22 @@ describe("findSendingCall", () => {
   it("points a call folded after a steer at its own segment, not the turn's first fold", () => {
     const runId = RunId.make("run-1");
     const rows: MessagesTimelineRow[] = [
-      { kind: "turn-fold", id: "fold-turn", createdAt: "", runId, label: "", expanded: false },
+      {
+        kind: "turn-fold",
+        id: "fold-turn",
+        createdAt: "",
+        runId,
+        status: "worked",
+        duration: null,
+        expanded: false,
+      },
       {
         kind: "turn-fold",
         id: "fold-steer",
         createdAt: "",
         runId: RunId.make("run-1:steer:s1"),
-        label: "",
+        status: "continued",
+        duration: null,
         expanded: false,
       },
     ];

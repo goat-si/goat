@@ -35,6 +35,7 @@ import {
   keepsUsageRecord,
   mapUsageModel,
   resolveModelAliases,
+  usageTimestampFilter,
   UsageAggregator,
 } from "./usageAggregation.ts";
 import {
@@ -63,6 +64,7 @@ import {
   makeFileRecordReader,
   makeSupersededCacheRemover,
   makeUsageInstances,
+  makeWithinDir,
   providerRateModel,
   resolveSourceOwners,
   resolveUsageHostId,
@@ -523,7 +525,7 @@ export const make = Effect.gen(function* () {
                   : Effect.succeed({ volumeId, physical: {} }),
                 (identity): ScannedDir => ({
                   ...source,
-                  files: source.files?.map((file) => ({ ...file, malformedRecords: 0 })) ?? null,
+                  files: source.files?.map((file) => ({ ...file, malformedRecords: [] })) ?? null,
                   provider: reader.provider,
                   volumeId: identity.volumeId,
                   ...identity.physical,
@@ -639,18 +641,6 @@ export const make = Effect.gen(function* () {
     // Deleted transcripts' saved usage still aggregates and deduplicates normally.
     const retainedSinceMs = Math.max(windowStartMs, retentionCutoffMs);
     // Saved paths are files below a scanned root, so their folder decides; folders repeat thousands of times.
-    const withinDir = (dir: string) => {
-      const foldersWithin = new Map<string, boolean>();
-      return (filePath: string) => {
-        const folder = path.dirname(filePath);
-        let within = foldersWithin.get(folder);
-        if (within === undefined) {
-          within = isWithinDirectory(folder, dir);
-          foldersWithin.set(folder, within);
-        }
-        return within;
-      };
-    };
     const knownFiles = yield* Effect.acquireRelease(
       Effect.sync(() => fileCache.snapshot()),
       (snapshot) => Effect.sync(snapshot.release),
@@ -658,7 +648,7 @@ export const make = Effect.gen(function* () {
     const filesByDir = scannedDirs.map(({ provider, dir, files }) => {
       const liveFiles = files ?? [];
       const livePaths = new Set(liveFiles.map((file) => file.path));
-      const isRetained = withinDir(dir);
+      const isRetained = makeWithinDir(dir, path, isWithinDirectory);
       return {
         *[Symbol.iterator]() {
           yield* liveFiles;
@@ -686,7 +676,7 @@ export const make = Effect.gen(function* () {
     // scan reads them in: walked files in walk order, then the directory's deleted files.
     for (const { provider, dir, walked } of fromMemory ? [] : scannedDirs) {
       if (walked === undefined) continue;
-      const within = withinDir(dir);
+      const within = makeWithinDir(dir, path, isWithinDirectory);
       const saved = [...fileCache.metadata()];
       const slots = saved.flatMap(([filePath, entry], index) =>
         entry.provider === provider && within(filePath) ? [index] : [],
@@ -758,7 +748,11 @@ export const make = Effect.gen(function* () {
 
     const crossFileSessions = sharedSessions(Iterator.from(filesByDir).flatMap((files) => files));
 
-    const scans = resolveSourceOwners(scannedDirs, filesByDir);
+    const scans = resolveSourceOwners(
+      scannedDirs,
+      filesByDir,
+      usageTimestampFilter({ ...input, ...hourlyWindow }),
+    );
     const tierReaders = fromMemory ? [] : transcriptReaders.map(({ reader }) => reader);
     const counted = new Set<number>();
     const sessions = new Map<number, Set<string>>();

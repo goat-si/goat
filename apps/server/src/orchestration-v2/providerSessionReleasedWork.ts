@@ -18,6 +18,7 @@ import type * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderSessionReleaseReason } from "./ProviderSessionManager.ts";
 import { releasedThreadIds } from "./providerSessionReleasedThreads.ts";
+import { makeReleasedWorkNote } from "./providerSessionLostWork.ts";
 
 // Tool calls that only a live provider process can end.
 const releasedToolCallTypes: ReadonlyArray<OrchestrationV2TurnItem["type"]> = [
@@ -69,6 +70,13 @@ export const makeReleasedBackgroundWork = ({
       const released = [];
       for (const threadId of releasedThreadIds(input)) {
         const projection = yield* projectionStore.getThreadRecords(threadId, ["providerThreads"]);
+        const openItems =
+          input.reason === "runtime_error"
+            ? (yield* projectionStore.getThreadRecords(threadId, ["turnItems"], {
+                turnItemTypes: [...releasedToolCallTypes, "subagent"],
+                turnItemStatuses: activeTurnItemStatuses,
+              })).turnItems
+            : [];
         for (const providerThread of projection.providerThreads) {
           if (providerThread.providerSessionId !== providerSessionId) continue;
           released.push({
@@ -80,6 +88,18 @@ export const makeReleasedBackgroundWork = ({
               NodeId,
               { readonly task: string; readonly card?: string }
             >(),
+            lostTasks:
+              input.reason === "runtime_error" && providerThread.ownerNodeId === null
+                ? (providerThread.pendingBackgroundTasks ?? [])
+                : [],
+            lostItems:
+              input.reason === "runtime_error" && providerThread.ownerNodeId === null
+                ? openItems.filter(
+                    (item) =>
+                      item.providerThreadId === providerThread.id &&
+                      (item.type !== "subagent" || item.origin === "provider_native"),
+                  )
+                : [],
             taskIds: new Set(
               (providerThread.pendingBackgroundTasks ?? []).map((task) => task.taskId),
             ),
@@ -491,6 +511,8 @@ export const makeReleasedBackgroundWork = ({
       Effect.andThen(writeReleasedSubagentEvents(released, releasedAt)),
     );
 
+  const writeReleasedWorkNote = makeReleasedWorkNote({ projectionStore, eventSink, idAllocator });
+
   const writeReleasedBackgroundWorkEvents = (
     released: ReadonlyArray<ReleasedProviderThread>,
     releasedAt: DateTime.Utc,
@@ -500,6 +522,7 @@ export const makeReleasedBackgroundWork = ({
       (providerThread) =>
         writeReleasedRosterEvents(providerThread).pipe(
           Effect.andThen(writeReleasedProcessTaskEvents(providerThread, releasedAt)),
+          Effect.andThen(writeReleasedWorkNote(providerThread)),
         ),
       { discard: true },
     );

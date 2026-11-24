@@ -17,6 +17,7 @@ import type {
   RunId,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
+import type * as Effect from "effect/Effect";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { BackgroundWorkReport } from "@goat/provider-core/server/notification";
 import type { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -74,6 +75,12 @@ export interface ActiveTurn {
     | undefined;
   interrupted: boolean;
   unsent: boolean;
+  pendingMemoryReceipt?:
+    | {
+        readonly id: string;
+        readonly receipt: Effect.Effect<void>;
+      }
+    | undefined;
   readonly steers: Set<string>;
   readonly settledInbox: Set<string>;
   readonly takenPages: Set<string>;
@@ -115,6 +122,11 @@ export interface Wake {
   readonly after: string | undefined;
   readonly first: string | undefined;
   readonly children: Set<string>;
+  readonly awaited: Set<string>;
+  readonly ended: Map<
+    string,
+    { readonly status: "completed" | "failed" | "interrupted"; readonly exit?: number }
+  >;
 }
 
 export interface OpenBlock {
@@ -159,7 +171,6 @@ export interface ThreadState {
   goalRevision: number;
   goalFresh: boolean;
   goalRefreshing: boolean;
-  readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
   active: ActiveTurn | undefined;
   model: ModelRef | undefined;
   /** Locally ended but possibly live; consume its next execution end without settling a new turn. */
@@ -254,7 +265,6 @@ export const makeNewThreadState =
     goalRevision: 0,
     goalFresh: false,
     goalRefreshing: false,
-    providerTurns: new Map(),
     active: undefined,
     model: undefined,
     unsettled: false,

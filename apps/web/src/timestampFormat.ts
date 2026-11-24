@@ -172,6 +172,14 @@ export function formatShortTimestamp(
   return getTimestampFormatter(timestampFormat, false, "UTC", locale).format(wallClockAsUtc(date));
 }
 
+export function formatTimeOfDay(timeOfDay: string, timestampFormat: TimestampFormat): string {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(timeOfDay);
+  if (!match) return timeOfDay;
+  return getTimestampFormatter(timestampFormat, false).format(
+    Date.UTC(2000, 0, 1, Number(match[1]), Number(match[2])),
+  );
+}
+
 const numericDateOptions: Intl.DateTimeFormatOptions = { month: "numeric", day: "numeric" };
 const numericDateWithYearOptions: Intl.DateTimeFormatOptions = {
   ...numericDateOptions,

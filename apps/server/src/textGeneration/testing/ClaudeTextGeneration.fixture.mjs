@@ -90,6 +90,33 @@ if (argsMustNotContain && args.includes(argsMustNotContain)) {
   fail("args contained forbidden content", 3);
 }
 
+if (
+  process.env.GOAT_FAKE_CLAUDE_REJECTS_IMAGES === "auth" &&
+  stdinContent.includes('"type":"image"')
+) {
+  process.stderr.write("Authentication failed\n");
+  process.exit(1);
+}
+
+if (
+  ["1", "reverse"].includes(process.env.GOAT_FAKE_CLAUDE_REJECTS_IMAGES) &&
+  stdinContent.includes('"type":"image"')
+) {
+  process.stdout.write(
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 400,
+      result:
+        process.env.GOAT_FAKE_CLAUDE_REJECTS_IMAGES === "reverse"
+          ? "API Error: 400 This model does not support images"
+          : "API Error: 400 Image inputs are not supported by this model",
+    }) + "\n",
+  );
+  process.exit(1);
+}
+
 const stdinMustContain = process.env.GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN;
 if (stdinMustContain && !stdinContent.includes(stdinMustContain)) {
   fail("stdin missing expected content", 4);

@@ -1,5 +1,26 @@
+import type { EnvironmentId } from "@goat/contracts";
 import type { MediaActionsSource } from "./mediaActionsSource";
 import type { FilePreviewItem, FilePreviewSource } from "../components/FilePreviewModal.types";
+
+export function remoteAttachmentImageSource(
+  environmentId: EnvironmentId,
+  attachmentId: string,
+  { name, mimeType }: { readonly name: string; readonly mimeType: string },
+) {
+  const resource = {
+    _tag: "attachment" as const,
+    attachmentId,
+    fileName: name,
+    mimeType,
+  };
+  return {
+    kind: "image",
+    name,
+    environmentId,
+    resource,
+    actionsSource: { name, mimeType, environmentId, resource },
+  } satisfies FilePreviewItem;
+}
 
 export function filePreviewKey(source: FilePreviewItem): string {
   if ("resource" in source)

@@ -40,20 +40,32 @@ const sdk = vi.hoisted(() => ({
   send: vi.fn(),
   cancelRun: vi.fn(),
 }));
-vi.mock("./sdk.ts", () => ({
-  loadCursorSdk: () => ({
-    Agent: {
-      create: async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} }),
-      resume: async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} }),
-      listRuns: async () => ({ items: [{ id: "abandoned-run", status: "running" }] }),
-      cancelRun: sdk.cancelRun,
-      messages: { list: async () => [] },
-    },
-    createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => async () => {} }),
-  }),
-  loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
-  isCursorSdkError: () => false,
-}));
+vi.mock("./sdk.ts", () => {
+  const agent = async () => ({ agentId: "recovery-agent", send: sdk.send, close: () => {} });
+  const listRuns = async () => ({ items: [{ id: "abandoned-run", status: "running" }] });
+  return {
+    loadCursorSdk: () => ({
+      Agent: {
+        create: agent,
+        resume: agent,
+        listRuns,
+        cancelRun: sdk.cancelRun,
+        messages: { list: async () => [] },
+      },
+      // The runner opens agents on a fresh platform instance over the shared stores.
+      CursorAgentPlatform: class {
+        createAgent = agent;
+        resumeAgent = agent;
+        listRuns = listRuns;
+        cancelRun = sdk.cancelRun;
+        getAgentMessages = async () => [];
+      },
+      createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => async () => {} }),
+    }),
+    loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
+    isCursorSdkError: () => false,
+  };
+});
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
 describe("Cursor memory recovery admission", () => {

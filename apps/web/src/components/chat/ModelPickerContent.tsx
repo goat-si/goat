@@ -1,3 +1,4 @@
+import { ModelPickerProviderNotices } from "./ModelPickerProviderNotices";
 import { resolveModelPickerSelectedModel } from "./ProviderModelPicker.logic";
 import { shouldIncludeModelPickerOption } from "./modelPickerAvailability";
 import {
@@ -10,8 +11,10 @@ import {
 } from "@goat/contracts";
 import { resolveSelectableModel } from "@goat/shared/model";
 import { useAtomValue } from "@effect/atom-react";
-import { formatProviderUpdateRequiredNotice } from "@goat/client-runtime/providerUpdateRequiredModels";
-import { useNavigate } from "@tanstack/react-router";
+import {
+  formatProviderUpdateRequiredNotice,
+  providerUpdateChannelLags,
+} from "@goat/client-runtime/providerUpdateRequiredModels";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -27,7 +30,6 @@ import { ChevronRightIcon } from "~/components/solar";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
-import { getProviderStatusMessage } from "./ProviderStatusBanner";
 import {
   modelPickerLegacySectionKey,
   modelPickerModelKey,
@@ -37,7 +39,6 @@ import {
 import { rankModelPickerSearch } from "./modelPickerSearch";
 import {
   Combobox,
-  ComboboxEmpty,
   ComboboxSearchInput,
   ComboboxItem,
   ComboboxListVirtualized,
@@ -61,7 +62,6 @@ import { announce } from "~/lib/announce";
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import { TooltipProvider } from "../ui/tooltip";
-import { InlineButton } from "../ui/button";
 import {
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
@@ -145,64 +145,6 @@ function modelJumpLabelsByKey(
     }
   }
   return mapping.size > 0 ? mapping : EMPTY_MODEL_JUMP_LABELS;
-}
-
-function ModelPickerProviderNotices({
-  setupEntries,
-  updateRequiredNotices,
-  emptyLabel,
-  onRequestClose,
-  onOpenProviderSetup,
-}: {
-  setupEntries: ReadonlyArray<ProviderInstanceEntry>;
-  emptyLabel: string;
-  updateRequiredNotices: ReadonlyArray<{ instanceId: ProviderInstanceId; notice: string }>;
-  onRequestClose: (() => void) | undefined;
-  onOpenProviderSetup: ((instanceId: ProviderInstanceId) => void) | undefined;
-}) {
-  const navigate = useNavigate();
-  return (
-    <>
-      {setupEntries.length > 0 ? (
-        <div className="max-h-44 shrink-0 overflow-y-auto border-t border-border/70 p-2">
-          {setupEntries.map((entry) => (
-            <div key={entry.instanceId} className="px-1 py-1.5 text-xs leading-snug">
-              <p className="line-clamp-3 text-muted-foreground">
-                {getProviderStatusMessage(entry.snapshot)}
-              </p>
-              <InlineButton
-                className="mt-1"
-                onClick={() => {
-                  onRequestClose?.();
-                  onOpenProviderSetup?.(entry.instanceId);
-                }}
-              >
-                {setupEntries.length > 1 ? `Set up ${entry.displayName}` : "Open provider setup"}
-              </InlineButton>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <ComboboxEmpty className="empty:h-0">{emptyLabel}</ComboboxEmpty>
-      )}
-      {updateRequiredNotices.map(({ instanceId, notice }) => (
-        <p
-          key={instanceId}
-          className="shrink-0 border-t border-border/70 px-3 py-2 text-xs leading-snug text-muted-foreground"
-        >
-          {notice}{" "}
-          <InlineButton
-            onClick={() => {
-              onRequestClose?.();
-              void navigate({ to: "/settings/providers" });
-            }}
-          >
-            Provider settings
-          </InlineButton>
-        </p>
-      ))}
-    </>
-  );
 }
 
 function ModelPickerList({
@@ -719,7 +661,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       ? matchesLockedProvider(entry)
       : entry.instanceId === selectedEntry?.instanceId;
     const notice = shown ? formatProviderUpdateRequiredNotice(entry.snapshot, searchQuery) : null;
-    return notice ? [{ instanceId: entry.instanceId, notice }] : [];
+    return notice
+      ? [
+          {
+            instanceId: entry.instanceId,
+            notice,
+            canUpdateInSettings: !providerUpdateChannelLags(entry.snapshot, searchQuery),
+          },
+        ]
+      : [];
   });
 
   const modelJumpModelKeys = visibleModels

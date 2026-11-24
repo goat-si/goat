@@ -122,7 +122,7 @@ describe("parseCodexLine", () => {
         state,
       );
       expect(next).not.toBeNull();
-      expect(codexUsageFormat.readMalformedRecords?.(state)).toBe(0);
+      expect(codexUsageFormat.readMalformedRecords?.(state).length).toBe(0);
     });
 
     it("recognizes subagent spawns without forked_from_id", () => {
@@ -173,7 +173,7 @@ describe("parseCodexLine", () => {
 
       expect({
         processed: [first, copied, afterBurst, next],
-        skipped: codexUsageFormat.readMalformedRecords?.(state),
+        skipped: codexUsageFormat.readMalformedRecords?.(state).length,
       }).toEqual({ processed: [120, 0, 120, 35], skipped: 0 });
     });
 
@@ -194,7 +194,7 @@ describe("parseCodexLine", () => {
 
       expect({
         processed: billed.map((record) => totalTokens(record.totals)),
-        skipped: codexUsageFormat.readMalformedRecords?.(state),
+        skipped: codexUsageFormat.readMalformedRecords?.(state).length,
       }).toEqual({ processed: [160, 230], skipped: 0 });
     });
   });

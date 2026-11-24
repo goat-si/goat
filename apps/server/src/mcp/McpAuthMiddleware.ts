@@ -1,6 +1,8 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import { McpProtocol } from "effect/ai";
 import type * as Types from "effect/Types";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
@@ -18,6 +20,30 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import { normalizeMcpHttpResponse } from "./normalizeMcpHttpResponse.ts";
 import { withServedToolNames } from "./ToolDispatch.ts";
 import { listingSetting, withCallerListing } from "./toolListing.ts";
+
+// Effect rejects unknown stateless notifications without metadata; Go MCP clients send roots changes.
+const isUndefinedNotification = Effect.fnUntraced(function* (
+  request: HttpServerRequest.HttpServerRequest,
+) {
+  const method = request.headers["mcp-method"];
+  const protocol = [McpProtocol.v2025_06_18, McpProtocol.v2026_07_28].find(
+    (candidate) => candidate.protocolVersion === request.headers["mcp-protocol-version"],
+  );
+  if (
+    request.method !== "POST" ||
+    protocol?.runtime._tag !== "Stateless" ||
+    !method?.startsWith("notifications/") ||
+    protocol.clientRpcs.requests.has(method)
+  )
+    return false;
+  const message = yield* Effect.orElseSucceed(request.json, () => undefined);
+  return (
+    Predicate.isReadonlyObject(message) &&
+    message.jsonrpc === "2.0" &&
+    message.method === method &&
+    !Predicate.hasProperty(message, "id")
+  );
+});
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   requestUrl(request).pipe(
@@ -176,6 +202,8 @@ export const makeMcpAuthMiddleware = Effect.gen(function* () {
       return cors(HttpServerResponse.empty({ status: 204 }));
     const invocation = yield* authenticateRequest(request);
     if (HttpServerResponse.isHttpServerResponse(invocation)) return cors(invocation);
+    if (yield* isUndefinedNotification(request))
+      return cors(HttpServerResponse.empty({ status: 202 }));
     return yield* withCallerListing(
       listing,
       permissions,

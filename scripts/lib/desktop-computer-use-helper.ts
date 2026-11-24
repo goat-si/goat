@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { ReleaseVerificationError, runReleaseCommand } from "./release-verify.ts";
 
+export type HelperDriverArch = "arm64" | "x64" | "universal";
+
 /**
  * The helper channel a packaged app embeds. Never "dev": a dev helper skips its parent check
  * (GOATComputerUseAllowAnyParent), so it must not ship in a nightly or stable app.
@@ -12,6 +14,7 @@ export const packagedHelperChannel = (updateChannel: "latest" | "nightly") =>
 export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseHelper")(
   function* (input: {
     readonly repoRoot: string;
+    readonly arch: HelperDriverArch;
     readonly output: string;
     readonly channel: "latest" | "nightly";
     readonly signed: boolean;
@@ -22,6 +25,8 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
       path.join(input.repoRoot, "scripts/build-computer-use-helper.ts"),
       "--channel",
       packagedHelperChannel(input.channel),
+      "--driver-arch",
+      input.arch,
       "--output",
       input.output,
     ];

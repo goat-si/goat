@@ -1,3 +1,4 @@
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { PullRequestLabels } from "./PullRequestLabels";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -52,7 +53,7 @@ import { PullRequestOverviewLoading } from "./PullRequestOverviewLoading";
 import { copyPullRequestLink, sharePullRequestLink } from "./pullRequestLink";
 import { PullRequestIdentity } from "./PullRequestIdentity";
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import { Linking, Platform, RefreshControl, StyleSheet, View } from "react-native";
+import { Platform, RefreshControl, StyleSheet, View } from "react-native";
 import { PullRequestTabScrollView } from "./PullRequestTabScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -378,7 +379,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     {
                       accessibilityLabel: openOnProviderLabel(identity.provider),
                       icon: "arrow.up.right" as const,
-                      onPress: () => void Linking.openURL(identity.url),
+                      onPress: () => void tryOpenExternalUrl(identity.url),
                     },
                     {
                       accessibilityLabel: "Copy link",
@@ -480,7 +481,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
             {identity ? (
               <Toolbar.MenuAction
                 icon="arrow.up.right"
-                onPress={() => void Linking.openURL(identity.url)}
+                onPress={() => void tryOpenExternalUrl(identity.url)}
               >
                 <Toolbar.Label>{openOnProviderLabel(identity.provider)}</Toolbar.Label>
               </Toolbar.MenuAction>
@@ -1247,7 +1248,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
         ) : null}
         {result.error && result.nextCursor ? (
           <View className="self-center">
-            <Button label="Retry loading remaining files" tone="text" onPress={result.refresh} />
+            <Button label="Retry loading remaining files" tone="text" onPress={result.retry} />
           </View>
         ) : null}
         {parsed.kind === "files" && parsed.notice ? (

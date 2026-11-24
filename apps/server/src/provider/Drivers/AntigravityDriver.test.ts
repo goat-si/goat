@@ -1,3 +1,4 @@
+import { knownProviderFailureMessage } from "@goat/provider-core/server/failure";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,6 +20,7 @@ import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -75,6 +77,104 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect.skipIf(windowsHost)(
+    "refuses an Antigravity executable older than 1.5 before opening a session",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const old = yield* h.makeExecutable("runtime-old", { agentVersion: "1.4.5" });
+        h.controls.selected = { ...old, source: "path", version: null };
+        const threadId = ThreadId.make("thread-antigravity-old-runtime");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: h.profileDirectory,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const error = yield* Effect.gen(function* () {
+          const session = yield* h.instance.orchestrationAdapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-antigravity-old-runtime"),
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }).pipe(Effect.scoped, Effect.flip);
+        expect(knownProviderFailureMessage(error)).toContain("Antigravity 1.4.5 does not work");
+        expect((yield* h.refresh().pipe(Effect.flip)).detail).toContain(
+          "Antigravity 1.4.5 does not work",
+        );
+        const methods = (yield* h.readRequests).map((request) => request.method);
+        expect(methods).toContain("initialize");
+        expect(methods).not.toContain("session/new");
+      }).pipe(Effect.scoped),
+  );
+  it.effect.skipIf(windowsHost)(
+    "native code sign-in shares credentials through isolated homes and releases its lease",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const executable = yield* h.makeExecutable("native-login");
+        const original = yield* h.fs.readFileString(executable.executablePath);
+        const link =
+          "https://accounts.google.com/o/oauth2/auth?response_type=code&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=test-state";
+        yield* h.fs.writeFileString(
+          executable.executablePath,
+          original.replace(
+            "#!/bin/sh\n",
+            [
+              "#!/bin/sh",
+              'case " $* " in',
+              '  *" --login "*)',
+              `    printf '%s\n' '${link}'`,
+              "    IFS= read -r code",
+              '    printf %s "$code" > "$GEMINI_HOME/antigravity-acp/acp_token.json"',
+              "    exit 0;;",
+              "esac",
+              "",
+            ].join("\n"),
+          ),
+        );
+        h.controls.selected = { ...executable, harnessPath: null };
+        const auth = h.instance.auth;
+        if (!auth?.respond) return yield* Effect.die("Missing auth controller");
+        const owner = "native-login-owner";
+        const started = yield* auth.start(owner);
+        const waitFor = (phase: "waiting" | "succeeded") =>
+          auth.subscribe(owner).pipe(
+            Stream.filter((state) => state.phase === phase),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+          );
+        const waiting = yield* waitFor("waiting");
+        expect(waiting.authorizationUrl).toBe(link);
+        expect(waiting.interaction?.type).toBe("credentials");
+        if (!started.flowId) return yield* Effect.die("Missing flow id");
+        yield* auth.respond(owner, {
+          instanceId: h.instanceId,
+          flowId: started.flowId,
+          interactionId: started.flowId,
+          response: { type: "credentials", values: { code: "4/test-code" } },
+        });
+        yield* waitFor("succeeded");
+        expect(
+          yield* h.fs.readFileString(
+            h.path.join(h.profileDirectory, "antigravity-acp", "acp_token.json"),
+          ),
+        ).toBe("4/test-code");
+        const login = h.launches.find((launch) => launch.args.includes("--login"));
+        const runtime = h.launches.find(
+          (launch) => !launch.args.includes("--login") && launch.profileDirectory !== undefined,
+        );
+        expect(login?.profileDirectory).toBeDefined();
+        expect(runtime?.profileDirectory).toBeDefined();
+        expect(login?.profileDirectory).not.toBe(runtime?.profileDirectory);
+        expect(login?.profileDirectory).not.toBe(h.profileDirectory);
+        expect(h.releases).toEqual([executable.version, executable.version]);
+        yield* h.assertClosed;
+      }).pipe(Effect.scoped),
+  );
+
   // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
     "a turn in flight keeps its runtime home through an instance rebuild while orphaned runs are swept",
@@ -539,7 +639,10 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
           h.second.harnessPath,
         ]);
         for (const launch of nativeLaunches) {
-          expect(launch.args).toEqual(hostPlatform === "linux" ? ["--uid="] : []);
+          expect(launch.args).toEqual([
+            ...(hostPlatform === "linux" ? ["--uid="] : []),
+            "--alsologtostderr",
+          ]);
           expect(launch.profileDirectory).toBe(launch.tempDirectory);
           expect(launch.forceFileStorage).toBe("1");
           expect(launch.extendEnv).toBe(false);

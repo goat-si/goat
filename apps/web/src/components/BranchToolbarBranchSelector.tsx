@@ -114,6 +114,12 @@ function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
+// Picker checkouts by environment and checkout: null while in flight, then the branch it landed
+// on. Shared because a draft thread mounts two selectors on one checkout, and the switch's own
+// settle reloads refs for both.
+const pickerCheckouts = new Map<string, string | null>();
+const pickerCheckoutKey = (environmentId: string, cwd: string) => `${environmentId}\u0000${cwd}`;
+
 export function BranchToolbarBranchSelector({
   forceNewWorktree = false,
   ref,
@@ -532,6 +538,8 @@ export function BranchToolbarBranchSelector({
     runBranchAction(async () => {
       const previousBranch = resolvedActiveBranch;
       setOptimisticBranch(selectedBranchName);
+      const checkoutKey = pickerCheckoutKey(environmentId, selectionTarget.checkoutCwd);
+      pickerCheckouts.set(checkoutKey, null);
       const checkoutResult = await switchRef({
         environmentId,
         input: {
@@ -543,6 +551,7 @@ export function BranchToolbarBranchSelector({
         const nextBranchName = refName.isRemote
           ? (checkoutResult.value.refName ?? selectedBranchName)
           : selectedBranchName;
+        pickerCheckouts.set(checkoutKey, nextBranchName);
         const movesCheckout = selectionTarget.checkoutCwd !== branchCwd;
         let hold: BranchHold | null = null;
         const applied = setThreadBranch(
@@ -576,6 +585,7 @@ export function BranchToolbarBranchSelector({
         setOptimisticBranch(applied ? nextBranchName : previousBranch);
         return;
       }
+      pickerCheckouts.delete(checkoutKey);
       setOptimisticBranch(previousBranch);
       if (!isAtomCommandInterrupted(checkoutResult)) {
         toastManager.add(
@@ -601,6 +611,8 @@ export function BranchToolbarBranchSelector({
     runBranchAction(async () => {
       const previousBranch = resolvedActiveBranch;
       setOptimisticBranch(name);
+      const checkoutKey = pickerCheckoutKey(environmentId, branchCwd);
+      pickerCheckouts.set(checkoutKey, null);
       const createBranchResult = await createRefMutation({
         environmentId,
         input: {
@@ -611,6 +623,7 @@ export function BranchToolbarBranchSelector({
       });
       if (createBranchResult._tag === "Success") {
         const nextBranchName = createBranchResult.value.refName;
+        pickerCheckouts.set(checkoutKey, nextBranchName);
         const applied = setThreadBranch(nextBranchName, activeWorktreePath);
         if (applied) {
           setBranchHold({
@@ -622,6 +635,7 @@ export function BranchToolbarBranchSelector({
         setOptimisticBranch(applied ? nextBranchName : previousBranch);
         return;
       }
+      pickerCheckouts.delete(checkoutKey);
       setOptimisticBranch(previousBranch);
       if (!isAtomCommandInterrupted(createBranchResult)) {
         toastManager.add(
@@ -647,6 +661,14 @@ export function BranchToolbarBranchSelector({
         (!cloneDone && (branch === null || branchByName.get(branch)?.current === true))
       )
         return;
+      if (!cloneDone && cwd !== null && branch !== null) {
+        const checkoutKey = pickerCheckoutKey(environment, cwd);
+        if (pickerCheckouts.has(checkoutKey)) {
+          const pickerBranch = pickerCheckouts.get(checkoutKey);
+          if (pickerBranch === null || pickerBranch === branch) return;
+          pickerCheckouts.delete(checkoutKey);
+        }
+      }
       void refreshLocalStatusForPicker({
         environmentId: environment,
         input: { cwd, localOnly: true },

@@ -30,8 +30,10 @@ import {
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
 import {
+  commandlessCommandLabel,
   contextCompactionLabel,
   formatCommandActionsLabel,
+  liveActivityToolStatus,
   liveThoughtLine,
   toolItemForDisplay,
   workEntryDisplayIndicatesToolFailure,
@@ -41,8 +43,8 @@ import {
   toolGroupSummaryKind,
   workEntriesViewedImagePaths,
   type WorkLogPresentationEntry,
-  type WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
+import { itemLifecycleStatus, itemWorkLogTone } from "./threadActivityItemStatus.ts";
 import {
   resolveGoatMcpItemCall,
   resolveGoatMcpToolPresentation,
@@ -277,40 +279,6 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
   return item.status === "completed" ? "success" : "neutral";
 }
 
-function itemLifecycleStatus(item: OrchestrationV2TurnItem): WorkLogToolLifecycleStatus {
-  switch (item.status) {
-    case "pending":
-    case "running":
-    case "waiting":
-      return "inProgress";
-    case "idle":
-      return "idle";
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "cancelled":
-    case "interrupted":
-      return "stopped";
-  }
-}
-
-function itemWorkLogTone(item: OrchestrationV2TurnItem): WorkLogPresentationEntry["tone"] {
-  if (item.type === "error") return "info";
-  if (item.type === "reasoning") return "thinking";
-  switch (item.type) {
-    case "command_execution":
-    case "file_change":
-    case "file_search":
-    case "web_search":
-    case "dynamic_tool":
-    case "subagent":
-      return "tool";
-    default:
-      return "info";
-  }
-}
-
 function itemToolPresentation(item: OrchestrationV2TurnItem): GoatMcpToolPresentation | null {
   if (item.type !== "dynamic_tool") {
     return null;
@@ -491,7 +459,12 @@ function toFeedActivity(
   const summary = itemSummary(item, toolPresentation);
   const detail = item.type === "notification" ? null : itemPreview(item);
   const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
-  const workEntry = toWorkLogEntry(item, createdAt, summary, detail);
+  const initialWorkEntry = toWorkLogEntry(item, createdAt, summary, detail);
+  const commandless = commandlessCommandLabel(
+    initialWorkEntry,
+    liveActivityToolStatus(initialWorkEntry.toolLifecycleStatus, false),
+  );
+  const workEntry = commandless ? { ...initialWorkEntry, label: commandless } : initialWorkEntry;
   const readPaths =
     item.type === "dynamic_tool" && toolGroupAction(workEntry) === "read"
       ? collectToolFilePaths(item)
@@ -1005,6 +978,10 @@ function presentationRestart(
     const firstEntry = runId === null ? undefined : previous.firstEntryByRun.get(runId);
     if (firstEntry !== undefined && firstEntry < restart.entry) return null;
   }
+  // The reused rows hold the live run's fold, which a rebuilt tail would add again.
+  const liveRunId = unsettledRunId(latestRun);
+  const liveRunStart = liveRunId === null ? undefined : previous.firstEntryByRun.get(liveRunId);
+  if (liveRunStart !== undefined && liveRunStart < restart.entry) return null;
   return { ...restart, index };
 }
 
@@ -1219,10 +1196,17 @@ export function deriveThreadFeedPresentation(
   }
   const trailingLiveFold = liveFold.end();
   if (trailingLiveFold) result.push(trailingLiveFold);
+  const latestRow = result.at(-1);
+  const replyIsStreaming =
+    latestRow?.type === "message" &&
+    latestRow.message.role === "assistant" &&
+    latestRow.message.streaming;
+
   if (
     isWorking &&
     activeWorkStartedAt !== null &&
     latestRun?.turnEnded !== true &&
+    !replyIsStreaming &&
     (activeRunId === null || !compactionCommandRunIds.has(activeRunId)) &&
     !result.some(
       (row) =>
@@ -1510,7 +1494,10 @@ function appendToolGroupRows(
       ? latestActivity.lifecycleStatus === "inProgress"
         ? "Thinking"
         : "Thought"
-      : liveToolActivitySummary(latestActivity, live)
+      : (commandlessCommandLabel(
+          latestActivity.workEntry,
+          liveActivityToolStatus(latestActivity.lifecycleStatus, live),
+        ) ?? liveToolActivitySummary(latestActivity, live))
     : singleActivity !== null &&
         singleActivity.toolLike &&
         toolGroupAction(singleActivity.workEntry) !== "edit"

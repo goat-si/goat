@@ -22,6 +22,7 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import type * as DateTime from "effect/DateTime";
 import type * as Deferred from "effect/Deferred";
+import type * as Effect from "effect/Effect";
 import type { OpenCodePermissionRequestKind } from "./permissionRules.ts";
 import type { OpenCodeTurnTokenUsageAccumulator } from "./turnUsage.ts";
 
@@ -56,6 +57,12 @@ export interface ActiveOpenCodeTurn {
   nextItemOrdinal: number;
   nativeUserMessageId: string | null;
   admissionMessageId: string | null;
+  pendingMemoryReceipt?:
+    | {
+        readonly id: string;
+        readonly receipt: Effect.Effect<void>;
+      }
+    | undefined;
   priorWakePromptIds?: Set<string>;
   priorWakeSettled?: Deferred.Deferred<void>;
   interrupted: boolean;
@@ -104,7 +111,6 @@ export interface OpenCodeThreadState {
   providerThread: OrchestrationV2ProviderThread;
   appThread: OrchestrationV2AppThread | null;
   activeTurn: ActiveOpenCodeTurn | null;
-  readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
   readonly runtimeRequests: Map<string, OrchestrationV2RuntimeRequest>;
   readonly messageRoles: Map<string, "user" | "assistant">;
   readonly userMessageIds: Array<string>;

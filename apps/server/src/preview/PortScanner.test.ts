@@ -788,3 +788,34 @@ effectIt.effect("traces requested scans without spans for routine polling helper
     Effect.withTracer(countingTracer(spans)),
   );
 });
+
+effectIt.effect("attributes an agent listener to its thread while discovery is retained", () => {
+  const fetchFn = (() =>
+    Promise.resolve(
+      new Response("ok", { headers: { "content-type": "text/html" } }),
+    )) as typeof globalThis.fetch;
+  const run: ProcessRunner.ProcessRunner["Service"]["run"] = (input) =>
+    Effect.succeed(
+      processOutput(
+        input.command === "lsof"
+          ? "p1234\ncnode\nn*:43123\n"
+          : " 1234 node GOAT_THREAD_ID=thread-pi\n",
+      ),
+    );
+  const layer = layerScanner.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerNoProc,
+        Layer.succeed(ProcessRunner.ProcessRunner, { run }),
+        Layer.succeed(HostProcess.Platform, "darwin"),
+        FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn))),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const scanner = yield* PortScanner.PortDiscovery;
+    yield* scanner.retainAgent;
+    const servers = yield* scanner.scan();
+    expect(servers.map((server) => server.agent?.threadId)).toEqual(["thread-pi"]);
+  }).pipe(Effect.scoped, Effect.provide(layer));
+});

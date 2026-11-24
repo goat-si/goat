@@ -20,7 +20,10 @@ import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
-import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
+import {
+  CodexOrchestratorReplayHarness,
+  withReplayTitles,
+} from "../Adapters/CodexAdapterV2.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import {
@@ -296,7 +299,10 @@ describe("orchestration V2 thread fork", () => {
         ),
       );
       const transcript = yield* CodexOrchestratorReplayHarness.decodeTranscript(
-        materializeReplayTranscriptWorkspace(rawTranscript, cwd),
+        withReplayTitles(materializeReplayTranscriptWorkspace(rawTranscript, cwd), [
+          "Source thread",
+          "Forked from first response",
+        ]),
       );
 
       const materialized = yield* Effect.gen(function* () {

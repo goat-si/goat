@@ -53,7 +53,7 @@ function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][])
       provider: "claude",
       records,
       tailRecords: [],
-      malformedRecords: 0,
+      malformedRecords: [],
       position: position(),
     });
   }
@@ -96,7 +96,7 @@ describe("scan cache round trip", () => {
     ]);
     original.set("/grok.jsonl", {
       size: 40,
-      malformedRecords: 2,
+      malformedRecords: [100, 100],
       mtimeMs: 300,
       provider: "grok",
       records: [
@@ -132,7 +132,7 @@ describe("scan cache round trip", () => {
     const pendingTail = { ...pending, unresolvedServiceTierTurnId: "native-tail" };
     original.set("/codex.jsonl", {
       size: 80,
-      malformedRecords: 3,
+      malformedRecords: [100, 100, 100],
       mtimeMs: 400,
       provider: "codex",
       records: [
@@ -170,6 +170,16 @@ describe("scan cache round trip", () => {
 
     expect(restored.size).toBe(4);
     expect(restored).toEqual(original);
+    const encoded = parse(makeScanCacheWriter()(original, {}));
+    const { mt: _dates, ...undated } = encoded.files["/codex.jsonl"]!;
+    const reparsed = decodeScanCache(
+      { ...encoded, files: { ...encoded.files, "/codex.jsonl": undated } },
+      TEST_FORMAT_MAP,
+    ).get("/codex.jsonl")!;
+    expect(reparsed.size).toBe(-1);
+    expect(reparsed.position.resumeOffset).toBe(0);
+    expect(reparsed.records).toEqual(original.get("/codex.jsonl")!.records);
+    expect(reparsed.malformedRecords).toEqual([]);
   });
 
   it.each([5, 6, 7, 8, 10, 11, 12, 13])(
@@ -179,7 +189,7 @@ describe("scan cache round trip", () => {
       original.set("/gone-codex.jsonl", {
         ...original.get("/gone.jsonl")!,
         provider: "codex",
-        malformedRecords: 1,
+        malformedRecords: [100],
         records: [record({ provider: "codex", speed: "fast", dedupeKey: null })],
         position: position({
           state: {
@@ -199,12 +209,12 @@ describe("scan cache round trip", () => {
         size: 256,
         provider: "pi",
         records: [record({ provider: "pi", model: "anthropic/claude-fable-5" })],
-        malformedRecords: 3,
+        malformedRecords: [100, 100, 100],
         position: position({ state: { sessionId: "session-a" } }),
       });
       const cleanCodex = {
         ...original.get("/gone-codex.jsonl")!,
-        malformedRecords: 0,
+        malformedRecords: [],
       };
       original.set("/clean-codex.jsonl", cleanCodex);
       const encoded = encodeScanCache(original);
@@ -267,7 +277,7 @@ describe("scan cache round trip", () => {
       provider: "codex",
       records: [record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null })],
       tailRecords: [],
-      malformedRecords,
+      malformedRecords: Array.from({ length: malformedRecords }, () => 100),
       position: position({
         state: { ...initialCodexScanState(), model: "gpt-6-astra", sessionId: "session-a" },
       }),
@@ -310,7 +320,7 @@ describe("scan cache round trip", () => {
       provider: "codex",
       records: [record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null })],
       tailRecords: [],
-      malformedRecords: 0,
+      malformedRecords: [],
       position: position({
         state: {
           ...initialCodexScanState(),
@@ -372,14 +382,14 @@ describe("scan cache round trip", () => {
       ["/a.jsonl", 100, [record()]],
       ["/b.jsonl", 200, [record({ sessionId: "session-b" })]],
     ]);
-    cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: 2 });
+    cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: [100, 100] });
     const sources = { "claude\u0000/projects": { dir: "/projects", volumeId: "1:2" } };
     expect(decodeScanCache(parse(write(cache, { sources })), TEST_FORMAT_MAP)).toEqual(cache);
 
     cache.set("/b.jsonl", {
       ...cache.get("/b.jsonl")!,
       size: 30,
-      malformedRecords: 4,
+      malformedRecords: [100, 100, 100, 100],
       records: [record({ sessionId: "session-c", model: "claude-opus-5-5", dedupeKey: "msg_3:" })],
     });
     const document = parse(write(cache, { sources }));

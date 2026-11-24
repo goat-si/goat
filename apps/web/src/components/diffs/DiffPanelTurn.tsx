@@ -1,5 +1,6 @@
 import type { EnvironmentId, RunId, ScopedThreadRef } from "@goat/contracts";
 import { useEffect } from "react";
+import { relativeHeaderPaths } from "../../lib/relativeHeaderPaths";
 
 import {
   type DiffPanelSelection,
@@ -21,6 +22,7 @@ const emptyStateClassName =
  */
 export function useDiffPanelTurn<T extends { readonly runId: RunId }>(input: {
   readonly threadRef: ScopedThreadRef | null;
+  readonly workspaceRoot: string | undefined;
   readonly selection: DiffPanelSelection;
   readonly orderedSummaries: ReadonlyArray<T>;
   readonly environmentId: EnvironmentId | undefined;
@@ -59,7 +61,8 @@ export function useDiffPanelTurn<T extends { readonly runId: RunId }>(input: {
       : null,
   );
   const item = detail.data?.item;
-  const diff = item?.type === "file_change" ? item.patch : undefined;
+  const diff =
+    item?.type === "file_change" ? relativeHeaderPaths(item.patch, input.workspaceRoot) : undefined;
   const edit =
     source === null
       ? null

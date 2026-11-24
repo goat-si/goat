@@ -114,6 +114,8 @@ export function resolveDraftProjectSelection(
     readonly incomingShareId?: string;
     readonly pickerClosed: boolean;
     readonly connectedEnvironmentIds: ReadonlySet<EnvironmentId>;
+    readonly useLastProject?: boolean | undefined;
+    readonly lastProject?: ProjectRef | undefined;
   },
 ): DraftProjectSelectionResolution {
   const hasExplicitProjectSelection =
@@ -127,6 +129,34 @@ export function resolveDraftProjectSelection(
 
   if (draft.pickerClosed && selectedProjectKey === null && draft.incomingShareId === undefined) {
     return { kind: "dismiss" };
+  }
+  const last =
+    draft.incomingShareId !== undefined && draft.useLastProject !== false
+      ? projects.find(
+          (project) =>
+            project.environmentId === draft.lastProject?.environmentId &&
+            project.id === draft.lastProject.projectId &&
+            project.archivedAt == null,
+        )
+      : undefined;
+  if (last) {
+    // Prefer the remembered copy, but not over a connected copy of the same project. Match
+    // by projectRefs: a stale registration of a path is a ref of its scope, not a member.
+    const lastScope = projectScopes.find((scope) =>
+      scope.projectRefs.some(
+        (ref) => ref.environmentId === last.environmentId && ref.projectId === last.id,
+      ),
+    );
+    const live = lastScope?.projects.filter((project) => project.archivedAt == null) ?? [];
+    const project =
+      lastScope && live.length > 0
+        ? getProjectScopeSelectionTarget(
+            { ...lastScope, projects: live },
+            last.environmentId,
+            draft.connectedEnvironmentIds,
+          )
+        : last;
+    return { kind: "select", project };
   }
   const onlyScope =
     draft.incomingShareId !== undefined && projectScopes.length === 1 ? projectScopes[0] : null;

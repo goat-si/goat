@@ -47,7 +47,11 @@ export const memoryFixture = () =>
     ],
   })!;
 
-export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached: boolean) =>
+export const acpMemoryDelivery = (
+  kind: "acp" | "grok" | "antigravity",
+  attached: boolean,
+  crash?: "before" | "after",
+) =>
   Effect.gen(function* () {
     const instanceId = M.ProviderInstanceId.make(`${kind}-memory`);
     const threadId = M.ThreadId.make(`${kind}-memory-thread`);
@@ -141,6 +145,7 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
               cwd: input.cwd,
               env: {
                 GOAT_ACP_SESSION_LIFECYCLE: "1",
+                ...(crash ? { GOAT_ACP_CRASH_PROMPT: crash } : {}),
                 ...(kind === "antigravity" ? { GOAT_ACP_ANTIGRAVITY: "1" } : {}),
               },
             },
@@ -158,9 +163,9 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
         );
         return {
           ...runtime,
-          prompt: (input) =>
+          prompt: (input, options) =>
             Effect.sync(() => prompts.push(input.prompt)).pipe(
-              Effect.andThen(runtime.prompt(input)),
+              Effect.andThen(runtime.prompt(input, options)),
             ),
           handleMcpConnect: (handler) =>
             Effect.sync(() => {
@@ -258,6 +263,41 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
       refreshMemoryContext: () =>
         Effect.succeed(!attached || scopes.includes("memory:read") ? snapshot : undefined),
     });
+    if (crash) {
+      let confirmed = 0;
+      let uncertain = 0;
+      const attempt = input(12);
+      const started = yield* runtime
+        .startTurn({
+          ...attempt,
+          message: {
+            ...attempt.message,
+            text: crash === "after" ? "crash after output" : "crash now",
+          },
+          onMemoryDelivered: () =>
+            Effect.sync(() => {
+              confirmed++;
+            }),
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              uncertain++;
+            }),
+        })
+        .pipe(Effect.exit);
+      if (Exit.isSuccess(started)) {
+        const events = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const terminal = events.at(-1);
+        assert.equal(terminal?.type === "turn.terminal" ? terminal.status : null, "failed");
+      }
+      assert.lengthOf(prompts, 1);
+      assert.isTrue(prompts[0]?.some((part) => part.text === memoryContextText(snapshot)));
+      assert.equal(confirmed, crash === "after" ? 1 : 0);
+      assert.equal(uncertain, 1);
+      return;
+    }
     const transitions: ReadonlyArray<ReadonlyArray<M.AuthEnvironmentScope>> = [
       [],
       ["memory:read", "memory:write", "orchestration:read"],
@@ -405,7 +445,7 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
         "acp-mcp-bridge",
       );
     }
-    if (kind === "antigravity") assert.isUndefined(runtime.compactThread);
+    if (kind === "antigravity") assert.isDefined(runtime.compactThread);
   }).pipe(
     Effect.scoped,
     Effect.provide(

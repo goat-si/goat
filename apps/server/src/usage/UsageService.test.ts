@@ -1,3 +1,4 @@
+import { registerUsageWindowTests } from "./usageWindow.testkit.ts";
 import { registerPhysicalSourceTests } from "./usagePhysicalSource.testkit.ts";
 import { registerUsageRetentionTests } from "./usageRetention.testkit.ts";
 import { registerRateAliasTests } from "./usageRateAliases.testkit.ts";
@@ -1588,6 +1589,7 @@ describe("UsageService", () => {
   );
 
   registerUnpricedTest(setup, layerService);
+  registerUsageWindowTests(setup, layerService, claudeLine);
 
   it.effect("includes host and merged OpenCode instance histories once across list aliases", () =>
     Effect.gen(function* () {
@@ -1708,7 +1710,11 @@ describe("UsageService", () => {
       );
       const summary = yield* service.readSummary(WINDOW);
       const sourcesFor = (provider: "opencode" | "antigravity") =>
-        summary.sources.filter((source) => source.fingerprint.provider === provider);
+        summary.sources.filter(
+          (source) =>
+            source.fingerprint.provider === provider &&
+            !source.fingerprint.resolvedHomePath.endsWith("antigravity-acp"),
+        );
       assert.strictEqual(sourcesFor("opencode").length, 1);
       assert.strictEqual(sourcesFor("antigravity").length, 1);
       assert.strictEqual(
@@ -2719,7 +2725,7 @@ describe("UsageService", () => {
                   provider: "claude" as const,
                   records: [],
                   tailRecords: [],
-                  malformedRecords: 2,
+                  malformedRecords: [mtimeMs, mtimeMs],
                   position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
                 },
               ],

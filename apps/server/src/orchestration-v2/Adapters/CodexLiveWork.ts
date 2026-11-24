@@ -144,5 +144,10 @@ export const makeCodexLiveWork = <Turn extends CodexLiveTurn<Turn>>(input: {
     return false;
   });
 
-  return { hasPendingBackgroundWork, hasPendingBackgroundWorkForThread, holdsLiveWork };
+  return {
+    hasPendingBackgroundWork,
+    hasPendingBackgroundWorkForThread,
+    holdsLiveWork,
+    backgroundTasksEndWithProcess: true as const,
+  };
 };

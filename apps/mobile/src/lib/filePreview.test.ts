@@ -1,3 +1,4 @@
+import "./filePreviewState.testkit";
 import {
   act,
   createElement,
@@ -161,18 +162,6 @@ vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goat/client-runtime/state/runtime")>()),
   executeAtomQuery: (...args: unknown[]) => audio.query(...args),
 }));
-vi.mock("../state/projects", () => ({
-  projectEnvironment: {
-    searchEntries: (input: unknown) => input,
-    fileMetadata: (input: unknown) => input,
-  },
-}));
-vi.mock("../state/server", () => ({ serverEnvironment: {} }));
-vi.mock("../state/session", () => ({
-  readEnvironmentScope: () => true,
-  usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://example.com" } }),
-  environmentSession: { preparedConnectionValueAtom: () => null },
-}));
 vi.mock("../state/atom-registry", () => ({ appAtomRegistry: { get: () => ({ _tag: "None" }) } }));
 vi.mock("../state/threads", () => ({ environmentThreadShells: {}, threadEnvironment: {} }));
 vi.mock("../state/entities", () => ({
@@ -278,6 +267,9 @@ vi.mock("../features/threads/SecretRequestCard", () => ({}));
 vi.mock("../features/threads/worktree-setup-card", () => ({}));
 vi.mock("../features/threads/CopyTextButton", () => ({ CopyTextButton: () => null }));
 vi.mock("../features/threads/thread-work-log", () => ({ THREAD_DISCLOSURE_TRANSITION_MS: 100 }));
+vi.mock("../features/threads/CollapsibleUserMessageBody", () => ({
+  CollapsibleUserMessageBody: (props: { children: ReactNode }) => props.children,
+}));
 vi.mock("../features/threads/HtmlRenderWebView", () => ({}));
 vi.mock("../features/threads/McpAppWebView", () => ({}));
 vi.mock("../features/layout/AdaptiveWorkspaceLayout", () => ({

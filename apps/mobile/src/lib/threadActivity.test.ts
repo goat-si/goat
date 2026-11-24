@@ -1262,6 +1262,15 @@ describe("buildThreadFeed", () => {
         startedAt,
       ),
     ).toMatchObject([{ type: "run-fold", label: "Working" }]);
+    const streamingReply = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected({ ...assistantMessage(), streaming: true }, 1),
+    ]);
+    expect(
+      deriveThreadFeedPresentation(streamingReply, run, new Set(), new Set(), startedAt).map(
+        (row) => row.type,
+      ),
+    ).toEqual(["message", "run-fold", "message"]);
   });
 
   it("pretty prints T3 MCP dynamic tool activities and attaches the product logo", () => {
@@ -1833,6 +1842,13 @@ describe("streamed feed updates", () => {
     completedAt: null,
   };
   const settled = { ...running, status: "completed" as const, completedAt: at(50) };
+  // A follow-up the server accepted waits under the running turn until a run picks it up.
+  const queuedBehindRun: OrchestrationV2TurnItem[] = [
+    ...history,
+    reply("a3", 22, runs[2], "Working", true),
+    shell("s4", 23, runs[2]),
+    { ...user("queued", 30, runs[2]), runId: null },
+  ];
   // Each step is what one streamed event leaves behind, including the edits
   // that reach back into earlier runs.
   const steps: ReadonlyArray<{
@@ -1919,6 +1935,8 @@ describe("streamed feed updates", () => {
       ],
       latestRun: running,
     },
+    { items: queuedBehindRun, latestRun: running },
+    { items: queuedBehindRun, latestRun: running },
   ];
   // Like the projection reducer, an unchanged item at an unchanged position keeps its row.
   const rowsByItem = new Map<

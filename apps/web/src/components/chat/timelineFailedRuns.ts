@@ -32,8 +32,9 @@ export function failedTimelineRunIds(
 export function itemizedFailedRunIds(
   entries: ReadonlyArray<TimelineEntry>,
   failedRunIds: ReadonlySet<RunId>,
+  usageLimitRunId: RunId | null = null,
 ) {
-  const usageLimited = new Set<RunId>();
+  const usageLimited = new Set<RunId>(usageLimitRunId ? [usageLimitRunId] : []);
   const otherFailures = new Set<RunId>();
   for (const entry of entries) {
     const item = timelineEntryFailedItem(entry);

@@ -57,6 +57,7 @@ import {
   pastedPathQueryLength,
 } from "~/composer-logic";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { preserveReadingPosition } from "~/lib/preserveReadingPosition";
 import { caretLineDirection, ComposerTextDirectionExtension } from "~/composer-text-direction";
 import {
   collapseShownMarkdownSource,
@@ -193,6 +194,8 @@ export interface ComposerPromptEditorProps {
     expandedCursor: number,
     cursorAdjacentToMention: boolean,
     contextIds: string[],
+    /** False when only the caret or selection moved. */
+    textChanged: boolean,
   ) => void;
   onVisibleSelectionChange?: () => void;
   onCommandKeyDown?: (key: string, event: KeyboardEvent, isTaskItem?: boolean) => boolean;
@@ -857,6 +860,7 @@ function ComposerPromptEditorTiptapInner(
       nextExpandedCursor,
       suppressTrigger,
       contextIds,
+      previousSnapshot.value !== nextValue,
     );
   };
 
@@ -1293,8 +1297,33 @@ function ComposerPromptEditorTiptapInner(
   );
   const mountedEditor = useMountedEditor(editor);
 
+  const resumeEditingFocusRef = useRef(false);
+  // oxlint-disable-next-line goat/react-effect-budget -- preserves native selection focus across temporarily making the editor read-only for dictation
   useEffect(() => {
-    editor?.setEditable(!disabled);
+    if (!editor) return;
+    if (disabled && editor.isEditable) resumeEditingFocusRef.current = editor.view.hasFocus();
+    editor.setEditable(!disabled);
+    if (!resumeEditingFocusRef.current) return;
+
+    const editorDom = editor.view.dom;
+    const ownerDocument = editorDom.ownerDocument;
+    if (disabled) {
+      const cancelFocusRestore = (event: FocusEvent) => {
+        if (!event.composedPath().includes(editorDom)) {
+          resumeEditingFocusRef.current = false;
+        }
+      };
+      ownerDocument.addEventListener("focusin", cancelFocusRestore, true);
+      return () => ownerDocument.removeEventListener("focusin", cancelFocusRestore, true);
+    }
+
+    resumeEditingFocusRef.current = false;
+    if (
+      ownerDocument.activeElement === ownerDocument.body ||
+      ownerDocument.activeElement === editorDom
+    ) {
+      editor.view.focus();
+    }
   }, [disabled, editor]);
 
   // Push attributes before layout measurements; Tiptap updates them later in a passive effect.
@@ -1458,12 +1487,14 @@ function ComposerPromptEditorTiptapInner(
   useLayoutEffect(() => {
     const view = mountedEditorView(editor);
     if (!editor || !view) return;
+    const stopPreservingReadingPosition = preserveReadingPosition(view.dom);
     if (restoreFocusRef.current) {
       restoreFocusRef.current = false;
       view.focus();
       scrollTiptapCaretIntoView(editor);
     }
     return () => {
+      stopPreservingReadingPosition();
       // Capture focus before the keyed editor's DOM is removed.
       restoreFocusRef.current = mountedEditorView(editor)?.hasFocus() ?? false;
     };
@@ -1500,6 +1531,7 @@ function ComposerPromptEditorTiptapInner(
       snapshotRef.current.expandedCursor,
       literalText,
       snapshotRef.current.contextIds,
+      false,
     );
   };
 
@@ -1745,11 +1777,9 @@ function scrollTiptapCaretIntoView(editor: TiptapEditor): void {
 }
 
 /**
- * The editor's ProseMirror view, or null before mount and after unmount or
- * destroy, when Tiptap throws on most `editor.view` reads. Read every view in
- * this file through it: @tiptap/react destroys an editor whose component has
- * not run its passive effects within a millisecond, which happens to a composer
- * React prerenders behind a Suspense fallback before revealing it.
+ * The editor's view, or null before mount and after destroy, when Tiptap throws on
+ * `editor.view`. Read views only through this: @tiptap/react destroys an editor whose
+ * passive effects don't run within a millisecond, as when prerendered behind Suspense.
  */
 function mountedEditorView(editor: TiptapEditor | null | undefined): EditorView | null {
   return editor && !editor.isDestroyed ? editor.view : null;

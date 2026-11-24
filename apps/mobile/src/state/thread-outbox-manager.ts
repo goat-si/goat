@@ -37,6 +37,14 @@ export interface ThreadOutboxManagerOptions {
   readonly warn?: (message: string, error: unknown) => void;
 }
 
+/** Reads that fail leave nothing unsaved, so only failed writes stop an update restart. */
+function blocksFlush(cause: unknown): boolean {
+  return !(
+    cause instanceof ThreadOutboxManagerError &&
+    (cause.operation === "load" || cause.operation === "clear-environment-load")
+  );
+}
+
 export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const queuedMessagesByThreadKeyAtom = Atom.make<
     Record<string, ReadonlyArray<QueuedThreadMessage>>
@@ -48,13 +56,25 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     });
   let loadPromise: Promise<boolean> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
+  const pendingMutations = new Set<Promise<unknown>>();
+  // Each running flush collects write failures, including ones that settle between its snapshots.
+  const flushFailures = new Set<unknown[]>();
   const revisions = new Map<MessageId, number>();
   const bumpRevision = (messageId: MessageId): void => {
     revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
   };
 
-  const serialize = <A>(mutation: () => Promise<A>): Promise<A> => {
+  const serialize = <A>(mutation: () => Promise<A>, readOnly = false): Promise<A> => {
     const result = mutationQueue.then(mutation, mutation);
+    const tracked = readOnly ? result.catch(() => undefined) : result;
+    pendingMutations.add(tracked);
+    void tracked.then(
+      () => pendingMutations.delete(tracked),
+      (cause: unknown) => {
+        pendingMutations.delete(tracked);
+        if (blocksFlush(cause)) for (const failures of flushFailures) failures.push(cause);
+      },
+    );
     mutationQueue = result.then(
       () => undefined,
       () => undefined,
@@ -86,7 +106,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         throw new AggregateError(result.errors, "Some queued messages could not be read.");
       }
       return true;
-    }).catch((cause) => {
+    }, true).catch((cause) => {
       loadPromise = null;
       warn(
         "[thread-outbox] failed to load persisted messages",
@@ -390,6 +410,26 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   return {
     queuedMessagesByThreadKeyAtom,
     serialize,
+    flush: async (flushWrites: () => Promise<void> = async () => {}) => {
+      const failures: unknown[] = [];
+      flushFailures.add(failures);
+      try {
+        let drained = false;
+        while (!drained) {
+          const queue = mutationQueue;
+          await Promise.allSettled(pendingMutations);
+          try {
+            await flushWrites();
+          } catch (cause) {
+            failures.push(cause);
+          }
+          drained = queue === mutationQueue && pendingMutations.size === 0;
+        }
+      } finally {
+        flushFailures.delete(failures);
+      }
+      if (failures.length > 0) throw failures[0];
+    },
     load,
     enqueue,
     confirmQueued,

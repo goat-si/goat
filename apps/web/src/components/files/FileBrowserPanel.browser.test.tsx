@@ -10,6 +10,8 @@ import { dismissContextMenu, showContextMenuFallback } from "~/contextMenuFallba
 
 import { resolveShortcutCommand } from "~/keybindings";
 import { render } from "../../../test/render";
+import { GTProvider } from "gt-react";
+import chinese from "~/i18n/translations/zh.json";
 
 const state = vi.hoisted(() => ({
   readFile: vi.fn(async (_path: string): Promise<unknown> => ({ _tag: "Failure" })),
@@ -18,6 +20,7 @@ const state = vi.hoisted(() => ({
   menu: vi.fn(),
   loads: [] as string[],
   largeListing: false,
+  listing: null as ProjectEntry[] | null,
   keybindings: [] as typeof DEFAULT_RESOLVED_KEYBINDINGS,
 }));
 
@@ -31,7 +34,10 @@ vi.mock("./projectFilesQueryState", () => ({ getProjectFileQueryAtom: () => "rea
 vi.mock("~/state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.readFile }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/composerHandleContext", () => ({ useComposerHandleContext: () => null }));
-vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: state.copy }));
+vi.mock("~/hooks/useCopyToClipboard", () => ({
+  writeTextToClipboard: state.copy,
+  useCopyToClipboard: () => ({ copyToClipboard: state.copy, isCopied: false }),
+}));
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("~/hooks/useWorkspaceMutationRefresh", () => ({ useWorkspaceMutationRefresh: () => {} }));
 vi.mock("~/fileContextMenu", () => ({
@@ -85,7 +91,7 @@ vi.mock("./useDirectoryEntries", async () => {
         ]);
       });
       return {
-        entries,
+        entries: state.listing ?? entries,
         load,
         refresh: vi.fn(),
         ready: true,
@@ -98,6 +104,7 @@ vi.mock("./useDirectoryEntries", async () => {
 });
 
 import FileBrowserPanel from "./FileBrowserPanel";
+import { writeExpandedDirectories } from "./fileTreeExpansion";
 import { FileViewMenu } from "./FileViewMenu";
 
 const MOD = /mac|iphone|ipad/i.test(navigator.platform) ? "Meta" : "Control";
@@ -115,28 +122,112 @@ function setup(customRules: KeybindingRule[] = []) {
   state.menu.mockReset();
   state.loads.length = 0;
   state.largeListing = false;
+  state.listing = null;
 }
 
 async function renderPanel(
-  props: { cwd?: string; workspaceRoot?: string; hostFolder?: boolean } = {},
+  props: {
+    cwd?: string;
+    workspaceRoot?: string;
+    hostFolder?: boolean;
+    selectedPath?: string;
+    onOpenFile?: (path: string) => void;
+    i18n?: boolean;
+  } = {},
 ) {
   const container = document.createElement("div");
   container.style.cssText = "display: flex; flex-direction: column; width: 320px; height: 480px";
-  return render(
+  const panel = (
     <FileBrowserPanel
       environmentId={EnvironmentId.make("remote-ssh")}
       cwd={props.cwd ?? "/home/dev/repo"}
       workspaceRoot={props.workspaceRoot ?? props.cwd ?? "/home/dev/repo"}
       hostFolder={props.hostFolder ?? false}
       projectName="repo"
-      selectedPath={null}
+      selectedPath={props.selectedPath ?? null}
       selectedPathRevealId={0}
-      onOpenFile={() => {}}
+      onOpenFile={props.onOpenFile ?? (() => {})}
       workspaceMutationId={null}
-    />,
-    { container, router: false /* the panel renders no links */ },
+    />
+  );
+  return render(
+    <GTProvider locale={props.i18n ? "zh" : "en"} translations={{ zh: chinese }}>
+      {panel}
+    </GTProvider>,
+    {
+      container,
+      router: false /* the panel renders no links */,
+    },
   );
 }
+
+it("keeps a revealed folder visible while restored folders load above it", async () => {
+  setup();
+  const cwd = "/reveal-test";
+  using _stored = { [Symbol.dispose]: () => writeExpandedDirectories(`remote-ssh:${cwd}`, []) };
+  writeExpandedDirectories(`remote-ssh:${cwd}`, ["d01/"]);
+  const roots: ProjectEntry[] = Array.from({ length: 12 }, (_, i) => ({
+    path: `d${String(i).padStart(2, "0")}`,
+    kind: "directory",
+  }));
+  state.listing = roots;
+  const panel = () => (
+    <FileBrowserPanel
+      environmentId={EnvironmentId.make("remote-ssh")}
+      cwd={cwd}
+      workspaceRoot={cwd}
+      hostFolder={false}
+      projectName="repo"
+      selectedPath="d09"
+      selectedPathRevealId={1}
+      onOpenFile={() => {}}
+      workspaceMutationId={null}
+    />
+  );
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex;flex-direction:column;width:320px;height:300px";
+  await using screen = await render(panel(), { container, router: false /* no links */ });
+  await row(screen.container, "d09/");
+  state.listing = [
+    ...roots,
+    ...Array.from({ length: 60 }, (_, i): ProjectEntry => ({
+      path: `d01/f${String(i).padStart(3, "0")}.ts`,
+      kind: "file",
+    })),
+  ];
+  await screen.rerender(panel());
+  await vi.waitFor(() => {
+    const root = treeRoot(screen.container);
+    const scroller = root.querySelector<HTMLElement>("[data-file-tree-virtualized-scroll]");
+    const target = root.querySelector<HTMLElement>('[data-item-path="d09/"]');
+    expect(scroller).not.toBeNull();
+    expect(scroller!.scrollHeight).toBeGreaterThan(60 * 24);
+    expect(target).not.toBeNull();
+    const bounds = scroller!.getBoundingClientRect();
+    expect(target!.getBoundingClientRect().top).toBeGreaterThanOrEqual(bounds.top);
+    expect(target!.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom);
+  });
+});
+
+it("opens the selected file again when its row is clicked", async () => {
+  setup();
+  const open = vi.fn();
+  await using screen = await renderPanel({ onOpenFile: open });
+  const file = await row(screen.container, "README.md");
+  await userEvent.click(file);
+  await userEvent.click(file);
+  expect(open).toHaveBeenCalledTimes(2);
+});
+
+it("renders file search and folder controls in Simplified Chinese", async () => {
+  setup();
+  await using screen = await renderPanel({ i18n: true });
+  await expect
+    .element(screen.getByRole("searchbox", { name: "搜索 repo 的文件" }))
+    .toHaveAttribute("placeholder", "搜索文件");
+  await expect.element(screen.getByRole("button", { name: "刷新工作区文件" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "展开所有文件夹" })).toBeVisible();
+});
 
 function treeRoot(container: HTMLElement): ShadowRoot {
   const host = container.querySelector("file-tree-container");

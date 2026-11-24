@@ -13,6 +13,7 @@ export const runProviderLoginTerminal = Effect.fnUntraced(function* (options: {
   readonly env: NodeJS.ProcessEnv;
   readonly context: ProviderAuthFlowContext;
   readonly failure: (operation: string, detail: string) => ProviderSetupError;
+  readonly retainFailureOutput?: boolean;
 }) {
   const exited = yield* Deferred.make<number>();
   const output = yield* Queue.sliding<string>(64);
@@ -30,7 +31,11 @@ export const runProviderLoginTerminal = Effect.fnUntraced(function* (options: {
         options.failure("start", "Could not open the provider sign-in terminal."),
       ),
     );
+  let captured = "";
+  let capturedOffset = 0;
   const detachData = process.onData((data) => {
+    capturedOffset += data.length;
+    captured = (captured + data).slice(-16_384);
     Queue.offerUnsafe(output, data.slice(-16_384));
   });
   const detachExit = process.onExit(({ exitCode }) => {
@@ -72,9 +77,19 @@ export const runProviderLoginTerminal = Effect.fnUntraced(function* (options: {
     Effect.forever,
     Effect.forkScoped,
   );
-  if ((yield* Deferred.await(exited)) !== 0)
+  if ((yield* Deferred.await(exited)) !== 0) {
+    if (options.retainFailureOutput && options.context.retainInteractionOnFailure) {
+      yield* options.context.setInteraction({
+        type: "terminal",
+        id: "terminal",
+        output: captured,
+        outputOffset: capturedOffset,
+      });
+      yield* options.context.retainInteractionOnFailure;
+    }
     return yield* options.failure(
       "start",
       "The provider login command did not finish successfully.",
     );
+  }
 });

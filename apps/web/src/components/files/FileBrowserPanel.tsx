@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "~/components/solar";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import type {
@@ -26,7 +27,11 @@ import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh
 import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
 import { readLocalApi } from "~/localApi";
 import { GOAT_PIERRE_ICONS } from "~/pierre-icons";
-import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
+import {
+  PIERRE_TREE_UNSAFE_CSS,
+  pierreTreeStyle,
+  titleClippedPierreTreeRow,
+} from "~/pierre-tree-theme";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { joinHostPath } from "./filePath";
@@ -76,6 +81,7 @@ function RefreshFilesButton(props: {
   onRefresh: () => void;
   shortcut: string | null;
 }) {
+  const gt = useGT();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -84,7 +90,7 @@ function RefreshFilesButton(props: {
             type="button"
             variant="ghost"
             size="icon-xs"
-            aria-label="Refresh workspace files"
+            aria-label={gt("Refresh workspace files")}
             onClick={props.onRefresh}
           />
         }
@@ -92,7 +98,7 @@ function RefreshFilesButton(props: {
         <RefreshIcon refreshing={props.isPending} />
       </TooltipTrigger>
       <TooltipPopup>
-        {props.isPending ? "Refreshing…" : "Refresh files"}
+        {props.isPending ? gt("Refreshing…") : gt("Refresh files")}
         {props.shortcut ? (
           <span className="ms-2 text-muted-foreground">{props.shortcut}</span>
         ) : null}
@@ -113,6 +119,7 @@ function FileSearchField({
   onValueChange: (value: string) => void;
   value: string;
 }) {
+  const gt = useGT();
   return (
     <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
       <InputGroupInput
@@ -122,7 +129,7 @@ function FileSearchField({
         size="sm"
         value={props.value}
         aria-label={props.ariaLabel}
-        placeholder="Search files"
+        placeholder={gt("Search files")}
         data-workspace-focus-default
         spellCheck={false}
         onChange={(event) => props.onValueChange(event.target.value)}
@@ -185,6 +192,7 @@ export default function FileBrowserPanel({
   workspaceMutationId,
   hostFolder = false,
 }: FileBrowserPanelProps) {
+  const gt = useGT();
   const panelPath = (relativePath: string) =>
     hostFolder
       ? joinHostPath(cwd, relativePath)
@@ -230,6 +238,9 @@ export default function FileBrowserPanel({
   const treeSelectionPathRef = useRef<string | null>(null);
   const selectedTreePathsRef = useRef<readonly string[]>([]);
   const handledRevealRef = useRef<{ path: string; revealId: number } | null>(null);
+  // Tree path of the revealed row. Folders restored or loaded later insert rows above it, so each
+  // path update scrolls to it again until the user takes over the scroll position.
+  const followedRevealRef = useRef<string | null>(null);
 
   // Shadow-DOM row rects are unreliable; capture the composed contextmenu event's viewport position.
   const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
@@ -482,6 +493,9 @@ export default function FileBrowserPanel({
       controller.abort();
     };
   }, [load, selectedPath]);
+  const stopFollowingReveal = () => {
+    followedRevealRef.current = null;
+  };
   const handleSearchValueChange = (value: string) => {
     setQuery(value);
     if (value.trim().length === 0) {
@@ -521,9 +535,14 @@ export default function FileBrowserPanel({
       if (activeSearch !== null) model.closeSearch();
       model.resetPaths(treePaths, { initialExpandedPaths: [...expandedPathsRef.current] });
       if (activeSearch !== null) model.setSearch(activeSearch);
+    } else if (updates.length > 0) {
+      model.batch(updates);
+    } else {
       return;
     }
-    if (updates.length > 0) model.batch(updates);
+    if (followedRevealRef.current !== null) {
+      model.scrollToPath(followedRevealRef.current, { focus: false, offset: "center" });
+    }
   }, [ready, entryKinds, model, treePaths]);
 
   useEffect(() => {
@@ -534,6 +553,7 @@ export default function FileBrowserPanel({
   useEffect(() => {
     if (!selectedPath) {
       handledRevealRef.current = null;
+      followedRevealRef.current = null;
       return;
     }
     const selectedKind = entryKinds.get(selectedPath);
@@ -561,6 +581,7 @@ export default function FileBrowserPanel({
     if (selectedInTree && treeSelectionPathRef.current === selectedPath) {
       treeSelectionPathRef.current = null;
       handledRevealRef.current = revealRequest;
+      followedRevealRef.current = null;
       return;
     }
     treeSelectionPathRef.current = null;
@@ -588,6 +609,7 @@ export default function FileBrowserPanel({
       focus: true,
       offset: "center",
     });
+    followedRevealRef.current = selectedTreePath;
     queueMicrotask(() => {
       syncingSelectionRef.current = false;
     });
@@ -634,6 +656,10 @@ export default function FileBrowserPanel({
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
       data-glass-layer
+      onWheel={stopFollowingReveal}
+      onPointerDown={stopFollowingReveal}
+      onTouchStart={stopFollowingReveal}
+      onKeyDown={stopFollowingReveal}
     >
       <div
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
@@ -646,7 +672,7 @@ export default function FileBrowserPanel({
         />
         <FileSearchField
           name="project-files-search"
-          ariaLabel={`Search ${projectName} files`}
+          ariaLabel={gt("Search {projectName} files", { projectName })}
           ref={searchInputRef}
           value={search.value}
           onValueChange={handleSearchValueChange}
@@ -663,8 +689,8 @@ export default function FileBrowserPanel({
                   variant="ghost"
                   aria-label={
                     expandAll || allDirectoriesExpanded
-                      ? "Collapse all folders"
-                      : "Expand all folders"
+                      ? gt("Collapse all folders")
+                      : gt("Expand all folders")
                   }
                   onClick={toggleAllDirectories}
                 />
@@ -677,7 +703,9 @@ export default function FileBrowserPanel({
               )}
             </TooltipTrigger>
             <TooltipPopup>
-              {expandAll || allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"}
+              {expandAll || allDirectoriesExpanded
+                ? gt("Collapse all folders")
+                : gt("Expand all folders")}
               {expandToggleShortcut ? (
                 <span className="ms-2 text-muted-foreground">{expandToggleShortcut}</span>
               ) : null}
@@ -692,12 +720,12 @@ export default function FileBrowserPanel({
           onClick={handleRefresh}
           className="p-4 text-left text-xs leading-relaxed text-destructive"
         >
-          {error ?? pathSearch.error} Click to retry.
+          {gt("{error} Click to retry.", { error: error ?? pathSearch.error ?? "" })}
         </button>
       ) : null}
       {query.trim() && pathSearch.truncated && !pathSearch.isPending ? (
         <div className="px-3 py-1 text-xs text-muted-foreground">
-          More matches available. Refine your search.
+          {gt("More matches available. Refine your search.")}
         </div>
       ) : null}
       {(!ready || pathSearch.isPending) && (
@@ -709,21 +737,48 @@ export default function FileBrowserPanel({
               : "px-3 py-1 text-xs text-muted-foreground"
           }
         >
-          Loading files…
+          {gt("Loading files…")}
         </div>
       )}
       {hasNoSearchMatches ? (
         ready && !isPending && !pathSearch.isPending && !error && !pathSearch.error ? (
           <div role="status" className="px-3 py-4 text-xs text-muted-foreground">
-            No matching files.
+            {gt("No matching files.")}
           </div>
         ) : null
       ) : (
         <FileTree
           model={model}
-          aria-label={`${projectName} files`}
+          aria-label={gt("{projectName} files", { projectName })}
           className="min-h-0 flex-1 overflow-hidden"
+          onClickCapture={(event) => {
+            if (
+              event.defaultPrevented ||
+              event.button !== 0 ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.shiftKey ||
+              event.altKey ||
+              dragMention.isDragInProgress()
+            ) {
+              return;
+            }
+            // Pierre emits no change for its sole selected row; read before the click to avoid double opens.
+            const selected = model.getSelectedPaths();
+            const path = selected.length === 1 ? selected[0] : undefined;
+            if (!path || entryKindsRef.current.get(path) !== "file") return;
+            const clickedSelectedRow = event.nativeEvent
+              .composedPath()
+              .some(
+                (node) =>
+                  node instanceof HTMLElement && node.getAttribute("data-item-path") === path,
+              );
+            if (!clickedSelectedRow) return;
+            treeSelectionPathRef.current = path;
+            onOpenFile(panelPath(path));
+          }}
           style={pierreTreeStyle(resolvedTheme)}
+          onPointerOver={titleClippedPierreTreeRow}
         />
       )}
     </div>

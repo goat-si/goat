@@ -67,6 +67,9 @@ export function makeTestAdapter(input: {
   >;
   readonly failure?: ReturnType<typeof makeProviderFailure>;
   readonly failedRunOrdinals?: ReadonlySet<number>;
+  readonly brokenRunOrdinals?: ReadonlySet<number>;
+  readonly runtimeStarts?: Ref.Ref<ReadonlyArray<string>>;
+  readonly unacceptedRunOrdinals?: ReadonlySet<number>;
   readonly interruptedRunOrdinals?: ReadonlySet<number>;
   readonly cancelledRunOrdinals?: ReadonlySet<number>;
   readonly holdRunOrdinal?: number;
@@ -93,6 +96,12 @@ export function makeTestAdapter(input: {
       sessionInput: Parameters<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>[0],
     ) {
       const events = yield* PubSub.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+      if (input.runtimeStarts !== undefined) {
+        yield* Ref.update(input.runtimeStarts, (starts) => [
+          ...starts,
+          sessionInput.initialNativeThreadId ?? "new",
+        ]);
+      }
       if (input.closedSessions !== undefined) {
         const closedSessions = input.closedSessions;
         yield* Effect.addFinalizer(() =>
@@ -148,6 +157,9 @@ export function makeTestAdapter(input: {
             ProviderAdapter.ProviderAdapterV2SessionRuntime["ensureThread"]
           >[0],
         ) {
+          if (threadInput.forceNewNativeThread && input.runtimeStarts !== undefined) {
+            yield* Ref.update(input.runtimeStarts, (starts) => [...starts, "replacement"]);
+          }
           const createdAt = yield* DateTime.now;
           const generation =
             input.nativeThreadGeneration === undefined
@@ -181,6 +193,7 @@ export function makeTestAdapter(input: {
           providerThread,
         }: Parameters<ProviderAdapter.ProviderAdapterV2SessionRuntime["resumeThread"]>[0]) {
           if (
+            (input.brokenRunOrdinals !== undefined && providerThread.status === "error") ||
             input.failResume ||
             (input.failResumeOnce !== undefined &&
               (yield* Ref.getAndSet(input.failResumeOnce, false)))
@@ -235,7 +248,8 @@ export function makeTestAdapter(input: {
           if (input.skipAfterFenceOnOrdinal === turnInput.runOrdinal)
             return yield* turnInput.inputDelivery?.skipped() ?? Effect.void;
           yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
-          yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
+          if (!input.unacceptedRunOrdinals?.has(turnInput.runOrdinal))
+            yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
           yield* Effect.yieldNow;
           yield* Ref.update(input.capturedTurns, (turns) => [
             ...turns,
@@ -384,7 +398,9 @@ export function makeTestAdapter(input: {
                       }),
                   }
                 : { status: terminalStatus, failure: null }),
-              threadDisposition: "reusable",
+              threadDisposition: input.brokenRunOrdinals?.has(turnInput.runOrdinal)
+                ? "broken"
+                : "reusable",
             },
           ];
           const reportedUsage = input.tokenUsageByRunOrdinal?.[turnInput.runOrdinal];
@@ -397,6 +413,17 @@ export function makeTestAdapter(input: {
                 status: "running",
                 completedAt: null,
                 tokenUsage: { ...reportedUsage, updatedAt: DateTime.formatIso(eventTime) },
+              },
+            });
+          }
+          if (input.brokenRunOrdinals?.has(turnInput.runOrdinal)) {
+            yield* PubSub.publish(events, {
+              type: "provider_thread.updated",
+              driver: input.driver,
+              providerThread: {
+                ...turnInput.providerThread,
+                status: "error",
+                updatedAt: eventTime,
               },
             });
           }

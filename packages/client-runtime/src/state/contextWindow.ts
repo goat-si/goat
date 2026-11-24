@@ -77,8 +77,48 @@ export function deriveLatestContextWindowSnapshot(
     readonly item: ThreadStructureTurnItem;
   }>,
   liveUsage?: OrchestrationV2ProviderTurnTokenUsage | null,
-  providerThread?: Pick<OrchestrationV2ProviderThread, "contextUsage" | "updatedAt"> | null,
+  providerThread?:
+    | (Pick<OrchestrationV2ProviderThread, "contextUsage" | "updatedAt"> &
+        Partial<Pick<OrchestrationV2ProviderThread, "id">>)
+    | null,
 ): ContextWindowSnapshot | null {
+  const latestCompaction = entries.findLast(
+    ({ item }) =>
+      item.type === "compaction" &&
+      item.status === "completed" &&
+      !(
+        providerThread?.id != null &&
+        item.providerThreadId != null &&
+        item.providerThreadId !== providerThread.id
+      ),
+  )?.item;
+  const usageAt =
+    liveUsage?.updatedAt ??
+    (providerThread?.contextUsage != null ? DateTime.formatIso(providerThread.updatedAt) : null);
+  if ((liveUsage != null || providerThread != null) && latestCompaction?.type === "compaction") {
+    const compactedAt = DateTime.formatIso(
+      latestCompaction.completedAt ?? latestCompaction.updatedAt,
+    );
+    if (usageAt === null || Date.parse(compactedAt) > Date.parse(usageAt)) {
+      const snapshot = deriveLatestContextWindowSnapshot([{ item: latestCompaction }]);
+      if (snapshot === null) return null;
+      const maxTokens =
+        liveUsage?.maxTokens ?? asFiniteNumber(providerThread?.contextUsage?.maxTokens);
+      const usedPercentage =
+        maxTokens !== null && maxTokens > 0
+          ? Math.min(100, (snapshot.usedTokens / maxTokens) * 100)
+          : null;
+      return {
+        ...snapshot,
+        maxTokens,
+        remainingTokens:
+          maxTokens === null ? null : Math.max(0, Math.round(maxTokens - snapshot.usedTokens)),
+        usedPercentage,
+        remainingPercentage: usedPercentage === null ? null : Math.max(0, 100 - usedPercentage),
+        updatedAt: compactedAt,
+      };
+    }
+  }
   if (liveUsage != null) {
     const usedTokens = Math.max(0, liveUsage.usedTokens);
     const maxTokens = liveUsage.maxTokens ?? null;
@@ -148,7 +188,13 @@ export function deriveLatestContextWindowSnapshot(
   }
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (!entry || entry.item.type !== "compaction") {
+    if (
+      !entry ||
+      entry.item.type !== "compaction" ||
+      (providerThread?.id != null &&
+        entry.item.providerThreadId != null &&
+        entry.item.providerThreadId !== providerThread.id)
+    ) {
       continue;
     }
     const payload = entry.item;

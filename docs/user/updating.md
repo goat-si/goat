@@ -283,7 +283,7 @@ until you enable it and refresh provider status.
 
 GOAT's mobile app has no App Store or Google Play release yet. On iPhone and iPad,
 TestFlight installs new beta builds; on Android, download each new build from the
-Firebase App Distribution invitation. The mobile app can also download updates in the
+Firebase App Distribution invitation. Open **Settings → About GOAT → Check beta builds** to visit the distribution channel for your phone. Builds with over-the-air updates enabled also show **Check for app updates**, which checks for updates compatible with the installed binary. The mobile app can also download updates in the
 background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the

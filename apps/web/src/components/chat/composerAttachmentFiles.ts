@@ -1,3 +1,4 @@
+import { readSnapshotClipboardWrapper } from "../snapshotClipboardFingerprint";
 import { toKindScopedComposerContextId } from "@goat/shared/composerContextReferences";
 import { collectInlineContextIds } from "../../lib/composerContextReferences";
 import {
@@ -200,29 +201,64 @@ export function attachmentsToReleaseOnUploadCapabilityLoss(
   );
 }
 
+function isOnlyFileNames(text: string, files: ReadonlyArray<File>): boolean {
+  const names = new Set(files.map((file) => file.name));
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .every((line) => names.has(line));
+}
+
+export function clipboardHtmlImageContent(html: string): "only-image" | "image-and-text" | "none" {
+  if (!html) return "none";
+  if (readSnapshotClipboardWrapper(html)) return "only-image";
+  const body = new DOMParser().parseFromString(html, "text/html").body;
+  if (!body.querySelector("img")) return "none";
+  return (body.textContent ?? "").trim().length === 0 ? "only-image" : "image-and-text";
+}
+
+function isPastedImageFile(file: File): boolean {
+  const classification = classifyComposerAttachmentFile(file);
+  return classification === "image" || classification === "unsupported-image";
+}
+
+export function imagesToAttachBesidePastedText(input: {
+  readonly files: ReadonlyArray<File>;
+  readonly plainText: string;
+  readonly bypassAutoAttachment?: boolean;
+  readonly htmlHasImageAndText: boolean;
+}): File[] {
+  if (input.bypassAutoAttachment || !input.plainText || !input.htmlHasImageAndText) return [];
+  return input.files.filter(isPastedImageFile);
+}
+
 export function shouldHandleComposerAttachmentPaste(input: {
   readonly files: ReadonlyArray<File>;
   readonly plainText: string;
+  readonly bypassAutoAttachment?: boolean;
+  readonly htmlIsOnlyImage?: boolean;
 }): boolean {
+  // Paste as Text keeps the text even when the source also put an image of it on the clipboard.
+  if (input.bypassAutoAttachment && input.plainText.length > 0) return false;
   if (
-    input.files.some((file) => {
-      if (isDngFile(file)) return true;
-      const classification = classifyComposerAttachmentFile(file);
-      return (
-        classification === "image" ||
-        classification === "unsupported-image" ||
-        isSvgAttachment({ name: file.name, mimeType: file.type })
-      );
-    })
+    input.files.some(
+      (file) => isDngFile(file) || isSvgAttachment({ name: file.name, mimeType: file.type }),
+    )
   ) {
     return true;
   }
-
-  if (input.plainText.length > 0) {
-    return false;
+  const hasImage = input.files.some((file) => {
+    const classification = classifyComposerAttachmentFile(file);
+    return classification === "image" || classification === "unsupported-image";
+  });
+  if (input.plainText.length === 0) {
+    return hasImage || input.files.some((file) => classifyComposerAttachmentFile(file) === "file");
   }
-
-  return input.files.some((file) => classifyComposerAttachmentFile(file) === "file");
+  // Rich text sources (Word, Pages) add a picture of the text. Copy Image adds the image URL as
+  // text beside an <img>, and a Finder copy adds the file names.
+  return (
+    hasImage && (input.htmlIsOnlyImage === true || isOnlyFileNames(input.plainText, input.files))
+  );
 }
 
 export function composerInlineFileIds(

@@ -405,48 +405,56 @@ describe("bounded binary previews", () => {
     }
   });
 
-  it("keeps WhiteIsZero TIFF brightness and rejects oversized metadata before decoding", async () => {
-    const tags = [
-      [256, 2],
-      [257, 1],
-      [258, 8],
-      [259, 1],
-      [262, 0],
-      [273, 134],
-      [277, 1],
-      [278, 1],
-      [279, 2],
-      [284, 1],
-    ];
-    const bytes = new ArrayBuffer(136);
-    const view = new DataView(bytes);
-    view.setUint16(0, 0x4949);
-    view.setUint16(2, 42, true);
-    view.setUint32(4, 8, true);
-    view.setUint16(8, tags.length, true);
-    tags.forEach(([tag, value], index) => {
-      const offset = 10 + index * 12;
-      view.setUint16(offset, tag!, true);
-      view.setUint16(offset + 2, 4, true);
-      view.setUint32(offset + 4, 1, true);
-      view.setUint32(offset + 8, value!, true);
-    });
-    view.setUint8(135, 255);
-    const src = URL.createObjectURL(new Blob([bytes]));
-    try {
-      const blob = await decodeImagePreview(src, false, new AbortController().signal);
-      const bitmap = await createImageBitmap(blob);
-      const canvas = new OffscreenCanvas(2, 1);
-      const context = canvas.getContext("2d")!;
-      context.drawImage(bitmap, 0, 0);
-      expect([...context.getImageData(0, 0, 2, 1).data]).toEqual([
-        255, 255, 255, 255, 0, 0, 0, 255,
-      ]);
-      bitmap.close();
-    } finally {
-      URL.revokeObjectURL(src);
+  it("keeps WhiteIsZero TIFF brightness and alpha with SubIFDs tags and rejects oversized metadata before decoding", async () => {
+    let bytes = new ArrayBuffer(0);
+    for (const { pixels, expected } of [
+      { pixels: [0, 255], expected: [255, 255, 255, 255, 0, 0, 0, 255] },
+      { pixels: [0, 255, 255, 0], expected: [255, 255, 255, 255, 0, 0, 0, 0] },
+    ]) {
+      const samples = pixels.length / 2;
+      const start = samples === 2 ? 158 : 146;
+      const tags = [
+        [256, 2],
+        [257, 1],
+        [258, 8],
+        [259, 1],
+        [262, 0],
+        [273, start],
+        [277, samples],
+        [278, 1],
+        [279, pixels.length],
+        [284, 1],
+        [330, 0, 13],
+        ...(samples === 2 ? [[338, 2]] : []),
+      ];
+      bytes = new ArrayBuffer(start + pixels.length);
+      const view = new DataView(bytes);
+      view.setUint16(0, 0x4949);
+      view.setUint16(2, 42, true);
+      view.setUint32(4, 8, true);
+      view.setUint16(8, tags.length, true);
+      tags.forEach(([tag, value, type = 4], index) => {
+        const offset = 10 + index * 12;
+        view.setUint16(offset, tag!, true);
+        view.setUint16(offset + 2, type, true);
+        view.setUint32(offset + 4, 1, true);
+        view.setUint32(offset + 8, value!, true);
+      });
+      new Uint8Array(bytes, start).set(pixels);
+      const src = URL.createObjectURL(new Blob([bytes]));
+      try {
+        const blob = await decodeImagePreview(src, false, new AbortController().signal);
+        const bitmap = await createImageBitmap(blob);
+        const canvas = new OffscreenCanvas(2, 1);
+        const context = canvas.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        expect([...context.getImageData(0, 0, 2, 1).data]).toEqual(expected);
+        bitmap.close();
+      } finally {
+        URL.revokeObjectURL(src);
+      }
     }
-    view.setUint32(14, 1_000_000, true);
+    new DataView(bytes).setUint32(14, 1_000_000, true);
     const invalid = URL.createObjectURL(new Blob([bytes]));
     try {
       await expect(
@@ -1958,60 +1966,6 @@ it("unwraps one text attachment without turning off the word wrap setting", asyn
   await expect.element(screen.getByRole("button", { name: "Enable word wrap" })).toBeVisible();
   expect(getClientSettings().wordWrap).toBe(true);
   expect(screen.container.querySelector("pre")?.dataset.wordWrap).toBe("false");
-});
-
-it("mounts a bounded set of saved notebook outputs as the reader scrolls", async () => {
-  const notebook = {
-    nbformat: 4,
-    metadata: {},
-    cells: Array.from({ length: 20 }, (_, cell) => ({
-      cell_type: "code",
-      source: [],
-      metadata: {},
-      outputs: Array.from({ length: 100 }, (_, output) => ({
-        output_type: "display_data",
-        data: { "text/html": `<p>saved ${cell}-${output}</p>` },
-      })),
-    })),
-  };
-  const file = new Blob([JSON.stringify(notebook)]);
-  await using screen = await render(
-    <div style={{ display: "flex", height: 400, width: 600 }}>
-      <AttachmentFilePreview
-        name="observations.ipynb"
-        mimeType="application/json"
-        sizeBytes={file.size}
-        file={file}
-      />
-    </div>,
-  );
-  // The first outputs wait on the lazy notebook viewer and the conversion worker, not on a frame.
-  await vi.waitFor(
-    () => expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
-    { timeout: 10_000 },
-  );
-  expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
-  const first = screen.container.querySelector("iframe")!;
-  expect(first.srcdoc).toContain("saved 0-0");
-  const viewport = screen.container.querySelector<HTMLElement>(".scrollbar-gutter-both")!;
-  await act(() => {
-    viewport.scrollTop = viewport.scrollHeight;
-  });
-  await vi.waitFor(() => {
-    expect(
-      [...screen.container.querySelectorAll("iframe")].some((frame) =>
-        frame.srcdoc.includes("saved 19-99"),
-      ),
-    ).toBe(true);
-    expect(first.isConnected).toBe(false);
-  });
-  expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
-  await act(() => {
-    viewport.scrollTop = 0;
-  });
-  await vi.waitFor(() =>
-    expect(screen.container.querySelector("iframe")?.srcdoc).toContain("saved 0-0"),
-  );
 });
 
 it.each([

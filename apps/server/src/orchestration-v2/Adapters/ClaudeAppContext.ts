@@ -18,9 +18,10 @@ export function makeClaudeAppContextDelivery() {
     prompt: string,
     entries: ReadonlyArray<Entry>,
     reservation: Reservation,
+    offered?: ReadonlyMap<string, string>,
   ) {
     if (prompt.trimStart().startsWith("/")) return undefined;
-    const previous = delivered.get(session);
+    const previous = offered ?? delivered.get(session);
     const snapshot = new Map(previous);
     const blocks: Array<{ type: "text"; text: string }> = [];
     let bytes = 0;

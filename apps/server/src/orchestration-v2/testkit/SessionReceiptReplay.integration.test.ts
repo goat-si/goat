@@ -17,7 +17,10 @@ import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
-import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testkit.ts";
+import {
+  CodexOrchestratorReplayHarness,
+  withReplayTitles,
+} from "../Adapters/CodexAdapterV2.testkit.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import {
@@ -203,12 +206,15 @@ function receiptReplay<T extends ProviderReplayTranscript, E>(
     const modelSelection = driver === "codex" ? CODEX_MODEL_SELECTION : CLAUDE_MODEL_SELECTION;
     const workspace = yield* checkpointWorkspace("receipt-" + driver);
     const transcript = yield* harness.decodeTranscript(
-      materializeReplayTranscriptRuntimeInstructions(
-        materializeReplayTranscriptWorkspace(receiptFrames(raw, driver, mixed), workspace),
-        {
-          driver: ProviderDriverKind.make(driver),
-          model: modelSelection.model,
-        },
+      withReplayTitles(
+        materializeReplayTranscriptRuntimeInstructions(
+          materializeReplayTranscriptWorkspace(receiptFrames(raw, driver, mixed), workspace),
+          {
+            driver: ProviderDriverKind.make(driver),
+            model: modelSelection.model,
+          },
+        ),
+        [`Replay fixture: receipt-${driver}`],
       ),
     );
     const materialized = yield* materializeFixtureInput({

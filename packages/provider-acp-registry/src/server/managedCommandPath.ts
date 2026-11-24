@@ -21,3 +21,13 @@ export function withPreferredPath(
     PATH: mergePathEntries(directory, readEnvironmentPath(environment, platform), platform),
   };
 }
+
+export function withoutNpmPrefix(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") return environment;
+  return Object.fromEntries(
+    Object.entries(environment).filter(([key]) => key.toLowerCase() !== "npm_config_prefix"),
+  );
+}

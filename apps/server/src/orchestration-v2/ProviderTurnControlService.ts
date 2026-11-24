@@ -1,3 +1,4 @@
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as ServerConfig from "../config.ts";
 import {
   isChannelWorkerThreadId,
@@ -46,6 +47,15 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
 export interface ProviderTurnControlServiceV2Shape {
+  readonly applyThreadTitle: (input: {
+    readonly threadId: ThreadId;
+    readonly title: string;
+  }) => Effect.Effect<
+    void,
+    | ProjectionStore.ProjectionStoreV2Error
+    | ProviderSessionManager.ProviderSessionManagerV2Error
+    | ProviderAdapter.ProviderAdapterV2Error
+  >;
   readonly interrupt: (input: {
     readonly subagent?: {
       readonly id: NodeId;
@@ -89,12 +99,14 @@ export const layer: Layer.Layer<
   | ProjectionStore.ProjectionStoreV2
   | ProviderSessionManager.ProviderSessionManagerV2
   | EventSink.EventSinkV2
+  | McpAppModelContext.McpAppModelContext
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const eventSink = yield* EventSink.EventSinkV2;
+    const mcpAppModelContext = yield* McpAppModelContext.McpAppModelContext;
     const computerUse = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
     // Optional so test assemblies without settings still build; then no built-in skill is sent.
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -213,6 +225,18 @@ export const layer: Layer.Layer<
     });
 
     return ProviderTurnControlServiceV2.of({
+      applyThreadTitle: Effect.fn("ProviderTurnControlService.applyThreadTitle")(function* (input) {
+        const { thread, providerThreads } = yield* projections.getThreadRecords(input.threadId, [
+          "providerThreads",
+        ]);
+        const providerThread = providerThreads.find(
+          (item) => item.id === thread.activeProviderThreadId,
+        );
+        if (!providerThread?.providerSessionId) return;
+        const session = yield* sessions.get(providerThread.providerSessionId);
+        if (Option.isNone(session) || session.value.applyThreadTitle === undefined) return;
+        yield* session.value.applyThreadTitle({ providerThread, title: input.title });
+      }),
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {
           if (input.subagent === undefined) yield* stopComputerUse(input.threadId);
@@ -503,12 +527,17 @@ export const layer: Layer.Layer<
               });
             }
           }
+          const appContext = yield* McpAppModelContext.forProvider(
+            mcpAppModelContext,
+            input.threadId,
+          );
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
               runId: run.id,
               providerThread: loaded.providerThread,
               providerTurnId: loaded.providerTurn.id,
+              ...(appContext.length === 0 ? {} : { appContext }),
               ...(input.modelSelection === undefined
                 ? {}
                 : { modelSelection: input.modelSelection }),

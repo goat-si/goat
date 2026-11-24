@@ -1,7 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Tests exercise the CLI file-descriptor reader.
 import { describe, expect, it } from "@effect/vitest";
 import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Option from "effect/Option";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { makeCli } from "../binCli.ts";
 import {
@@ -12,6 +16,7 @@ import {
   type InputReader,
   OPERATOR_VERBS,
   toolResultEnvelope,
+  readBoundedInput,
 } from "./agentSurfaceCommand.ts";
 
 const entries = Object.values(agentSurfaceRegistry) as ReadonlyArray<AgentSurfaceRegistryEntry>;
@@ -25,6 +30,37 @@ const input: InputReader = {
   },
 };
 const invoke = (...argv: ReadonlyArray<string>) => agentSurfaceInvocation(argv, input);
+
+it("bounds stdin by bytes and reports read failures", () => {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-input-"));
+  try {
+    const file = NodePath.join(dir, "input");
+    NodeFS.writeFileSync(file, "éé");
+    const fd = NodeFS.openSync(file, "r");
+    try {
+      expect(readBoundedInput(fd, 4)).toBe("éé");
+    } finally {
+      NodeFS.closeSync(fd);
+    }
+    const tooLarge = NodeFS.openSync(file, "r");
+    try {
+      expect(() => readBoundedInput(tooLarge, 3)).toThrow(/exceeds/);
+    } finally {
+      NodeFS.closeSync(tooLarge);
+    }
+    expect(() => readBoundedInput(-1, 4)).toThrow();
+    expect(
+      agentSurfaceInvocation(["acp-mcp-call", "thread.read", "-"], {
+        ...input,
+        stdin: () => {
+          throw new Error("read failed");
+        },
+      }),
+    ).toMatchObject({ kind: "usage", message: "Could not read stdin: read failed" });
+  } finally {
+    NodeFS.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 const error = (fields: Partial<Extract<AgentSurfaceResult, { status: "error" }>["error"]>) =>
   ({
