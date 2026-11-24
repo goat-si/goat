@@ -873,5 +873,7 @@
   "ab5f7cd7f8d24e36": "Suchanfrage",
   "540690430e586ae8": "Keine sichtbaren Einträge.",
   "3d40ebe62a5baa33": "Version",
-  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt."
+  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt.",
+  "51b267b48c021ff4": "Verhindert den Ruhezustand bei laufenden Aufgaben auf den ausgewählten Servern. Das Schließen des Laptopdeckels kann weiterhin den Ruhezustand auslösen.",
+  "29e68b2aabcc1dac": "Alle ausgewählten verbundenen Server müssen diese Einstellung unterstützen."
 }
