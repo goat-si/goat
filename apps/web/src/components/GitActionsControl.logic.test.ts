@@ -148,6 +148,21 @@ describe("when: on default ref without open PR", () => {
       disabled: false,
     });
   });
+  it("resolveQuickAction pushes without committing when the tree is clean and ahead", () => {
+    const withUpstream = resolveQuickAction(
+      status({ refName: "main", aheadCount: 1 }),
+      false,
+      true,
+    );
+    assert.deepInclude(withUpstream, { kind: "run_action", action: "push", label: "Push" });
+
+    const withoutUpstream = resolveQuickAction(
+      status({ refName: "main", aheadCount: 1, hasUpstream: false }),
+      false,
+      true,
+    );
+    assert.deepInclude(withoutUpstream, { kind: "run_action", action: "push", label: "Push" });
+  });
 });
 
 describe("when: local changes are behind upstream", () => {
