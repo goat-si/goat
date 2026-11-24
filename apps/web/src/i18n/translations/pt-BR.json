@@ -978,5 +978,9 @@
   "40c503999bce960e": "Nova tarefa",
   "1b30548ce8e56b75": "Editar tarefa",
   "1517f4c831b1c8aa": "Nenhuma tarefa agendada",
-  "6d799d4105f2696b": "Nenhuma tarefa corresponde ao ambiente e ao projeto selecionados."
+  "6d799d4105f2696b": "Nenhuma tarefa corresponde ao ambiente e ao projeto selecionados.",
+  "c7c73764f9b4539d": "O GOAT Bot responde às suas mensagens e inicia tarefas para você. Em «Executar em», escolha o ambiente do bot, que pode ser diferente do hub.",
+  "547f57262a90beed": "Conversas de tarefas",
+  "aa96ebe0442c7764": "Abrir conversas de tarefas ao lado do chat principal",
+  "ca61f7c11122271d": "Mostre as conversas das tarefas ao lado do chat principal quando houver espaço suficiente."
 }

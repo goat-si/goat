@@ -978,5 +978,9 @@
   "40c503999bce960e": "Neue Aufgabe",
   "1b30548ce8e56b75": "Aufgabe bearbeiten",
   "1517f4c831b1c8aa": "Keine geplanten Aufgaben",
-  "6d799d4105f2696b": "Keine Aufgaben für die ausgewählte Umgebung und das ausgewählte Projekt."
+  "6d799d4105f2696b": "Keine Aufgaben für die ausgewählte Umgebung und das ausgewählte Projekt.",
+  "c7c73764f9b4539d": "GOAT Bot beantwortet deine Nachrichten und startet Aufgaben für dich. Unter „Läuft auf“ wählst du seine Umgebung, die sich vom Hub unterscheiden kann.",
+  "547f57262a90beed": "Aufgaben-Threads",
+  "aa96ebe0442c7764": "Aufgaben-Threads neben dem Hauptchat öffnen",
+  "ca61f7c11122271d": "Wenn genug Platz vorhanden ist, werden Aufgabenunterhaltungen neben dem Hauptchat angezeigt."
 }

@@ -83,7 +83,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/archived": { text: "Threads you archived. Restore or delete them here." },
   "/settings/goat-bot": {
-    text: "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    text: msg(
+      "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    ),
   },
   "/settings/decision-inbox": {
     text: msg("Questions agents left for you, each with a recommendation and a deadline."),

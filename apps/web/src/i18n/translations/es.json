@@ -978,5 +978,9 @@
   "40c503999bce960e": "Nueva tarea",
   "1b30548ce8e56b75": "Editar tarea",
   "1517f4c831b1c8aa": "No hay tareas programadas",
-  "6d799d4105f2696b": "No hay tareas que coincidan con el entorno y el proyecto seleccionados."
+  "6d799d4105f2696b": "No hay tareas que coincidan con el entorno y el proyecto seleccionados.",
+  "c7c73764f9b4539d": "GOAT Bot responde a tus mensajes e inicia tareas por ti. En «Se ejecuta en» eliges el entorno donde vive, que puede ser distinto del nodo central.",
+  "547f57262a90beed": "Hilos de tareas",
+  "aa96ebe0442c7764": "Abrir los hilos de tareas junto al chat principal",
+  "ca61f7c11122271d": "Muestra las conversaciones de las tareas junto al chat principal cuando haya suficiente espacio."
 }

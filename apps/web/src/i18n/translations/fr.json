@@ -978,5 +978,9 @@
   "40c503999bce960e": "Nouvelle tâche",
   "1b30548ce8e56b75": "Modifier la tâche",
   "1517f4c831b1c8aa": "Aucune tâche planifiée",
-  "6d799d4105f2696b": "Aucune tâche ne correspond à l’environnement et au projet sélectionnés."
+  "6d799d4105f2696b": "Aucune tâche ne correspond à l’environnement et au projet sélectionnés.",
+  "c7c73764f9b4539d": "GOAT Bot répond à vos messages et lance des tâches pour vous. « Exécuté sur » choisit son environnement, qui peut différer du nœud central.",
+  "547f57262a90beed": "Fils de tâches",
+  "aa96ebe0442c7764": "Ouvrir les fils de tâches à côté de la conversation principale",
+  "ca61f7c11122271d": "Affichez les conversations des tâches à côté de la conversation principale lorsque l’espace le permet."
 }
