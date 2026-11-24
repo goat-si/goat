@@ -930,5 +930,7 @@
   "8f58599fa5441356": "via Hub {name}",
   "d5fb0e454106617b": "inferred",
   "87a604067ec76d8b": "Quota routing inferred for {hosts}",
-  "05c31d948cc5627c": "Fleet matched instances by provider driver because their hosts did not report which ones use this pool. Older hosts report this after a GOAT update."
+  "05c31d948cc5627c": "Fleet matched instances by provider driver because their hosts did not report which ones use this pool. Older hosts report this after a GOAT update.",
+  "edaebeea1915f9c1": "Account",
+  "022be4c560f02e1a": "{plan} account"
 }

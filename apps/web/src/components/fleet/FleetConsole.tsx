@@ -802,7 +802,7 @@ function FleetConsoleExpanded(props: {
                       <PopoverPopup side="top" align="start" width="md">
                         <ul aria-label={gt("More alerts")} className="flex flex-col gap-1">
                           {alerts.slice(3).map((alert) => (
-                            <AlertRow key={alert.key} alert={alert} />
+                            <AlertRow key={alert.key} alert={alert} expanded />
                           ))}
                         </ul>
                       </PopoverPopup>
@@ -819,7 +819,13 @@ function FleetConsoleExpanded(props: {
 }
 
 /** One alert: what is wrong, where, and its one next step. Long details clamp to two lines. */
-function AlertRow({ alert }: { readonly alert: FleetAlert }) {
+function AlertRow({
+  alert,
+  expanded = false,
+}: {
+  readonly alert: FleetAlert;
+  readonly expanded?: boolean;
+}) {
   return (
     <li data-fleet-alert className="flex min-w-0 items-start gap-1.5 text-xs leading-4">
       <span
@@ -834,7 +840,10 @@ function AlertRow({ alert }: { readonly alert: FleetAlert }) {
         <TooltipTrigger
           render={
             <span
-              className="line-clamp-2 min-w-0 flex-1 text-muted-foreground wrap-anywhere outline-hidden"
+              className={cn(
+                "min-w-0 flex-1 text-muted-foreground wrap-anywhere outline-hidden",
+                !expanded && "line-clamp-2",
+              )}
               tabIndex={0}
             />
           }

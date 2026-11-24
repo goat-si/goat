@@ -930,5 +930,7 @@
   "8f58599fa5441356": "vía Hub {name}",
   "d5fb0e454106617b": "inferido",
   "87a604067ec76d8b": "Rutas de cuota inferidas para {hosts}",
-  "05c31d948cc5627c": "Los hosts no indicaron qué instancias usan esta reserva, por lo que se asociaron por controlador de proveedor. Los hosts antiguos lo indican tras actualizar GOAT."
+  "05c31d948cc5627c": "Los hosts no indicaron qué instancias usan esta reserva, por lo que se asociaron por controlador de proveedor. Los hosts antiguos lo indican tras actualizar GOAT.",
+  "edaebeea1915f9c1": "Cuenta",
+  "022be4c560f02e1a": "Cuenta {plan}"
 }

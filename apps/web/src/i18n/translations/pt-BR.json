@@ -930,5 +930,7 @@
   "8f58599fa5441356": "via Hub {name}",
   "d5fb0e454106617b": "inferido",
   "87a604067ec76d8b": "Roteamento de cota inferido para {hosts}",
-  "05c31d948cc5627c": "Os hosts não informaram quais instâncias usam este pool, então elas foram associadas pelo driver do provedor. Hosts antigos passam a informar isso após atualizar o GOAT."
+  "05c31d948cc5627c": "Os hosts não informaram quais instâncias usam este pool, então elas foram associadas pelo driver do provedor. Hosts antigos passam a informar isso após atualizar o GOAT.",
+  "edaebeea1915f9c1": "Conta",
+  "022be4c560f02e1a": "Conta {plan}"
 }
