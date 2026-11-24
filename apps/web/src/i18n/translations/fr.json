@@ -1068,5 +1068,7 @@
   "4e0943e8c7a465d1": "Afficher ou masquer le sélecteur de fichiers",
   "df5fdcdf26a6b52a": "Afficher ou masquer la recherche dans le projet",
   "97c7de6aaab317a2": "Fermer le panneau de droite",
-  "81e0e9f4304d2f01": "Nouvel onglet dans le panneau de droite"
+  "81e0e9f4304d2f01": "Nouvel onglet dans le panneau de droite",
+  "51b267b48c021ff4": "Empêche la mise en veille pendant les exécutions sur les serveurs sélectionnés. Fermer le capot d’un ordinateur portable peut toujours le mettre en veille.",
+  "29e68b2aabcc1dac": "Tous les serveurs connectés sélectionnés doivent prendre en charge ce réglage."
 }

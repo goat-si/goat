@@ -1068,5 +1068,7 @@
   "4e0943e8c7a465d1": "Mostrar ou ocultar o seletor de arquivos",
   "df5fdcdf26a6b52a": "Mostrar ou ocultar a busca no projeto",
   "97c7de6aaab317a2": "Fechar o painel direito",
-  "81e0e9f4304d2f01": "Nova aba no painel direito"
+  "81e0e9f4304d2f01": "Nova aba no painel direito",
+  "51b267b48c021ff4": "Impedir a suspensão por inatividade durante as execuções nos servidores selecionados. Fechar a tampa de um notebook ainda pode suspendê-lo.",
+  "29e68b2aabcc1dac": "Todos os servidores conectados e selecionados devem oferecer suporte a esta configuração."
 }

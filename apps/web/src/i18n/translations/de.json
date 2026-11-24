@@ -1068,5 +1068,7 @@
   "4e0943e8c7a465d1": "Dateiauswahl ein- oder ausblenden",
   "df5fdcdf26a6b52a": "Projektsuche ein- oder ausblenden",
   "97c7de6aaab317a2": "Rechten Bereich schließen",
-  "81e0e9f4304d2f01": "Neuer Tab im rechten Bereich"
+  "81e0e9f4304d2f01": "Neuer Tab im rechten Bereich",
+  "51b267b48c021ff4": "Verhindert den Ruhezustand bei laufenden Aufgaben auf den ausgewählten Servern. Das Schließen des Laptopdeckels kann weiterhin den Ruhezustand auslösen.",
+  "29e68b2aabcc1dac": "Alle ausgewählten verbundenen Server müssen diese Einstellung unterstützen."
 }

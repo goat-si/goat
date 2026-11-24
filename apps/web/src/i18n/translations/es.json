@@ -1068,5 +1068,7 @@
   "4e0943e8c7a465d1": "Mostrar u ocultar el selector de archivos",
   "df5fdcdf26a6b52a": "Mostrar u ocultar la búsqueda del proyecto",
   "97c7de6aaab317a2": "Cerrar el panel derecho",
-  "81e0e9f4304d2f01": "Nueva pestaña en el panel derecho"
+  "81e0e9f4304d2f01": "Nueva pestaña en el panel derecho",
+  "51b267b48c021ff4": "Impide la suspensión por inactividad durante las ejecuciones en los servidores seleccionados. Cerrar la tapa de un portátil aún puede suspenderlo.",
+  "29e68b2aabcc1dac": "Todos los servidores conectados y seleccionados deben admitir este ajuste."
 }

@@ -1068,5 +1068,7 @@
   "4e0943e8c7a465d1": "File Picker: Toggle",
   "df5fdcdf26a6b52a": "Project Search: Toggle",
   "97c7de6aaab317a2": "Right Panel: Close",
-  "81e0e9f4304d2f01": "Right Panel: New"
+  "81e0e9f4304d2f01": "Right Panel: New",
+  "51b267b48c021ff4": "Prevent idle sleep during active runs on the selected servers. Closing a laptop lid can still put it to sleep.",
+  "29e68b2aabcc1dac": "All selected connected servers must support this setting."
 }
