@@ -4,10 +4,10 @@ import {
   fnv1a32,
   getDiffLineStat,
   getRenderablePatch,
+  resolveFileDiffPath,
   type RenderablePatch,
 } from "~/lib/diffRendering";
-import { orderDiffFilesLikeTree } from "../diffs/diffFileTree.logic";
-import { orderDiffFiles } from "./pullRequestFileOrder.logic";
+import { orderDiffFilesForReview } from "@goat/client-runtime/diff-file-order";
 
 export interface DiffSlice {
   readonly source: PullRequestDiffResult;
@@ -67,10 +67,9 @@ export function diffModel(
   });
   const model: DiffModel = {
     parsedSlices,
-    loadedFiles: orderDiffFilesLikeTree(
-      parsedSlices.flatMap((parsed) =>
-        parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
-      ),
+    loadedFiles: orderDiffFilesForReview(
+      parsedSlices.flatMap((parsed) => (parsed?.kind === "files" ? parsed.files : [])),
+      resolveFileDiffPath,
     ),
     sourceFileStats: new Map(
       parsedSlices.flatMap((parsed) =>
