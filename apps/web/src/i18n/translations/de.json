@@ -958,5 +958,8 @@
   "05c31d948cc5627c": "Da die Hosts die Zuordnung zum Pool nicht gemeldet haben, wurden die Instanzen anhand des Anbietertreibers zugeordnet. Ältere Hosts melden dies nach einem GOAT-Update.",
   "edaebeea1915f9c1": "Konto",
   "022be4c560f02e1a": "{plan}-Konto",
-  "1eb63b662c5a7792": "{count} ausgelassen"
+  "1eb63b662c5a7792": "{count} ausgelassen",
+  "bed503fbca6c8735": "Einstellungen für das ausgewählte Projekt.",
+  "6d8922544060dd8b": "Alle Umgebungen anzeigen",
+  "65ccf4f8e049003e": "Wähle ein Projekt aus, um seinen Namen, sein Symbol, seine Checkouts und Aktionen zu verwalten."
 }

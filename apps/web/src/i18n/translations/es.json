@@ -958,5 +958,8 @@
   "05c31d948cc5627c": "Los hosts no indicaron qué instancias usan esta reserva, por lo que se asociaron por controlador de proveedor. Los hosts antiguos lo indican tras actualizar GOAT.",
   "edaebeea1915f9c1": "Cuenta",
   "022be4c560f02e1a": "Cuenta {plan}",
-  "1eb63b662c5a7792": "{count} omitidos"
+  "1eb63b662c5a7792": "{count} omitidos",
+  "bed503fbca6c8735": "Ajustes del proyecto seleccionado.",
+  "6d8922544060dd8b": "Mostrar todos los entornos",
+  "65ccf4f8e049003e": "Elige un proyecto para gestionar su nombre, icono, copias de trabajo y acciones."
 }

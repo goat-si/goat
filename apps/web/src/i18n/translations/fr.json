@@ -958,5 +958,8 @@
   "05c31d948cc5627c": "Les hôtes n’ayant pas indiqué quelles instances utilisent ce pool, le parc les a associées selon le pilote du fournisseur. Les anciens hôtes le signalent après une mise à jour de GOAT.",
   "edaebeea1915f9c1": "Compte",
   "022be4c560f02e1a": "Compte {plan}",
-  "1eb63b662c5a7792": "{count} omis"
+  "1eb63b662c5a7792": "{count} omis",
+  "bed503fbca6c8735": "Paramètres du projet sélectionné.",
+  "6d8922544060dd8b": "Afficher tous les environnements",
+  "65ccf4f8e049003e": "Sélectionnez un projet pour gérer son nom, son icône, ses copies de travail et ses actions."
 }

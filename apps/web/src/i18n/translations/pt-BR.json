@@ -958,5 +958,8 @@
   "05c31d948cc5627c": "Os hosts não informaram quais instâncias usam este pool, então elas foram associadas pelo driver do provedor. Hosts antigos passam a informar isso após atualizar o GOAT.",
   "edaebeea1915f9c1": "Conta",
   "022be4c560f02e1a": "Conta {plan}",
-  "1eb63b662c5a7792": "{count} omitidos"
+  "1eb63b662c5a7792": "{count} omitidos",
+  "bed503fbca6c8735": "Configurações do projeto selecionado.",
+  "6d8922544060dd8b": "Mostrar todos os ambientes",
+  "65ccf4f8e049003e": "Escolha um projeto para gerenciar seu nome, ícone, checkouts e ações."
 }
