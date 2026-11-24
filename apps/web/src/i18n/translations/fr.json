@@ -590,6 +590,12 @@
   "afda415d2d75a5d3": "Chat",
   "4beeab8d1814b251": "Diffs et pull requests",
   "3b958faa12d54484": "Raccourcis clavier",
+  "173a624274ec430e": "Capturez une partie de l’écran et joignez-la à un fil.",
+  "6348f556648fc14b": "La capture automatique est indisponible ici. Sélectionnez une fenêtre.",
+  "90247d578e1b3c09": "Capturez une fenêtre et joignez l’image à votre brouillon en cours.",
+  "aee8a4449f25bfa4": "Ce bureau fournit uniquement une capture d’écran.",
+  "fe433c619e19c998": "Mettez à jour l’application de bureau pour utiliser les captures.",
+  "a4bf49b31758ff7e": "Disponible uniquement dans l’application de bureau.",
   "1a6679bbe62703b2": "Captures d’écran",
   "2f77cc3105ddd7f8": "Fournisseurs",
   "6d9bf91f0d4b7ba3": "Fils",
@@ -873,11 +879,5 @@
   "ab5f7cd7f8d24e36": "Requête",
   "540690430e586ae8": "Aucune entrée visible.",
   "3d40ebe62a5baa33": "Révision",
-  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés.",
-  "173a624274ec430e": "Capturez une partie de l’écran et joignez-la à un fil.",
-  "6348f556648fc14b": "La capture automatique est indisponible ici. Sélectionnez une fenêtre.",
-  "90247d578e1b3c09": "Capturez une fenêtre et joignez l’image à votre brouillon en cours.",
-  "aee8a4449f25bfa4": "Ce bureau fournit uniquement une capture d’écran.",
-  "fe433c619e19c998": "Mettez à jour l’application de bureau pour utiliser les captures.",
-  "a4bf49b31758ff7e": "Disponible uniquement dans l’application de bureau."
+  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés."
 }

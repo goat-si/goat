@@ -590,6 +590,12 @@
   "afda415d2d75a5d3": "Chat",
   "4beeab8d1814b251": "Diffs y pull requests",
   "3b958faa12d54484": "Atajos de teclado",
+  "173a624274ec430e": "Captura una parte de la pantalla y adjúntala a un hilo.",
+  "6348f556648fc14b": "La captura automática no está disponible aquí. Elige una ventana.",
+  "90247d578e1b3c09": "Captura una ventana y adjunta la imagen al borrador actual.",
+  "aee8a4449f25bfa4": "Este escritorio solo proporciona una captura de pantalla.",
+  "fe433c619e19c998": "Actualiza la aplicación de escritorio para usar las capturas.",
+  "a4bf49b31758ff7e": "Solo está disponible en la aplicación de escritorio.",
   "1a6679bbe62703b2": "Capturas de pantalla",
   "2f77cc3105ddd7f8": "Proveedores",
   "6d9bf91f0d4b7ba3": "Hilos",
@@ -873,11 +879,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
-  "173a624274ec430e": "Captura una parte de la pantalla y adjúntala a un hilo.",
-  "6348f556648fc14b": "La captura automática no está disponible aquí. Elige una ventana.",
-  "90247d578e1b3c09": "Captura una ventana y adjunta la imagen al borrador actual.",
-  "aee8a4449f25bfa4": "Este escritorio solo proporciona una captura de pantalla.",
-  "fe433c619e19c998": "Actualiza la aplicación de escritorio para usar las capturas.",
-  "a4bf49b31758ff7e": "Solo está disponible en la aplicación de escritorio."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }
