@@ -409,22 +409,40 @@ export const make = Effect.gen(function* () {
     return Option.isNone(row) ? Option.none() : Option.some(yield* hydrate(row.value));
   });
 
-  // Once project settings are folded, actions resolve from Settings only, where the app's editor saves them.
-  const saveScripts = (projectId: ProjectId, scripts: ProjectCreateInput["scripts"]) =>
-    scripts === undefined
+  // Once project settings are folded, project defaults resolve from Settings only, where the app's editor saves them.
+  const saveProjectSettings = (
+    projectId: ProjectId,
+    input: Pick<
+      ProjectUpdateInput,
+      "scripts" | "defaultModelSelection" | "defaultThreadEnvMode" | "autoPull"
+    >,
+  ) =>
+    input.scripts === undefined &&
+    input.defaultModelSelection === undefined &&
+    input.defaultThreadEnvMode === undefined &&
+    input.autoPull === undefined
       ? Effect.void
       : serverSettings.getSettings.pipe(
           // A patch replaces the project's whole entry, so its other overrides are carried over.
-          Effect.flatMap(({ projectSettingsOverrides }) =>
-            serverSettings.updateSettings({
-              projectSettingsOverrides: {
-                [projectId]: {
-                  ...projectSettingsOverrides[projectId],
-                  defaultProjectScripts: scripts,
-                },
-              },
-            }),
-          ),
+          Effect.flatMap(({ projectSettingsOverrides }) => {
+            const entry = {
+              ...projectSettingsOverrides[projectId],
+              ...(input.scripts === undefined ? {} : { defaultProjectScripts: input.scripts }),
+              ...(input.defaultModelSelection == null
+                ? {}
+                : { defaultModelSelection: input.defaultModelSelection }),
+              ...(input.defaultThreadEnvMode == null
+                ? {}
+                : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
+              ...(input.autoPull === undefined ? {} : { defaultAutoPull: input.autoPull }),
+            };
+            // A cleared project default inherits the machine's setting again.
+            if (input.defaultModelSelection === null) delete entry.defaultModelSelection;
+            if (input.defaultThreadEnvMode === null) delete entry.defaultThreadEnvMode;
+            return serverSettings.updateSettings({
+              projectSettingsOverrides: { [projectId]: entry },
+            });
+          }),
           Effect.asVoid,
           Effect.mapError(
             (cause) =>
@@ -454,7 +472,7 @@ export const make = Effect.gen(function* () {
           workspaceRoot,
           ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
         },
-        saveScripts(input.projectId, input.scripts),
+        saveProjectSettings(input.projectId, { scripts: input.scripts }),
       );
       yield* projectEnrichment.invalidate([workspaceRoot]);
       return yield* readCommitted(input.projectId);
@@ -501,7 +519,7 @@ export const make = Effect.gen(function* () {
           ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
           ...(input.archived === undefined ? {} : { archived: input.archived }),
         },
-        saveScripts(input.projectId, input.scripts),
+        saveProjectSettings(input.projectId, input),
       );
       if (workspaceRoot !== previousRoot || input.faviconPath !== undefined) {
         yield* projectEnrichment.invalidate([previousRoot, workspaceRoot]);
