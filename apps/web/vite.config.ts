@@ -379,6 +379,17 @@ export default defineConfig(({ command }) => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       bootstrapTitlePlugin(),
+      {
+        name: "katex-woff2-fonts",
+        enforce: "pre",
+        transform: {
+          filter: { id: /\/katex\/dist\/katex\.min\.css$/ },
+          handler(css) {
+            // KaTeX ships three encodings of each face. All supported browsers use the first.
+            return css.replace(/(src:url\([^)]+\.woff2\) format\("woff2"\)),[^;}]+/g, "$1");
+          },
+        },
+      },
       // Worker previews repeatedly fetch large WASM assets; loopback tests need no compression.
       process.env.VITEST ? undefined : devCompressionPlugin(),
       chunkCycleGuardPlugin(),
