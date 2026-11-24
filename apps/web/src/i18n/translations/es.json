@@ -421,6 +421,9 @@
   "4ba692b01a327ce3": "Sin conexión",
   "f1719074b2c78dae": "Sobrescrito por",
   "06e9973f7537ed51": "Sobrescrito para este proyecto",
+  "bed503fbca6c8735": "Ajustes del proyecto seleccionado.",
+  "6d8922544060dd8b": "Mostrar todos los entornos",
+  "65ccf4f8e049003e": "Elige un proyecto para gestionar su nombre, icono, copias de trabajo y acciones.",
   "a147a2509d4fcfd5": "Proyecto",
   "7e2dfdd9f97fc027": "Ámbito del proyecto",
   "88ad3cc59a328507": "Proyectos e hilos",
@@ -873,8 +876,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
-  "bed503fbca6c8735": "Ajustes del proyecto seleccionado.",
-  "6d8922544060dd8b": "Mostrar todos los entornos",
-  "65ccf4f8e049003e": "Elige un proyecto para gestionar su nombre, icono, copias de trabajo y acciones."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }
