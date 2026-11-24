@@ -22,6 +22,14 @@ const decodeCdpError = Schema.decodeUnknownSync(
     Schema.Struct({ error: Schema.optional(Schema.Struct({ message: Schema.String })) }),
   ),
 );
+const decodeCdpMessage = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.optional(Schema.Number),
+      method: Schema.optional(Schema.String),
+    }),
+  ),
+);
 const key = { threadId: "thread-1", tabId: "tab-1" };
 /** Sends a page command whose id the fake debugger records as it receives it. */
 const command = (
@@ -734,5 +742,55 @@ describe("DesktopBrowserHost", () => {
       yield* settle;
       expect(debuggee.sessionIds).toEqual(["FRAME-SESSION", undefined]);
     }),
+  );
+
+  it.effect("relays no input to a guest while the person at its window annotates it", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee();
+      let annotating = true;
+      host.attach(key, { ...debuggee.tab, annotating: () => annotating });
+      const refusals: Array<number> = [];
+      yield* host.events.pipe(
+        Stream.map((line) => decodeEvent(new TextDecoder().decode(line))),
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            if (event.type !== "cdp") return;
+            const { id } = decodeCdpMessage(event.message);
+            const { error } = decodeCdpError(event.message);
+            if (id !== undefined && error?.message.includes("annotat")) refusals.push(id);
+          }),
+        ),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      const raw = (message: Record<string, unknown>) =>
+        host.handleCommandLine(encodeJson({ type: "cdp", ...key, message: encodeJson(message) }));
+      yield* raw({ id: 1, method: "Target.attachToTarget", params: { targetId: "GUEST" } });
+      yield* settle;
+
+      // A viewer's own session and the page's, as a person and an agent send them.
+      yield* raw({
+        id: 10,
+        method: "Input.dispatchKeyEvent",
+        params: { id: 10, type: "rawKeyDown" },
+        sessionId: "goat-preview-page-1",
+      });
+      yield* command(host, 11, "Input.insertText");
+      yield* command(host, 12, "Input.dispatchKeyEvent");
+      yield* settle;
+      expect(debuggee.methods).toEqual([]);
+      expect(refusals).toEqual([10, 11, 12]);
+
+      // The page stays readable meanwhile, and input resumes once the annotation ends.
+      yield* command(host, 20, "DOM.getDocument");
+      yield* settle;
+      expect(debuggee.methods).toEqual(["DOM.getDocument"]);
+      annotating = false;
+      yield* command(host, 21, "Input.insertText");
+      yield* settle;
+      expect(debuggee.methods).toHaveLength(2);
+      expect(refusals).toEqual([10, 11, 12]);
+    }).pipe(Effect.scoped),
   );
 });
