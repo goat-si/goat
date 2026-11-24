@@ -873,5 +873,10 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown."
+  "7e8de5a9133d331c": "Only the first recorded events are shown.",
+  "93635c8f20f04033": "Prompts that run on a schedule.",
+  "40c503999bce960e": "New task",
+  "1b30548ce8e56b75": "Edit task",
+  "1517f4c831b1c8aa": "No scheduled tasks",
+  "6d799d4105f2696b": "No tasks match this environment and project selection."
 }
