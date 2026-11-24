@@ -313,6 +313,10 @@
   "1bb6eb8f0604ec00": "Local environment",
   "0e3687a6c198f962": "Headless server on this computer",
   "3a54b8d98911331a": "Network access",
+  "75e2413805095813": "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+  "cbee01cf247ffaaf": "Phone pairing",
+  "2cae345a9df8e651": "Show phone QR",
+  "b99018ece57bd989": "Pair your phone",
   "479168d20a3bb181": "Connect your phone",
   "468d32c6b30df608": "Tailscale HTTPS",
   "5ba55a65d8600504": "WSL backend",
@@ -878,9 +882,5 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown.",
-  "75e2413805095813": "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
-  "cbee01cf247ffaaf": "Phone pairing",
-  "2cae345a9df8e651": "Show phone QR",
-  "b99018ece57bd989": "Pair your phone"
+  "7e8de5a9133d331c": "Only the first recorded events are shown."
 }
