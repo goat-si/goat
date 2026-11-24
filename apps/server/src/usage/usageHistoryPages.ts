@@ -8,6 +8,8 @@ import { encodeScanCachePages, type CachedFile } from "./usageScanCache.ts";
 
 const DECODED_BYTES = 16 * 1024 * 1024;
 const CONTRIBUTION_BYTES = 8 * 1024 * 1024;
+const SPILL_BATCH_BYTES = 256 * 1024;
+const SPILL_BATCH_ROWS = 256;
 
 type CacheEntry = {
   readonly id: number;
@@ -234,13 +236,36 @@ export class UsageHistoryPages {
 
   contributions(): UsageContributions {
     const scan = ++this.#nextScan;
-    const resident = new Map<string, UsageContribution>();
-    let residentBytes = 0;
+    const pending = new Map<string, UsageContribution>();
+    let pendingBytes = 0;
     let spilled = false;
-    const put = (key: string, value: UsageContribution) =>
-      this.#statement(
+    const weight = (key: string, { record }: UsageContribution) =>
+      640 +
+      4 *
+        (key.length +
+          record.model.length +
+          record.sessionId.length +
+          (record.rateModel?.length ?? 0) +
+          (record.unresolvedServiceTierTurnId?.length ?? 0));
+
+    const flush = () => {
+      if (pending.size === 0) return;
+      const db = this.#database();
+      const put = this.#statement(
         "INSERT INTO contributions VALUES (?, ?, ?) ON CONFLICT (scan, key) DO UPDATE SET payload = excluded.payload",
-      ).run(scan, key, JSON.stringify(value));
+      );
+      db.exec("BEGIN");
+      try {
+        for (const [key, value] of pending) put.run(scan, key, JSON.stringify(value));
+        db.exec("COMMIT");
+      } catch (error) {
+        if (db.isTransaction) db.exec("ROLLBACK");
+        throw error;
+      }
+      pending.clear();
+      pendingBytes = 0;
+    };
+
     const rows = () =>
       this.#statement("SELECT payload FROM contributions WHERE scan = ? ORDER BY rowid").iterate(
         scan,
@@ -250,53 +275,38 @@ export class UsageHistoryPages {
 
     return {
       get: (key) =>
-        spilled
+        pending.get(key) ??
+        (spilled
           ? decode(
               this.#statement("SELECT payload FROM contributions WHERE scan = ? AND key = ?").get(
                 scan,
                 key,
               ),
             )
-          : resident.get(key),
+          : undefined),
       set: (key, value) => {
-        if (!spilled) {
-          const previous = resident.get(key);
-          const weight = (entry: UsageContribution) => {
-            const { model, rateModel, sessionId, unresolvedServiceTierTurnId } = entry.record;
-            return (
-              640 +
-              4 *
-                (key.length +
-                  model.length +
-                  sessionId.length +
-                  (rateModel?.length ?? 0) +
-                  (unresolvedServiceTierTurnId?.length ?? 0))
-            );
-          };
-          residentBytes += weight(value) - (previous === undefined ? 0 : weight(previous));
-          if (residentBytes <= CONTRIBUTION_BYTES) {
-            resident.set(key, value);
-            return;
-          }
-          for (const [heldKey, held] of resident) put(heldKey, held);
-          resident.clear();
-          spilled = true;
+        const previous = pending.get(key);
+        pendingBytes += weight(key, value) - (previous === undefined ? 0 : weight(key, previous));
+        pending.set(key, value);
+        if (!spilled && pendingBytes > CONTRIBUTION_BYTES) spilled = true;
+        if (spilled && (pending.size >= SPILL_BATCH_ROWS || pendingBytes >= SPILL_BATCH_BYTES)) {
+          flush();
         }
-        put(key, value);
       },
       *values() {
         if (!spilled) {
-          yield* resident.values();
+          yield* pending.values();
           return;
         }
+        flush();
         for (const row of rows()) {
           const value = decode(row);
           if (value !== undefined) yield value;
         }
       },
       clear: () => {
-        resident.clear();
-        residentBytes = 0;
+        pending.clear();
+        pendingBytes = 0;
         if (spilled) this.#statement("DELETE FROM contributions WHERE scan = ?").run(scan);
         spilled = false;
       },
