@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import {
   foldSearchQuery,
   PALETTE_SECONDARY_LIMIT,
@@ -801,7 +802,7 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
     case "root-browse":
       return "Enter project path (e.g. ~/projects/my-app)";
     case "submenu":
-      return "Search...";
+      return msg("Search...");
     case "submenu-browse":
       return "Enter path (e.g. ~/projects/my-app)";
   }
