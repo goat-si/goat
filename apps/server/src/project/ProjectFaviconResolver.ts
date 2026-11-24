@@ -122,7 +122,7 @@ export class ProjectFaviconResolver extends Context.Service<
   }
 >()("goat/project/ProjectFaviconResolver") {}
 
-function extractIconHref(source: string): string | null {
+function* extractIconHrefs(source: string): Generator<string> {
   for (const [tag] of source.matchAll(HTML_LINK_RE)) {
     const attributes = new Map<string, { value: string; quoted: boolean }>();
     for (const [, name, doubleQuoted, singleQuoted, unquoted] of tag
@@ -146,14 +146,13 @@ function extractIconHref(source: string): string | null {
     // An unquoted `{...}` is a JSX expression, not a path.
     if (!href || (!href.quoted && href.value.startsWith("{"))) continue;
     const path = href.value.split("?")[0];
-    if (path) return path;
+    if (path) yield path;
   }
   for (const run of source.split("}")) {
     if (!ICON_REL_RE.test(run)) continue;
     const hrefMatch = run.match(ICON_HREF_RE);
-    if (hrefMatch?.[1]) return hrefMatch[1];
+    if (hrefMatch?.[1]) yield hrefMatch[1];
   }
-  return null;
 }
 
 const optionOnNotFound = <A, R>(
@@ -167,6 +166,17 @@ const optionOnNotFound = <A, R>(
     }),
   );
 
+// A path through a file (ENOTDIR) or a symlink loop names no file either.
+const optionOnMissing = <A, R>(
+  effect: Effect.Effect<A, PlatformError.PlatformError, R>,
+): Effect.Effect<Option.Option<A>, PlatformError.PlatformError, R> =>
+  optionOnNotFound(effect).pipe(
+    Effect.catchIf(
+      (error) => error.reason._tag === "BadResource",
+      () => Effect.succeedNone,
+    ),
+  );
+
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -174,6 +184,8 @@ export const make = Effect.gen(function* () {
   const projectFileLoader = yield* GoatProjectFileLoader.GoatProjectFileLoader;
 
   const resolveIconHref = (href: string): ReadonlyArray<string> => {
+    // `data:`, `https:` and `//host` icons name no project file, and a long data URL fails `stat`.
+    if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(href.trim())) return [];
     // Browsers strip surrounding whitespace from URL attributes; file paths keep theirs.
     const clean = href.trim().replace(/^\//, "");
     return [path.join("public", clean), clean];
@@ -204,7 +216,7 @@ export const make = Effect.gen(function* () {
       if (Option.isNone(candidate)) {
         continue;
       }
-      const stats = yield* optionOnNotFound(fileSystem.stat(candidate.value.absolutePath)).pipe(
+      const stats = yield* optionOnMissing(fileSystem.stat(candidate.value.absolutePath)).pipe(
         Effect.mapError(
           (cause) =>
             new ProjectFaviconResolutionError({
@@ -243,7 +255,7 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
-    const stats = yield* optionOnNotFound(fileSystem.stat(sourcePath.absolutePath)).pipe(
+    const stats = yield* optionOnMissing(fileSystem.stat(sourcePath.absolutePath)).pipe(
       Effect.mapError(
         (cause) =>
           new ProjectFaviconResolutionError({
@@ -258,7 +270,7 @@ export const make = Effect.gen(function* () {
     if (Option.isNone(stats) || stats.value.type !== "File") {
       return null;
     }
-    const source = yield* optionOnNotFound(
+    const source = yield* optionOnMissing(
       fileSystem.open(sourcePath.absolutePath, { flag: "r" }).pipe(
         Effect.flatMap((file) => file.readAlloc(ICON_SOURCE_SCAN_BYTES)),
         Effect.scoped,
@@ -278,11 +290,8 @@ export const make = Effect.gen(function* () {
     if (Option.isNone(source) || Option.isNone(source.value)) {
       return null;
     }
-    const href = extractIconHref(new TextDecoder().decode(source.value.value));
-    if (!href) {
-      return null;
-    }
-    return yield* findExistingFile(projectCwd, resolveIconHref(href), "workspace");
+    const hrefs = Array.from(extractIconHrefs(new TextDecoder().decode(source.value.value)));
+    return yield* findExistingFile(projectCwd, hrefs.flatMap(resolveIconHref), "workspace");
   });
 
   // Probe concurrently but join in list order so lower-ranked probes cannot delay a hit.
@@ -378,7 +387,7 @@ export const make = Effect.gen(function* () {
       return null;
     }
 
-    const stats = yield* optionOnNotFound(fileSystem.stat(cached)).pipe(
+    const stats = yield* optionOnMissing(fileSystem.stat(cached)).pipe(
       Effect.mapError(
         (cause) =>
           new ProjectFaviconResolutionError({
