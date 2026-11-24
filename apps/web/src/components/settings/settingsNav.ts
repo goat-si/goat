@@ -99,7 +99,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     ],
   },
   "/settings/connections": {
-    text: "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+    text: msg(
+      "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+    ),
     related: [{ label: "Hub", to: "/settings/hub" }],
   },
 };
