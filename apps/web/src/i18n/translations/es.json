@@ -793,6 +793,8 @@
   "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
   "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo.",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
+  "51b267b48c021ff4": "Impide la suspensión por inactividad durante las ejecuciones en los servidores seleccionados. Cerrar la tapa de un portátil aún puede suspenderlo.",
+  "29e68b2aabcc1dac": "Todos los servidores conectados y seleccionados deben admitir este ajuste.",
   "d24e3cd7bcf08490": "Mantener activo mientras trabajan los agentes",
   "7fdde2b893ba1b9d": "Eliminado",
   "e58ce271d835b447": "Añadido",
@@ -873,7 +875,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
-  "51b267b48c021ff4": "Impide la suspensión por inactividad durante las ejecuciones en los servidores seleccionados. Cerrar la tapa de un portátil aún puede suspenderlo.",
-  "29e68b2aabcc1dac": "Todos los servidores conectados y seleccionados deben admitir este ajuste."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }

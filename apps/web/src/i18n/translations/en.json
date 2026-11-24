@@ -793,6 +793,8 @@
   "1e6c081708cf5864": "Limit reached, delete a view first",
   "79c3a969207c8760": "This view exceeds the allowed field length.",
   "856812e7e1fc445e": "Tool calls in chat",
+  "51b267b48c021ff4": "Prevent idle sleep during active runs on the selected servers. Closing a laptop lid can still put it to sleep.",
+  "29e68b2aabcc1dac": "All selected connected servers must support this setting.",
   "d24e3cd7bcf08490": "Keep awake while agents work",
   "7fdde2b893ba1b9d": "Removed",
   "e58ce271d835b447": "Added",
@@ -873,7 +875,5 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown.",
-  "51b267b48c021ff4": "Prevent idle sleep during active runs on the selected servers. Closing a laptop lid can still put it to sleep.",
-  "29e68b2aabcc1dac": "All selected connected servers must support this setting."
+  "7e8de5a9133d331c": "Only the first recorded events are shown."
 }
