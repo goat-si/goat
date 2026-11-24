@@ -58,7 +58,6 @@ import {
   formatTokens,
   formatUsageContractMismatch,
   formatUsd,
-  makeWindow,
   usageSourceMessages,
 } from "@goat/shared/usageFormat";
 import { Button, InlineButton } from "../ui/button";
@@ -87,6 +86,8 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { UsageLimitsSection } from "./UsageLimits";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
+import { UsagePeriodStatus } from "./UsagePeriodStatus";
+import { useUsagePeriod } from "./useUsagePeriod";
 import { UsageProviderChart } from "./UsageProviderChart";
 import { SpeedPremium, UsageModelDialog } from "./UsageModelDialog";
 import { UsageShareBar } from "./UsageShareBar";
@@ -189,14 +190,6 @@ export function UsagePage() {
     });
     return shortcut ? `${option.label} (${shortcut})` : option.label;
   };
-  const [windowSelection, setWindowSelection] = useState(() => ({
-    days: preferences.windowDays,
-    window: makeWindow(
-      preferences.windowDays,
-      undefined,
-      preferences.windowDays === 1 ? "hour" : "day",
-    ),
-  }));
   const metric = preferences.metric;
   const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -206,14 +199,15 @@ export function UsagePage() {
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
   const hiddenProviders = new Set(preferences.hiddenProviders);
-  const { days: windowDays, window } = windowSelection;
-  const isPast24Hours = windowDays === 1;
+  const windowDays = preferences.windowDays;
+  const { window, periodSelectionPending, refreshPeriod } = useUsagePeriod(windowDays);
   const {
     merged: answeredUsage,
     environments,
     selectedEnvironments,
     shown,
     isPartial,
+    isPending,
     refresh,
   } = useUsage(window, selectedEnvironmentIds, hiddenProviders);
   const merged = shown?.merged ?? answeredUsage;
@@ -243,11 +237,7 @@ export function UsagePage() {
   };
   const selectWindow = (days: number) => {
     if (!isUsageWindowDays(days)) return;
-    updatePreferences({ windowDays: days });
-    setWindowSelection({
-      days,
-      window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
-    });
+    if (days !== windowDays) updatePreferences({ windowDays: days });
   };
   const selectMetric = (nextMetric: UsageMetric) => {
     if (nextMetric === "limits") setLimitsNow(Date.now());
@@ -300,7 +290,7 @@ export function UsagePage() {
   }, []);
 
   const refreshWindow = () => {
-    if (refreshingRef.current) return;
+    if (refreshingRef.current || (!showingLimits && periodSelectionPending)) return;
 
     if (showingLimits) {
       refreshingRef.current = true;
@@ -311,15 +301,7 @@ export function UsagePage() {
       });
       return;
     }
-    const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    if (
-      nextWindow.sinceDay !== window.sinceDay ||
-      nextWindow.untilDay !== window.untilDay ||
-      nextWindow.sinceTime !== window.sinceTime ||
-      nextWindow.untilTime !== window.untilTime
-    ) {
-      setWindowSelection({ days: windowDays, window: nextWindow });
-    }
+    const nextWindow = refreshPeriod();
     refreshingRef.current = true;
     setIsRefreshing(true);
     void refresh(nextWindow).finally(() => {
@@ -434,7 +416,9 @@ export function UsagePage() {
           onClick={refreshWindow}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
           aria-busy={isRefreshing}
-          disabled={isRefreshing || (!showingLimits && !canReadDiagnostics)}
+          disabled={
+            isRefreshing || (!showingLimits && (periodSelectionPending || !canReadDiagnostics))
+          }
           size="icon-sm"
           variant="ghost"
         >
@@ -497,7 +481,9 @@ export function UsagePage() {
           onClick={refreshWindow}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
           aria-busy={isRefreshing}
-          disabled={isRefreshing || (!showingLimits && !canReadDiagnostics)}
+          disabled={
+            isRefreshing || (!showingLimits && (periodSelectionPending || !canReadDiagnostics))
+          }
           size="icon-sm"
           variant="ghost"
         >
@@ -514,6 +500,15 @@ export function UsagePage() {
           {topbarContent}
           <AppRouteModalClose />
         </header>
+
+        {!showingLimits && shown !== null && canReadDiagnostics ? (
+          <UsagePeriodStatus
+            loading={periodSelectionPending || (showingKept && isPending)}
+            previousWindow={showingKept || periodSelectionPending ? shownWindow : undefined}
+            hour12={hour12}
+            failed={showingKept && !isPending && !periodSelectionPending}
+          />
+        ) : null}
 
         <ScrollArea className="min-h-0 flex-1" observeContent>
           <WorkspacePageContainer width="wide">
@@ -558,7 +553,7 @@ export function UsagePage() {
                 hour12={hour12}
                 days={days}
                 hours={hours}
-                showingKept={showingKept}
+                showingKept={periodSelectionPending || (showingKept && isPending)}
                 metric={metric === "tokens" ? "tokens" : "cost"}
                 selectedEnvironments={selectedEnvironments}
                 hiddenProviders={hiddenProviders}

@@ -873,5 +873,8 @@
   "ab5f7cd7f8d24e36": "Suchanfrage",
   "540690430e586ae8": "Keine sichtbaren Einträge.",
   "3d40ebe62a5baa33": "Version",
-  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt."
+  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt.",
+  "ca912768c320689c": "Die Nutzung für den ausgewählten Zeitraum konnte nicht geladen werden.",
+  "5e6e0fcae447fc1e": "Nutzung für den ausgewählten Zeitraum wird geladen…",
+  "9ee0e697adcf5366": "Angezeigt wird {range}."
 }

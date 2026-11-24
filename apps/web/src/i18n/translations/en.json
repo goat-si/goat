@@ -873,5 +873,8 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown."
+  "7e8de5a9133d331c": "Only the first recorded events are shown.",
+  "ca912768c320689c": "Could not load usage for the selected period.",
+  "5e6e0fcae447fc1e": "Loading usage for the selected period…",
+  "9ee0e697adcf5366": "Showing {range}."
 }

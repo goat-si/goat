@@ -873,5 +873,8 @@
   "ab5f7cd7f8d24e36": "Requête",
   "540690430e586ae8": "Aucune entrée visible.",
   "3d40ebe62a5baa33": "Révision",
-  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés."
+  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés.",
+  "ca912768c320689c": "Impossible de charger les données d’utilisation pour la période sélectionnée.",
+  "5e6e0fcae447fc1e": "Chargement des données d’utilisation pour la période sélectionnée…",
+  "9ee0e697adcf5366": "Période affichée : {range}."
 }
