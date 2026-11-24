@@ -2,7 +2,7 @@ import { DraftId } from "../composerDraftStore";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -23,10 +23,24 @@ vi.mock(import("../state/entities"), async (original) => ({
   useThreadShells: () => state.threads,
 }));
 
-function setup(input: { threads?: ReadonlyArray<Thread> } = {}) {
+function makeProject(title: string, id = title.toLowerCase().replace(/\s+/g, "-")): Project {
+  return {
+    environmentId: EnvironmentId.make("environment-1"),
+    id: ProjectId.make(id),
+    title,
+    workspaceRoot: `/${id}`,
+    repositoryIdentity: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function setup(input: { projects?: ReadonlyArray<Project>; threads?: ReadonlyArray<Thread> } = {}) {
   removeLocalStorageItem(LAST_USED_PROJECT_STORAGE_KEY);
   state.threads = input.threads ?? [];
-  state.projects = [
+  state.projects = input.projects ?? [
     {
       environmentId: EnvironmentId.make("environment-1"),
       id: ProjectId.make("project-1"),
@@ -116,6 +130,42 @@ describe("CommandPalette open intents", () => {
     const input = page.getByPlaceholder("Search commands, projects, and threads...");
     await expect.element(input).toHaveFocus();
     await expect.element(input).toHaveValue("example");
+  });
+
+  it("leaves a submenu only on a fresh, unmodified Backspace", async () => {
+    setup({ projects: [makeProject("Acme"), makeProject("Beta")] });
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+
+    openCommandPalette({});
+    const rootInput = page.getByPlaceholder("Search commands, projects, and threads...");
+    await expect.element(rootInput).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    await expect
+      .element(page.getByRole("option", { name: /^New thread in\.\.\./ }))
+      .toHaveAttribute("data-highlighted");
+    await userEvent.keyboard("{Enter}");
+
+    const submenuInput = page.getByPlaceholder("Search...");
+    await expect.element(submenuInput).toHaveFocus();
+
+    for (const init of [
+      { repeat: true },
+      { ctrlKey: true },
+      { isComposing: true },
+    ] satisfies ReadonlyArray<KeyboardEventInit>) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Backspace",
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      await act(() => submenuInput.element().dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+      await expect.element(submenuInput).toBeVisible();
+    }
+
+    await userEvent.keyboard("{Backspace}");
+    await expect.element(rootInput).toHaveFocus();
   });
 });
 
