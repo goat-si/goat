@@ -873,5 +873,9 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
+  "fe9ecfc8c6212d72": "Herramientas que los agentes pueden usar además de tu código: navegador, herramientas de GOAT, simuladores y control del equipo.",
+  "a4bf49b31758ff7e": "Solo está disponible en la aplicación de escritorio.",
+  "6797e82cca21dbff": "Permite que los agentes de este proyecto usen el navegador compartido. Se aplica al iniciar la próxima sesión del agente.",
+  "a6a6dc235b108747": "Permite que los agentes usen el navegador compartido. Los proyectos pueden cambiar este ajuste."
 }
