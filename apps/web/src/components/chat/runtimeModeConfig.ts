@@ -41,3 +41,54 @@ const options = runtimeModeOptions.map((mode) => ({ mode, ...runtimeModeConfig[m
 export function getCompatibleRuntimeModeOptions(supported: readonly RuntimeMode[] | undefined) {
   return supported?.length ? options.filter(({ mode }) => supported.includes(mode)) : options;
 }
+
+export function resolveCompatibleRuntimeMode(
+  runtimeMode: RuntimeMode,
+  supported: readonly RuntimeMode[] | undefined,
+) {
+  const compatibleOptions = getCompatibleRuntimeModeOptions(supported);
+  const mode = compatibleOptions.some((option) => option.mode === runtimeMode)
+    ? runtimeMode
+    : (compatibleOptions[0]?.mode ?? runtimeMode);
+  return { options: compatibleOptions, mode };
+}
+
+/**
+ * The modes a draft's send can run in. A multi-model send gives every thread the draft's mode
+ * and only that thread's provider narrows it, so the composer offers what any of them supports.
+ */
+export function draftSupportedRuntimeModes(
+  activeProviderModes: ReadonlyArray<RuntimeMode> | undefined,
+  multipleModelSelections: ReadonlyArray<{ readonly instanceId: string }> | null,
+  providers: ReadonlyArray<{
+    readonly instanceId: string;
+    readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode> | undefined;
+  }>,
+) {
+  if (multipleModelSelections === null || multipleModelSelections.length === 0) {
+    return activeProviderModes;
+  }
+  const supported = multipleModelSelections.map(
+    (selection) =>
+      providers.find((provider) => provider.instanceId === selection.instanceId)
+        ?.supportedRuntimeModes ?? [],
+  );
+  // A provider that reports no modes supports them all.
+  if (supported.some((modes) => modes.length === 0)) return undefined;
+  return runtimeModeOptions.filter((mode) => supported.some((modes) => modes.includes(mode)));
+}
+
+export function resolveDraftRuntimeModes(
+  runtimeMode: RuntimeMode,
+  activeProviderModes: ReadonlyArray<RuntimeMode> | undefined,
+  multipleModelSelections: ReadonlyArray<{ readonly instanceId: string }> | null,
+  providers: ReadonlyArray<{
+    readonly instanceId: string;
+    readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode> | undefined;
+  }>,
+) {
+  return resolveCompatibleRuntimeMode(
+    runtimeMode,
+    draftSupportedRuntimeModes(activeProviderModes, multipleModelSelections, providers),
+  );
+}

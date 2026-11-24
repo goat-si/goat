@@ -10,7 +10,7 @@ import {
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import type { ComposerAttachmentInsertion } from "../composerAttachmentInsertion";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
-import { getCompatibleRuntimeModeOptions } from "./runtimeModeConfig";
+import { resolveDraftRuntimeModes } from "./runtimeModeConfig";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
 import {
@@ -913,14 +913,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : undefined;
   const resolvedCompactDisabledReason =
     compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
-  const compatibleRuntimeModeOptions = getCompatibleRuntimeModeOptions(
-    selectedProviderEntry?.snapshot.supportedRuntimeModes,
-  );
-  const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
-    (option) => option.mode === runtimeMode,
-  )
-    ? runtimeMode
-    : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
+  const { options: compatibleRuntimeModeOptions, mode: compatibleRuntimeMode } =
+    resolveDraftRuntimeModes(
+      runtimeMode,
+      selectedProviderEntry?.snapshot.supportedRuntimeModes,
+      multipleModelSelections,
+      providerStatuses,
+    );
 
   const providerSendBlockReason = sshWorktreeSelected
     ? null
