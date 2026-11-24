@@ -68,6 +68,16 @@ export function PullRequestListEmptyState({
   onLoadMore: () => void;
   onRefresh: () => void;
 }) {
+  const end =
+    query.length > 48 &&
+    query.charCodeAt(47) >= 0xd800 &&
+    query.charCodeAt(47) <= 0xdbff &&
+    query.charCodeAt(48) >= 0xdc00 &&
+    query.charCodeAt(48) <= 0xdfff
+      ? 47
+      : 48;
+  const shownQuery = query.length > 48 ? `${query.slice(0, end)}…` : query;
+
   if (!hasProjects) {
     return (
       <Empty>
@@ -89,12 +99,7 @@ export function PullRequestListEmptyState({
   }
 
   if (searching) {
-    return (
-      <PullRequestListGhost
-        rows={5}
-        caption={`Searching every host for “${query.length > 48 ? `${query.slice(0, 48)}…` : query}”`}
-      />
-    );
+    return <PullRequestListGhost rows={5} caption={`Searching every host for “${shownQuery}”`} />;
   }
 
   if (query.length > 0) {
@@ -102,9 +107,7 @@ export function PullRequestListEmptyState({
       <Empty>
         <BranchMark joined={false} />
         <EmptyHeader>
-          <EmptyTitle>
-            Nothing matches “{query.length > 48 ? `${query.slice(0, 48)}…` : query}”
-          </EmptyTitle>
+          <EmptyTitle>Nothing matches “{shownQuery}”</EmptyTitle>
           <EmptyDescription>
             The hosts were searched for it. Try fewer words, or search by number, author or branch.
           </EmptyDescription>
