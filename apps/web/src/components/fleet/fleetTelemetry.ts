@@ -1,3 +1,4 @@
+import { gtFallback, type useGT } from "gt-react";
 import { presentChildSetup } from "@goat/client-runtime/hub-devices";
 import type { FleetMachine, FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
@@ -447,6 +448,7 @@ export function fleetAlerts(
       { readonly owner: EnvironmentId; readonly ownerLabel: string; readonly ownedHere: boolean }
     >;
   } = {},
+  gt: ReturnType<typeof useGT> = gtFallback,
 ): ReadonlyArray<FleetAlert> {
   const unreadable = options.unreadable ?? [];
   const lastSeen = options.lastSeen ?? new Map();
@@ -454,7 +456,7 @@ export function fleetAlerts(
     key: key + ":unreadable",
     tone: "warning",
     label,
-    detail: "Could not read its host status; showing what it last reported",
+    detail: gt("Could not read its host status; showing what it last reported"),
   }));
   for (const row of rows) {
     const connection = row.machineId === null ? undefined : connections.get(row.machineId);
