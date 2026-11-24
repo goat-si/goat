@@ -414,6 +414,11 @@
   "aea25315995268e1": "Hereda el valor",
   "c37237fc8d425018": "Integraciones",
   "7f99aaba0befc867": "Máquinas",
+  "ee4c852b5d2fb490": "Qué recuerdan los agentes entre hilos y quién puede leerlo.",
+  "d2d02339e50a2443": "Recordar conversaciones",
+  "f633ccf59f82fd24": "Modelo de memoria",
+  "2f46e6da3ef449fa": "GOAT resume las conversaciones terminadas en la memoria. Al desactivarlo no se generan más resúmenes y se conservan los recuerdos guardados.",
+  "773dc9457c17d15a": "La opción automática usa el modelo de generación de texto. Puedes elegir otro modelo para los resúmenes de memoria.",
   "2f890e1e55af5ae5": "Memoria",
   "091be13f50490708": "Los valores difieren entre los entornos seleccionados",
   "3c2a43018b7c4901": "Sin entornos",
@@ -873,10 +878,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "No hay entradas visibles.",
   "3d40ebe62a5baa33": "Revisión",
-  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados.",
-  "ee4c852b5d2fb490": "Qué recuerdan los agentes entre hilos y quién puede leerlo.",
-  "d2d02339e50a2443": "Recordar conversaciones",
-  "f633ccf59f82fd24": "Modelo de memoria",
-  "2f46e6da3ef449fa": "GOAT resume las conversaciones terminadas en la memoria. Al desactivarlo no se generan más resúmenes y se conservan los recuerdos guardados.",
-  "773dc9457c17d15a": "La opción automática usa el modelo de generación de texto. Puedes elegir otro modelo para los resúmenes de memoria."
+  "7e8de5a9133d331c": "Solo se muestran los primeros eventos registrados."
 }
