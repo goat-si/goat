@@ -372,6 +372,7 @@
   "947be0860aae5d80": "Autoriser les appareils GOAT Connect à accéder aux appareils du hub",
   "09e8e04d8ee5700e": "Cette machine sert de hub",
   "80b037bfaaead458": "Afficher les machines Pen comme appareils du hub",
+  "154480df13afc704": "Le nœud central est le serveur GOAT auquel votre téléphone s’associe. Il vérifie vos autres appareils et héberge les exécutions dans le cloud. Son OpenCodex est l’OpenCodex Home qui conserve toutes les connexions. Configurez un seul environnement comme nœud central.",
   "82585dce5b5d7574": "Exécutions dans le cloud",
   "75bc620b15714383": "Connecter de nouvelles machines dans le cloud",
   "58d338f471386497": "Connecter des machines temporaires",
@@ -877,6 +878,5 @@
   "ab5f7cd7f8d24e36": "Requête",
   "540690430e586ae8": "Aucune entrée visible.",
   "3d40ebe62a5baa33": "Révision",
-  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés.",
-  "154480df13afc704": "Le nœud central est le serveur GOAT auquel votre téléphone s’associe. Il vérifie vos autres appareils et héberge les exécutions dans le cloud. Son OpenCodex est l’OpenCodex Home qui conserve toutes les connexions. Configurez un seul environnement comme nœud central."
+  "7e8de5a9133d331c": "Seuls les premiers événements enregistrés sont affichés."
 }
