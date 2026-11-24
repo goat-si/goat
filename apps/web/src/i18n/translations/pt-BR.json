@@ -368,6 +368,7 @@
   "947be0860aae5d80": "Permitir que dispositivos do GOAT Connect acessem os dispositivos do hub",
   "09e8e04d8ee5700e": "Esta máquina é o hub",
   "80b037bfaaead458": "Listar máquinas Pen como dispositivos do hub",
+  "154480df13afc704": "O hub é o servidor GOAT ao qual seu celular se conecta. Ele verifica os outros dispositivos e hospeda as execuções na nuvem. Seu OpenCodex é o OpenCodex Home que mantém todos os logins. Defina apenas um ambiente como hub.",
   "82585dce5b5d7574": "Execuções na nuvem",
   "75bc620b15714383": "Conectar novas máquinas na nuvem",
   "58d338f471386497": "Conectar máquinas temporárias",
@@ -873,6 +874,5 @@
   "ab5f7cd7f8d24e36": "Consulta",
   "540690430e586ae8": "Nenhuma entrada visível.",
   "3d40ebe62a5baa33": "Revisão",
-  "7e8de5a9133d331c": "Somente os primeiros eventos registrados são exibidos.",
-  "154480df13afc704": "O hub é o servidor GOAT ao qual seu celular se conecta. Ele verifica os outros dispositivos e hospeda as execuções na nuvem. Seu OpenCodex é o OpenCodex Home que mantém todos os logins. Defina apenas um ambiente como hub."
+  "7e8de5a9133d331c": "Somente os primeiros eventos registrados são exibidos."
 }
