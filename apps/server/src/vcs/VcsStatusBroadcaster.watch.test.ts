@@ -44,6 +44,57 @@ function fakeNativeWatch(onClose = () => {}) {
 }
 
 describe("VCS HEAD watchers", () => {
+  it.effect("a terminal commit clears local Changes totals", () =>
+    Effect.gen(function* () {
+      const native = fakeNativeWatch();
+      const state = {
+        currentLocalStatus: {
+          ...baseLocalStatus,
+          refName: "main",
+          hasWorkingTreeChanges: true,
+          workingTree: {
+            files: [{ path: "lib.txt", insertions: 40, deletions: 0 }],
+            insertions: 40,
+            deletions: 0,
+          },
+        },
+        currentRemoteStatus: null,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        headPath: "/repo/.git/HEAD",
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () => Effect.succeed(true),
+        }),
+      };
+      yield* Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const subscribed = yield* Deferred.make<void>();
+        const clean = yield* Deferred.make<void>();
+        let latest: VcsStatusResult | null = null;
+        yield* Stream.runForEach(
+          broadcaster.streamStatus({ cwd: "/repo", includeRemote: false }),
+          (event) =>
+            Effect.gen(function* () {
+              latest = applyGitStatusStreamEvent(latest, event);
+              yield* Deferred.succeed(subscribed, undefined);
+              if (latest.workingTree.files.length === 0) yield* Deferred.succeed(clean, undefined);
+            }),
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(subscribed);
+        state.currentLocalStatus = { ...baseLocalStatus, refName: "main" };
+        native.notify("rename", "index");
+        yield* Deferred.await(clean);
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
+  );
+
   it.effect("a terminal checkout publishes the new branch without waiting for a poll", () =>
     Effect.gen(function* () {
       const native = fakeNativeWatch();
