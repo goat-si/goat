@@ -167,6 +167,50 @@ describe("CommandPalette open intents", () => {
     await userEvent.keyboard("{Backspace}");
     await expect.element(rootInput).toHaveFocus();
   });
+
+  it("ignores repeated Escape keydowns in file search and after stepping back", async () => {
+    setup();
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+
+    openCommandPalette({});
+    const palette = page.getByTestId("command-palette");
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "command");
+
+    await page.getByRole("option", { name: /^Go to file/ }).click();
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "files");
+
+    const repeatInChild = new KeyboardEvent("keydown", {
+      key: "Escape",
+      keyCode: 27,
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => document.activeElement?.dispatchEvent(repeatInChild));
+    expect(repeatInChild.defaultPrevented).toBe(true);
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "files");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "command");
+    await expect
+      .element(page.getByPlaceholder("Search commands, projects, and threads..."))
+      .toHaveFocus();
+
+    await act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "command");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(palette).not.toBeInTheDocument();
+  });
 });
 
 it("omits a launched task nested under a visible parent from thread results", async () => {
