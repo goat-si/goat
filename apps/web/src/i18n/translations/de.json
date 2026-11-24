@@ -1080,5 +1080,8 @@
   "87374bfe1fd81fdf": "Bedingung bearbeiten für {command}",
   "4da9b09518a3f47a": "Aktionen für {command}",
   "bd8e87512fd9bdf2": "Nicht zugewiesen",
-  "326001d549448f2e": "Hintergrundbild"
+  "326001d549448f2e": "Hintergrundbild",
+  "ca912768c320689c": "Die Nutzung für den ausgewählten Zeitraum konnte nicht geladen werden.",
+  "5e6e0fcae447fc1e": "Nutzung für den ausgewählten Zeitraum wird geladen…",
+  "9ee0e697adcf5366": "Angezeigt wird {range}."
 }
