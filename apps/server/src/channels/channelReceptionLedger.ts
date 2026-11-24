@@ -5,6 +5,7 @@ import {
   type ChannelTaskEvent,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelTaskChanges } from "./channelTaskChanges.ts";
@@ -176,6 +177,11 @@ export const receptionLedger = (
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            if (
+              input.before !== undefined &&
+              DateTime.toEpochMillis(yield* DateTime.now) >= Date.parse(input.before)
+            )
+              return false;
             const rows = yield* sql`UPDATE channel_inbox SET reception_id = ${input.receptionId}
       WHERE input_id = ${input.inputId} AND state = 'processing'
         AND reception_id = ${input.expectedReceptionId} RETURNING input_id`;

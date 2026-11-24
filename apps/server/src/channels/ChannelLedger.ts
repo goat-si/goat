@@ -216,6 +216,8 @@ export class ChannelLedger extends Context.Service<
       readonly inputId: ChannelInputId;
       readonly expectedReceptionId: ChannelReceptionId;
       readonly receptionId: ChannelReceptionId;
+      /** Refused at or after this instant, judged inside the transaction. */
+      readonly before?: string;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly commitSessionReceipt: (input: {
       readonly owner: string;

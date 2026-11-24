@@ -62,7 +62,7 @@ describe("session receipt recovery", () => {
         const task = taskIdFor(input.inputId, 0);
         if (variant === "after a sealed first line") {
           yield* runtime.runPass;
-          harness.assistant((yield* ledger.getTask(task))!.task, "Checking disk usage.\n", true);
+          harness.assistant((yield* ledger.getTask(task))!.task, "Checking disk usage.");
         }
         const restarted = yield* freshObserver;
         yield* restarted.observe(runtime.ownerToken);
@@ -100,7 +100,7 @@ describe("session receipt recovery", () => {
       );
       yield* runtime.drain;
       const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
-      const item = harness.assistant(task, "Checking disk usage.\nMore detail", true);
+      const item = harness.assistant(task, "Checking disk usage.");
       const interrupted = yield* freshObserver.pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, {
           ...ledger,
@@ -181,6 +181,39 @@ describe("session receipt recovery", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("a takeover that reaches the ledger at 55 seconds is refused there", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* runtime.drain;
+      const input = yield* gateway.ingest(goatInput("Inspect the disk", "late-ack"), rpcContext);
+      const claim = ChannelReceptionId.make("channel-session:" + input.inputId);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const observer = yield* freshObserver;
+          assert.isTrue(yield* observer.offer(input.inputId, runtime.ownerToken));
+        }),
+      );
+      const acceptedAt = (yield* ledger.getInput(input.inputId))!.snapshot.acceptedAt;
+      const before = DateTime.formatIso(DateTime.makeUnsafe(Date.parse(acceptedAt) + 55_000));
+      const takeover = {
+        owner: runtime.ownerToken,
+        inputId: input.inputId,
+        expectedReceptionId: claim,
+        receptionId: ChannelReceptionId.make("channel-session-ack:" + input.inputId + ":late"),
+      };
+      // The decision was made earlier; the transaction itself runs at the boundary.
+      yield* TestClock.adjust("55 seconds");
+      assert.isFalse(yield* ledger.takeSessionAcknowledgment({ ...takeover, before }));
+      assert.strictEqual((yield* ledger.getInput(input.inputId))?.snapshot.receptionId, claim);
+      // Without the boundary the same claim is still free to take, so the boundary refused it.
+      assert.isTrue(yield* ledger.takeSessionAcknowledgment(takeover));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("ordinary reception cannot take either durable session claim", () => {
     const harness = makeSessionHarness();
     let calls = 0;
@@ -233,6 +266,7 @@ describe("session receipt recovery", () => {
         const input = yield* gateway.ingest(goatInput("Inspect disk", "hung-ack"), rpcContext);
         yield* runtime.drain;
         const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        harness.tool(task, "df -h");
         yield* TestClock.adjust("19999 millis");
         assert.strictEqual(calls, 0);
         yield* TestClock.adjust("1 millis");

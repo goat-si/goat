@@ -177,7 +177,7 @@ describe("session-first reception controls", () => {
       const first = yield* gateway.ingest(goatInput("Inspect disk", "busy-first"), rpcContext);
       yield* runtime.drain;
       const task = (yield* ledger.getTask(taskIdFor(first.inputId, 0)))!.task;
-      harness.assistant(task, "Checking.\n", true);
+      harness.assistant(task, "Checking.");
       yield* runtime.runPass;
       yield* runtime.settle([first.inputId]);
       yield* sql`UPDATE channel_tasks SET status = 'completed', task_json = json_set(task_json, '$.status', 'completed')
@@ -216,7 +216,7 @@ describe("session-first reception controls", () => {
       assert.isDefined(task);
       yield* settings.updateSettings({ goatBotSessionRouting: "reception" });
       if (task === undefined) return;
-      harness.assistant(task.task, "Checking disk.\n", true);
+      harness.assistant(task.task, "Checking disk.");
       yield* runtime.runPass;
       const second = yield* gateway.ingest(goatInput("hello", "rollback-second"), rpcContext);
       yield* runtime.drain;

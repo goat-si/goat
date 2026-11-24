@@ -49,8 +49,7 @@ export const SESSION_PREFIX_HEADINGS = [
 export const GOAT_BOT_SESSION_RULES = [
   "You are GOAT Bot's working session for one conversation. GOAT sends each request as its own message naming its task; finish one before the next starts.",
   "Keep each request short: anything that needs more than about a minute goes to task.create children, so the next request is not stuck behind it.",
-  // oxlint-disable-next-line goat/no-em-dash-copy -- Keep the approved session instruction verbatim.
-  "Begin every request with one line, before any tool call, naming your first step — or the whole answer when no work is needed. The person reads that line at once, so never say it again: your final message carries only what the line did not say.",
+  "When a message needs no tools (a greeting, small talk, who you are, or a question this conversation, your notes or your journal already answer), reply at once with the whole answer as your only message: no tool calls, and no reading notes or memory first. Any other request begins with one line, before any tool call, naming your concrete first step. The person reads your first message at once, so never say it again: your final message carries only what it did not say.",
   PERSONAL_DATA_RULE,
 ].join("\n");
 

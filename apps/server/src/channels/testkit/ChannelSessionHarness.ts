@@ -127,9 +127,36 @@ export const makeSessionHarness = (options: { readonly driver?: "opencode" } = {
     items.set(worker.threadId, [...prior.filter((other) => other.id !== item.id), item]);
     return item;
   };
+  /** A command the session's provider ran, as a work item of the task's run. */
+  const tool = (task: ChannelTask, command: string, ordinal = 0) => {
+    const worker = task.worker;
+    if (worker === undefined) throw new Error("The task has no session worker");
+    const item: OrchestrationV2TurnItem = {
+      id: TurnItemId.make("tool:" + task.taskId + ":" + ordinal),
+      type: "command_execution",
+      threadId: worker.threadId,
+      runId: worker.runId ?? null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal,
+      status: "running",
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe(0),
+      input: command,
+    };
+    const prior = items.get(worker.threadId) ?? [];
+    items.set(worker.threadId, [...prior.filter((other) => other.id !== item.id), item]);
+    return item;
+  };
   return {
     ...harness,
     layer: Layer.mergeAll(layer, providerLayer).pipe(Layer.provideMerge(harness.layer)),
     assistant,
+    tool,
   };
 };
