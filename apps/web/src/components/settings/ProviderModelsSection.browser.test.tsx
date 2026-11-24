@@ -315,3 +315,65 @@ it("cancels adding or editing a custom model on Escape without closing Settings"
   await userEvent.keyboard("{Escape}");
   await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
 });
+
+it("clears the model filter on Escape without closing Settings", async () => {
+  const manyModels = Array.from({ length: 9 }, (_, index) => ({
+    slug: `gpt-${index}`,
+    name: `GPT ${index}`,
+    isCustom: false,
+    capabilities: null,
+  }));
+  const root = createRootRoute({ component: Outlet });
+  const settingsRoute = createRoute({
+    getParentRoute: () => root,
+    path: "/settings/providers",
+    component: () => (
+      <SettingsPageShell pathname="/settings/providers">
+        {section({ models: manyModels })}
+      </SettingsPageShell>
+    ),
+  });
+  const home = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: () => <h1>Home view</h1>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([settingsRoute, home]),
+    history: createMemoryHistory({ initialEntries: ["/settings/providers"] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  // Uses a custom multi-route router with SettingsPageShell and a home fallback route.
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  const closeSettings = page.getByRole("button", { name: "Close settings" });
+  const filter = page.getByRole("textbox", { name: "Filter models" });
+  await userEvent.type(filter, "gpt 1");
+  for (const composition of [
+    { key: "Escape", isComposing: true, keyCode: 27 },
+    { key: "Escape", isComposing: false, keyCode: 229 },
+  ]) {
+    // Safari ends the composition just before the Escape keydown.
+    await act(() => {
+      filter.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      filter
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { ...composition, bubbles: true }));
+    });
+    await expect.element(filter).toHaveValue("gpt 1");
+  }
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(filter).toHaveValue("");
+  await expect.element(filter).toHaveFocus();
+  // Holding Escape repeats the keydown, which must not also close Settings.
+  await act(() => {
+    filter
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", repeat: true, bubbles: true }));
+  });
+  await expect.element(closeSettings).toBeVisible();
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
+});
