@@ -3,6 +3,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
+import { Dialog, DialogPopup } from "../ui/dialog";
 
 const state = vi.hoisted(() => ({
   result: null as { readonly agents: ReadonlyArray<AcpRegistrySearchAgent> } | null,
@@ -175,4 +176,50 @@ it.each([
     .element(page.getByRole("button", { name: "Add Built-in provider" }))
     .not.toBeInTheDocument();
   await expect.element(page.getByRole("status")).toHaveTextContent("1 compatible agent found.");
+});
+
+it("Escape in the search clears it without closing Add provider", async () => {
+  setup();
+  const onOpenChange = vi.fn();
+  await using _screen = await render(
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogPopup>{step()}</DialogPopup>
+    </Dialog>,
+  );
+  const search = page.getByRole("searchbox", { name: "Search ACP Registry" });
+  await userEvent.fill(search, "gemini");
+  for (const composition of [
+    { key: "Escape", isComposing: true, keyCode: 27 },
+    { key: "Escape", isComposing: false, keyCode: 229 },
+  ]) {
+    // Safari ends the composition just before the Escape keydown.
+    await act(() => {
+      search.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      search
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { ...composition, bubbles: true, cancelable: true }),
+        );
+    });
+    await expect.element(search).toHaveValue("gemini");
+  }
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(search).toHaveValue("");
+  await expect.element(search).toHaveFocus();
+  // Holding Escape repeats the keydown, which must not also close the dialog.
+  await act(() => {
+    search.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  expect(onOpenChange).not.toHaveBeenCalled();
+
+  await userEvent.keyboard("{Escape}");
+  expect(onOpenChange.mock.calls.map(([open]) => open)).toEqual([false]);
 });
