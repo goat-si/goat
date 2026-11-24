@@ -136,6 +136,14 @@ import {
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
+// A floating preview over the lower half of a narrow chat covers the timeline's last rows,
+// so the end must scroll them above it as it does for the composer.
+function resolveTimelineEndInset(composerInset: number, canvas: ReturnType<typeof useChatCanvas>) {
+  const frame = canvas?.layout.overlapsChat ? canvas.layout.frame : null;
+  const height = canvas?.container.height ?? 0;
+  if (!frame || frame.y + frame.height / 2 < height / 2) return composerInset;
+  return Math.max(composerInset, Math.ceil(height - frame.y));
+}
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
@@ -338,7 +346,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
-  contentInsetEndAdjustment,
+  contentInsetEndAdjustment: composerInsetEnd,
   onIsAtEndChange,
   onContentOverflowChange,
   liveFollowEnabled,
@@ -349,6 +357,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   topFadeEnabled = false,
   historyControls,
 }: MessagesTimelineProps) {
+  const canvas = useChatCanvas();
+  const contentInsetEndAdjustment = resolveTimelineEndInset(composerInsetEnd, canvas);
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
   // Find open at the opening is part of the snapshot: opening find later
@@ -1118,7 +1128,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
       {parentThreadLink !== null ? listHeaderLeadingContent : null}
     </>
   );
-  const canvas = useChatCanvas();
   const registerTimeline = canvas?.registerTimeline;
   const [timelineScrollNode, setTimelineScrollNode] = useState<HTMLElement | null>(null);
   // Stable so the list attaches once per mount. A re-attach reports no overflow for a frame,
