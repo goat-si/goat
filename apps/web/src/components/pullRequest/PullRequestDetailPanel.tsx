@@ -5,6 +5,7 @@ import {
 } from "./pullRequestActionFailures";
 import { addPullRequestCommentToComposer } from "./pullRequestChatHandoff";
 import { parsePullRequestAnchor, pullRequestLinkCommit } from "@goat/shared/pullRequestAnchor";
+import { summaryCondensedByScopeKey } from "./pullRequestSummaryScroll.logic";
 import { linkedTab, usePullRequestDetailReveal } from "./usePullRequestDetailReveal";
 import { projectChangeRequestUrl } from "@goat/client-runtime/change-request-links";
 import { normalizeThreadPullRequestKey } from "@goat/client-runtime/thread-pull-requests";
@@ -339,23 +340,15 @@ export function PullRequestDetailPanel({
   } else if (!tabMountState.tabs.has(tab)) {
     setTabMountState({ key: tabScopeKey, tabs: new Set(tabMountState.tabs).add(tab) });
   }
-  // Each tab restores the condensed state its own scrolling left behind.
   const [condensedByTab, setCondensedByTab] = useState<
     Partial<Record<PullRequestDetailTab, boolean>>
-  >({});
+  >(() => ({ summary: summaryCondensedByScopeKey.get(tabScopeKey) ?? false }));
   const condensed = condensedByTab[tab] ?? false;
   const scrollerByTab = useRef<Partial<Record<PullRequestDetailTab, HTMLElement | null>>>({});
-  // Fresh ref callbacks would detach and reattach every scroller on each render.
   const [scrollerRefs] = useState(() => ({
-    summary: (node: HTMLElement | null) => {
-      scrollerByTab.current.summary = node;
-    },
-    timeline: (node: HTMLElement | null) => {
-      scrollerByTab.current.timeline = node;
-    },
-    code: (node: HTMLElement | null) => {
-      scrollerByTab.current.code = node;
-    },
+    summary: (node: HTMLElement | null) => void (scrollerByTab.current.summary = node),
+    timeline: (node: HTMLElement | null) => void (scrollerByTab.current.timeline = node),
+    code: (node: HTMLElement | null) => void (scrollerByTab.current.code = node),
   }));
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
@@ -1630,7 +1623,9 @@ export function PullRequestDetailPanel({
             compensationRef.current = { tab, scroller, target: top - chromeDelta };
             next = true;
           }
-          if (next !== previous) setCondensedByTab({ ...condensedByTab, [tab]: next });
+          if (next === previous) return;
+          if (tab === "summary") summaryCondensedByScopeKey.set(tabScopeKey, next);
+          setCondensedByTab({ ...condensedByTab, [tab]: next });
         }}
       >
         {detailQuery.error && !detail ? (

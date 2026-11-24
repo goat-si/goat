@@ -1,6 +1,7 @@
 import { AddToChatButton, chatSubject } from "./PullRequestChatActions";
 import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
 import { pullRequestCommentPreview } from "./pullRequestMarkdown.logic";
+import { usePullRequestSummaryView } from "./pullRequestSummaryScroll.logic";
 import { usePullRequestSummaryReveal } from "./usePullRequestSummaryReveal";
 import { useAtomValue } from "@effect/atom-react";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -370,8 +371,14 @@ export function PullRequestSummaryTab({
   onRefreshChecks?: () => void;
 }) {
   const terminology = sourceControlClients.get(detail.provider).changeRequest;
-  const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
-  const shownConversations = shown.url === detail.url ? shown.count : COMMENT_PAGE;
+  const {
+    shownConversations,
+    setShown,
+    commentOrder,
+    toggleCommentOrder,
+    initialScrollTop,
+    rememberScrollTop,
+  } = usePullRequestSummaryView(`${environmentId}:${detail.url}`, detail.url);
   const [commentFilter, setCommentFilter] = useLocalStorage(
     COMMENT_FILTER_STORAGE_KEY,
     DEFAULT_COMMENT_FILTER,
@@ -396,7 +403,6 @@ export function PullRequestSummaryTab({
     filteredItems,
     shownConversations,
   );
-  const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
   const visibleItems = orderPullRequestComments(recentItems, commentOrder);
   const showOldestCommentsButton =
     hiddenConversationCount > 0 ? (
@@ -404,7 +410,7 @@ export function PullRequestSummaryTab({
         size="sm"
         variant="outline"
         className="w-full"
-        onClick={() => setShown({ url: detail.url, count: shownConversations + COMMENT_PAGE })}
+        onClick={() => setShown(shownConversations + COMMENT_PAGE)}
       >
         Show {Math.min(hiddenConversationCount, COMMENT_PAGE)} older conversation
         {hiddenConversationCount === 1 ? "" : "s"} ({hiddenConversationCount} hidden)
@@ -480,12 +486,14 @@ export function PullRequestSummaryTab({
   const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
 
   const editingDescription = bodyScope?.url === detail.url;
-  const { scrollRef, checksReveals, descriptionReveals } = usePullRequestSummaryReveal({
-    revealUrl,
-    onRevealSettled,
-    description,
-    editingDescription,
-  });
+  const { scrollRef, restoringScroll, checksReveals, descriptionReveals } =
+    usePullRequestSummaryReveal({
+      revealUrl,
+      onRevealSettled,
+      description,
+      editingDescription,
+      initialScrollTop,
+    });
   // Checkbox ticks and the editor share one draft, so each starts from the other's latest body.
   const saveDescription = async (body: string) => {
     const key = detail.url;
@@ -674,6 +682,9 @@ export function PullRequestSummaryTab({
       ref={(node) => {
         scrollRef.current = node;
         scrollerRef(node);
+      }}
+      onScroll={(event) => {
+        if (!restoringScroll.current) rememberScrollTop(event.currentTarget.scrollTop);
       }}
       className="h-full overflow-y-auto"
       data-pull-request-summary-scroll
@@ -925,7 +936,7 @@ export function PullRequestSummaryTab({
                   ? "Show oldest comments first"
                   : "Show newest comments first"
               }
-              onClick={() => setCommentOrder((value) => (value === "newest" ? "oldest" : "newest"))}
+              onClick={toggleCommentOrder}
             >
               <ArrowDownUpIcon aria-hidden className="size-3" />
               {commentOrder === "newest" ? "Newest first" : "Oldest first"}
@@ -968,7 +979,7 @@ export function PullRequestSummaryTab({
                     size="sm"
                     variant="ghost"
                     className="w-full"
-                    onClick={() => setShown({ url: detail.url, count: COMMENT_PAGE })}
+                    onClick={() => setShown(COMMENT_PAGE)}
                   >
                     Show only {COMMENT_PAGE} recent conversations
                   </Button>
