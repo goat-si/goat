@@ -1,3 +1,4 @@
+import { scheduledTaskWorktreeBaseRef } from "@goat/client-runtime/scheduled-task-worktree";
 import { useNavigation } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
@@ -132,7 +133,11 @@ export function ScheduledTaskBranchPickerRouteScreen() {
       title="Base branch"
       project={project}
       branches={visibleBranches}
-      selectedBranchName={editor.draft.baseRef}
+      selectedBranchName={
+        editor.draft.baseRef.trim() || debouncedQuery.trim() || branches.data === null
+          ? editor.draft.baseRef
+          : scheduledTaskWorktreeBaseRef("", branches.refs)
+      }
       query={query}
       onQueryChange={setQuery}
       loading={

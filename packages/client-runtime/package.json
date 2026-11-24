@@ -187,6 +187,10 @@
       "types": "./src/scheduledTasks/index.ts",
       "default": "./src/scheduledTasks/index.ts"
     },
+    "./scheduled-task-worktree": {
+      "types": "./src/scheduledTaskWorktree.ts",
+      "default": "./src/scheduledTaskWorktree.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"

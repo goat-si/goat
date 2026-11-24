@@ -1,5 +1,7 @@
 import { useClientSettings } from "../../hooks/useSettings";
 import { formatTimeOfDay } from "../../timestampFormat";
+import { scheduledTaskWorktreeBaseRef } from "@goat/client-runtime/scheduled-task-worktree";
+import { usePaginatedBranches } from "../../state/queries";
 import { ScheduledRelativeLabel } from "./ScheduledRelativeLabel";
 import { WebhookDeliveriesDialog } from "./WebhookDeliveriesDialog";
 import { WebhookEndpointField } from "./WebhookEndpointField";
@@ -743,6 +745,15 @@ function ScheduledTaskEditorForm({
   const botRoutine = isBotRoutineDraft(liveTask, draft);
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const automaticBase = !botRoutine && draft.workspaceMode === "worktree" && !draft.baseRef.trim();
+  const refs = usePaginatedBranches({
+    environmentId,
+    cwd: automaticBase ? (selectedProject?.workspaceRoot ?? null) : null,
+    query: "",
+  });
+  const baseLoading =
+    automaticBase && selectedProject !== undefined && refs.data === null && refs.error === null;
+  const worktreeBase = scheduledTaskWorktreeBaseRef(draft.baseRef, refs.refs);
   const instanceEntries = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
       deriveProviderInstanceEntries(providers),
@@ -785,7 +796,8 @@ function ScheduledTaskEditorForm({
       saving ||
       editingTaskMissing ||
       !connected ||
-      tasksQuery.data === null
+      tasksQuery.data === null ||
+      baseLoading
     )
       return;
     const selection = activeSelection;
@@ -851,7 +863,7 @@ function ScheduledTaskEditorForm({
                 draft.baseModelSelection.model === selection.model
                   ? draft.baseModelSelection
                   : selection,
-              workspaceStrategy: workspaceStrategyFromDraft(draft),
+              workspaceStrategy: workspaceStrategyFromDraft({ ...draft, baseRef: worktreeBase }),
             };
     if (context === null) return;
     const input: ScheduledTaskUpsertInput = {
@@ -924,7 +936,7 @@ function ScheduledTaskEditorForm({
                   projectId: defaultScheduledTaskProjectId(projectsOn(next.environmentId), scope),
                   modelKey: "",
                   baseModelSelection: null,
-                  baseRef: "main",
+                  baseRef: "",
                   startFromOrigin: true,
                   existingWorktreePath: "",
                 }));
@@ -1069,7 +1081,7 @@ function ScheduledTaskEditorForm({
                     id="scheduled-task-base-ref"
                     environmentId={environmentId}
                     cwd={selectedProject?.workspaceRoot ?? null}
-                    value={draft.baseRef}
+                    value={baseLoading ? "" : worktreeBase}
                     onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}
                     startFromOrigin={draft.startFromOrigin}
                     onStartFromOriginChange={(startFromOrigin) =>
@@ -1432,7 +1444,14 @@ function ScheduledTaskEditorForm({
         </DialogClose>
         <Button
           size="sm"
-          disabled={!canOperate || saving || editingTaskMissing || !connected || !tasksQuery.data}
+          disabled={
+            !canOperate ||
+            saving ||
+            editingTaskMissing ||
+            !connected ||
+            !tasksQuery.data ||
+            baseLoading
+          }
           onClick={() => void submit()}
         >
           {draft.editingId ? "Save task" : "Create task"}
