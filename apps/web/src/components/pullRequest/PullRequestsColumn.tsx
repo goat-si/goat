@@ -141,6 +141,7 @@ export function PullRequestsColumn({
   const [searchFocusToken, setSearchFocusToken] = useState(0);
   const searchExpanded = searchOpen || searchValue.length > 0;
   useEffect(() => {
+    if (maximizedAway) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
@@ -157,7 +158,7 @@ export function PullRequestsColumn({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed]);
+  }, [condensed, maximizedAway]);
   if (!condensed && searchOpen) setSearchOpen(false);
   useEffect(() => {
     if (condensed) return;

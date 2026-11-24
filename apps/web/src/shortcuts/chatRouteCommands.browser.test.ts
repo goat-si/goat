@@ -148,6 +148,20 @@ describe("chat route commands", () => {
     expect(lower).toHaveBeenCalledOnce();
   });
 
+  it("leaves preview.find unclaimed on non-thread chat routes", () => {
+    const { router } = routerAt([
+      ...CHAT,
+      { routeId: "/_chat/pull-requests", pathname: "/pull-requests" },
+    ]);
+    const onPreviewAction = vi.fn();
+    using stack = new DisposableStack();
+    stack.defer(subscribePreviewAction(onPreviewAction));
+    stack.defer(installChatRouteCommands(router));
+
+    expect(pressKey("f").defaultPrevented).toBe(false);
+    expect(onPreviewAction).not.toHaveBeenCalled();
+  });
+
   it("dispatches Find for a searchable preview without browser operate permission", () => {
     const environmentId = EnvironmentId.make("read-only-env");
     const { router } = routerAt([
