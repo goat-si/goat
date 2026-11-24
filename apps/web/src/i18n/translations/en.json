@@ -873,5 +873,6 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown."
+  "7e8de5a9133d331c": "Only the first recorded events are shown.",
+  "d0caad5cb95ee8cd": "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in."
 }

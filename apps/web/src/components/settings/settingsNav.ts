@@ -65,7 +65,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   "/settings/keybindings": { text: "Keyboard shortcuts for this app." },
   "/settings/snap-shot": { text: "Capture part of your screen and attach it to a thread." },
   "/settings/providers": {
-    text: "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+    text: msg(
+      "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+    ),
     related: [{ label: "Hub", to: "/settings/hub" }],
   },
   "/settings/memory": { text: "What agents remember across threads, and who can read it." },
