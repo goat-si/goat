@@ -107,6 +107,11 @@
   "9485a52216cfc0d5": "Enter a positive duration.",
   "c19a0ed0ac547356": "Custom snooze",
   "4f50663b717bd2fe": "Choose when snoozed threads return to your inbox.",
+  "93635c8f20f04033": "Prompts that run on a schedule.",
+  "40c503999bce960e": "New task",
+  "1b30548ce8e56b75": "Edit task",
+  "1517f4c831b1c8aa": "No scheduled tasks",
+  "6d799d4105f2696b": "No tasks match this environment and project selection.",
   "9bc551235d78e133": "Schedule type",
   "7212b0e2653b17f3": "Date and time",
   "7982b3041b9ae1d0": "Duration",
@@ -873,10 +878,5 @@
   "ab5f7cd7f8d24e36": "Query",
   "540690430e586ae8": "No visible entries.",
   "3d40ebe62a5baa33": "Revision",
-  "7e8de5a9133d331c": "Only the first recorded events are shown.",
-  "93635c8f20f04033": "Prompts that run on a schedule.",
-  "40c503999bce960e": "New task",
-  "1b30548ce8e56b75": "Edit task",
-  "1517f4c831b1c8aa": "No scheduled tasks",
-  "6d799d4105f2696b": "No tasks match this environment and project selection."
+  "7e8de5a9133d331c": "Only the first recorded events are shown."
 }

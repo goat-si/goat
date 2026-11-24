@@ -107,6 +107,11 @@
   "9485a52216cfc0d5": "Gib eine Dauer größer als null ein.",
   "c19a0ed0ac547356": "Benutzerdefinierte Wiedervorlage",
   "4f50663b717bd2fe": "Wähle, wann Threads auf Wiedervorlage wieder im Posteingang erscheinen.",
+  "93635c8f20f04033": "Prompts, die nach einem Zeitplan ausgeführt werden.",
+  "40c503999bce960e": "Neue Aufgabe",
+  "1b30548ce8e56b75": "Aufgabe bearbeiten",
+  "1517f4c831b1c8aa": "Keine geplanten Aufgaben",
+  "6d799d4105f2696b": "Keine Aufgaben für die ausgewählte Umgebung und das ausgewählte Projekt.",
   "9bc551235d78e133": "Zeitplanart",
   "7212b0e2653b17f3": "Datum und Uhrzeit",
   "7982b3041b9ae1d0": "Dauer",
@@ -873,10 +878,5 @@
   "ab5f7cd7f8d24e36": "Suchanfrage",
   "540690430e586ae8": "Keine sichtbaren Einträge.",
   "3d40ebe62a5baa33": "Version",
-  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt.",
-  "93635c8f20f04033": "Prompts, die nach einem Zeitplan ausgeführt werden.",
-  "40c503999bce960e": "Neue Aufgabe",
-  "1b30548ce8e56b75": "Aufgabe bearbeiten",
-  "1517f4c831b1c8aa": "Keine geplanten Aufgaben",
-  "6d799d4105f2696b": "Keine Aufgaben für die ausgewählte Umgebung und das ausgewählte Projekt."
+  "7e8de5a9133d331c": "Nur die ersten aufgezeichneten Ereignisse werden angezeigt."
 }
