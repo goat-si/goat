@@ -16,6 +16,11 @@ import { SettingsBreadcrumb } from "./SettingsBreadcrumb";
 const ESCAPE_OWNERS =
   '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-slot$="popup"]';
 
+function blurFocusedWithin(container: HTMLElement | null) {
+  const focused = document.activeElement;
+  if (focused instanceof HTMLElement && container?.contains(focused)) focused.blur();
+}
+
 // Escape leaves Settings when nothing else (a popup, the search field, a dialog) claimed it.
 function registerSettingsEscape(router: AnyRouter): () => void {
   return registerCommands(
@@ -49,11 +54,23 @@ export function SettingsPageShell({
   const gt = useGT();
   const router = useRouter();
   const closeSettings = useCloseAppModal();
-  // Created once so re-renders never re-register the command.
-  const [escapeCommandRef] = useState(
-    () => (node: HTMLDivElement | null) =>
-      node === null ? undefined : registerSettingsEscape(router),
-  );
+  // Created once so re-renders never re-register the command or navigation blur listener.
+  // Leaving Settings without closing (Navigation: Back) unmounts focused fields during commit,
+  // when React no longer delivers blur; onBeforeLoad runs before unmount even after a redirect.
+  const [escapeCommandRef] = useState(() => (node: HTMLDivElement | null) => {
+    if (node === null) return undefined;
+    const disposeEscape = registerSettingsEscape(router);
+    const disposeBeforeLoad = router.subscribe("onBeforeLoad", ({ pathChanged }) => {
+      const focused = document.activeElement;
+      if (pathChanged && focused?.matches("input, textarea, [contenteditable]")) {
+        blurFocusedWithin(node);
+      }
+    });
+    return () => {
+      disposeEscape();
+      disposeBeforeLoad();
+    };
+  });
 
   return (
     <SidebarInset
