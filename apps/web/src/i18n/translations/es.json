@@ -974,5 +974,6 @@
   "7a0598bc546ddf61": "Git, solicitudes de incorporación, cuentas de GitHub y los textos que los agentes redactan para los commits y las revisiones.",
   "78f82fef9e0c8661": "Repositorios",
   "fd5e987709679db9": "Mantiene actualizada la rama predeterminada de este proyecto cuando la copia de trabajo no tiene cambios ni commits locales.",
-  "a8d6b69e67c6015e": "Mantiene actualizada la rama predeterminada cuando la copia de trabajo no tiene cambios ni commits locales. Los proyectos pueden cambiar este ajuste."
+  "a8d6b69e67c6015e": "Mantiene actualizada la rama predeterminada cuando la copia de trabajo no tiene cambios ni commits locales. Los proyectos pueden cambiar este ajuste.",
+  "8ae95350a8a0186f": "Ubicación y limpieza de los árboles de trabajo, además de artefactos y registros."
 }

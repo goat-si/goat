@@ -974,5 +974,6 @@
   "7a0598bc546ddf61": "Git, pull requests, contas do GitHub e textos que os agentes escrevem para commits e revisões.",
   "78f82fef9e0c8661": "Repositórios",
   "fd5e987709679db9": "Mantém a branch padrão deste projeto atualizada quando o checkout não tem alterações nem commits locais.",
-  "a8d6b69e67c6015e": "Mantém a branch padrão atualizada quando o checkout não tem alterações nem commits locais. Cada projeto pode substituir esta configuração."
+  "a8d6b69e67c6015e": "Mantém a branch padrão atualizada quando o checkout não tem alterações nem commits locais. Cada projeto pode substituir esta configuração.",
+  "8ae95350a8a0186f": "Local e limpeza de worktrees, além de artefatos e logs."
 }
