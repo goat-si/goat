@@ -8,6 +8,14 @@ import { PullRequestsPage } from "../components/pullRequest/PullRequestsPage";
 
 const MAX_SEARCH_LABEL_CANDIDATES = 100;
 
+function sliceWhole(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const before = text.charCodeAt(limit - 1);
+  const after = text.charCodeAt(limit);
+  const splits = before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+  return text.slice(0, splits ? limit - 1 : limit);
+}
+
 function pullRequestSearchLabels(raw: unknown): PullRequestsSearch["labels"] {
   const values = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : []).slice(
     0,
@@ -60,7 +68,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
       : {}),
     // Always include free-text keys to override numeric values in the parent route's unvalidated search.
-    q: typeof raw.q === "string" && raw.q ? raw.q.slice(0, 200) : undefined,
+    q: typeof raw.q === "string" && raw.q ? sliceWhole(raw.q, 200) : undefined,
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
     ...(raw.review === "approved" ||
     raw.review === "changes-requested" ||
