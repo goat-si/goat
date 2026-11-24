@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
@@ -170,9 +171,22 @@ describe("nightly staging hand-off", () => {
       expect(draft.assets.map((asset) => asset.name).at(-1)).toBe("js-bundle.manifest.json");
 
       const dest = tempDir();
-      expect(yield* getHandoffs(client, { tag, names: ["js-bundle"], dir: dest })).toEqual([
-        "js-bundle",
-      ]);
+      // Force the second part to finish before the first, regardless of host speed.
+      const secondDownloaded = yield* Deferred.make<void>();
+      const completed: number[] = [];
+      const first = draft.assets[0]!.id;
+      const second = draft.assets[1]!.id;
+      const downloadAsset = Effect.fn(function* (id: number) {
+        if (id === first) yield* Deferred.await(secondDownloaded);
+        const bytes = yield* client.downloadAsset(id);
+        completed.push(id);
+        if (id === second) yield* Deferred.succeed(secondDownloaded, undefined);
+        return bytes;
+      });
+      expect(
+        yield* getHandoffs({ ...client, downloadAsset }, { tag, names: ["js-bundle"], dir: dest }),
+      ).toEqual(["js-bundle"]);
+      expect(completed.indexOf(second)).toBeLessThan(completed.indexOf(first));
       expect(NodeFS.readFileSync(NodePath.join(dest, "server/dist/index.mjs"), "utf8")).toBe(big);
       expect(
         NodeFS.readFileSync(NodePath.join(dest, "desktop/dist-electron/main.js"), "utf8"),
@@ -253,6 +267,13 @@ describe("nightly staging hand-off", () => {
         (yield* getHandoffs(client, { tag, names: ["x"], dir: tempDir() }).pipe(Effect.flip))
           .message,
       ).toContain("does not match its manifest");
+      draft.assets[1]!.bytes = new Uint8Array(1);
+      const truncatedDest = tempDir();
+      const truncated = yield* getHandoffs(client, { tag, names: ["x"], dir: truncatedDest }).pipe(
+        Effect.flip,
+      );
+      expect(truncated.message).toContain("x.tar.001 does not match its manifest");
+      expect(NodeFS.readdirSync(truncatedDest)).toEqual([]);
       draft.assets.splice(1, 1);
       const missing = yield* getHandoffs(client, {
         tag,
