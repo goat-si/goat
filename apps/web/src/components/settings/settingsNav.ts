@@ -70,7 +70,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/memory": { text: "What agents remember across threads, and who can read it." },
   "/settings/integrations": {
-    text: "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    text: msg(
+      "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    ),
   },
   "/settings/source-control": {
     text: "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",

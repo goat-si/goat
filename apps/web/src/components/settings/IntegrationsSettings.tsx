@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   FILL_VALUE,
   RESPONSIVE_VALUE,
@@ -1501,6 +1502,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
 }
 
 export function IntegrationsSettingsPanel() {
+  const gt = useGT();
   const previewDefaultsDisabled = !isElectron;
   const previewDefaults = (
     <>
@@ -1517,10 +1519,10 @@ export function IntegrationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="browser" title="Browser">
+      <SettingsSection id="browser" title={gt("Browser")}>
         <AgentBrowserAccessSetting />
         {previewDefaultsDisabled ? (
-          <SettingsUnavailableGroup message="Only available in the desktop app.">
+          <SettingsUnavailableGroup message={gt("Only available in the desktop app.")}>
             {previewDefaults}
           </SettingsUnavailableGroup>
         ) : (
