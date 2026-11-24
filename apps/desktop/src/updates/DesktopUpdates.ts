@@ -8,6 +8,7 @@ import {
   hasDownloadOffer,
   hasInstallableDownload,
   isPersistedDownload,
+  makeDownloadedFileTracker,
   makeUpdateDownloadAttempts,
   makeUpdateFeedCapture,
   persistUpdateDownload,
@@ -268,6 +269,7 @@ export const make = Effect.gen(function* () {
   const activeUpdateAction = Ref.get(activeUpdateActionRef);
   const feedCapture = makeUpdateFeedCapture();
   const downloadAttempts = makeUpdateDownloadAttempts();
+  const downloadedFile = yield* makeDownloadedFileTracker(logUpdaterWarning, updateState);
 
   const tryStartUpdateAction = (action: UpdateAction): Effect.Effect<boolean> =>
     Ref.modify(activeUpdateActionRef, (activeAction) =>
@@ -786,11 +788,12 @@ export const make = Effect.gen(function* () {
         return refused;
       const replacement = current.status === "available" ? current.availableVersion : null;
       let version = retainedVersion;
-      if (replacement !== null) {
-        const result = yield* downloadUnderReservation(current);
-        if (!result.completed) return { ...result, failed: true };
-        version = replacement;
-      }
+      const redownloaded =
+        replacement !== null
+          ? yield* downloadUnderReservation(current)
+          : yield* downloadedFile.redownloadIfMissing(version, downloadUnderReservation);
+      if (redownloaded && !redownloaded.completed) return { ...redownloaded, failed: true };
+      if (replacement !== null) version = replacement;
       return yield* installDownloadedUpdate(version, {
         transferHeld: true,
         admission: automaticAdmission?.(version),
@@ -1203,6 +1206,7 @@ export const make = Effect.gen(function* () {
               }).pipe(Effect.map((next) => next.pendingUpdate === pendingUpdate)),
           );
           if (!published) return;
+          yield* downloadedFile.record(info.downloadedFile);
           yield* Ref.set(automaticInstallAttempt, null);
           yield* wakeAutomaticUpdateCoordinator;
           yield* logUpdaterInfo("update downloaded", { version: info.version });
@@ -1436,15 +1440,14 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("desktop.updates.install"),
     ),
     installPrepared: (expectedVersion, options) =>
-      installDownloadedUpdate(expectedVersion, {
-        waitForCheck: options?.waitForCheck,
-        checkWait: options?.checkWait,
-      }).pipe(
-        Effect.flatMap((result) =>
-          Ref.get(updateStateRef).pipe(Effect.map((state) => ({ ...result, state }))),
-        ),
-        Effect.withSpan("desktop.updates.install"),
-      ),
+      downloadedFile
+        .installOrRedownload(
+          expectedVersion,
+          Ref.get(updateStateRef),
+          () => downloadAvailableUpdate(true),
+          () => installDownloadedUpdate(expectedVersion, options),
+        )
+        .pipe(Effect.withSpan("desktop.updates.install")),
   });
 });
 

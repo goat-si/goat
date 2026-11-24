@@ -1,13 +1,16 @@
 import type { DesktopUpdateChannel, DesktopUpdateState } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import type * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import type * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { DesktopUpdateCheckTimeoutError, UPDATE_CHECK_TIMEOUT } from "./updateFailures.ts";
+import { reduceDesktopUpdateStateOnDownloadLost } from "./updateMachine.ts";
 
 export const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(
   Schema.Struct({ percent: Schema.Number }),
@@ -151,6 +154,72 @@ const UpdateInfo = Schema.Struct({
   releaseNotes: Schema.optional(Schema.Unknown),
   releaseName: Schema.optional(Schema.NullOr(Schema.String)),
   releaseDate: Schema.optional(Schema.String),
+  downloadedFile: Schema.optional(Schema.String),
 });
 
 export const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
+
+/** A cache cleaner can delete the archive; Squirrel.Mac would then fail every install attempt. */
+export const makeDownloadedFileTracker = Effect.fn("desktop.updates.makeDownloadedFileTracker")(
+  function* (
+    logWarning: (message: string, data: Record<string, unknown>) => Effect.Effect<void>,
+    updateState: (
+      f: (state: DesktopUpdateState) => DesktopUpdateState,
+    ) => Effect.Effect<DesktopUpdateState>,
+  ) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const downloadedFileRef = yield* Ref.make(Option.none<string>());
+    const redownloadIfMissing = Effect.fn("desktop.updates.redownloadIfMissing")(function* (
+      version: string,
+      redownload: (
+        state: DesktopUpdateState,
+      ) => Effect.Effect<{ readonly accepted: boolean; readonly completed: boolean }>,
+    ) {
+      const file = yield* Ref.get(downloadedFileRef);
+      const missing = Option.isSome(file)
+        ? yield* fileSystem.exists(file.value).pipe(
+            Effect.map((exists) => !exists),
+            Effect.orElseSucceed(() => false),
+          )
+        : false;
+      if (!missing) return null;
+      yield* logWarning("the downloaded update file is gone; downloading it again", {
+        version,
+      });
+      return yield* redownload(yield* updateState(reduceDesktopUpdateStateOnDownloadLost));
+    });
+    const installOrRedownload = Effect.fn("desktop.updates.installOrRedownload")(function* (
+      expectedVersion: string,
+      getState: Effect.Effect<DesktopUpdateState>,
+      redownload: () => Effect.Effect<{
+        readonly accepted: boolean;
+        readonly completed: boolean;
+      }>,
+      install: () => Effect.Effect<{
+        readonly accepted: boolean;
+        readonly completed: boolean;
+        readonly failed: boolean;
+      }>,
+    ) {
+      const state = yield* getState;
+      if (state.downloadedVersion === expectedVersion) {
+        const retried = yield* redownloadIfMissing(expectedVersion, redownload);
+        if (retried && !retried.completed) {
+          return {
+            accepted: retried.accepted,
+            completed: false,
+            failed: retried.accepted,
+            state: yield* getState,
+          };
+        }
+      }
+      const result = yield* install();
+      return { ...result, state: yield* getState };
+    });
+    return {
+      record: (path: string | undefined) => Ref.set(downloadedFileRef, Option.fromNullishOr(path)),
+      redownloadIfMissing,
+      installOrRedownload,
+    };
+  },
+);
