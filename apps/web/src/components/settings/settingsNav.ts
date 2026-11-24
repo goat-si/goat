@@ -90,7 +90,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/scheduled-tasks": { text: "Prompts that run on a schedule." },
   "/settings/hub": {
-    text: "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    text: msg(
+      "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    ),
     related: [
       { label: "Connect your phone", to: "/settings/connections", hash: "hub-device" },
       { label: "OpenCodex Home for Codex", to: "/settings/providers" },
