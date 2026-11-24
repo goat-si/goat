@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import { accessDenied, goatBotRefusedText } from "@goat/client-runtime/goatBot";
@@ -181,6 +182,7 @@ function GoatBotProfileRow({
 
 /** Every GOAT Bot control in one place: where it runs, then the channels that reach it. */
 export function GoatBotSettingsPanel() {
+  const gt = useGT();
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
   const suggestionsHidden = useClientSettings((settings) => settings.goatBotSuggestedHidden);
   return (
@@ -189,13 +191,15 @@ export function GoatBotSettingsPanel() {
       <GoatBotProfileSection />
       <GoatBotSettings />
       <GoatBotAlertSettings />
-      <SettingsSection title="Task threads">
+      <SettingsSection title={gt("Task threads")}>
         <SettingsRow
-          title="Open task threads beside the main chat"
-          description="Show task conversations beside the main chat when there is enough space."
+          title={gt("Open task threads beside the main chat")}
+          description={gt(
+            "Show task conversations beside the main chat when there is enough space.",
+          )}
           control={
             <Switch
-              aria-label="Open task threads beside the main chat"
+              aria-label={gt("Open task threads beside the main chat")}
               checked={besideChat}
               onCheckedChange={(checked) =>
                 void persistClientSettingsPatch({ goatBotTaskThreadsBesideChat: Boolean(checked) })
