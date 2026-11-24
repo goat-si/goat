@@ -81,7 +81,7 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   "/settings/storage": {
     text: "Where worktrees live, when they are cleaned up, and artifacts and logs.",
   },
-  "/settings/archived": { text: "Threads you archived. Restore or delete them here." },
+  "/settings/archived": { text: msg("Threads you archived. Restore or delete them here.") },
   "/settings/goat-bot": {
     text: "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
   },

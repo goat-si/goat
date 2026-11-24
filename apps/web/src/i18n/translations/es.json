@@ -961,5 +961,13 @@
   "1eb63b662c5a7792": "{count} omitidos",
   "bed503fbca6c8735": "Ajustes del proyecto seleccionado.",
   "6d8922544060dd8b": "Mostrar todos los entornos",
-  "65ccf4f8e049003e": "Elige un proyecto para gestionar su nombre, icono, copias de trabajo y acciones."
+  "65ccf4f8e049003e": "Elige un proyecto para gestionar su nombre, icono, copias de trabajo y acciones.",
+  "e1c1511f502b25a3": "Aquí puedes restaurar o eliminar los hilos que archivaste.",
+  "4568f63340b7a586": "Cargando hilos archivados",
+  "3ce9741f164fb944": "No se pudieron cargar los hilos archivados",
+  "ad25ae072f65b934": "No hay hilos archivados",
+  "4e690f420bcbdb5d": "Comprobando los entornos conectados.",
+  "89d08a5be3347890": "Los hilos archivados aparecerán aquí.",
+  "8e944f7583a727fd": "Desarchivar",
+  "da49b8271b9dffa0": "Eliminar"
 }

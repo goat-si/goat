@@ -961,5 +961,13 @@
   "1eb63b662c5a7792": "{count} omitted",
   "bed503fbca6c8735": "Settings for the selected project.",
   "6d8922544060dd8b": "Show all environments",
-  "65ccf4f8e049003e": "Choose a project to manage its name, icon, checkouts and actions."
+  "65ccf4f8e049003e": "Choose a project to manage its name, icon, checkouts and actions.",
+  "e1c1511f502b25a3": "Threads you archived. Restore or delete them here.",
+  "4568f63340b7a586": "Loading archived threads",
+  "3ce9741f164fb944": "Could not load archived threads",
+  "ad25ae072f65b934": "No archived threads",
+  "4e690f420bcbdb5d": "Checking connected environments.",
+  "89d08a5be3347890": "Archived threads will appear here.",
+  "8e944f7583a727fd": "Unarchive",
+  "da49b8271b9dffa0": "Delete"
 }
