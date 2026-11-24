@@ -113,6 +113,7 @@ describe("preview guest input", () => {
       { type: "keyDown", key: "x", text: "x" },
       undefined,
       undefined,
+      undefined,
       () => !released,
     );
     expect(guest.webContents.sendInputEvent).not.toHaveBeenCalled();
@@ -275,6 +276,31 @@ describe("preview guest input", () => {
       "Runtime.evaluate",
       "Runtime.evaluate",
     ]);
+  });
+
+  it("asks before typing into an unfocused guest, once its focus lookup has answered", async () => {
+    const guest = makeGuest({ focused: false });
+    let held = false;
+    const type = () =>
+      sendPageCommand(
+        guest.webContents as unknown as Electron.WebContents,
+        { sendCommand: guest.sendCommand } as unknown as Electron.Debugger,
+        "Input.insertText",
+        { text: "note" },
+        undefined,
+        undefined,
+        () => {
+          if (held) throw new Error("Held");
+        },
+      );
+    const typing = type();
+    // The lookup is on its way; the hold starts before it answers.
+    held = true;
+    await expect(typing).rejects.toThrow("Held");
+    expect(guest.webContents.insertText).not.toHaveBeenCalled();
+    held = false;
+    await type();
+    expect(guest.webContents.insertText).toHaveBeenCalledWith("note");
   });
 });
 

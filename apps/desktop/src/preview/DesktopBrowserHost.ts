@@ -519,8 +519,17 @@ export const make = Effect.gen(function* () {
     // Read when the pointer queue reaches the event: a guest the window shows routes its own input.
     const routeMouse: PointerRoute = (params) =>
       shownTabs.get(keyOf(tab.key)) === true ? Promise.resolve(null) : routeHidden(params);
+    // The annotation overlay lives in the guest and takes any input sent there as the
+    // person's at this window, so relayed input waits until they finish.
+    const annotated = (method: string) =>
+      method.startsWith("Input.") && tab.debuggee.annotating?.() === true;
     const send = async (method: string, params: Record<string, unknown>, sessionId?: string) => {
-      const result = await sendCommand(method, params, sessionId);
+      // Asked again at each dispatch: an annotation can start while the input waits its turn.
+      const refuseAnnotated = () => {
+        if (annotated(method)) throw new Error(ANNOTATING_MESSAGE);
+      };
+      refuseAnnotated();
+      const result = await sendCommand(method, params, sessionId, refuseAnnotated);
       if (method === "Network.clearBrowserCookies") await cookiesCleared?.();
       return result;
     };
@@ -528,6 +537,7 @@ export const make = Effect.gen(function* () {
       method: string,
       params: Record<string, unknown>,
       sessionId?: string,
+      beforeDispatch?: () => void,
     ) => {
       if (method === "Page.reload" && sessionId === undefined) {
         // Embedded guests can acknowledge CDP reload without navigating.
@@ -546,6 +556,7 @@ export const make = Effect.gen(function* () {
           params,
           sessionId,
           routeMouse,
+          beforeDispatch,
           current,
         );
       // Chromium answers with the guest's next frame, and a guest parked outside the window
@@ -559,6 +570,7 @@ export const make = Effect.gen(function* () {
           params,
           sessionId,
           routeMouse,
+          beforeDispatch,
           current,
         );
       } finally {
@@ -578,11 +590,7 @@ export const make = Effect.gen(function* () {
             tab.screencasts.delete(owner);
             syncPainting(tab);
           }
-          // The annotation overlay lives in the guest and takes any input sent there as the
-          // person's at this window, so relayed input waits until they finish.
-          if (method.startsWith("Input.") && tab.debuggee.annotating?.() === true) {
-            return Promise.reject(new Error(ANNOTATING_MESSAGE));
-          }
+          if (annotated(method)) return Promise.reject(new Error(ANNOTATING_MESSAGE));
           // A person's input through a viewer, or Playwright's own housekeeping, is not the agent's.
           if (AGENT_INPUT_METHOD.test(method)) {
             if (owner === undefined || !streamingOwners.has(owner)) {
