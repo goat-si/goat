@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId, ThreadId, type ServerProvider } from "@goat/contracts";
 import { ingestDrops } from "./ingestAllowlist.testkit.ts";
-import { agentToolProperties, handoffSettings, type AgentThread } from "./ProviderDimensions.ts";
+import {
+  type AgentThread,
+  agentToolProperties,
+  handoffSettings,
+  toolOutcome,
+} from "./ProviderDimensions.ts";
 
 const provider = (
   instanceId: string,
@@ -99,4 +104,21 @@ it("reports only properties GOAT's ingest stores for mcp.tool.invoked", () => {
     }).map((properties) => ({ event: "mcp.tool.invoked", properties })),
   );
   expect(ingestDrops(recorded)).toEqual([]);
+});
+
+it("reports only identifier-shaped failure codes and known delivery values", () => {
+  expect(toolOutcome({ isError: true, structuredContent: { code: "thread_not_found" } })).toEqual({
+    outcome: "error",
+    errorCode: "thread_not_found",
+  });
+  expect(
+    toolOutcome({
+      isError: true,
+      structuredContent: { code: "ENOENT: no such file '/Users/julius/secret'" },
+    }),
+  ).toEqual({ outcome: "error", errorCode: "unknown" });
+  expect(handoffSettings("goat_thread_send", {}, { delivery: "queued" })).toEqual({
+    delivery: "queued",
+  });
+  expect(handoffSettings("goat_thread_send", {}, { delivery: "/Users/julius" })).toEqual({});
 });
