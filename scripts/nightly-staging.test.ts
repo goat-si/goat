@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
-import { makeGitHubReleasesClient } from "./lib/github-releases.ts";
+import { GitHubReleaseError, makeGitHubReleasesClient } from "./lib/github-releases.ts";
 import {
   cleanupStaging,
   getHandoffs,
@@ -192,6 +192,43 @@ describe("nightly staging hand-off", () => {
         NodeFS.readFileSync(NodePath.join(dest, "desktop/dist-electron/main.js"), "utf8"),
       ).toBe("main");
       expect(NodeFS.existsSync(NodePath.join(dest, "other"))).toBe(false);
+    }),
+  );
+
+  it.effect("propagates a concurrent download failure before and after a written batch", () =>
+    Effect.gen(function* () {
+      const github = fakeGitHub();
+      const client = yield* clientFor(github.fetch);
+      const source = tempDir();
+      writeTree(source, { "payload.txt": "x".repeat(5000) });
+      const manifest = yield* putHandoff(client, {
+        tag,
+        target: sha,
+        name: "failure",
+        dir: source,
+        paths: [],
+        partBytes: 1024,
+      });
+      expect(manifest.parts.length).toBeGreaterThan(3);
+      const assets = draftOf(github, "failure").assets;
+      for (const offset of [0, 2]) {
+        const siblingStarted = yield* Deferred.make<void>();
+        const failedId = assets[offset]!.id;
+        const siblingId = assets[offset + 1]!.id;
+        const downloadAsset = Effect.fn(function* (id: number) {
+          if (id === failedId) {
+            yield* Deferred.await(siblingStarted);
+            return yield* new GitHubReleaseError({ message: "injected download failure" });
+          }
+          if (id === siblingId) yield* Deferred.succeed(siblingStarted, undefined);
+          return yield* client.downloadAsset(id);
+        });
+        const error = yield* getHandoffs(
+          { ...client, downloadAsset },
+          { tag, names: ["failure"], dir: tempDir() },
+        ).pipe(Effect.flip);
+        expect(error.message).toContain("injected download failure");
+      }
     }),
   );
 
