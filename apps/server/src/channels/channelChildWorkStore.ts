@@ -10,6 +10,8 @@
  */
 import {
   ChannelChildWork,
+  ChannelDeliverables,
+  requiredDeliverableRequestKey,
   type ChannelChildWorkDestination,
   type ChannelChildWorkId,
   type ChannelChildWorkState,
@@ -19,6 +21,7 @@ import {
   localChildThreadId,
   type ThreadId,
 } from "@goat/contracts";
+import { childWorkIdFor } from "./channelIds.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -43,6 +46,7 @@ const toStoreError =
       cause,
     });
 
+const decodeDeliverables = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelDeliverables));
 const encode = Schema.encodeSync(Schema.fromJsonString(ChannelChildWork));
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
 
@@ -90,6 +94,7 @@ function fillAcknowledgedDestination(
 export type ChannelChildWorkAdmitResult =
   | { readonly _tag: "admitted" }
   | { readonly _tag: "at_capacity" }
+  | { readonly _tag: "invalid_deliverable"; readonly detail: string }
   | { readonly _tag: "existing"; readonly record: ChannelChildWork }
   /** The owning task finished or a retry moved it to another generation. */
   | { readonly _tag: "owner_settled" };
@@ -240,12 +245,52 @@ const make = Effect.gen(function* () {
             SELECT value_json FROM channel_runtime_state
             WHERE key = ${keyFor(record.taskId, record.childWorkId)}
           `;
-          if (existing[0] !== undefined) {
-            return {
-              _tag: "existing",
-              record: decode(existing[0].value_json),
-            } as const satisfies ChannelChildWorkAdmitResult;
+          const prior = existing[0] === undefined ? undefined : decode(existing[0].value_json);
+          if (record.requestKey.startsWith("required:")) {
+            const plans = yield* sql<{ readonly items: string | null }>`
+              SELECT json_extract(task_json, '$.requiredDeliverables') AS items
+              FROM channel_tasks WHERE task_id = ${record.taskId} AND generation = ${record.generation}
+                AND status NOT IN ('completed','failed','cancelled')
+            `;
+            const items = plans[0]?.items;
+            const item =
+              items == null
+                ? undefined
+                : decodeDeliverables(items).find(
+                    (entry) =>
+                      requiredDeliverableRequestKey(entry.id, entry.attempt) === record.requestKey,
+                  );
+            if (!isDelegateSurface(record.surface) || !item || item.review)
+              return {
+                _tag: "invalid_deliverable",
+                detail:
+                  "This delegate does not match an open required item and its current attempt.",
+              } as const;
+            const previous =
+              item.attempt > 1
+                ? yield* get(
+                    record.taskId,
+                    childWorkIdFor(
+                      record.taskId,
+                      record.generation,
+                      requiredDeliverableRequestKey(item.id, item.attempt - 1),
+                    ),
+                  )
+                : prior;
+            if (
+              (item.attempt > 1 || prior) &&
+              (!previous ||
+                !previous.launchDigest ||
+                record.launchDigest !== previous.launchDigest ||
+                previous.promptDigest !== record.promptDigest)
+            )
+              return {
+                _tag: "invalid_deliverable",
+                detail:
+                  "Retry the required item with its original task, destination, and launch options.",
+              } as const;
           }
+          if (prior) return { _tag: "existing", record: prior } as const;
           // Checked in this write so a retry and an admission are ordered: either the retry sees
           // this record, or this admission sees the task at its next generation.
           const owners = yield* sql<{ readonly generation: number }>`

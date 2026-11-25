@@ -85,6 +85,7 @@ export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkEr
       "depth_exceeded",
       "owner_terminal",
       "run_not_attributable",
+      "invalid_deliverable",
       "storage",
     ]),
     detail: Schema.String,
@@ -152,6 +153,7 @@ export class ChannelChildWork extends Context.Service<
       readonly prompt: string;
       /** The launch target's canonical parts: host, cwd/workspace, model. */
       readonly destinationKey: string;
+      readonly launchOptions?: string | undefined;
       readonly destinationHint?: string | undefined;
       readonly clientRequestId?: string | undefined;
     }) => Effect.Effect<ChannelChildWorkAdmission, ChannelChildWorkError>;
@@ -337,6 +339,7 @@ const make = Effect.gen(function* () {
     readonly surface: ChannelChildWorkSurface;
     readonly prompt: string;
     readonly destinationKey: string;
+    readonly launchOptions?: string | undefined;
     readonly destinationHint?: string | undefined;
     readonly clientRequestId?: string | undefined;
   }) {
@@ -396,6 +399,13 @@ const make = Effect.gen(function* () {
       ...(input.callerRunId === undefined ? {} : { callerRunId: input.callerRunId }),
       requestKey,
       promptDigest,
+      ...(requestKey.startsWith("required:")
+        ? {
+            launchDigest: childWorkPromptDigestFor(
+              JSON.stringify([input.surface, input.destinationKey, input.launchOptions]),
+            ),
+          }
+        : {}),
       ...(input.destinationHint === undefined ? {} : { destinationHint: input.destinationHint }),
       state: "reserved",
       createdAt: now,
@@ -411,6 +421,11 @@ const make = Effect.gen(function* () {
         detail: "This work finished or was retried, so it no longer launches subagents or threads.",
       });
     }
+    if (result._tag === "invalid_deliverable")
+      return yield* new ChannelChildWorkError({
+        reason: "invalid_deliverable",
+        detail: result.detail,
+      });
     if (result._tag === "at_capacity") {
       return yield* new ChannelChildWorkError({
         reason: "at_capacity",
@@ -424,10 +439,14 @@ const make = Effect.gen(function* () {
       return {
         _tag: "existing",
         record: result.record,
-        requestKey,
+        requestKey: requestKey.startsWith("required:") ? record.childWorkId : requestKey,
       } as const satisfies ChannelChildWorkAdmission;
     }
-    return { _tag: "admitted", record, requestKey } as const satisfies ChannelChildWorkAdmission;
+    return {
+      _tag: "admitted",
+      record,
+      requestKey: requestKey.startsWith("required:") ? record.childWorkId : requestKey,
+    } as const satisfies ChannelChildWorkAdmission;
   });
 
   /** Compare-and-set; false when another writer moved the record first or the write failed. */
