@@ -1,3 +1,4 @@
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -164,6 +165,9 @@ it.effect.each([
           }),
           Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
             publish: (event) => Effect.succeed({ ...event, sequence: 1 }),
+          }),
+          Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+            shouldRunHostWork: Effect.succeed(true),
           }),
           Layer.mock(ServerSettings.ServerSettingsService)({
             start: Deferred.succeed(settingsHeld, undefined).pipe(
