@@ -1,8 +1,10 @@
-import type {
-  OrchestrationV2ContextHandoff,
-  OrchestrationV2ProviderThread,
-  ThreadId,
-  TurnItemId,
+import {
+  isCompactionCommandMessage,
+  parseGoalCommand,
+  type OrchestrationV2ContextHandoff,
+  type OrchestrationV2ProviderThread,
+  type ThreadId,
+  type TurnItemId,
 } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ContextHandoffBudgetError } from "@goat/provider-core/server/failure";
@@ -32,14 +34,15 @@ export interface ReplayedHandoffInput {
   readonly runOrdinal: number;
 }
 
-// A command name, never a path: "/README.md explain" and "/tmp inspect" are ordinary prompts.
-const SLASH_COMMAND =
-  /^\s*\/(?!(?:tmp|usr|var|etc|opt|home|root|srv|mnt|dev|proc|bin|sbin|lib|nix|private|Users|Volumes|Applications|Library|System)(?:\s|$))[A-Za-z][\w:-]*(?:\s|$)/u;
-
+// Only commands GOAT itself recognizes defer pending context. A provider command and a
+// path-led prompt ("/data inspect this") look alike without the provider's command list.
 export const isSlashCommandMessage = (message: {
   readonly role: string;
   readonly text: string;
-}): boolean => message.role === "user" && SLASH_COMMAND.test(message.text);
+  readonly attachments?: ReadonlyArray<unknown> | undefined;
+}): boolean =>
+  message.role === "user" &&
+  (isCompactionCommandMessage(message) || parseGoalCommand(message) !== null);
 
 /** Persist around injection; ambiguous delivery requires a fresh native thread. Call unsent if refused before prompt consumption. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(

@@ -5,7 +5,7 @@ import { expect } from "vite-plus/test";
 import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
 import { selectSideChatHandoffs } from "./SideChatHandoffSelection.ts";
 
-it.effect.each(["/review", "/compact"])(
+it.effect.each(["/goal ship it", "/compact"])(
   "regression: a side chat's parent context deferred by %s reaches the next turn",
   (command) =>
     Effect.gen(function* () {

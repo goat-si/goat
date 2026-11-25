@@ -25,14 +25,16 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const GROK_DRIVER = ProviderDriverKind.make("acp");
 
 it.live.each([
-  { name: "a slash command", text: "/implement do X", verbatim: true },
+  { name: "a goal command", text: "/goal do X", verbatim: true },
+  // GOAT cannot tell a provider command from a path without the provider's command list.
+  { name: "a provider command", text: "/implement do X", verbatim: false },
   { name: "a message opening with a path", text: "/usr/lib/foo is broken", verbatim: false },
 ] as const)(
   "a switched ACP provider gets $name with the handoff where the command allows it",
   ({ text: firstMessage, verbatim }) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace(`slash-command-handoff-${verbatim}`);
+        const cwd = yield* checkpointWorkspace(`slash-command-handoff-${firstMessage.length}`);
         const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
         const originalPrompt = "Keep the release marker violet and preserve the existing API.";
         const codexResponse = "I checked the API and found the release configuration.";

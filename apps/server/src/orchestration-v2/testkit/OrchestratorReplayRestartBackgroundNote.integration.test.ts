@@ -303,7 +303,7 @@ describe("restart-cancelled background work", () => {
   it.effect("sends a slash command verbatim and tells the next user turn instead", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const slashCommand = "/review the diff";
+        const slashCommand = "/goal review the diff";
         const projection = yield* runRestart({
           resumedPrompts: [slashCommand, `${NOTE}\n\nUser message:\n${SECOND_AFTER_RESTART}`],
           userMessagesAfterRestart: [slashCommand, SECOND_AFTER_RESTART],
