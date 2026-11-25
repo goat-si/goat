@@ -2,8 +2,6 @@ import Constants from "expo-constants";
 import { type ReleaseChannel, releaseResourceAttributes } from "@goat/shared/releaseResource";
 import * as RelayTracing from "@goat/shared/relayTracing";
 
-import { hasTracingPublicConfig, resolveCloudPublicConfig } from "../cloud/publicConfig";
-
 export interface TracingConfig {
   readonly tracesUrl: string;
   readonly tracesDataset: string;
@@ -22,15 +20,6 @@ const RELEASE_CHANNEL_BY_VARIANT: Readonly<Record<string, ReleaseChannel | undef
   production: "stable",
 };
 
-export function resolveTracingConfig(): TracingConfig | null {
-  const config = resolveCloudPublicConfig();
-  if (!hasTracingPublicConfig(config)) {
-    return null;
-  }
-  const { tracesUrl, tracesDataset, tracesToken } = config.observability;
-  return { tracesUrl, tracesDataset, tracesToken };
-}
-
 export function layerFromConfig(config: TracingConfig | null, resource: TracingResource) {
   const channel =
     typeof __DEV__ !== "undefined" && __DEV__
@@ -46,7 +35,8 @@ export function layerFromConfig(config: TracingConfig | null, resource: TracingR
   });
 }
 
-export const layer = layerFromConfig(resolveTracingConfig(), {
+// Relay spans leave the device, and the app has no way to opt in to them, so it exports none.
+export const layer = layerFromConfig(null, {
   serviceVersion: Constants.expoConfig?.version,
   serviceInstanceId: Constants.sessionId,
   appVariant:

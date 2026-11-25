@@ -86,24 +86,6 @@ export function hasCloudPublicConfig(): boolean {
   return Boolean(config.clerk.publishableKey && config.relay.url);
 }
 
-type Configured<T> = {
-  readonly [Key in keyof T]: NonNullable<T[Key]>;
-};
-
-type TracingPublicConfig = Omit<CloudPublicConfig, "observability"> & {
-  readonly observability: Configured<CloudPublicConfig["observability"]>;
-};
-
-export function hasTracingPublicConfig(
-  config: CloudPublicConfig = resolveCloudPublicConfig(),
-): config is TracingPublicConfig {
-  return Boolean(
-    config.observability.tracesUrl &&
-    config.observability.tracesDataset &&
-    config.observability.tracesToken,
-  );
-}
-
 export function resolveRelayClerkTokenOptions() {
   if (!hasCloudPublicConfig())
     throw new CloudPublicConfigMissingError({ key: "GOAT_CLERK_PUBLISHABLE_KEY" });
