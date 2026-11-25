@@ -196,6 +196,57 @@ function setup() {
   state.session.mockClear();
 }
 
+it("shows one accepted result while the failed Linux check still needs work", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Release check",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row },
+      codingRows: [],
+      remoteWork: [],
+      partial: false,
+      launchesTruncated: false,
+      requiredDeliverables: [
+        {
+          id: "mac",
+          criterion: "Launch the Mac build",
+          state: "accepted",
+          attempt: 1,
+          evidence: "Window opened",
+        },
+        {
+          id: "linux",
+          criterion: "Run Linux smoke tests",
+          state: "failed",
+          attempt: 2,
+          host: "linux-runner",
+        },
+      ],
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("1/2", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Window opened")).toBeVisible();
+  await expect.element(screen.getByText("Run Linux smoke tests")).toBeVisible();
+  await expect.element(screen.getByText("Attempt 2")).toBeVisible();
+  await expect.element(screen.getByText("Worker on linux-runner")).toBeVisible();
+});
+
 const decodeProfile = Schema.decodeSync(BotProfile);
 
 it("looks up an older task on a capable server and shows its actions", async () => {

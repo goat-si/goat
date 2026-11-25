@@ -8,6 +8,8 @@ type Props = Record<string, unknown> & { children?: ReactNode };
 const spoken = vi.hoisted(() => ({ lines: [] as string[] }));
 vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
 const platform = vi.hoisted(() => ({ OS: "ios" }));
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
+
 vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
   Platform: platform,
@@ -597,4 +599,48 @@ it("keeps every listed worker when Activity arrives with capped worker details",
     [...container.querySelectorAll("button")].filter((item) => item.textContent === "Remote work"),
   ).toHaveLength(21);
   await act(async () => root.unmount());
+});
+
+it("counts only accepted required results and hides the previous generation's checklist", async () => {
+  const work = result(
+    { state: "known", row: knownTask.row },
+    {
+      requiredDeliverables: [
+        {
+          id: "mac",
+          criterion: "Launch the Mac build",
+          state: "accepted",
+          attempt: 1,
+          evidence: "Window opened",
+        },
+        {
+          id: "linux",
+          criterion: "Run Linux smoke tests",
+          state: "awaiting_acceptance",
+          attempt: 1,
+        },
+      ],
+    },
+  );
+  const lookup = { state: "known" as const, task: knownTask, result: work };
+  const root = await render(lookup);
+  try {
+    expect(text()).toContain("1/2");
+    expect(text()).toContain("Window opened");
+    expect(text()).toContain("Awaiting acceptance");
+  } finally {
+    await act(() => root.unmount());
+  }
+
+  const retried = {
+    ...knownTask,
+    row: { ...knownTask.row, task: { ...knownTask.row.task, generation: 2 } },
+  };
+  const next = await render(lookup, true, null, new Map(), undefined, retried);
+  try {
+    expect(text()).not.toContain("Window opened");
+    expect(text()).not.toContain("Required results accepted");
+  } finally {
+    await act(() => next.unmount());
+  }
 });

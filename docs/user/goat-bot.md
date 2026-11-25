@@ -211,6 +211,19 @@ On web and desktop, open **Deliveries** on the trigger under **Home → Routines
 unsigned, duplicate, and own-work events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
 them in the trigger. You can pause or resume a configured trigger on mobile.
 
+### Required results
+
+For work with multiple required outputs, tell the bot what would count as success on each machine.
+For example, ask it to launch a Mac build and run the Linux regression suite, and to report success
+only after the window opens and the tests pass. When the bot declares those two results before
+dispatch, the task details on web, desktop and mobile show both criteria and the number accepted.
+
+A worker can finish its run while its result still awaits acceptance. The coordinating bot checks
+the report against the criterion and records its evidence. If the Mac build is accepted and Linux
+fails, the count stays at **1/2**. While the parent task is active, the bot can retry the Linux item
+on its original target and keep the Mac evidence. The count reaches **2/2** when the bot accepts
+the new Linux result. A late report from the first Linux attempt cannot satisfy the retry.
+
 ## Going back to an older GOAT
 
 Once you save a work trigger, older GOAT versions that cannot check its dispatch grant refuse to

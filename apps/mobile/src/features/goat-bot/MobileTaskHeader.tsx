@@ -18,6 +18,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { useGT } from "../../i18n/I18nProvider";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotTaskActivity } from "./mobileBotWorkDetails";
+import { MobileRequiredResults } from "./MobileRequiredResults";
 import { MobileTaskActions } from "./MobileTaskActions";
 import {
   mobileBotTaskStatus,
@@ -157,6 +158,10 @@ export function MobileTaskHeader(props: {
             : gt("Worker report missing")}
         </Text>
       )}
+      <MobileRequiredResults
+        work={props.screen.listedDetails ?? result}
+        task={task?.row.task ?? unavailable?.task.task}
+      />
       {result?.activity && <MobileBotTaskActivity work={result} />}
       {!props.enabled ? (
         <Text className="text-foreground-muted">

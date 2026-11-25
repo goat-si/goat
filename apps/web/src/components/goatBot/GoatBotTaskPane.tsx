@@ -5,6 +5,7 @@ import {
   botTaskWait,
   botTaskAttemptEvidence,
   canSendToGoatBot,
+  currentRequiredResults,
   goatBotOpenQuestionPlaceholder,
   goatBotTaskWait,
   isRetryableTaskStatus,
@@ -21,6 +22,7 @@ import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useResizableWidth, RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
+import { GoatBotRequiredResults } from "./GoatBotRequiredResults";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
@@ -127,6 +129,7 @@ export function GoatBotTaskPane({
       if (sent !== undefined) finish(sent);
     },
   });
+  const requiredResults = currentRequiredResults(lookup.value, taskSummary);
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   // A draft belongs to the task and bot it was written for; opening another one empties the box.
@@ -377,6 +380,7 @@ export function GoatBotTaskPane({
           </Button>
         </div>
       )}
+      {requiredResults && <GoatBotRequiredResults progress={requiredResults} />}
       {lookup.value?.activity && <GoatBotTaskActivity work={lookup.value} />}
       {task !== undefined && listedTask !== undefined && (
         <div className="px-3">
