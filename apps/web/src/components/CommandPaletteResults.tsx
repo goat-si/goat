@@ -1,4 +1,5 @@
 import { startPaletteThreadDrag } from "./CommandPalette.drag";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { type ResolvedKeybindingsConfig } from "@goat/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { ChevronRightIcon } from "~/components/solar";
@@ -107,6 +108,20 @@ export function scrollCommandPaletteRowIntoView(
   void list?.scrollIndexIntoView?.({ index: rowIndex, animated: false });
 }
 
+// Keeps a mounted row's old data when it shows the same item, so typing re-renders only the
+// rows whose item or position changed.
+function commandPaletteRowsAreEqual(previous: CommandPaletteRow, next: CommandPaletteRow) {
+  if (previous.kind === "label" || next.kind === "label") {
+    return (
+      previous.kind === "label" &&
+      next.kind === "label" &&
+      previous.label === next.label &&
+      previous.first === next.first
+    );
+  }
+  return previous.item === next.item && previous.itemIndex === next.itemIndex;
+}
+
 interface CommandPaletteVirtualizedResultsProps extends Omit<CommandPaletteResultsProps, "groups"> {
   rows: ReadonlyArray<CommandPaletteRow>;
   listRef: RefObject<LegendListRef | null>;
@@ -116,6 +131,9 @@ interface CommandPaletteVirtualizedResultsProps extends Omit<CommandPaletteResul
  * unmounted rows. */
 export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualizedResultsProps) {
   const { listRef } = props;
+  // The palette rebuilds its handler every render; a stable one keeps rows from re-rendering.
+  const onExecuteItem = useStableCallback(props.onExecuteItem);
+  const onDragStart = useStableCallback(() => props.onDragStart?.());
   const [scrollFade, setScrollFade] = useState({ top: false, bottom: false });
   const updateScrollFade = () => {
     const scrollElement = listRef.current?.getScrollableNode?.();
@@ -126,6 +144,11 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
     setScrollFade((current) =>
       current.top === top && current.bottom === bottom ? current : { top, bottom },
     );
+  };
+  // Kept rows re-render only when this changes, so it holds everything rows read besides their item.
+  const rowInputs = {
+    highlightedItemValue: props.highlightedItemValue,
+    keybindings: props.keybindings,
   };
 
   if (props.rows.length === 0) {
@@ -143,8 +166,9 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
         ref={listRef}
         data={props.rows}
         keyExtractor={(row) => row.key}
+        itemsAreEqual={commandPaletteRowsAreEqual}
         getItemType={(row) => row.kind}
-        extraData={props.highlightedItemValue}
+        extraData={rowInputs}
         renderItem={({ item: row }) =>
           row.kind === "label" ? (
             <div className={row.first ? undefined : "pt-1.5"}>
@@ -163,8 +187,8 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
               item={row.item}
               keybindings={props.keybindings}
               isActive={props.highlightedItemValue === row.item.value}
-              onExecuteItem={props.onExecuteItem}
-              onDragStart={props.onDragStart}
+              onExecuteItem={onExecuteItem}
+              onDragStart={props.onDragStart ? onDragStart : undefined}
             />
           )
         }

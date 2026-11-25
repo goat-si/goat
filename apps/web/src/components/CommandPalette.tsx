@@ -188,7 +188,6 @@ import {
 } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useAvailableSettingsSearchItems } from "./settings/useAvailableSettingsSearchItems";
 import {
   applyWslEnvironmentConfiguration,
   parseWslUncPath,
@@ -258,7 +257,10 @@ import {
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
 import { CommandPaletteProjectSummaries } from "./CommandPaletteProjectSummaries";
-import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
+import {
+  CommandPaletteThreadQueryContext,
+  useCommandPaletteThreadItems,
+} from "./CommandPaletteThreadItems";
 import {
   APPEARANCE_OPTIONS,
   notifyThemeSaveFailure,
@@ -502,7 +504,7 @@ function OpenCommandPaletteDialog(props: {
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
   const goatBots = useGoatBotPaletteBots();
   const goatBotNewBot = useGoatBotPaletteNewBot(props.openTemplates);
-  const availableSettingsSearchItems = useAvailableSettingsSearchItems();
+  const settingsSearchItems = useCommandPaletteSettingsItems(deferredQuery.trim().length > 0);
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useProjects();
@@ -1766,10 +1768,6 @@ function OpenCommandPaletteDialog(props: {
     });
   }
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
-  const settingsSearchItems = useCommandPaletteSettingsItems(
-    availableSettingsSearchItems,
-    pathname,
-  );
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
@@ -3006,36 +3004,39 @@ function OpenCommandPaletteDialog(props: {
         </div>
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
-      <CommandPaletteVirtualizedResults
-        searchFailed={isThreadSearchFailed}
-        onDragStart={() => props.setOpen(false)}
-        rows={resultRows.rows}
-        listRef={resultListRef}
-        highlightedItemValue={highlightedItemValue}
-        isActionsOnly={isActionsOnly}
-        keybindings={keybindings}
-        onExecuteItem={executeItem}
-        {...(addProjectCloneFlow?.step === "repository"
-          ? {
-              emptyStateMessage:
-                addProjectCloneFlow.source === "url"
-                  ? "Enter a Git clone URL and press Enter to continue."
-                  : "Enter a repository path and press Enter to look it up.",
-            }
-          : addProjectCloneFlow?.step === "confirm"
-            ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-            : relativePathNeedsActiveProject
-              ? { emptyStateMessage: "Relative paths require an active project." }
-              : willCreateProjectPath
-                ? {
-                    emptyStateMessage: "Press Enter to create this folder and add it as a project.",
-                  }
-                : isThreadSearchPending
-                  ? { emptyStateMessage: "Searching thread messages…" }
-                  : isThreadSearchFailed
-                    ? { emptyStateMessage: "Couldn't search thread messages." }
-                    : {})}
-      />
+      <CommandPaletteThreadQueryContext value={threadSearchQuery}>
+        <CommandPaletteVirtualizedResults
+          searchFailed={isThreadSearchFailed}
+          onDragStart={() => props.setOpen(false)}
+          rows={resultRows.rows}
+          listRef={resultListRef}
+          highlightedItemValue={highlightedItemValue}
+          isActionsOnly={isActionsOnly}
+          keybindings={keybindings}
+          onExecuteItem={executeItem}
+          {...(addProjectCloneFlow?.step === "repository"
+            ? {
+                emptyStateMessage:
+                  addProjectCloneFlow.source === "url"
+                    ? "Enter a Git clone URL and press Enter to continue."
+                    : "Enter a repository path and press Enter to look it up.",
+              }
+            : addProjectCloneFlow?.step === "confirm"
+              ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
+              : relativePathNeedsActiveProject
+                ? { emptyStateMessage: "Relative paths require an active project." }
+                : willCreateProjectPath
+                  ? {
+                      emptyStateMessage:
+                        "Press Enter to create this folder and add it as a project.",
+                    }
+                  : isThreadSearchPending
+                    ? { emptyStateMessage: "Searching thread messages…" }
+                    : isThreadSearchFailed
+                      ? { emptyStateMessage: "Couldn't search thread messages." }
+                      : {})}
+        />
+      </CommandPaletteThreadQueryContext>
     </CommandPaletteContent>
   );
 }
