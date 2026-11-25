@@ -53,6 +53,7 @@ vi.mock("./useDirectoryEntries", () => ({
     entries: browser.entries,
     load: browser.load,
     refresh: vi.fn(),
+    revalidate: vi.fn(),
     ready: true,
     error: null,
     isPending: false,

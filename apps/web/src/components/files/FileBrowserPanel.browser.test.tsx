@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
   menu: vi.fn(),
   loads: [] as string[],
+  revalidate: vi.fn<(directoryPath: string) => void>(),
   largeListing: false,
   listing: null as ProjectEntry[] | null,
   keybindings: [] as typeof DEFAULT_RESOLVED_KEYBINDINGS,
@@ -95,6 +96,7 @@ vi.mock("./useDirectoryEntries", async () => {
         entries: state.listing ?? entries,
         load,
         refresh: vi.fn(),
+        revalidate: state.revalidate,
         ready: true,
         error: null,
         isPending: false,
@@ -122,6 +124,7 @@ function setup(customRules: KeybindingRule[] = []) {
   state.toast.mockClear();
   state.menu.mockReset();
   state.loads.length = 0;
+  state.revalidate.mockClear();
   state.largeListing = false;
   state.listing = null;
 }
@@ -584,6 +587,11 @@ describe("file viewer path copy shortcuts", () => {
     await using second = await renderPanel({ cwd: "/repo-expansion-test" });
     const folder = await row(second.container, "src/");
     await vi.waitFor(() => expect(folder.getAttribute("aria-expanded")).toBe("true"));
+
+    // Refresh revalidates the folders behind the rows on screen: the open one and the root.
+    state.revalidate.mockClear();
+    await userEvent.click(second.getByRole("button", { name: "Refresh workspace files" }));
+    expect(state.revalidate.mock.calls).toEqual([["src"], [""]]);
   });
 
   it("opens collapsed when the stored folders cannot be read, and expands when they cannot be saved", async () => {

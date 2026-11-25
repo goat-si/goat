@@ -73,6 +73,7 @@ vi.mock("./useDirectoryEntries", async () => {
         entries,
         load,
         refresh: vi.fn(),
+        revalidate: vi.fn(),
         ready: true,
         error: null,
         isPending: false,
