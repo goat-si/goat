@@ -16,6 +16,7 @@ import type {
   PullRequestRef,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
+  ScopedThreadRef,
 } from "@goat/contracts";
 import {
   ChevronDownIcon,
@@ -147,6 +148,7 @@ export interface PullRequestAgentSelectionInput {
 function PullRequestCodeTab({
   scrollerRef,
   environmentId,
+  threadRef = null,
   reference,
   detail,
   selectedCommitOid,
@@ -165,6 +167,7 @@ function PullRequestCodeTab({
 }: {
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
+  threadRef?: ScopedThreadRef | null;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
   selectedCommitOid: string | null;
@@ -1291,22 +1294,18 @@ function PullRequestCodeTab({
   if (diffQuery.isPending && loadedSlices.length === 0) {
     return withToolbar(<DiffPanelLoadingState label={`Loading ${term} diff...`} />);
   }
-
   if (diffQuery.error && loadedSlices.length === 0) {
     return withToolbar(
       <PullRequestDiffUnavailableState
         error={diffQuery.error}
         provider={detail.provider}
         url={detail.url}
+        threadRef={threadRef}
         onRetry={() => diffQuery.refresh()}
       />,
     );
   }
-
-  if (rawSlicesView !== null) {
-    return withToolbar(rawSlicesView);
-  }
-
+  if (rawSlicesView !== null) return withToolbar(rawSlicesView);
   if (items.length === 0 && nextCursor === null) {
     if (hiddenTestFilesLabel !== null && files.length === 0) {
       return withToolbar(

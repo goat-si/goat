@@ -1498,7 +1498,6 @@ export function PullRequestDetailPanel({
             ) : null}
           </div>
         </div>
-
         {detail ? (
           <PullRequestDetailTabBar
             tabs={visibleTabs}
@@ -1611,7 +1610,6 @@ export function PullRequestDetailPanel({
           </PullRequestDetailTabBar>
         ) : null}
       </div>
-
       <div
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         onScrollCapture={(event) => {
@@ -1647,6 +1645,7 @@ export function PullRequestDetailPanel({
               ? {
                   host: {
                     url: unavailableHostUrl,
+                    threadRef,
                     openLabel: openOnHostLabel(
                       sourceControlClients.get(repositoryIdentity?.provider),
                     ),
@@ -1750,6 +1749,7 @@ export function PullRequestDetailPanel({
                     scrollerRef={scrollerRefs.code}
                     onAddToAgentSelection={addSelectionToAgent}
                     environmentId={environmentId}
+                    threadRef={threadRef}
                     reference={reference}
                     detail={detail}
                     selectedCommitOid={selectedCodeCommitOid}
@@ -1771,7 +1771,6 @@ export function PullRequestDetailPanel({
           </PullRequestMarkdownContext>
         ) : null}
       </div>
-
       {detail ? (
         <div className="absolute right-4 bottom-3 z-20">
           <PullRequestComposer
