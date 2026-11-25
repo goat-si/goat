@@ -1,10 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { FetchHttpClient } from "effect/http";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
 
-import { RelayClientTracer, withLocalTracing, withRelayClientTracing } from "./relayTracing.ts";
+import {
+  layer,
+  RelayClientTracer,
+  withLocalTracing,
+  withRelayClientTracing,
+} from "./relayTracing.ts";
 
 function collectingTracer(spans: Array<string>): Tracer.Tracer {
   return Tracer.make({
@@ -71,6 +79,38 @@ describe("withLocalTracing", () => {
       ]);
       expect(localSpans).toEqual(["sql.execute", "ServerSecretStore.get"]);
     }),
+  );
+});
+
+it.effect("relay exports leave out the operator's own resource attributes", () => {
+  const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
+  return Effect.void.pipe(
+    Effect.withSpan("relay.connection.attempt"),
+    withRelayClientTracing,
+    Layer.effectDiscard,
+    Layer.provide(
+      layer(
+        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
+        { serviceName: "goat-test", runtime: "node", serviceInstanceId: "id", client: "test" },
+      ),
+    ),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)),
+    Layer.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromEnvRecord({ OTEL_RESOURCE_ATTRIBUTES: "host.name=private-host" }),
+      ),
+    ),
+    Layer.build,
+    Effect.scoped,
+    Effect.andThen(
+      Effect.sync(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+        const sent = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
+        expect(sent).toContain("relay.connection.attempt");
+        expect(sent).not.toContain("private-host");
+      }),
+    ),
   );
 });
 
