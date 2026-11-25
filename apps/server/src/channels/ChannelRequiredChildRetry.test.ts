@@ -9,11 +9,14 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
-import { retryRequiredDeliverable } from "./channelDeliverableRetry.ts";
 import {
+  confirmRequiredChildStopped,
+  retryRequiredDeliverable,
+} from "./channelDeliverableRetry.ts";
+import {
+  NOW,
   admit,
   childThread,
-  isChildWorkError,
   makeLayer,
   move,
   seedWorker,
@@ -38,12 +41,73 @@ const seedPlan = (taskId: ChannelTaskId, items: ReadonlyArray<ChannelDeliverable
   });
 
 describe("retrying a required worker", () => {
-  it.effect("refuses a required attempt that the parent never declared", () =>
+  it.effect("preserves arbitrary request keys and their replay on an unplanned task", () =>
     Effect.gen(function* () {
       yield* seedWorker;
-      const failure = yield* delegate(1).pipe(Effect.flip);
-      assert.isTrue(isChildWorkError(failure));
-      assert.strictEqual(failure.reason, "invalid_deliverable");
+      for (const clientRequestId of ["required:custom", key(mac.id, 1)]) {
+        const first = yield* admit("Build.", { clientRequestId });
+        const replay = yield* admit("Build.", { clientRequestId });
+        if (first._tag !== "admitted" || replay._tag !== "existing")
+          return yield* Effect.die("expected an idempotent ordinary delegate");
+        assert.strictEqual(first.requestKey, clientRequestId);
+        assert.strictEqual(first.record.launchDigest, undefined);
+        assert.strictEqual(replay.requestKey, clientRequestId);
+        assert.strictEqual(replay.record.childWorkId, first.record.childWorkId);
+      }
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect("refuses unbound local and remote delegates before reserving a worker", () =>
+    Effect.gen(function* () {
+      const task = yield* seedWorker;
+      yield* seedPlan(task, [mac, linux]);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      for (const surface of ["delegate_local", "delegate_remote"] as const) {
+        for (const clientRequestId of [undefined, "rehearsal-linux-1", "required:missing:1"]) {
+          const options =
+            clientRequestId === undefined ? { surface } : { surface, clientRequestId };
+          const error = yield* admit("Run tests.", options).pipe(Effect.flip);
+          assert.strictEqual(error.reason, "invalid_deliverable");
+          assert.include(error.detail, key(linux.id, 1));
+        }
+      }
+      assert.isEmpty(yield* store.listForTask(task));
+      assert.strictEqual((yield* delegate(1))._tag, "admitted");
+    }).pipe(Effect.provide(makeLayer())),
+  );
+
+  it.effect("requires confirmation that the original Linux run stopped before repeating it", () =>
+    Effect.gen(function* () {
+      const task = yield* seedWorker;
+      yield* seedPlan(task, [linux]);
+      const first = yield* delegate(1);
+      if (first._tag !== "admitted") return yield* Effect.die("expected first attempt");
+      const sql = yield* SqlClient.SqlClient;
+      const children = yield* ChannelChildWork.ChannelChildWork;
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      const correlation = "linux-first";
+      yield* Effect.scoped(
+        children.claimLaunch(first.record, { correlationId: correlation, host: "linux" }),
+      );
+      yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, remote_thread_id, launched_run_id, read_key, delivery,
+         state, known_run_id, known_run_status, end_reason, ended_at, task_id, parent_run_id, created_at, updated_at)
+        VALUES (${correlation}, 'task', ${first.record.callerThreadId}, 'linux', 'remote-thread',
+          'original-run', 'read-key', 'wake', 'lost', 'original-run', 'failed', 'host_unreachable',
+          ${NOW}, 'remote-task', 'parent-run', ${NOW}, ${NOW})`;
+      yield* children.reconcile;
+      const child = yield* store.get(task, first.record.childWorkId);
+      if (!child) return yield* Effect.die("missing Linux worker record");
+      assert.strictEqual(child.state, "failed");
+      assert.isFalse(yield* confirmRequiredChildStopped(sql, child));
+      yield* sql`UPDATE remote_dispatches SET state = 'cancelled', end_reason = 'dismissed'`;
+      assert.isFalse(yield* confirmRequiredChildStopped(sql, child));
+      yield* sql`UPDATE remote_dispatches SET state = 'settled', end_reason = NULL, ended_at = NULL, known_run_id = 'other-run'`;
+      assert.isFalse(yield* confirmRequiredChildStopped(sql, child));
+      yield* sql`UPDATE remote_dispatches SET known_run_id = 'original-run', known_run_status = 'running'`;
+      assert.isFalse(yield* confirmRequiredChildStopped(sql, child));
+      yield* sql`UPDATE remote_dispatches SET known_run_status = 'failed'`;
+      assert.isTrue(yield* confirmRequiredChildStopped(sql, child));
     }).pipe(Effect.provide(makeLayer())),
   );
 
