@@ -12,6 +12,7 @@ import { makeThreadFixture } from "../test-fixtures";
 import type { Thread } from "../types";
 import type { Project } from "../types";
 import { CommandPalette } from "./CommandPalette";
+import { useThemeEditorStore } from "./settings/themeEditorStore";
 
 const state = vi.hoisted(() => ({
   projects: [] as ReadonlyArray<Project>,
@@ -39,6 +40,7 @@ function makeProject(title: string, id = title.toLowerCase().replace(/\s+/g, "-"
 
 function setup(input: { projects?: ReadonlyArray<Project>; threads?: ReadonlyArray<Thread> } = {}) {
   removeLocalStorageItem(LAST_USED_PROJECT_STORAGE_KEY);
+  useThemeEditorStore.setState(useThemeEditorStore.getInitialState(), true);
   state.threads = input.threads ?? [];
   state.projects = input.projects ?? [
     {
@@ -210,6 +212,44 @@ describe("CommandPalette open intents", () => {
 
     await userEvent.keyboard("{Escape}");
     await expect.element(palette).not.toBeInTheDocument();
+  });
+
+  it("ignores held repeat shortcuts for overlay toggle, theme editor, and Usage", async () => {
+    setup();
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    await using screen = await render(<CommandPalette>{null}</CommandPalette>);
+    using navigate = vi.spyOn(screen.router!, "navigate").mockResolvedValue(undefined);
+
+    await userEvent.keyboard("{Control>}k{/Control}");
+    const palette = page.getByTestId("command-palette");
+    await expect.element(palette).toBeVisible();
+
+    const repeatToggle = new KeyboardEvent("keydown", {
+      key: "k",
+      ctrlKey: true,
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => window.dispatchEvent(repeatToggle));
+    expect(repeatToggle.defaultPrevented).toBe(true);
+    await expect.element(palette).toBeVisible();
+
+    for (const keys of [
+      { key: "T", ctrlKey: true, altKey: true, shiftKey: true },
+      { key: "u", ctrlKey: true },
+    ]) {
+      const event = new KeyboardEvent("keydown", {
+        ...keys,
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(() => window.dispatchEvent(event));
+      expect(event.defaultPrevented, keys.key).toBe(true);
+    }
+    expect(useThemeEditorStore.getState().session).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

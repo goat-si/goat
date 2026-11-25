@@ -328,10 +328,20 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           usagePageOpen,
         },
       });
+      const mode = overlayModeForCommand(command);
+      if (
+        command !== "appearance.cycle" &&
+        command !== "theme.select" &&
+        command !== "themeEditor.toggle" &&
+        command !== "usage.open" &&
+        mode === null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
       if (command === "appearance.cycle") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
         const nextMode =
           appearanceMode === "system" ? "light" : appearanceMode === "light" ? "dark" : "system";
         if (!setAppearanceMode(nextMode)) {
@@ -346,36 +356,19 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         return;
       }
       if (command === "theme.select") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
         dispatch({ _tag: "OpenChangeTheme" });
         return;
       }
       if (command === "themeEditor.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleThemeEditorForTheme({
-          theme,
-          themeHalves,
-          initialAppearance: resolvedTheme,
-        });
+        toggleThemeEditorForTheme({ theme, themeHalves, initialAppearance: resolvedTheme });
         return;
       }
       if (command === "usage.open") {
-        event.preventDefault();
-        event.stopPropagation();
         setOpen(false);
         void navigate({ to: "/usage" });
         return;
       }
-      const mode = overlayModeForCommand(command);
-      if (mode === null) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      toggleMode(mode);
+      if (mode !== null) toggleMode(mode);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
