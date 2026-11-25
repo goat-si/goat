@@ -51,7 +51,7 @@ vi.mock(import("~/state/server"), async (original) => {
       usageSummary: (({ input }: { input: UsageSummaryInput }) => {
         let query = fixture.queries.get(input.sinceDay);
         if (!query) {
-          query = Atom.make(AsyncResult.initial(true));
+          query = Atom.make(AsyncResult.initial(true)).pipe(Atom.keepAlive);
           fixture.queries.set(input.sinceDay, query);
           fixture.reads.push(input.sinceDay);
         }
