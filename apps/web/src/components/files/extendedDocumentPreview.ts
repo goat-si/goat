@@ -543,6 +543,7 @@ const rtfCodePageLabel = (codePage: number) =>
       950: "big5",
       874: "windows-874",
       10000: "macintosh",
+      54936: "gb18030",
     } as Record<number, string>
   )[codePage] ?? `windows-${codePage}`;
 export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
