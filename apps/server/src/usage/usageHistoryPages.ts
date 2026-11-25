@@ -38,7 +38,7 @@ export class UsageHistoryPages {
     const db = new NodeSqlite.DatabaseSync(NodePath.join(this.#directory, "pages.sqlite"));
     try {
       db.exec(`
-        PRAGMA journal_mode = OFF;
+        PRAGMA journal_mode = MEMORY;
         PRAGMA synchronous = OFF;
         PRAGMA cache_size = -4096;
         PRAGMA temp_store = FILE;
