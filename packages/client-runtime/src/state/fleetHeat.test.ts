@@ -74,7 +74,7 @@ describe("fleetHeatSignals", () => {
       cpuPercent: 91,
       loadPerCore: 1.7,
       memoryPercent: 75,
-      quota: { label: "Codex weekly", usedPercent: 82 },
+      quota: { account: "Codex", windowLabel: "Weekly", usedPercent: 82 },
     });
   });
 
@@ -105,9 +105,9 @@ describe("fleetHeatTier", () => {
     [signals({ memoryPercent: 80 }), "warm"],
     [signals({ memoryPercent: 90 }), "hot"],
     [signals({ memoryPercent: 95 }), "burning"],
-    [signals({ quota: { label: "Codex weekly", usedPercent: 70 } }), "warm"],
-    [signals({ quota: { label: "Codex weekly", usedPercent: 85 } }), "hot"],
-    [signals({ quota: { label: "Codex weekly", usedPercent: 95 } }), "burning"],
+    [signals({ quota: { account: "Codex", windowLabel: "Weekly", usedPercent: 70 } }), "warm"],
+    [signals({ quota: { account: "Codex", windowLabel: "Weekly", usedPercent: 85 } }), "hot"],
+    [signals({ quota: { account: "Codex", windowLabel: "Weekly", usedPercent: 95 } }), "burning"],
     // The hottest signal wins.
     [signals({ cpuPercent: 65, loadPerCore: 1.6 }), "burning"],
     [signals({ cpuPercent: null, loadPerCore: null, memoryPercent: null }), "normal"],
@@ -155,7 +155,7 @@ describe("fleetHeatReasons", () => {
           cpuPercent: 91,
           loadPerCore: 1.74,
           memoryPercent: 40,
-          quota: { label: "Codex weekly", usedPercent: 82 },
+          quota: { account: "Codex", windowLabel: "Weekly", usedPercent: 82 },
         }),
       ),
     ).toEqual(["load 1.7/core", "CPU 91%", "Codex weekly 82%"]);
@@ -440,7 +440,7 @@ describe("fleetHeatSignals quota verdicts", () => {
           { id: "availability", label: "Availability", exhausted: true, resetsAt: future },
         ],
       }),
-    ).toEqual({ label: "Codex all accounts blocked", usedPercent: 100, blocked: true });
+    ).toEqual({ account: "Codex", windowLabel: null, usedPercent: 100, blocked: true });
     const heat = fleetMachineHeat({
       host: "studio",
       reachability: "ok",
