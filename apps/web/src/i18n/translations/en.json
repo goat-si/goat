@@ -1072,5 +1072,12 @@
   "51b267b48c021ff4": "Prevent idle sleep during active runs on the selected servers. Closing a laptop lid can still put it to sleep.",
   "29e68b2aabcc1dac": "All selected connected servers must support this setting.",
   "6b7b4054cab8e8cb": "A true black dark mode, dimmer read threads, and simpler composer controls. Turn it off for the classic look.",
-  "96714eee68489516": "Order active threads by when each last came back to you. Running work stays in Priority."
+  "96714eee68489516": "Order active threads by when each last came back to you. Running work stays in Priority.",
+  "1d720ad4349345f3": "Theme: {theme}",
+  "5fec763022aa74ce": "Theme: {light} for light mode, {dark} for dark mode",
+  "4d5e1036410e2a18": "Edit shortcut for {command}: {shortcut}",
+  "337a261bf1551d16": "Keybinding for {command}",
+  "87374bfe1fd81fdf": "Edit when clause for {command}",
+  "4da9b09518a3f47a": "Actions for {command}",
+  "bd8e87512fd9bdf2": "Unassigned"
 }

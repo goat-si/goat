@@ -79,7 +79,7 @@ export function DesktopWindowMaterialSetting() {
               </Button>
             ) : null}
             <Switch
-              aria-label="System glass"
+              aria-label={setting("desktop-system-material").title}
               checked={enabled || presetForcesMaterial}
               disabled={presetForcesMaterial || !state?.capability.supported}
               onCheckedChange={(checked) =>

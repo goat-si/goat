@@ -679,7 +679,6 @@ function useKeybindingRowEditor({
 }
 
 type KeybindingRowEditor = ReturnType<typeof useKeybindingRowEditor>;
-
 interface KeybindingRowActions {
   allRows: ReadonlyArray<KeybindingRow>;
   variables: ReadonlyArray<WhenVariableOption>;
@@ -717,9 +716,9 @@ function KeybindingKeyControl({
     captureKeybinding,
     pillRef,
   } = editor;
+  const gt = useGT();
   const labelForCommand = useKeybindingDisplayLabel();
   const showPill = !isRecording && keyDraft === row.key && row.key.length > 0 && !isDirty;
-
   return (
     <>
       {isDirty ? (
@@ -736,7 +735,12 @@ function KeybindingKeyControl({
           ref={pillRef}
           type="button"
           onClick={() => setDraft({ isRecording: true })}
-          aria-label={`Edit shortcut for ${labelForCommand(row.command)}: ${row.isUnassigned ? "Unassigned" : formatShortcutLabel(row.binding.shortcut)}`}
+          aria-label={gt("Edit shortcut for {command}: {shortcut}", {
+            command: labelForCommand(row.command),
+            shortcut: row.isUnassigned
+              ? gt("Unassigned")
+              : formatShortcutLabel(row.binding.shortcut),
+          })}
           className={cn(
             "inline-flex h-8 cursor-pointer items-center rounded-md border border-transparent px-1.5 sm:h-7 outline-none transition-colors hover:border-border/70 hover:bg-accent focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/24",
             pillClassName,
@@ -752,7 +756,7 @@ function KeybindingKeyControl({
         <Input
           data-keybinding-capture=""
           autoFocus={isRecording}
-          aria-label={`Keybinding for ${labelForCommand(row.command)}`}
+          aria-label={gt("Keybinding for {command}", { command: labelForCommand(row.command) })}
           value={isRecording ? "" : keyDraft}
           placeholder={isRecording ? "Press shortcut" : "Unassigned"}
           size="sm"
@@ -788,7 +792,6 @@ function WhenClauseControl({
   const handleOpenChange = (open: boolean) => {
     if (!open) onValidityChange(true);
   };
-
   return (
     <Popover onOpenChange={handleOpenChange}>
       <PopoverTrigger
@@ -799,7 +802,7 @@ function WhenClauseControl({
             className="min-w-0 shrink"
           />
         }
-        aria-label={`Edit when clause for ${label}`}
+        aria-label={gt("Edit when clause for {command}", { command: label })}
       >
         <span className="truncate font-mono">{expression || gt("Always")}</span>
         <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />
@@ -829,11 +832,11 @@ function KeybindingRowMenu({
   onUnassign: (row: KeybindingRow) => void;
   onRemove: (row: KeybindingRow) => void;
 }) {
+  const gt = useGT();
   const labelForCommand = useKeybindingDisplayLabel();
   const canReset = row.source === "Custom" && row.defaultKey !== null;
   const canUnassign = row.source === "Default";
   const canRemove = row.source !== "Default" && !row.isUnassigned;
-
   return (
     <Menu>
       <MenuTrigger
@@ -843,7 +846,7 @@ function KeybindingRowMenu({
             variant="ghost-muted"
             size="icon-sm"
             disabled={isSaving}
-            aria-label={`Actions for ${labelForCommand(row.command)}`}
+            aria-label={gt("Actions for {command}", { command: labelForCommand(row.command) })}
           />
         }
       >

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   CopyIcon,
   MoonIcon,
@@ -217,6 +218,7 @@ export function ThemePickerMenu({
   onCreate: () => void;
   onAdd: () => void;
 }) {
+  const gt = useGT();
   const isSplit = lightLabel !== darkLabel;
   const groups = groupChoices(choices);
   const checkedKey = choices.find((choice) => choice.ownedModes.length === 2)?.key ?? "";
@@ -225,8 +227,11 @@ export function ThemePickerMenu({
       <MenuTrigger
         aria-label={
           isSplit
-            ? `Theme: ${lightLabel} for light mode, ${darkLabel} for dark mode`
-            : `Theme: ${lightLabel}`
+            ? gt("Theme: {light} for light mode, {dark} for dark mode", {
+                light: lightLabel,
+                dark: darkLabel,
+              })
+            : gt("Theme: {theme}", { theme: lightLabel })
         }
         className="w-full sm:w-56"
         render={<SelectButton size="sm" />}

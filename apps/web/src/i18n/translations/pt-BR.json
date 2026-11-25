@@ -1072,5 +1072,12 @@
   "51b267b48c021ff4": "Impedir a suspensão por inatividade durante as execuções nos servidores selecionados. Fechar a tampa de um notebook ainda pode suspendê-lo.",
   "29e68b2aabcc1dac": "Todos os servidores conectados e selecionados devem oferecer suporte a esta configuração.",
   "6b7b4054cab8e8cb": "Modo escuro em preto puro, conversas lidas mais discretas e controles de escrita mais simples. Desative para voltar ao visual clássico.",
-  "96714eee68489516": "Ordene as conversas ativas pela última vez em que voltaram a exigir sua atenção. As tarefas em execução permanecem em Prioridade."
+  "96714eee68489516": "Ordene as conversas ativas pela última vez em que voltaram a exigir sua atenção. As tarefas em execução permanecem em Prioridade.",
+  "1d720ad4349345f3": "Tema: {theme}",
+  "5fec763022aa74ce": "Tema: {light} para o modo claro, {dark} para o modo escuro",
+  "4d5e1036410e2a18": "Editar atalho de {command}: {shortcut}",
+  "337a261bf1551d16": "Atalho de teclado para {command}",
+  "87374bfe1fd81fdf": "Editar condição de {command}",
+  "4da9b09518a3f47a": "Ações para {command}",
+  "bd8e87512fd9bdf2": "Não atribuído"
 }

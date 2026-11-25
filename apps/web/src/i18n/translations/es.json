@@ -1072,5 +1072,12 @@
   "51b267b48c021ff4": "Impide la suspensión por inactividad durante las ejecuciones en los servidores seleccionados. Cerrar la tapa de un portátil aún puede suspenderlo.",
   "29e68b2aabcc1dac": "Todos los servidores conectados y seleccionados deben admitir este ajuste.",
   "6b7b4054cab8e8cb": "Modo oscuro en negro puro, hilos leídos más tenues y controles de escritura más sencillos. Desactívalo para volver al aspecto clásico.",
-  "96714eee68489516": "Ordena los hilos activos por el momento en que volvieron a requerir tu atención. El trabajo en curso sigue en Prioridad."
+  "96714eee68489516": "Ordena los hilos activos por el momento en que volvieron a requerir tu atención. El trabajo en curso sigue en Prioridad.",
+  "1d720ad4349345f3": "Tema: {theme}",
+  "5fec763022aa74ce": "Tema: {light} para el modo claro, {dark} para el modo oscuro",
+  "4d5e1036410e2a18": "Editar atajo de {command}: {shortcut}",
+  "337a261bf1551d16": "Atajo de teclado para {command}",
+  "87374bfe1fd81fdf": "Editar condición para {command}",
+  "4da9b09518a3f47a": "Acciones para {command}",
+  "bd8e87512fd9bdf2": "Sin asignar"
 }

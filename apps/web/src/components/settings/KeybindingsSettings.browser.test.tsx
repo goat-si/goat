@@ -1,3 +1,4 @@
+import ko from "../../i18n/translations/ko.json";
 import { GTProvider } from "gt-react";
 import chinese from "../../i18n/translations/zh.json";
 import { RegistryProvider } from "@effect/atom-react";
@@ -192,4 +193,21 @@ it("finds a localized shortcut by its display name, English label, or command ID
       .element(screen.getByText("打开首选编辑器", { exact: true }))
       .not.toBeInTheDocument();
   }
+});
+
+it("announces shortcut and condition controls in Korean", async () => {
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <KeybindingsSettingsPanel />
+    </GTProvider>,
+  );
+  const command = "명령 팔레트 표시 전환";
+  await expect.element(screen.getByRole("button", { name: `조건 편집: ${command}` })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: `작업: ${command}` }))
+    .toBeInTheDocument();
+  const shortcut = screen.getByRole("button", { name: new RegExp(`^단축키 편집: ${command}:`) });
+  await expect.element(shortcut).toBeVisible();
+  await shortcut.click();
+  await expect.element(screen.getByRole("textbox", { name: `단축키: ${command}` })).toBeVisible();
 });

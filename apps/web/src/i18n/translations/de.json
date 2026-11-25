@@ -1072,5 +1072,12 @@
   "51b267b48c021ff4": "Verhindert den Ruhezustand bei laufenden Aufgaben auf den ausgewählten Servern. Das Schließen des Laptopdeckels kann weiterhin den Ruhezustand auslösen.",
   "29e68b2aabcc1dac": "Alle ausgewählten verbundenen Server müssen diese Einstellung unterstützen.",
   "6b7b4054cab8e8cb": "Ein tiefschwarzer Dunkelmodus, weniger hervorgehobene gelesene Threads und einfachere Eingabefunktionen. Ausschalten, um zum klassischen Design zurückzukehren.",
-  "96714eee68489516": "Sortiere aktive Threads danach, wann sie zuletzt wieder deine Aufmerksamkeit brauchten. Laufende Aufgaben bleiben unter Priorität."
+  "96714eee68489516": "Sortiere aktive Threads danach, wann sie zuletzt wieder deine Aufmerksamkeit brauchten. Laufende Aufgaben bleiben unter Priorität.",
+  "1d720ad4349345f3": "Thema: {theme}",
+  "5fec763022aa74ce": "Thema: {light} für den hellen Modus, {dark} für den dunklen Modus",
+  "4d5e1036410e2a18": "Tastenkürzel bearbeiten für {command}: {shortcut}",
+  "337a261bf1551d16": "Tastenkürzel für {command}",
+  "87374bfe1fd81fdf": "Bedingung bearbeiten für {command}",
+  "4da9b09518a3f47a": "Aktionen für {command}",
+  "bd8e87512fd9bdf2": "Nicht zugewiesen"
 }

@@ -1072,5 +1072,12 @@
   "51b267b48c021ff4": "Empêche la mise en veille pendant les exécutions sur les serveurs sélectionnés. Fermer le capot d’un ordinateur portable peut toujours le mettre en veille.",
   "29e68b2aabcc1dac": "Tous les serveurs connectés sélectionnés doivent prendre en charge ce réglage.",
   "6b7b4054cab8e8cb": "Un mode sombre noir véritable, des fils lus plus discrets et des commandes de saisie simplifiées. Désactivez cette option pour retrouver l’apparence classique.",
-  "96714eee68489516": "Triez les fils actifs selon la dernière fois qu’ils ont demandé votre attention. Les travaux en cours restent dans Priorité."
+  "96714eee68489516": "Triez les fils actifs selon la dernière fois qu’ils ont demandé votre attention. Les travaux en cours restent dans Priorité.",
+  "1d720ad4349345f3": "Thème : {theme}",
+  "5fec763022aa74ce": "Thème : {light} pour le mode clair, {dark} pour le mode sombre",
+  "4d5e1036410e2a18": "Modifier le raccourci de {command} : {shortcut}",
+  "337a261bf1551d16": "Raccourci clavier pour {command}",
+  "87374bfe1fd81fdf": "Modifier la condition pour {command}",
+  "4da9b09518a3f47a": "Actions pour {command}",
+  "bd8e87512fd9bdf2": "Non attribué"
 }

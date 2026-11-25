@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
 import { RegistryProvider } from "@effect/atom-react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../../test/render";
@@ -196,4 +198,14 @@ it("offers Restart after Later so the pending glass change can still be applied"
   await screen.getByRole("button", { name: "Restart" }).click();
   await screen.getByRole("button", { name: "Restart now" }).click();
   expect(fixture.bridge.relaunchForWindowMaterial).toHaveBeenCalledTimes(1);
+});
+
+it("gives the system glass switch its Korean setting name", async () => {
+  using _fixture = materialBridge();
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <Setting />
+    </GTProvider>,
+  );
+  await expect.element(screen.getByRole("switch", { name: "시스템 유리 효과" })).toBeVisible();
 });
