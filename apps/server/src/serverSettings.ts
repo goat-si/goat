@@ -789,6 +789,7 @@ export class ServerSettingsService extends Context.Service<
 
     /** Subscribe before reading a snapshot to retain changes before lazy stream startup. */
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
+    readonly changesRevision?: Effect.Effect<number>;
     readonly speechChangesRevision?: Effect.Success<typeof SpeechSettingsChanges.make>["revision"];
     readonly subscribeSpeechChanges?: Effect.Success<
       typeof SpeechSettingsChanges.make
@@ -1269,6 +1270,7 @@ const make = Effect.gen(function* () {
   const cacheKey = "settings" as const;
   const hubConsent = yield* makeHubConsentGenerations;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+  const changesRevision = yield* Ref.make(0);
   const speechChanges = yield* SpeechSettingsChanges.make;
   const providerChangesPubSub = yield* PubSub.unbounded<{
     readonly settings: ServerSettings;
@@ -1285,7 +1287,9 @@ const make = Effect.gen(function* () {
       yield* Ref.set(blockedBrowserHostsRef, settings.blockedBrowserHosts);
       yield* hubConsent.committed(settings.hub);
       yield* speechChanges.publish(settings.speech);
-      yield* PubSub.publish(changesPubSub, settings);
+      yield* Ref.update(changesRevision, (revision) => revision + 1).pipe(
+        Effect.andThen(PubSub.publish(changesPubSub, settings)),
+      );
       if (Option.isSome(routeState))
         yield* PubSub.publish(providerChangesPubSub, {
           settings,
@@ -2206,30 +2210,25 @@ const make = Effect.gen(function* () {
     withStoredSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => writeSemaphore.withPermits(1)(cachedLocked.pipe(Effect.flatMap(use))),
-    get subscribeProviderChanges() {
-      return PubSub.subscribe(providerChangesPubSub).pipe(
-        Effect.map((subscription) =>
-          Stream.fromSubscription(subscription).pipe(
-            Stream.mapEffect((event) =>
-              materializeSettingsSecrets(event.settings).pipe(
-                Effect.map((settings) => ({
-                  ...event,
-                  settings: resolveTextGenerationProvider(settings),
-                })),
-              ),
+    subscribeProviderChanges: PubSub.subscribe(providerChangesPubSub).pipe(
+      Effect.map((subscription) =>
+        Stream.fromSubscription(subscription).pipe(
+          Stream.mapEffect((event) =>
+            materializeSettingsSecrets(event.settings).pipe(
+              Effect.map((settings) => ({
+                ...event,
+                settings: resolveTextGenerationProvider(settings),
+              })),
             ),
           ),
         ),
-      );
-    },
-    get streamChanges() {
-      return materializeChanges(Stream.fromPubSub(changesPubSub));
-    },
-    get subscribeChanges() {
-      return PubSub.subscribe(changesPubSub).pipe(
-        Effect.map((subscription) => materializeChanges(Stream.fromSubscription(subscription))),
-      );
-    },
+      ),
+    ),
+    streamChanges: materializeChanges(Stream.fromPubSub(changesPubSub)),
+    subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
+      Effect.map((subscription) => materializeChanges(Stream.fromSubscription(subscription))),
+    ),
+    changesRevision: Ref.get(changesRevision),
     speechChangesRevision: speechChanges.revision,
     subscribeSpeechChanges: speechChanges.subscribe,
   } satisfies ServerSettingsService["Service"] &

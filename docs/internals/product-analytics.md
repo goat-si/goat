@@ -17,8 +17,9 @@ leftover upstream opt-in is not consent to GOAT.
 
 [AnalyticsService](../../apps/server/src/telemetry/AnalyticsService.ts) reads consent on every
 record and send, so turning it off stops delivery at once. It also follows settings changes: saving
-any answer but `granted` drops queued and failed batches right away, and declining deletes the
-install id, so sharing again soon after starts fresh. GOAT Connect relay tracing needs
+any answer but `granted` drops queued and failed batches, and declining deletes the install id,
+so sharing again starts fresh. While settings changes are pending, analytics pauses delivery and
+drops new events. GOAT Connect relay tracing needs
 `GOAT_TELEMETRY_ENABLED=true` explicitly.
 
 ## Installs and owners

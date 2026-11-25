@@ -210,7 +210,12 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({}),
   Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
-  Layer.mock(AnalyticsService.AnalyticsService)({}),
+  Layer.mock(AnalyticsService.AnalyticsService)({
+    // @effect-diagnostics-next-line effectSucceedWithVoid:off -- explicit undefined models an absent override.
+    telemetryOverride: Effect.succeed(undefined),
+    // @effect-diagnostics-next-line effectSucceedWithVoid:off -- explicit undefined models an absent override.
+    telemetryOverrideResolved: Effect.succeed(undefined),
+  }),
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(ProviderInstallation.ProviderInstallation)({}),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),

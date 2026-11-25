@@ -1,6 +1,7 @@
 import { AutoSettleDaysInput } from "./AutoSettleDaysInput";
 import { resolvePastedPath } from "@goat/shared/path";
 import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
+import { TelemetryConsentSetting } from "./TelemetryConsentSetting";
 import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
 import { RestartContinuationSettings } from "./RestartContinuationSettings";
 import { NotificationSettings } from "./NotificationSettings";
@@ -1028,6 +1029,10 @@ export function GeneralSettingsPanel() {
         <RestartContinuationSettings />
 
         <BackgroundActivitySettingsRow />
+      </SettingsSection>
+
+      <SettingsSection id="privacy" title={gt("Privacy")}>
+        <TelemetryConsentSetting />
       </SettingsSection>
 
       <SettingsSection id="projects-and-threads" title={gt("Projects and worktrees")}>

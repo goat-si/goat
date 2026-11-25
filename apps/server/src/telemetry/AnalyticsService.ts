@@ -25,6 +25,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -32,6 +33,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { DesktopShellDiscovery } from "../resourceTelemetry/DesktopShellDiscovery.ts";
 import {
   getTelemetryIdentity,
   resetTelemetryIdentity,
@@ -100,6 +102,10 @@ export class AnalyticsService extends Context.Service<
     ) => Effect.Effect<void>;
 
     readonly flush: Effect.Effect<void>;
+
+    /** GOAT_TELEMETRY_ENABLED's decision, which outranks the person's setting; doubles may leave it out. */
+    readonly telemetryOverride?: Effect.Effect<"enabled" | "disabled" | undefined>;
+    readonly telemetryOverrideResolved?: Effect.Effect<"enabled" | "disabled" | undefined>;
 
     /**
      * Records `install.owner_observed` for each owner of this install that the
@@ -236,42 +242,88 @@ export const make = Effect.gen(function* () {
   const enqueueBufferedEvent = (
     uuid: string,
     event: string,
-    properties?: Readonly<Record<string, unknown>>,
+    properties: Readonly<Record<string, unknown>> | undefined,
+    now: DateTime.DateTime,
   ) =>
-    Effect.flatMap(DateTime.now, (now) =>
-      Ref.modify(bufferRef, (current) => {
-        const appended = [
-          ...current,
-          {
-            uuid,
-            event,
-            ...(properties ? { properties } : {}),
-            capturedAt: DateTime.formatIso(now),
-          } satisfies BufferedAnalyticsEvent,
-        ];
+    Ref.modify(bufferRef, (current) => {
+      const appended = [
+        ...current,
+        {
+          uuid,
+          event,
+          ...(properties ? { properties } : {}),
+          capturedAt: DateTime.formatIso(now),
+        } satisfies BufferedAnalyticsEvent,
+      ];
 
-        const next =
-          appended.length > telemetryConfig.maxBufferedEvents
-            ? appended.slice(appended.length - telemetryConfig.maxBufferedEvents)
-            : appended;
+      const next =
+        appended.length > telemetryConfig.maxBufferedEvents
+          ? appended.slice(appended.length - telemetryConfig.maxBufferedEvents)
+          : appended;
 
-        return [
-          {
-            size: next.length,
-            dropped: next.length !== appended.length,
-          } as const,
-          next,
-        ] as const;
-      }),
-    );
+      return [
+        {
+          size: next.length,
+          dropped: next.length !== appended.length,
+        } as const,
+        next,
+      ] as const;
+    });
 
+  const takeBatch = Ref.modify(bufferRef, (current) => {
+    const nextBatch = current.slice(0, telemetryConfig.flushBatchSize);
+    return [nextBatch, current.slice(nextBatch.length)] as const;
+  });
+
+  // Queued events never outlive consent. A person who declines also loses the install id, so
+  // sharing again starts a new one; an environment override leaves the id alone.
+  const discardUnlessEnabled = Effect.gen(function* () {
+    if (yield* telemetryEnabled) {
+      yield* Ref.set(identityResetRef, false);
+      return true;
+    }
+    yield* dropQueued;
+    if ((yield* consent) === "declined" && !(yield* Ref.get(identityResetRef))) {
+      yield* identityLock.withPermit(resetIdentity);
+      yield* Ref.set(identityResetRef, true);
+    }
+    return false;
+  });
+
+  // A saved answer other than granted withdraws the prior queue and identity.
+  const withdraw = Effect.fn("AnalyticsService.withdraw")(function* (answer: TelemetryConsent) {
+    if (answer === "granted" || (yield* environmentOverride) === "enabled") return;
+    yield* dropQueued;
+    if (answer !== "declined") return;
+    yield* identityLock.withPermit(resetIdentity);
+    yield* Ref.set(identityResetRef, true);
+  });
+  const revision = settings.changesRevision ?? Effect.succeed(0);
+  const baseline = yield* settings.withSettingsSnapshot((current) =>
+    Effect.gen(function* () {
+      const changes = yield* settings.subscribeChanges;
+      return { changes, revision: yield* revision, consent: current.telemetryConsent };
+    }),
+  );
+  yield* Ref.set(
+    resetPendingRef,
+    baseline.consent === "declined" && (yield* environmentOverride) !== "enabled",
+  );
+  const consentChanges = baseline.changes;
+  const processed = yield* SubscriptionRef.make(baseline.revision);
+  let lastConsent = baseline.consent;
+  const caughtUp = Effect.gen(function* () {
+    const current = yield* revision;
+    return (yield* SubscriptionRef.get(processed)) >= current;
+  });
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
     generation: number,
   ) {
-    if (!(yield* telemetryEnabled)) return;
+    if (!(yield* telemetryEnabled)) return false;
     const { distinctId, installId } = yield* identity;
-    if (!distinctId || (yield* Ref.get(generationRef)) !== generation) return;
+    if (!distinctId || !(yield* caughtUp) || (yield* Ref.get(generationRef)) !== generation)
+      return false;
 
     const payload = {
       api_key: telemetryConfig.posthogKey,
@@ -305,32 +357,29 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.timeout(SEND_TIMEOUT),
     );
+    return true;
   });
 
-  const takeBatch = Ref.modify(bufferRef, (current) => {
-    const nextBatch = current.slice(0, telemetryConfig.flushBatchSize);
-    return [nextBatch, current.slice(nextBatch.length)] as const;
-  });
-
-  // Queued events never outlive consent. A person who declines also loses the install id, so
-  // sharing again starts a new one; an environment override leaves the id alone.
-  const discardUnlessEnabled = Effect.gen(function* () {
-    if (yield* telemetryEnabled) {
-      yield* Ref.set(identityResetRef, false);
-      return true;
-    }
-    yield* dropQueued;
-    if ((yield* consent) === "declined" && !(yield* Ref.get(identityResetRef))) {
-      yield* identityLock.withPermit(resetIdentity);
-      yield* Ref.set(identityResetRef, true);
-    }
-    return false;
-  });
+  const awaitCaughtUp = SubscriptionRef.changes(processed).pipe(
+    Stream.filterEffect((count) => Effect.map(revision, (current) => count >= current)),
+    Stream.runHead,
+  );
+  yield* Stream.runForEach(consentChanges, (current) =>
+    Effect.gen(function* () {
+      if (current.telemetryConsent !== lastConsent) {
+        lastConsent = current.telemetryConsent;
+        yield* withdraw(current.telemetryConsent);
+      }
+      yield* SubscriptionRef.update(processed, (count) => count + 1);
+    }),
+  ).pipe(Effect.forkScoped);
 
   // Back off even after dropping rejected batches so bad API keys cannot drain the queue in a tight loop.
   const flush: AnalyticsService["Service"]["flush"] = Effect.gen(function* () {
+    if (Option.isNone(yield* awaitCaughtUp.pipe(Effect.timeoutOption("5 seconds")))) return;
     if (!(yield* discardUnlessEnabled)) return;
     while (true) {
+      if (!(yield* caughtUp)) return;
       const generation = yield* Ref.get(generationRef);
       const delivery = yield* Ref.get(deliveryRef);
       const batch = delivery.failedBatch.length > 0 ? delivery.failedBatch : yield* takeBatch;
@@ -344,6 +393,10 @@ export const make = Effect.gen(function* () {
       // Withdrawn while sending: this batch must not be retried.
       if ((yield* Ref.get(generationRef)) !== generation) return;
       if (Result.isSuccess(sent)) {
+        if (!sent.success) {
+          yield* Ref.set(deliveryRef, { ...delivery, failedBatch: batch });
+          return;
+        }
         yield* Ref.set(deliveryRef, IDLE_DELIVERY);
         continue;
       }
@@ -390,42 +443,29 @@ export const make = Effect.gen(function* () {
   }).pipe(flushLock.withPermit);
 
   const flushWhenDue = Effect.gen(function* () {
-    if (!(yield* discardUnlessEnabled)) return;
+    if (!(yield* caughtUp) || !(yield* discardUnlessEnabled)) return;
     const { retryAt } = yield* Ref.get(deliveryRef);
     if ((yield* Clock.currentTimeMillis) >= retryAt) {
       yield* flush;
     }
   });
 
-  // A saved answer other than "granted" acts at once, without waiting for a send in progress, so
-  // sharing again soon after cannot send the old queue or reuse the old id. Only
-  // GOAT_TELEMETRY_ENABLED=true outranks it.
-  const withdraw = Effect.fn("AnalyticsService.withdraw")(function* (answer: TelemetryConsent) {
-    if (answer === "granted" || (yield* environmentOverride) === "enabled") return;
-    yield* dropQueued;
-    if (answer !== "declined") return;
-    yield* identityLock.withPermit(resetIdentity);
-    yield* Ref.set(identityResetRef, true);
-  });
-  const consentChanges = yield* settings.subscribeChanges;
-  yield* Stream.runForEach(
-    consentChanges.pipe(
-      Stream.map((current) => current.telemetryConsent),
-      Stream.changes,
-    ),
-    withdraw,
-  ).pipe(Effect.forkScoped);
-
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
       const generation = yield* Ref.get(generationRef);
-      if (!(yield* telemetryEnabled) || !(yield* identity).distinctId) return;
+      if (!(yield* caughtUp) || !(yield* telemetryEnabled) || !(yield* identity).distinctId) return;
 
       // Catch Node UUID defects too; best-effort telemetry drops events without UUIDs.
       const uuid = yield* Effect.exit(crypto.uuidV7());
-      if (Exit.isFailure(uuid) || (yield* Ref.get(generationRef)) !== generation) return;
+      const now = yield* DateTime.now;
+      if (
+        Exit.isFailure(uuid) ||
+        !(yield* caughtUp) ||
+        (yield* Ref.get(generationRef)) !== generation
+      )
+        return;
 
-      const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties);
+      const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties, now);
       if (enqueueResult.dropped) {
         yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
           size: enqueueResult.size,
@@ -475,7 +515,22 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  return AnalyticsService.of({ record, flush, recordOwners });
+  const telemetryOverride = Effect.map(environmentOverride, (override) =>
+    override === "pending" ? undefined : override,
+  );
+
+  const discovery = yield* DesktopShellDiscovery;
+  const telemetryOverrideResolved = Effect.gen(function* () {
+    if (hostEnvironment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1") yield* discovery.await;
+    return yield* telemetryOverride;
+  });
+  return AnalyticsService.of({
+    record,
+    flush,
+    telemetryOverride,
+    telemetryOverrideResolved,
+    recordOwners,
+  });
 });
 
 export const layer = Layer.effect(AnalyticsService, make);

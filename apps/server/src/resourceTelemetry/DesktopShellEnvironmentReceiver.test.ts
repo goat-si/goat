@@ -45,6 +45,28 @@ describe("desktop shell environment", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("signals discovery after applying the shell telemetry override", () =>
+    Effect.gen(function* () {
+      const environment: NodeJS.ProcessEnv = { GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
+      const observed: Array<string | undefined> = [];
+      const apply = makeApplyDesktopShellEnvironmentSnapshot(
+        environment,
+        "darwin",
+        Effect.void,
+        Effect.sync(() => observed.push(environment.GOAT_TELEMETRY_ENABLED)).pipe(Effect.asVoid),
+      );
+      yield* apply({
+        version: 1,
+        type: "shellEnvironment",
+        platform: "darwin",
+        discovered: true,
+        environment: { GOAT_TELEMETRY_ENABLED: "false" },
+      });
+      expect(observed).toEqual(["false"]);
+      expect(environment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING).toBeUndefined();
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("updates live TLS trust when shell certificates arrive after startup", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

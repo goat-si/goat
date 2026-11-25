@@ -10,9 +10,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
-import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -36,6 +34,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
+import { layerWithdrawable } from "./AnalyticsService.testkit.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 interface RecordedBatchRequest {
@@ -159,67 +158,6 @@ const layerWithConsent = (
     ),
     Layer.provideMerge(ServerSettings.layerTest({ telemetryConsent: consent })),
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(HostProcess.Platform, "linux"),
-        Layer.succeed(HostProcess.Architecture, "x64"),
-        Layer.succeed(HttpClient.HttpClient, client),
-      ),
-    ),
-  );
-
-/** Settings whose writes reach subscribers, as the live service's do. */
-const layerPublishingSettings = (consent: TelemetryConsent) =>
-  Layer.effect(
-    ServerSettings.ServerSettingsService,
-    Effect.gen(function* () {
-      const settings = yield* ServerSettings.ServerSettingsService;
-      const changes = yield* PubSub.unbounded<Effect.Success<typeof settings.getSettings>>();
-      return ServerSettings.ServerSettingsService.of({
-        ...settings,
-        updateSettings: (patch, authorizeAtCommit) =>
-          settings
-            .updateSettings(patch, authorizeAtCommit)
-            .pipe(Effect.tap((next) => PubSub.publish(changes, next))),
-        subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
-      });
-    }),
-  ).pipe(Layer.provide(ServerSettings.layerTest({ telemetryConsent: consent })));
-
-type RemoveId = (
-  remove: Effect.Effect<void, PlatformError.PlatformError>,
-) => Effect.Effect<void, PlatformError.PlatformError>;
-
-/**
- * AnalyticsService for a granted install whose settings writes reach subscribers. Deleting the
- * install id runs `removeId`, which decides whether and when the real removal happens.
- */
-const layerWithdrawable = (client: HttpClient.HttpClient, removeId: RemoveId) =>
-  Layer.unwrap(
-    Effect.map(ServerConfig.ServerConfig, (config) =>
-      AnalyticsService.layer.pipe(
-        Layer.provide(
-          Layer.effect(
-            FileSystem.FileSystem,
-            Effect.map(FileSystem.FileSystem, (fileSystem) =>
-              FileSystem.FileSystem.of({
-                ...fileSystem,
-                remove: (path, options) =>
-                  path === config.anonymousIdPath
-                    ? removeId(fileSystem.remove(path, options))
-                    : fileSystem.remove(path, options),
-              }),
-            ),
-          ),
-        ),
-        Layer.provideMerge(layerPublishingSettings("granted")),
-      ),
-    ),
-  ).pipe(
-    Layer.provideMerge(
-      ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-withdraw-" }),
-    ),
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(HostProcess.Platform, "linux"),
@@ -354,6 +292,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       const { bodies, client } = recordingClient();
       yield* Effect.gen(function* () {
         const analytics = yield* AnalyticsService.AnalyticsService;
+        assert.equal(yield* analytics.telemetryOverride!, "disabled");
         yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
         yield* analytics.flush;
       }).pipe(
@@ -384,6 +323,52 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
     }),
   );
 
+  it.effect("delayed consent changes cannot send the old queue or identity", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      const gate = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* analytics.record("test.old");
+        const old = yield* getTelemetryIdentity;
+        yield* settings.updateSettings({ telemetryConsent: "declined" });
+        yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.record("test.while-behind");
+        const flushing = yield* analytics.flush.pipe(Effect.forkChild({ startImmediately: true }));
+        assert.deepEqual(yield* decodeEvents(bodies), []);
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(flushing);
+        yield* analytics.record("test.new");
+        yield* analytics.flush;
+        const events = yield* decodeEvents(bodies);
+        assert.deepEqual(
+          events.map((event) => event.event),
+          ["test.new"],
+        );
+        assert.notEqual(events[0]?.distinct_id, old.distinctId);
+      }).pipe(Effect.provide(layerWithdrawable(client, (remove) => remove, gate)));
+    }),
+  );
+
+  it.effect("a declined startup never reuses an undeleted install id", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const old = yield* getTelemetryIdentity;
+        yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.flush;
+        yield* analytics.record("test.after-restart");
+        yield* analytics.flush;
+        const events = yield* decodeEvents(bodies);
+        assert.lengthOf(events, 1);
+        assert.notEqual(events[0]?.distinct_id, old.distinctId);
+      }).pipe(Effect.provide(layerWithConsent(client, "declined")));
+    }),
+  );
+
   it.effect("a saved decline drops queued events and the install id before any flush", () =>
     Effect.gen(function* () {
       const { bodies, client } = recordingClient();
@@ -396,6 +381,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         yield* settings.updateSettings({ telemetryConsent: "declined" });
         yield* Deferred.await(removed);
         yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.flush;
         yield* analytics.record("test.after-regrant", {});
         yield* analytics.flush;
         return before;
@@ -442,6 +428,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         yield* settings.updateSettings({ telemetryConsent: "granted" });
         yield* Deferred.succeed(firstAnswer, 503);
         yield* Fiber.join(flushing);
+        yield* analytics.flush;
         yield* analytics.record("test.after-regrant", {});
         yield* analytics.flush;
         return before;
@@ -476,6 +463,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         yield* settings.updateSettings({ telemetryConsent: "declined" });
         yield* Deferred.await(attempted);
         yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.flush;
         yield* analytics.record("test.after-regrant", {});
         yield* analytics.flush;
         return before;
