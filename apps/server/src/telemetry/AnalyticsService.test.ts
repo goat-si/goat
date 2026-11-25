@@ -9,7 +9,9 @@ import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
+import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -165,6 +167,41 @@ const layerWithConsent = (
     ),
   );
 
+/** Settings whose writes reach subscribers, as the live service's do. */
+const layerPublishingSettings = (consent: TelemetryConsent) =>
+  Layer.effect(
+    ServerSettings.ServerSettingsService,
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const changes = yield* PubSub.unbounded<Effect.Success<typeof settings.getSettings>>();
+      return ServerSettings.ServerSettingsService.of({
+        ...settings,
+        updateSettings: (patch, authorizeAtCommit) =>
+          settings
+            .updateSettings(patch, authorizeAtCommit)
+            .pipe(Effect.tap((next) => PubSub.publish(changes, next))),
+        subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
+      });
+    }),
+  ).pipe(Layer.provide(ServerSettings.layerTest({ telemetryConsent: consent })));
+
+/** Removing `target` completes `removed`, so a test can await the install id's deletion. */
+const layerReportingRemoval = (target: string, removed: Deferred.Deferred<void>) =>
+  Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fileSystem) =>
+      FileSystem.FileSystem.of({
+        ...fileSystem,
+        remove: (path, options) =>
+          fileSystem
+            .remove(path, options)
+            .pipe(
+              Effect.ensuring(path === target ? Deferred.succeed(removed, undefined) : Effect.void),
+            ),
+      }),
+    ),
+  );
+
 /**
  * Runs `record` (20 events by default), then lets `minutes` of background
  * flushes run against a client that answers every send with `respond`.
@@ -310,6 +347,74 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         yield* settings.updateSettings({ telemetryConsent: "granted" });
         yield* analytics.flush;
       }).pipe(Effect.provide(layerWithConsent(client, "granted")));
+      assert.deepEqual(bodies, []);
+    }),
+  );
+
+  it.effect("a saved decline drops queued events and the install id before any flush", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      const removed = yield* Deferred.make<void>();
+      const before = yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* analytics.record("test.queued.before-decline", {});
+        const before = yield* getTelemetryIdentity;
+        yield* settings.updateSettings({ telemetryConsent: "declined" });
+        yield* Deferred.await(removed);
+        yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.record("test.after-regrant", {});
+        yield* analytics.flush;
+        return before;
+      }).pipe(
+        Effect.provide(
+          Layer.unwrap(
+            Effect.map(ServerConfig.ServerConfig, (config) =>
+              AnalyticsService.layer.pipe(
+                Layer.provide(layerReportingRemoval(config.anonymousIdPath, removed)),
+                Layer.provideMerge(layerPublishingSettings("granted")),
+              ),
+            ),
+          ).pipe(
+            Layer.provideMerge(
+              ServerConfig.ServerConfig.layerTest(process.cwd(), {
+                prefix: "goat-telemetry-withdraw-",
+              }),
+            ),
+            Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(HostProcess.Platform, "linux"),
+                Layer.succeed(HostProcess.Architecture, "x64"),
+                Layer.succeed(HttpClient.HttpClient, client),
+              ),
+            ),
+          ),
+        ),
+      );
+      const sent = yield* Effect.forEach(bodies, (body) => decodeSentBatch(body)).pipe(
+        Effect.orDie,
+      );
+      const events = sent.flatMap((body) => body.batch);
+      assert.deepEqual(
+        events.map((event) => event.event),
+        ["test.after-regrant"],
+      );
+      assert.notEqual(events[0]?.distinct_id, before.distinctId);
+    }),
+  );
+
+  it.effect("T3 Code's variable set to false outranks GOAT_TELEMETRY_ENABLED=true", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+        yield* analytics.flush;
+      }).pipe(
+        Effect.provide(layerWithConsent(client, "granted", { GOAT_TELEMETRY_ENABLED: "true" })),
+        Effect.provideService(HostProcess.Environment, { T3CODE_TELEMETRY_ENABLED: "false" }), // goat-rename: legacy
+      );
       assert.deepEqual(bodies, []);
     }),
   );

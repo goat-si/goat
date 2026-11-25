@@ -466,6 +466,15 @@ describe("isRelayTracingEnabled", () => {
     );
   });
 
+  it("stays off when T3 Code's variable opts out, even with GOAT_TELEMETRY_ENABLED=true", () => {
+    assert.isFalse(
+      OtelEnvironment.isRelayTracingEnabled({
+        GOAT_TELEMETRY_ENABLED: "true",
+        T3CODE_TELEMETRY_ENABLED: "false", // goat-rename: legacy
+      }),
+    );
+  });
+
   it.effect("product opt-out beats SDK enable without disabling user-configured tracing", () =>
     Effect.gen(function* () {
       const env = {

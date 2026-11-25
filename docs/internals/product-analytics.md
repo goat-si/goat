@@ -12,11 +12,13 @@ starts `undecided`, which sends nothing, exactly like `declined`; existing insta
 `undecided` too, so an update never turns sharing on. It is classified `person` in
 `SETTINGS_ACCESS`: an agent must not answer for the person it describes.
 `GOAT_TELEMETRY_ENABLED` overrides the setting either way for headless servers. The legacy
-upstream variable can only turn sharing off, since a leftover upstream opt-in is not consent to GOAT.
+upstream variable can only turn sharing off, and its "off" outranks `GOAT_TELEMETRY_ENABLED`, since a
+leftover upstream opt-in is not consent to GOAT.
 
 [AnalyticsService](../../apps/server/src/telemetry/AnalyticsService.ts) reads consent on every
-record and send, so turning it off stops delivery at once; the next background check drops queued
-and failed batches. Declining also deletes the install id. GOAT Connect relay tracing needs
+record and send, so turning it off stops delivery at once. It also follows settings changes: saving
+any answer but `granted` drops queued and failed batches right away, and declining deletes the
+install id, so sharing again soon after starts fresh. GOAT Connect relay tracing needs
 `GOAT_TELEMETRY_ENABLED=true` explicitly.
 
 ## Installs and owners

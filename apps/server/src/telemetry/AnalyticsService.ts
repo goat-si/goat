@@ -8,7 +8,7 @@
  */
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as HostProcess from "@goat/shared/HostProcess";
-import type { ClientOs } from "@goat/contracts";
+import type { ClientOs, TelemetryConsent } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -24,6 +24,7 @@ import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -160,12 +161,11 @@ export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const hostEnvironment = yield* HostProcess.Environment;
   const awaitingShellConsent = hostEnvironment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1";
+  // The upstream variable can still turn sharing off, never on; its "off" outranks ours.
   const readOverride = (goatValue: string | undefined) =>
-    parseTelemetryOverride(goatValue) ??
-    // The upstream variable can still turn sharing off, never on.
-    (parseTelemetryOverride(hostEnvironment.T3CODE_TELEMETRY_ENABLED) === "disabled" // goat-rename: legacy
+    parseTelemetryOverride(hostEnvironment.T3CODE_TELEMETRY_ENABLED) === "disabled" // goat-rename: legacy
       ? ("disabled" as const)
-      : undefined);
+      : parseTelemetryOverride(goatValue);
   const startupOverride = readOverride(Option.getOrUndefined(telemetryConfig.enabled));
   // A cached PATH does not establish the login shell's choice; wait for the shell before deciding.
   const environmentOverride = Effect.sync(() => {
@@ -372,6 +372,26 @@ export const make = Effect.gen(function* () {
       yield* flush;
     }
   });
+
+  // A saved answer other than "granted" acts at once, so sharing again before the next background
+  // check cannot send the old queue under the old id. Only GOAT_TELEMETRY_ENABLED=true outranks it.
+  const withdraw = Effect.fn("AnalyticsService.withdraw")(function* (answer: TelemetryConsent) {
+    if (answer === "granted" || (yield* environmentOverride) === "enabled") return;
+    yield* Ref.set(bufferRef, []);
+    yield* Ref.set(deliveryRef, IDLE_DELIVERY);
+    if (answer !== "declined") return;
+    yield* resetTelemetryIdentity.pipe(Effect.provide(identityContext));
+    yield* Ref.set(identityRef, Option.none());
+    yield* Ref.set(identityResetRef, true);
+  }, flushLock.withPermit);
+  const consentChanges = yield* settings.subscribeChanges;
+  yield* Stream.runForEach(
+    consentChanges.pipe(
+      Stream.map((current) => current.telemetryConsent),
+      Stream.changes,
+    ),
+    withdraw,
+  ).pipe(Effect.forkScoped);
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {

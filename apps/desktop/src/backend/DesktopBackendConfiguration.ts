@@ -94,6 +94,7 @@ const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "GOAT_TELEMETRY_ENABLED",
+  "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
   // A dev backend refuses SSH without it; the opt-in must survive the trip into the distro.
   "GOAT_DEV_SSH",
   // Otherwise the WSL server keeps exporting to endpoints from the bootstrap.

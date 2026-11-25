@@ -323,10 +323,13 @@ export const isRelayTracingEnabled = (env: Readonly<Record<string, string | unde
   Config.all({
     ...sdkFlags,
     telemetry: flag("GOAT_TELEMETRY_ENABLED", GOAT_TRUE, GOAT_FALSE, String),
+    legacyTelemetry: flag("T3CODE_TELEMETRY_ENABLED", GOAT_TRUE, GOAT_FALSE, String), // goat-rename: legacy
   }).pipe(
     Effect.map(
-      ({ telemetry, goat, spec }) =>
-        telemetry.value === true && !(goat.value ?? spec.value ?? false),
+      ({ telemetry, legacyTelemetry, goat, spec }) =>
+        telemetry.value === true &&
+        legacyTelemetry.value !== false &&
+        !(goat.value ?? spec.value ?? false),
     ),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
     Effect.orDie,
