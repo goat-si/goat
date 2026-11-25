@@ -7,6 +7,8 @@ import {
   type AuthPairingCredentialResult,
   type DesktopServerExposureState,
 } from "@goat/contracts";
+import { GTProvider } from "gt-react";
+import chinese from "../../i18n/translations/zh.json";
 import * as DateTime from "effect/DateTime";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -104,10 +106,14 @@ const https: AdvertisedEndpoint = {
 function created(expiresAt = Date.UTC(2099, 0, 1)): AuthPairingCredentialResult {
   return { id: "phone-link", credential: "PHONE1234", expiresAt: DateTime.makeUnsafe(expiresAt) };
 }
-async function render(patch: Partial<Props> = {}) {
+async function render(patch: Partial<Props> = {}, locale: "en" | "zh" = "en") {
   props = { ...props, ...patch };
   await act(async () => {
-    root.render(<HubDeviceCard {...props} />);
+    root.render(
+      <GTProvider locale={locale} translations={{ en: {}, zh: chinese }}>
+        <HubDeviceCard {...props} />
+      </GTProvider>,
+    );
   });
 }
 function button(name: string) {
@@ -297,6 +303,14 @@ it("keeps web informational without issuing pairing credentials", async () => {
   expect(document.querySelectorAll("button")).toHaveLength(0);
   expect(state.createCredential).not.toHaveBeenCalled();
   expect(payload()).toBeNull();
+});
+
+it("shows the same Chinese hub access label that the switch announces", async () => {
+  await render({ delegatableScopes: [...AuthStandardClientScopes, AuthHubProxyScope] }, "zh");
+  await act(async () => button("显示手机配对二维码").click());
+  const label = "同时打开枢纽设备";
+  await expect.element(page.getByText(label, { exact: true })).toBeVisible();
+  await expect.element(page.getByRole("switch", { name: label, exact: true })).toBeChecked();
 });
 
 it("asks before granting hub access and sends it only while the switch is on", async () => {
