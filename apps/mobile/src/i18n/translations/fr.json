@@ -66,5 +66,10 @@
   "7ebd9f61d1766c38": "Installer la mise à jour de l’application",
   "a840ff60c35b919d": "Voir les versions bêta",
   "5df0a7f15501c3d9": "Impossible d’ouvrir les versions bêta",
-  "78a04e0e625c0990": "Échec de la mise à jour"
+  "78a04e0e625c0990": "Échec de la mise à jour",
+  "de2c01041f849c5a": "Critère de réussite",
+  "61ee56caa5880fae": "Machine de l’agent exécutant",
+  "0158b772ab348c18": "Dernière mise à jour",
+  "b949b3f1ed6bb373": "Rapport de l’agent reçu",
+  "a7a2c522026264c0": "Rapport de l’agent manquant"
 }

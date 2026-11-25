@@ -242,7 +242,6 @@ export function MobileBotWork(props: {
     workRevision: props.workRevision,
     childGroups: childData?.groups ?? [],
   });
-  const { lookup } = actions;
   const current = useMobileHomeCurrentWork(environmentId, botId);
   const openTaskFromHome = (id: ChannelTaskId, title?: string) => {
     closeSheet();
@@ -423,7 +422,7 @@ export function MobileBotWork(props: {
   useMobileHomeTaskReads({
     environmentId,
     seen: (props.seen ?? props.visible) && actions.canUpdate,
-    task: (task ?? (lookup.state === "known" ? lookup.task : undefined))?.row ?? null,
+    task: task?.row ?? (actions.lookup.state === "known" ? actions.lookup.task.row : null),
     peek: open ? (peekEntry?.row ?? null) : null,
     scope: workOwner,
     // A mark reaches the walk showing its computer and bot; only a sent one rereads.
@@ -843,6 +842,7 @@ export function MobileBotWork(props: {
           rows={rows}
           chips={chips}
           screen={actions}
+          environments={home.environments}
           title={props.taskTitle ?? props.taskCardInfo?.title ?? null}
           botName={botName}
           environmentId={environmentId ?? null}

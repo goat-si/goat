@@ -14,7 +14,7 @@ import { MobileTaskSnooze } from "./MobileTaskSnooze";
 import type { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { MobileTaskRetry } from "./MobileTaskRetry";
 import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
-import { workThreadLink } from "./mobileBotWorkDetails";
+import { MobileSubagentWork, workThreadLink } from "./mobileBotWorkDetails";
 
 /**
  * A task screen's actions and the work it started. While the bot's computer is offline the task
@@ -110,9 +110,12 @@ export function MobileTaskActions(props: {
         />
       ))}
       {task.subagents.map((agent) => (
-        <Text key={agent.childWorkId} className="text-foreground-muted">
-          {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
-        </Text>
+        <MobileSubagentWork
+          key={agent.childWorkId}
+          agent={agent}
+          disabled={closed}
+          onOpenThread={props.onOpenThread}
+        />
       ))}
       {props.childError ? (
         <Text className="text-danger-foreground">Couldn't load subagents.</Text>

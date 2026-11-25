@@ -42,6 +42,7 @@ it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", asy
     state.lookup.mockResolvedValue(
       AsyncResult.success({
         task: { state: "known", row },
+        attemptEvidence: { summary: "Checking the release manifest." },
         approvalObservation: {
           worker,
           needsYou,
@@ -88,6 +89,8 @@ it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", asy
   );
   await renderTask();
   expect(container.textContent).toContain("1 waiting");
+  expect(container.textContent).toContain("Latest update Checking the release manifest.");
+  expect(container.textContent).not.toContain("Worker report missing");
   const link = container.querySelector<HTMLButtonElement>(
     '[aria-label="Open worker · Waiting worker"]',
   );
