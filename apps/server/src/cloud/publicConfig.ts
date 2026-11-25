@@ -88,7 +88,9 @@ export function resolveRelayClientTracingConfig(
   env: Readonly<Record<string, string | undefined>> = process.env,
   fallback = buildTimeRelayClientTracing,
 ) {
-  if (!isRelayTracingEnabled(env)) {
+  // Resolved once at startup: a desktop launched from a cached environment has not read the login
+  // shell yet, so its opt-in is not established for this process.
+  if (env.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1" || !isRelayTracingEnabled(env)) {
     return null;
   }
 
