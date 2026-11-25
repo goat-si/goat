@@ -9,7 +9,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 
 export const unrelatedProject = Option.some({
-  workspaceRoot: "/nonexistent/t3-rollback-project",
+  workspaceRoot: "/nonexistent/goat-rollback-project",
 } as never);
 export const layerCheckpointRollbackService = CheckpointRollbackService.layer.pipe(
   Layer.provide(
