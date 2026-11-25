@@ -1,11 +1,4 @@
-import {
-  useContext,
-  useEffect,
-  useEffectEvent,
-  type RefObject,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useContext, useEffect, useEffectEvent, useState, type RefObject } from "react";
 import type { ResolvedKeybindingsConfig } from "@goat/contracts";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
@@ -30,10 +23,12 @@ export function useRightPanelNewShortcut(
     keybindings: ResolvedKeybindingsConfig;
     getShortcutContext: () => ShortcutMatchContext;
   },
-  addSurfaceMenuOpen: boolean,
-  setAddSurfaceMenuOpen: Dispatch<SetStateAction<boolean>>,
+  addSurfaceActions: ReadonlyArray<{ readonly available: boolean }>,
   addSurfaceTriggerRef: RefObject<HTMLButtonElement | null>,
 ) {
+  const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
+  const canAddSurface = addSurfaceActions.some((action) => action.available);
+  if ((props.open === false || !canAddSurface) && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
   const background = useContext(BackgroundThreadContext);
   const addSurfaceMenuBlocked = () =>
     !addSurfaceMenuOpen && document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS) !== null;
@@ -58,14 +53,15 @@ export function useRightPanelNewShortcut(
   const onMenuAction = useEffectEvent((action: string) => {
     if (action === "rightPanel.new" && !addSurfaceMenuBlocked()) setAddSurfaceMenuOpen(true);
   });
-  // oxlint-disable-next-line goat/react-effect-budget -- Subscribe to keyboard and desktop menu events while the panel is open.
+  // oxlint-disable-next-line goat/react-effect-budget -- Subscribe to keyboard and desktop menu events while the panel is open and can add a surface.
   useEffect(() => {
-    if (props.open === false || background) return;
+    if (props.open === false || !canAddSurface || background) return;
     document.addEventListener("keydown", onNewSurfaceKeyDown, true);
     const unsubscribe = window.desktopBridge?.onMenuAction(onMenuAction);
     return () => {
       document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
       unsubscribe?.();
     };
-  }, [props.open, background]);
+  }, [props.open, canAddSurface, background]);
+  return { addSurfaceMenuOpen, setAddSurfaceMenuOpen, canAddSurface } as const;
 }

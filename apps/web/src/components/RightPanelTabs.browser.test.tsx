@@ -1,14 +1,17 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useState } from "react";
-import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
-import { act, render } from "../../test/render";
+import { act, render, stubGlobal } from "../../test/render";
 import { focusPanelTerminalAfterClose, registerTerminalFocusTarget } from "~/lib/terminalFocus";
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
-import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+} from "@goat/shared/keybindings";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { RightPanelTabs, type RightPanelTabsProps } from "./RightPanelTabs";
 import { subscribePreviewAction } from "./preview/previewActionBus";
@@ -116,7 +119,7 @@ function Fixture(props: {
         onAddPullRequest={noop}
         onAddPullRequests={noop}
         onAddDevice={noop}
-        browserAvailable={false}
+        browserAvailable
         terminalAvailable={false}
         filesAvailable={false}
         diffAvailable={false}
@@ -563,4 +566,59 @@ it("right panel thumb buttons go back and forward in the active browser tab inst
   // The page canvas already went back in the tab; the panel must not go back a second time.
   releaseThumbButton(screen.getByTestId("page-canvas").element(), 3);
   expect(actions).toEqual(["back", "forward", "back"]);
+});
+
+describe("add surface launcher", () => {
+  it("hides the button, closes the open menu and stops taking Mod+T and the desktop menu action once no surface can be added", async () => {
+    const menuListeners = new Set<(action: string) => void>();
+    using _bridge = stubGlobal("desktopBridge", {
+      onMenuAction: (listener: (action: string) => void) => {
+        menuListeners.add(listener);
+        return () => menuListeners.delete(listener);
+      },
+    });
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const renderTabs = (browserAvailable: boolean) => (
+      <RightPanelTabs
+        {...(thumbPanel(DIFF_SURFACE).props as RightPanelTabsProps)}
+        open
+        keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
+        browserAvailable={browserAvailable}
+        terminalAvailable={false}
+        diffAvailable={false}
+        filesAvailable={false}
+        pullRequestAvailable={false}
+        pullRequestsAvailable={false}
+        deviceAvailable={false}
+      >
+        {null}
+      </RightPanelTabs>
+    );
+    const pressModT = async () => {
+      const event = new KeyboardEvent("keydown", {
+        key: "t",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(() => {
+        document.body.dispatchEvent(event);
+      });
+      return event.defaultPrevented;
+    };
+    await using screen = await render(renderTabs(true));
+    const addButton = screen.getByRole("button", { name: "Add panel surface" });
+
+    await expect.element(addButton).toBeInTheDocument();
+    expect(menuListeners.size).toBe(1);
+    expect(await pressModT()).toBe(true);
+    await expect.element(page.getByRole("menu")).toBeVisible();
+
+    await screen.rerender(renderTabs(false));
+    expect(addButton.query()).toBeNull();
+    expect(page.getByRole("menu").query()).toBeNull();
+    expect(menuListeners.size).toBe(0);
+    expect(await pressModT()).toBe(false);
+    expect(page.getByRole("menu").query()).toBeNull();
+  });
 });
