@@ -1,5 +1,6 @@
 import {
   EnvironmentAuthorizationError,
+  type EnvironmentId,
   HandoffError,
   HandoffSummary,
   HubNode,
@@ -37,6 +38,7 @@ import {
   type SshHostCaller,
 } from "./SshHostAuthorization.ts";
 import * as Setup from "./SshHostSetup.ts";
+import * as Dispatch from "./SshRemoteDispatch.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export const SshDeviceAddInput = Schema.Struct({
@@ -132,6 +134,7 @@ const make = Effect.gen(function* () {
   const sessions = yield* Sessions.SessionStore;
   const threads = yield* Threads.ThreadManagementService;
   const hub = yield* HubNodes.HubNodes;
+  const dispatch = yield* Dispatch.SshRemoteDispatch;
   const addDevice: SshDeviceAdd["Service"]["addDevice"] = (input, caller) =>
     Effect.gen(function* () {
       if (caller.kind !== "mcp")
@@ -290,7 +293,7 @@ const make = Effect.gen(function* () {
           const latest = yield* liveCaller;
           yield* assertFullAccess(latest, fullAccessMessage);
           const alias = resolved.host;
-          const nodeRegistration = () =>
+          const nodeRegistration = (expectEnvironmentId?: EnvironmentId) =>
             hub.add(
               {
                 kind: "ssh",
@@ -307,13 +310,14 @@ const make = Effect.gen(function* () {
                   Effect.flatMap((caller) => assertFullAccess(caller, fullAccessMessage)),
                 ),
                 requireIdentity: true,
+                ...(expectEnvironmentId === undefined ? {} : { expectEnvironmentId }),
               },
             );
           register = nodeRegistration;
           // The desktop already saved it; a hub failure is reported, not turned into a failed add.
           // A child fiber stays interruptible, so its own limit ends it even though a cut cannot.
-          const registerSaved = () =>
-            nodeRegistration().pipe(
+          const registerSaved = (saved: EnvironmentId) =>
+            nodeRegistration(saved).pipe(
               Effect.map(({ node }) => ({ saved: true as const, node })),
               Effect.catchTags({
                 HubNodesError: (error) =>
@@ -331,6 +335,10 @@ const make = Effect.gen(function* () {
               Effect.forkChild,
               Effect.flatMap(Fiber.join),
             );
+          const reachedEnvironmentId = yield* dispatch
+            .identifyTarget({ alias, hostname: alias, username: null, port: null })
+            .pipe(Effect.orElseSucceed(() => null));
+          yield* assertFullAccess(yield* liveCaller, fullAccessMessage);
           // Once the desktop has answered, its save is registered on the hub even if the call is cut.
           const settled = yield* Effect.uninterruptibleMask((restore) =>
             restore(
@@ -338,6 +346,7 @@ const make = Effect.gen(function* () {
                 {
                   type: "add_ssh",
                   host: alias,
+                  ...(reachedEnvironmentId === null ? {} : { reachedEnvironmentId }),
                   ...(input.label ? { label: input.label } : {}),
                   addedBy,
                 },
@@ -366,7 +375,11 @@ const make = Effect.gen(function* () {
               Effect.flatMap(
                 Effect.fnUntraced(function* (answer) {
                   if (answer?.type !== "add_ssh") return { kind: "other" as const, answer };
-                  return { kind: "saved" as const, answer, hub: yield* registerSaved() };
+                  return {
+                    kind: "saved" as const,
+                    answer,
+                    hub: yield* registerSaved(answer.connection.environmentId),
+                  };
                 }),
               ),
             ),

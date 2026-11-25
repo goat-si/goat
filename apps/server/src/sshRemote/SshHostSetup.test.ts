@@ -43,7 +43,6 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { dependencies, baseDependencies } from "./testkit/SshHostSetupTestkit.ts";
 import * as SshHostSetup from "./SshHostSetup.ts";
@@ -1684,6 +1683,7 @@ it.effect(
         const add = Context.get(
           yield* Layer.build(
             SshDeviceAdd.layer.pipe(
+              Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
               Layer.provide(Layer.succeed(SshHostSetup.SshHostSetup, setup)),
               Layer.provide(
                 Layer.mock(Broker.ConnectionCatalogBroker)({

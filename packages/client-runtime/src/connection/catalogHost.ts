@@ -97,17 +97,34 @@ export const handleConnectionCatalogOperation = <E>(
         };
       case "add_ssh": {
         const target = yield* resolveSshTarget(operation.host);
-        for (const entry of entries.values()) {
-          if (
-            connectionRoutes(entry).some((route) => {
-              const profile = Option.getOrNull(route.profile);
-              return (
-                profile?._tag === "SshConnectionProfile" &&
-                (profile.target.alias === operation.host || sameEndpoint(profile.target, target))
+        const matches = [...entries.values()].filter((entry) =>
+          connectionRoutes(entry).some((route) => {
+            const profile = Option.getOrNull(route.profile);
+            return (
+              profile?._tag === "SshConnectionProfile" &&
+              (profile.target.alias === operation.host || sameEndpoint(profile.target, target))
+            );
+          }),
+        );
+        const match =
+          operation.reachedEnvironmentId === undefined
+            ? matches[0]
+            : matches.find(
+                (entry) => entry.target.environmentId === operation.reachedEnvironmentId,
               );
-            })
-          )
-            return { type: "add_ssh", created: false, connection: savedConnection(entry) };
+        if (match !== undefined)
+          return { type: "add_ssh", created: false, connection: savedConnection(match) };
+        const stale = matches[0];
+        if (stale !== undefined && operation.reachedEnvironmentId !== undefined) {
+          const host = operation.host.slice(0, 300);
+          const reached = operation.reachedEnvironmentId.slice(0, 300);
+          const label = stale.target.label.slice(0, 300);
+          const savedId = stale.target.environmentId.slice(0, 300);
+          return {
+            type: "failure",
+            reason: "refused",
+            message: `${host} now answers as a different GOAT environment (${reached}) than the saved connection ${label} (${savedId}): the machine was replaced or reinstalled. Settings → Connections → Remove from this device forgets that connection's pairing, credentials and cached threads on this device; then add ${host} again. goat_connection_remove works only while the hub still lists the old id.`,
+          };
         }
         const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
         const environmentId = yield* onboarding.registerSsh({
