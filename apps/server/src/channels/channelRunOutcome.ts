@@ -107,6 +107,25 @@ export const settleCompletedRun = (input: {
   readonly now: string;
 }): ChannelTaskEventSpec => {
   const { task, runId, reported } = input;
+  const missing = task.requiredDeliverables?.filter((item) => item.review?.decision !== "accepted");
+  if (missing?.length && (!reported || reported.outcome === "succeeded")) {
+    return {
+      type: "task.question.opened",
+      payload: {
+        question: {
+          questionId: questionIdFor(task.taskId, task.version + 1),
+          text:
+            "Required results still need acceptance: " +
+            missing.map((item) => item.id).join(", ") +
+            ". Reply to continue work on these items.",
+          askedAt: input.now,
+          ...(task.requester.externalActorId === undefined
+            ? {}
+            : { requesterExternalActorId: task.requester.externalActorId }),
+        },
+      },
+    };
+  }
   if (input.finalReportDue) {
     const text = input.fallbackSummary.trim();
     const reason = "The bot ended without a final report after its delegated work finished.";

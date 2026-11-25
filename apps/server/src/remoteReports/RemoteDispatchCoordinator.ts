@@ -5,7 +5,6 @@ import * as AutomationHold from "../automationHold.ts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import {
-  ChannelWorkerObservation,
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
@@ -38,6 +37,7 @@ import {
   RemoteTaskError,
   recordRemoteTaskProgress,
   recordRemoteTaskResult,
+  remoteTaskObservationJson,
   committedTaskResult,
   importRemoteTaskClaim,
   waitForRemoteTask,
@@ -96,7 +96,6 @@ type Row = RemoteDispatchRow.RemoteDispatchRow;
 const RELAY_REQUEST_OUTCOME_LIMIT = 1_000;
 const decodeRows = RemoteDispatchRow.decodeRemoteDispatchRows;
 const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
-const encodeObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
 const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 const decodeFailure = (cause: unknown) => new RemoteDispatchError({ stage: "decode", cause });
@@ -333,7 +332,7 @@ const make = Effect.gen(function* () {
               // none, leaves the previous report in place or clears it.
               if (observed !== null && observed.runId === r.launched_run_id) {
                 yield* sql`UPDATE remote_dispatches SET
-                  observation = ${observed.observation === undefined ? null : encodeObservation(observed.observation)}
+                  observation = ${remoteTaskObservationJson(observed)}
                   WHERE correlation_id = ${id}`;
               }
             }),

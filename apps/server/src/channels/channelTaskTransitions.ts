@@ -175,6 +175,9 @@ export function applyChannelTaskEvent(
         task: {
           ...base,
           resultSummary: event.payload.summary,
+          ...(event.payload.requiredDeliverables
+            ? { requiredDeliverables: event.payload.requiredDeliverables }
+            : {}),
           ...(task.doneMeans === undefined && event.payload.doneMeans !== undefined
             ? { doneMeans: event.payload.doneMeans }
             : {}),
@@ -219,12 +222,16 @@ export function applyChannelTaskEvent(
     case "task.followup.received":
       return { ok: true, task: base };
     case "task.completion.proposed": {
+      if (task.requiredDeliverables?.some((item) => item.review?.decision !== "accepted"))
+        return reject("Required deliverables still need acceptance.");
       if (task.worker?.runId !== event.payload.proposal.runId) {
         return reject("The proposal names a run the task is not bound to.");
       }
       return { ok: true, task: { ...base, proposedCompletion: event.payload.proposal } };
     }
     case "task.completed": {
+      if (task.requiredDeliverables?.some((item) => item.review?.decision !== "accepted"))
+        return reject("Required deliverables still need acceptance.");
       const { proposedCompletion: _proposed, observed: _observed, ...rest } = base;
       return {
         ok: true,
@@ -275,6 +282,7 @@ export function applyChannelTaskEvent(
         completedAt: _completedAt,
         resultSummary: _summary,
         completionReport: _report,
+        requiredDeliverables,
         observed: _observed,
         host,
         ...rest
@@ -283,6 +291,15 @@ export function applyChannelTaskEvent(
         ok: true,
         task: {
           ...rest,
+          ...(requiredDeliverables
+            ? {
+                requiredDeliverables: requiredDeliverables.map(({ id, criterion }) => ({
+                  id,
+                  criterion,
+                  attempt: 1,
+                })),
+              }
+            : {}),
           ...(automatic === undefined
             ? host === undefined
               ? {}
@@ -350,12 +367,22 @@ export function applyChannelTaskEvent(
         projectId: _projectId,
         observed: _observed,
         briefVersion: _briefVersion,
+        requiredDeliverables,
         ...rest
       } = base;
       return {
         ok: true,
         task: {
           ...rest,
+          ...(requiredDeliverables
+            ? {
+                requiredDeliverables: requiredDeliverables.map(({ id, criterion }) => ({
+                  id,
+                  criterion,
+                  attempt: 1,
+                })),
+              }
+            : {}),
           status: "received",
           generation: event.payload.generation,
           host: event.payload.host,

@@ -16,6 +16,7 @@ import {
 import {
   botReportAwaitsDelegates,
   clearBotReportDue,
+  missingDeliverablesForRun,
   markBotReportDue,
   settlementReportRun,
 } from "./delegatedBotReports.ts";
@@ -33,11 +34,24 @@ import { readObservedCheck, readObservedCheckState } from "./ObservedCheckServic
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
   {
-    reason: Schema.Literals(["run_not_found", "run_mismatch", "delegates_pending", "storage"]),
+    reason: Schema.Literals([
+      "run_not_found",
+      "run_mismatch",
+      "delegates_pending",
+      "deliverables_pending",
+      "storage",
+    ]),
     cause: Schema.optional(Schema.Defect()),
+    missing: Schema.optionalKey(Schema.Array(Schema.String)),
   },
 ) {
   override get message(): string {
+    if (this.reason === "deliverables_pending")
+      return (
+        "Required results still need acceptance: " +
+        this.missing?.join(", ") +
+        ". Review each current worker result with channel.task_report before reporting success."
+      );
     if (this.reason === "delegates_pending")
       return "Delegated results are outstanding. Wait for their notifications or read the results with task.status, then report what each task returned.";
     return this.reason === "run_not_found"
@@ -273,9 +287,26 @@ const make = Effect.gen(function* () {
         report_json = excluded.report_json,
         reported_at = excluded.reported_at
     `;
-    yield* (
-      bot ? sql.withTransaction(write.pipe(Effect.andThen(clearBotReportDue(sql, run.id)))) : write
-    ).pipe(Effect.mapError(storage));
+    if (bot) {
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            if (input.outcome === "succeeded") {
+              const missing = yield* missingDeliverablesForRun(sql, threadId, run, records.runs);
+              if (missing.length)
+                return yield* new ThreadResultError({
+                  reason: "deliverables_pending",
+                  missing: missing.map((row) => row.id),
+                });
+            }
+            yield* write;
+            yield* clearBotReportDue(sql, run.id);
+          }),
+        )
+        .pipe(Effect.catchTags({ SqlError: (error) => Effect.fail(storage(error)) }));
+    } else {
+      yield* write.pipe(Effect.mapError(storage));
+    }
     yield* PubSub.publish(reports, threadId);
     return buildThreadResult({
       thread: records.thread,

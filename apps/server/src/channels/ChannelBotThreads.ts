@@ -45,6 +45,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { readRequiredDeliverables } from "./channelDeliverables.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
 import {
@@ -782,8 +783,12 @@ const make = Effect.gen(function* () {
       ownerId: owner.ownerId,
       environmentId: bot.bot.environmentId,
     });
+    const requiredDeliverables = yield* readRequiredDeliverables(sql, task).pipe(
+      Effect.mapError(failed),
+    );
     return {
       activity,
+      ...(requiredDeliverables ? { requiredDeliverables } : {}),
       task:
         known && row?.kind === "task"
           ? { state: "known" as const, row: { ...row, task: summary } }

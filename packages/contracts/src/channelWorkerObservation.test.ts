@@ -23,6 +23,11 @@ describe("channel run evidence contract", () => {
     at: "2026-10-12T00:00:00.000Z",
     outputTail: "failed",
   };
+  it("recognizes the formal outcome of a remote worker", () => {
+    const before = decode(base);
+    const after = decode({ ...base, result: { ...base.result, reportedOutcome: "succeeded" } });
+    expect(channelWorkerObservationEquals(before, after)).toBe(false);
+  });
   it("round-trips independent claims and checks, and recognizes a late result", () => {
     const before = decode(base);
     const after = decode({
