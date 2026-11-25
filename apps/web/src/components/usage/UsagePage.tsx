@@ -16,7 +16,7 @@ import {
   InfoIcon,
   SlidersHorizontalIcon,
 } from "~/components/solar";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
@@ -198,7 +198,11 @@ export function UsagePage() {
   const [priceDialog, setPriceDialog] = useState<{ readonly model?: string } | null>(null);
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
-  const hiddenProviders = new Set(preferences.hiddenProviders);
+  // oxlint-disable-next-line goat/no-manual-memo -- useUsage retains previous answers by set identity.
+  const hiddenProviders = useMemo(
+    () => new Set(preferences.hiddenProviders),
+    [preferences.hiddenProviders],
+  );
   const windowDays = preferences.windowDays;
   const { window, periodSelectionPending, refreshPeriod } = useUsagePeriod(windowDays);
   const {
