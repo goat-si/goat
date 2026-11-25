@@ -709,7 +709,7 @@ function UsageOverview({
             <p className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <span>
                 <span className={figureClass(loadingPartial)}>
-                  {formatCount(merged.sessions)} sessions
+                  {formatCount(merged.sessions)} {merged.sessions === 1 ? "session" : "sessions"}
                 </span>
                 {metric === "cost" && " · API estimate"}
               </span>
