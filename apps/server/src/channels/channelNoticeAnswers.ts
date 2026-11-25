@@ -37,11 +37,22 @@ export const noticeMessageIds = (
 
 const markerKey = (threadId: string, runId: string) => "notice-answer:" + threadId + ":" + runId;
 
-/** A task's runs that can be its result: every owned run but the background command notices. */
-export const resultRunsOf = <R extends Pick<OrchestrationV2Run, "userMessageId">>(
+/** A task's result runs exclude background command notices and redundant wakes that never ran. */
+export const resultRunsOf = <
+  R extends Pick<OrchestrationV2Run, "userMessageId" | "status" | "startedAt" | "terminationCause">,
+>(
   runs: ReadonlyArray<R>,
   notices: ReadonlySet<string>,
-) => runs.filter((run) => !notices.has(run.userMessageId));
+) =>
+  runs.filter(
+    (run) =>
+      !notices.has(run.userMessageId) &&
+      !(
+        run.status === "cancelled" &&
+        run.startedAt === null &&
+        run.terminationCause?.kind === "delegated_wake_disposed"
+      ),
+  );
 
 /** The text a notice answer is sent with: a text channel without threads names the request. */
 export const noticeAnswerText = (
