@@ -11,7 +11,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ServerSettings from "../serverSettings.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
-import { layerWithdrawable } from "./AnalyticsService.testHelpers.ts";
+import { layerWithdrawable } from "./AnalyticsService.testkit.ts";
 
 const decode = Schema.decodeEffect(
   Schema.fromJsonString(

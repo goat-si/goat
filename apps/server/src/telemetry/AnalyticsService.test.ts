@@ -34,7 +34,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
-import { layerWithdrawable } from "./AnalyticsService.testHelpers.ts";
+import { layerWithdrawable } from "./AnalyticsService.testkit.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 interface RecordedBatchRequest {
