@@ -1,6 +1,7 @@
 import { useGT } from "gt-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
+import { InlineButton } from "../ui/button";
 import { observeResize } from "~/lib/observeResize";
 
 export function DraftHeroProjectHeading({
@@ -44,7 +45,10 @@ export function DraftHeroProjectHeading({
         >
           <span>{inlinePrefix}</span>
           <span>
-            <span className="font-medium">{projectName}</span>
+            <InlineButton tone="pickerMuted" render={<span />}>
+              {projectName}
+              <span className="size-[0.65em] shrink-0" />
+            </InlineButton>
             {questionMark}
           </span>
         </span>
