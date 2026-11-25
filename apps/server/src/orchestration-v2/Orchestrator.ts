@@ -1,4 +1,4 @@
-import { agentQueuePrecedesSend } from "./goat/AgentQueueOrder.ts";
+import * as DispatchModeAdjustment from "./goat/DispatchModeAdjustment.ts";
 import { mergeBackClosedThread } from "./mergeBackClosedThread.ts";
 import { enqueueProviderTitleEffect } from "./goat/ProviderTitleEffect.ts";
 import { recoverTerminalSubagents } from "./goat/RecoverTerminalSubagents.ts";
@@ -5332,29 +5332,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    if (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") {
-      const targetRunId = dispatchMode.targetRunId;
-      const target = projection.runs.find((run) => run.id === targetRunId);
-      const turn = latestProviderTurnForAttempt(
-        projection.providerTurns.filter((candidate) => candidate.nodeId === target?.rootNodeId),
-        target?.activeAttemptId,
-      );
-      // The client may still show a running turn while its completion is being
-      // projected. Preserve the submission as a new turn when steering is too late.
-      if (
-        target !== undefined &&
-        (target.status === "completed" ||
-          (dispatchMode.type === "restart_active" && !isBlockingRun(target)) ||
-          ((target.status === "running" || target.status === "waiting") &&
-            turn !== undefined &&
-            (turn.status === "completed" ||
-              (dispatchMode.type === "restart_active" &&
-                turn.status !== "pending" &&
-                turn.status !== "running"))))
-      ) {
-        dispatchMode = { type: "start_immediately" };
-      }
-    }
+    dispatchMode = DispatchModeAdjustment.afterLateSteer(projection, dispatchMode);
     // After Stop, a plain send queues and releases the hold; an explicit steer fails below.
     if (
       command.deliveryIntent === "auto" &&
@@ -5363,16 +5341,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       dispatchMode = { type: "queue_after_active" };
     }
-    if (
-      command.deliveryIntent === "auto" &&
-      command.createdBy === "agent" &&
-      (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") &&
-      (yield* agentQueuePrecedesSend(projectionStore, command.threadId, projection.runs).pipe(
-        mapDispatchError(command),
-      ))
-    ) {
-      dispatchMode = { type: "queue_after_active" };
-    }
+    dispatchMode = yield* DispatchModeAdjustment.forAgentQueue(
+      projectionStore,
+      projection.runs,
+      command,
+      dispatchMode,
+    ).pipe(mapDispatchError(command));
     if (
       dispatchMode.type === "restart_active" &&
       (yield* stopReachedRun(command, command.threadId, dispatchMode.targetRunId))
@@ -5380,12 +5354,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode = { type: "start_immediately" };
     }
     const freshContext = command.freshContext === true;
-    if (
-      freshContext &&
-      (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active")
-    ) {
-      dispatchMode = { type: "queue_after_active" };
-    }
+    dispatchMode = DispatchModeAdjustment.forFreshContext(dispatchMode, freshContext);
     // Native goal commands must not steer an existing turn.
     const parsedGoalCommand = parseGoalCommand(command);
     const goalCommand =

@@ -4,7 +4,7 @@ import { ComposerContextReferenceChip } from "./composerContextPresentation";
 import type { NodeViewProps } from "@tiptap/react";
 import type { KeyboardEvent } from "react";
 
-export function removeReadOnlyContextChip(
+function removeReadOnlyContextChip(
   event: KeyboardEvent<HTMLElement>,
   { node, editor, getPos }: Pick<NodeViewProps, "node" | "editor" | "getPos">,
 ) {

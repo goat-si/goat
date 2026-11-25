@@ -1,3 +1,4 @@
+import * as SessionClosing from "./providerSessionClosing.ts";
 import {
   claimIdleThreadUnload,
   detachIdleThreads,
@@ -43,7 +44,6 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -2195,7 +2195,7 @@ export const layerWithOptions = (
           ),
       );
 
-      const startEventPump = (entry: LiveSessionEntry, sessionClosed: Deferred.Deferred<void>) => {
+      const startEventPump = (entry: LiveSessionEntry, sessionClosed: SessionClosing.Signal) => {
         let stoppedByProvider = false;
         let lastSessionStatus = entry.runtime.providerSession.status;
         const retryStalls = makeRetryStallWatch({
@@ -2209,8 +2209,7 @@ export const layerWithOptions = (
           projectionStore,
           runtime: entry.exposedRuntime,
         });
-        return entry.runtime.events.pipe(
-          Stream.interruptWhen(Deferred.await(sessionClosed)),
+        return SessionClosing.interrupt(entry.runtime.events, sessionClosed).pipe(
           Stream.runForEach((nativeEvent) => {
             if (shutdownSignal.received) return Effect.void;
             // Live output bypasses persistence and subscribers so floods cannot delay domain events.
@@ -2535,9 +2534,7 @@ export const layerWithOptions = (
                     return existing.exposedRuntime;
                   }
 
-                  const sessionScope = yield* Scope.fork(sessionScopes);
-                  const sessionClosed = yield* Deferred.make<void>();
-                  yield* Scope.addFinalizer(sessionScope, Deferred.done(sessionClosed, Exit.void));
+                  const { sessionScope, sessionClosed } = yield* SessionClosing.make(sessionScopes);
                   if (Option.isSome(codexRoutes))
                     yield* codexRoutes.value.reserveUse(input.modelSelection.instanceId).pipe(
                       Effect.provideService(Scope.Scope, sessionScope),
