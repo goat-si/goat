@@ -184,6 +184,15 @@ it("shows only the last frame of carriage-return progress bars in notebook strea
   ]);
 });
 
+it("falls back to text when a notebook declares a blank or non-ASCII language name", () => {
+  for (const name of ["", "Питон"]) {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ nbformat: 4, metadata: { language_info: { name } }, cells: [] }),
+    );
+    expect(openNotebook(bytes.buffer as ArrayBuffer)).toMatchObject({ language: "text" });
+  }
+});
+
 it("shows notebook error outputs saved without a traceback", () => {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
