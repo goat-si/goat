@@ -129,8 +129,13 @@ vi.mock("./ui/tooltip", () => ({
 }));
 
 import { useClosedViewStore } from "../closedViewStore";
-import { selectThreadRightPanelState, useRightPanelStore } from "../rightPanelStore";
+import {
+  PULL_REQUESTS_PANEL_REF,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "../rightPanelStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
+import { writePullRequestListPreferences } from "./pullRequest/pullRequestListPreferences";
 import { ReopenClosedViewShortcut } from "./ReopenClosedViewShortcut";
 import { SidebarControl } from "./AppSidebarLayout";
 
@@ -438,6 +443,66 @@ describe("root reopen shortcut", () => {
         expect.objectContaining({ command: "rightPanel.new" }),
       ]),
     );
+  });
+
+  it("reopens a closed pull request tab from another route with saved list preferences and no foreign search params", async () => {
+    setup();
+    window.localStorage.removeItem("t3.pullRequests.preferences");
+    using _cleanup = {
+      [Symbol.dispose]: () => window.localStorage.removeItem("t3.pullRequests.preferences"),
+    };
+    writePullRequestListPreferences({ involvement: "reviewing", state: "merged" });
+    useClosedViewStore.getState().remember({
+      kind: "panel-tab",
+      threadRef: PULL_REQUESTS_PANEL_REF,
+      surface: {
+        id: "pull-request:remote:project-1:github.com:goat-si/goat#42",
+        kind: "pull-request",
+        environmentId: "remote",
+        projectId: "project-1",
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 42,
+      },
+    });
+
+    const history = createMemoryHistory({
+      initialEntries: ["/other?who=assigned&status=closed&q=login&host=linear.app"],
+    });
+    const root = createRootRoute({
+      component: () => (
+        <>
+          <ReopenClosedViewShortcut />
+          <Outlet />
+        </>
+      ),
+    });
+    const router = createRouter({
+      history,
+      routeTree: root.addChildren([
+        createRoute({ getParentRoute: () => root, path: "other" }),
+        createRoute({ getParentRoute: () => root, path: "pull-requests" }),
+      ]),
+    });
+    state.navigate.mockImplementation(router.navigate);
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    // Provides its own memory router to verify route search parameters across navigation.
+    await using _view = await render(<RouterProvider router={router} />, { router: false });
+
+    await act(() => {
+      press();
+    });
+
+    expect(router.state.location.pathname).toBe("/pull-requests");
+    expect(router.state.location.search).toEqual({
+      involvement: "reviewing",
+      state: "merged",
+      repository: "goat-si/goat",
+      number: 42,
+      selectedProjectId: "project-1",
+      selectedHost: "github.com",
+      selectedEnvironmentId: "remote",
+    });
   });
 
   it("toggles the activity view and back when the guest forwards its command", async () => {
