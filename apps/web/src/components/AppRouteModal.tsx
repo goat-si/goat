@@ -3,7 +3,7 @@ import { requestWorkspaceFocus } from "../lib/workspaceFocus";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useRouter } from "@tanstack/react-router";
 import { XIcon } from "~/components/solar";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { useCloseAppModal } from "./sidebar/mainAppLocation";
 import { Button } from "./ui/button";
@@ -15,7 +15,15 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
  * backdrop returns to the page that opened it. Keyboard guards that skip dialogs exempt
  * `[data-app-modal]`, because these pages own their shortcuts.
  */
-export function AppRouteModal({ label, children }: { label: string; children: ReactNode }) {
+export function AppRouteModal({
+  label,
+  actionsRef,
+  children,
+}: {
+  label: string;
+  actionsRef?: RefObject<DialogPrimitive.Root.Actions | null>;
+  children: ReactNode;
+}) {
   const closeAppModal = useCloseAppModal();
   const router = useRouter();
   const [open, setOpen] = useState(true);
@@ -46,6 +54,7 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
   return (
     <DialogPrimitive.Root
       open={open}
+      actionsRef={actionsRef}
       // Portaled layers outside this tree (toasts, Clerk, confirm dialogs) are not backdrop presses.
       disablePointerDismissal
       onOpenChange={(nextOpen, eventDetails) => {

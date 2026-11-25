@@ -2,6 +2,7 @@ import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import { usesChatGptSharing } from "@goat/shared/usageLimits";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
+import type { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Atom } from "effect/reactivity";
 import {
   ProviderDriverKind,
@@ -101,7 +102,7 @@ import {
 import {
   METRIC_OPTIONS,
   WINDOW_OPTIONS,
-  resolveUsageShortcut,
+  resolveUsageShortcutAction,
   type UsageMetric,
 } from "./usageShortcuts";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
@@ -195,6 +196,7 @@ export function UsagePage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const refreshingRef = useRef(false);
+  const modalActionsRef = useRef<DialogPrimitive.Root.Actions | null>(null);
   const [priceDialog, setPriceDialog] = useState<{ readonly model?: string } | null>(null);
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
@@ -277,15 +279,13 @@ export function UsagePage() {
     )
       return;
 
-    const command = resolveUsageShortcut(event, keybindings);
-    const metricOption = METRIC_OPTIONS.find((option) => option.command === command);
-    const periodOption = WINDOW_OPTIONS.find((option) => option.command === command);
-    if (!metricOption && !periodOption) return;
-
+    const action = resolveUsageShortcutAction(event, keybindings);
+    if (!action) return;
     event.preventDefault();
     event.stopPropagation();
-    if (metricOption) selectMetric(metricOption.value);
-    if (periodOption && !showingLimits) selectWindow(periodOption.days);
+    if (action.type === "close") modalActionsRef.current?.close();
+    else if (action.type === "metric") selectMetric(action.value);
+    else if (!showingLimits) selectWindow(action.days);
   });
 
   useEffect(() => {
@@ -498,7 +498,7 @@ export function UsagePage() {
   );
 
   return (
-    <AppRouteModal label="Usage">
+    <AppRouteModal label="Usage" actionsRef={modalActionsRef}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="@container/usage-header flex min-h-12 shrink-0 items-center gap-1 border-b ps-5 pe-2">
           {topbarContent}

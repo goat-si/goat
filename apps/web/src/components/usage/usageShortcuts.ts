@@ -38,3 +38,21 @@ export function resolveUsageShortcut(
     context: { usagePageOpen: true },
   });
 }
+
+export type UsageShortcutAction =
+  | { readonly type: "close" }
+  | { readonly type: "metric"; readonly value: UsageMetric }
+  | { readonly type: "window"; readonly days: (typeof WINDOW_OPTIONS)[number]["days"] };
+
+export function resolveUsageShortcutAction(
+  event: ShortcutEventLike & { target: EventTarget | null },
+  keybindings: ResolvedKeybindingsConfig,
+): UsageShortcutAction | null {
+  const command = resolveUsageShortcut(event, keybindings);
+  if (command === "usage.open") return { type: "close" };
+  const metricOption = METRIC_OPTIONS.find((option) => option.command === command);
+  if (metricOption) return { type: "metric", value: metricOption.value };
+  const periodOption = WINDOW_OPTIONS.find((option) => option.command === command);
+  if (periodOption) return { type: "window", days: periodOption.days };
+  return null;
+}
