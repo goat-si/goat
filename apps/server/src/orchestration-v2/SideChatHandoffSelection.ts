@@ -1,10 +1,9 @@
 import {
-  isCompactionCommandMessage,
   isSideChatThread,
-  parseGoalCommand,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import { isSlashCommandMessage } from "./ContextHandoffDelivery.ts";
 import { readyHandoffsForRun } from "./providerTurnStartHelpers.ts";
 import { isScheduledFreshRun } from "./ProviderContextBoundaries.ts";
 import type { IdAllocatorV2Allocate } from "@goat/provider-core/server/IdAllocator";
@@ -38,9 +37,7 @@ export function selectSideChatHandoffs(projection: HandoffProjection, run: Orche
       return (
         source.status === "completed" &&
         projection.messages.some(
-          (message) =>
-            message.id === source.userMessageId &&
-            (isCompactionCommandMessage(message) || parseGoalCommand(message) !== null),
+          (message) => message.id === source.userMessageId && isSlashCommandMessage(message),
         )
       );
     });
