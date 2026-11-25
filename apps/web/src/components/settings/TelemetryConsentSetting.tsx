@@ -4,7 +4,7 @@ import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
-export const USAGE_DATA_DESCRIPTION =
+const USAGE_DATA_DESCRIPTION =
   "Send GOAT which providers, models and features you use, turn results, durations and token counts, under a random ID for this install. Never prompts, responses, code, file paths or credentials.";
 
 export function TelemetryConsentSetting() {

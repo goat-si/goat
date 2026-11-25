@@ -5,7 +5,6 @@ import { useState } from "react";
 
 import { primaryServerConfigAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { USAGE_DATA_DESCRIPTION } from "../settings/TelemetryConsentSetting";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { OnboardingFooter, OnboardingHeader, OnboardingPopup } from "./OnboardingDialog";
@@ -61,7 +60,7 @@ export function TelemetryConsentPrompt({
       <OnboardingPopup>
         <OnboardingHeader
           title="Share usage data with GOAT?"
-          description={`Nothing is sent unless you turn this on. ${USAGE_DATA_DESCRIPTION}`}
+          description="Nothing is sent unless you say yes. If you do, this server tells GOAT which providers, models and features you use, turn results, durations and token counts, under a random ID for this install. Never prompts, responses, code, file paths or credentials."
         />
         <OnboardingFooter
           hint={
