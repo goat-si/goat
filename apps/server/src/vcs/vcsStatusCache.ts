@@ -1,10 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 
-function makeStatusCache<T>(
-  isRetained: (cwd: string) => boolean,
-  onEvict: (cwd: string) => void,
-) {
+function makeStatusCache<T>(isRetained: (cwd: string) => boolean, onEvict: (cwd: string) => void) {
   const cache = new Map<string, T>();
   const trim = (retainedCwd?: string) => {
     for (const cwd of cache.keys()) {
