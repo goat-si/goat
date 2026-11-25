@@ -105,6 +105,25 @@ it.each([
   },
 );
 
+it("does not split a surrogate pair when truncating an EPUB chapter title", async () => {
+  const archive = new JSZip()
+    .file(
+      "META-INF/container.xml",
+      '<container><rootfiles><rootfile full-path="Book/content.opf"/></rootfiles></container>',
+    )
+    .file(
+      "Book/content.opf",
+      '<package><manifest><item id="a" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>',
+    )
+    .file(
+      "Book/one.xhtml",
+      `<html><head><title>${"a".repeat(119)}🚀</title></head><body><h1>First chapter</h1></body></html>`,
+    );
+  const result = await openEpub(archive);
+  if (result.type !== "document") throw new Error("Expected document");
+  expect(result.pages[0]?.title).toBe("a".repeat(119));
+});
+
 it("removes terminal colors from saved notebook text outputs", () => {
   const bytes = new TextEncoder().encode(
     JSON.stringify({

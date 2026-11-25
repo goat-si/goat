@@ -445,9 +445,11 @@ export async function openEpub(archive: JSZip): Promise<OfficeWorkerResult> {
     const entry = path ? archive.file(path) : null;
     if (!entry || !path) continue;
     const chapter = parseXml(await entry.async("string"));
+    const title = text(find(chapter, "title")[0] ?? find(chapter, "h1")[0] ?? chapter).trim();
+    const last = title.charCodeAt(119);
     pages.push({
       title:
-        text(find(chapter, "title")[0] ?? find(chapter, "h1")[0] ?? chapter).slice(0, 120) ||
+        title.slice(0, last >= 0xd800 && last <= 0xdbff ? 119 : 120) ||
         `Chapter ${pages.length + 1}`,
       html: await epubHtml(chapter, archive, path),
     });
