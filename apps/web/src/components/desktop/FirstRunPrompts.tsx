@@ -16,6 +16,10 @@ import {
   serverEnvironment,
 } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  TelemetryConsentPrompt,
+  useTelemetryConsentAsk,
+} from "../onboarding/TelemetryConsentPrompt";
 import { ComputerUseFirstRunPrompt } from "./ComputerUseFirstRunPrompt";
 import { planFirstRunPrompts, openCodexSituation } from "./firstRunPrompts.logic";
 import { GoatclawFirstRunDialog, OpenCodexFirstRunDialog } from "./HubFirstRunDialogs";
@@ -31,9 +35,13 @@ export function FirstRunPrompts() {
   const hydrated = useClientSettingsHydrated();
   const prompts = useClientSettings((settings) => settings.firstRunPrompts);
   const serverConfig = useAtomValue(primaryServerConfigAtom);
+  const telemetryEnvironmentId = useTelemetryConsentAsk();
   const [closedOne, setClosedOne] = useState(false);
   if (!hydrated || closedOne || serverConfig === null || isLocalEnvironmentDisabled()) return null;
   const onClosed = () => setClosedOne(true);
+  // Asked before anything else: nothing is shared until it is answered.
+  if (telemetryEnvironmentId !== null)
+    return <TelemetryConsentPrompt environmentId={telemetryEnvironmentId} onClosed={onClosed} />;
   const environmentId = serverConfig.environment.environmentId;
   if (prompts.opencodex === "pending" || prompts.goatclaw === "pending")
     return <HubFirstRunPrompts environmentId={environmentId} onClosed={onClosed} />;

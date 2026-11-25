@@ -354,6 +354,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       const { bodies, client } = recordingClient();
       yield* Effect.gen(function* () {
         const analytics = yield* AnalyticsService.AnalyticsService;
+        assert.equal(yield* analytics.telemetryOverride ?? Effect.succeed(undefined), "disabled");
         yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
         yield* analytics.flush;
       }).pipe(

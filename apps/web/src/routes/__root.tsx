@@ -31,6 +31,7 @@ import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDi
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { FirstRunPrompts } from "../components/desktop/FirstRunPrompts";
+import { TelemetryConsentCoordinator } from "../components/onboarding/TelemetryConsentPrompt";
 import { ConnectionCatalogUnreadableToast } from "../components/desktop/ConnectionCatalogUnreadableNotice";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { HubNodesImportCoordinator } from "../components/desktop/HubNodesImportCoordinator";
@@ -285,6 +286,7 @@ function RootRouteBranch() {
           <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
         ) : null}
         {isElectron && primaryEnvironmentAuthenticated ? <FirstRunPrompts /> : null}
+        {!isElectron && primaryEnvironmentAuthenticated ? <TelemetryConsentCoordinator /> : null}
         {appShell}
         {/* Keep the theme editor above the router so drafts survive navigation. */}
         <ThemeEditorHost />

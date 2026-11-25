@@ -372,6 +372,7 @@ export const make = Effect.gen(function* () {
       serverBrowserStopLoading: true,
       nativeServerBrowserStopLoading: true,
       ...(supportsKeepAwake(hostPlatform) ? { keepAwakeWhileAgentsWork: true } : {}),
+      telemetryConsent: true,
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,

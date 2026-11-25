@@ -101,6 +101,9 @@ export class AnalyticsService extends Context.Service<
 
     readonly flush: Effect.Effect<void>;
 
+    /** GOAT_TELEMETRY_ENABLED's decision, which outranks the person's setting; doubles may leave it out. */
+    readonly telemetryOverride?: Effect.Effect<"enabled" | "disabled" | undefined>;
+
     /**
      * Records `install.owner_observed` for each owner of this install that the
      * server read itself or a connecting client reported. Each owner is sent once
@@ -475,7 +478,11 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  return AnalyticsService.of({ record, flush, recordOwners });
+  const telemetryOverride = Effect.map(environmentOverride, (override) =>
+    override === "pending" ? undefined : override,
+  );
+
+  return AnalyticsService.of({ record, flush, telemetryOverride, recordOwners });
 });
 
 export const layer = Layer.effect(AnalyticsService, make);

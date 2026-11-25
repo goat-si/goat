@@ -43,6 +43,7 @@ import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { TelemetryConsentSection } from "./TelemetryConsentSection";
 import { ComputerUseHistoryRetentionRow } from "./computerUse/ComputerUseHistoryRetentionRow";
 import {
   ComputerUseAdvancedRow,
@@ -951,6 +952,13 @@ function ServerSettingsDetail(props: {
                       />
                     </View>
                   </SettingsSection>
+                  <TelemetryConsentSection
+                    consent={uniform("telemetryConsent")}
+                    servers={targets.map((target) => target.environment.serverConfig)}
+                    disabled={disabledFor("telemetryConsent")}
+                    projectSelected={projectSelected}
+                    write={write}
+                  />
                 </>
               ) : null}
             </>

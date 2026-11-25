@@ -1,7 +1,8 @@
 # Product usage data
 
-GOAT sends no product usage data until you turn it on. A new or updated GOAT server sends nothing
-while you have not chosen, and nothing after you choose not to share.
+GOAT sends no product usage data until you turn it on. The first time you open GOAT on the desktop
+or in a browser, it asks whether to share; an updated GOAT asks once too. Until you answer, and
+after you choose not to share, nothing is sent.
 
 ## What is sent when sharing is on
 
@@ -38,11 +39,15 @@ after that. If cleanup is down for more than about a day, deletion waits for it 
 
 ## Turn sharing on or off
 
-Set `GOAT_TELEMETRY_ENABLED=true` in the server's environment before starting it to share, or
-`GOAT_TELEMETRY_ENABLED=false` to keep sharing off whatever is chosen elsewhere. The desktop app
-reads the variable from your shell profile (for example `~/.zshrc`) on macOS and Linux, so export it
-there and restart the app. On Windows, set it as a user environment variable. A browser or mobile
-client does not read the server's environment variables.
+Open **Settings > General > Privacy** and switch **Share usage data**. On mobile, it is under
+**Settings > Maintenance**. The choice belongs to the server, so it applies to every device that
+connects to it, and each server you connect to has its own.
+
+On a server without a screen, set `GOAT_TELEMETRY_ENABLED=true` in its environment before starting
+it to share, or `GOAT_TELEMETRY_ENABLED=false` to keep sharing off. The variable overrides the
+switch, which then shows that the environment sets it. The desktop app reads the variable from your
+shell profile (for example `~/.zshrc`) on macOS and Linux, so export it there and restart the app.
+On Windows, set it as a user environment variable.
 
 Turning sharing off stops it at once: events waiting to be sent are dropped. Choosing not to share
 also deletes the installation's random identifier, so sharing again later starts with a new one.

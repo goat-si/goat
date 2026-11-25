@@ -1435,6 +1435,8 @@ export const layerWsRpc = (
         readonly deferDirectEndpoints?: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
+        const telemetryOverride =
+          analytics.telemetryOverride && (yield* analytics.telemetryOverride);
         const providers = yield* providerRegistry.getProviders.pipe(
           Effect.flatMap(options.projectProviders ?? projectProviderReply()),
         );
@@ -1492,6 +1494,7 @@ export const layerWsRpc = (
                 }
               : {}),
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
+            ...(telemetryOverride === undefined ? {} : { telemetryOverride }),
           },
           settings,
           ...speechStreamingCapabilities,
