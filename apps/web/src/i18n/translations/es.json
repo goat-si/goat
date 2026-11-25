@@ -979,7 +979,7 @@
   "dc45ce3ddca31273": "extracción automática predeterminada",
   "4f2a1d5aef3f73a5": "Desactivar la extracción automática",
   "0c8037e10e1354fa": "Extracción automática predeterminada",
-  "acdeb0c1b0567098": "ubicación de los worktrees",
-  "be9514e5dd387acf": "Carpeta donde se crean los nuevos worktrees, en cualquier unidad, por ejemplo D:\\worktrees o ~/worktrees. Los worktrees existentes permanecen en su ubicación. Déjala vacía para usar la carpeta de inicio de GOAT.",
+  "acdeb0c1b0567098": "ubicación de los árboles de trabajo",
+  "be9514e5dd387acf": "Carpeta donde se crean los nuevos árboles de trabajo, en cualquier unidad, por ejemplo D:\\worktrees o ~/worktrees. Los árboles de trabajo existentes permanecen en su ubicación. Déjala vacía para usar la carpeta de inicio de GOAT.",
   "e40e6d4ec89b5365": "Predeterminado"
 }

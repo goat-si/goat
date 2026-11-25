@@ -975,11 +975,11 @@
   "78f82fef9e0c8661": "Repositorys",
   "fd5e987709679db9": "Hält den Standardbranch dieses Projekts aktuell, wenn der Checkout keine lokalen Änderungen oder Commits enthält.",
   "a8d6b69e67c6015e": "Hält den Standardbranch aktuell, wenn der Checkout keine lokalen Änderungen oder Commits enthält. Projekte können diese Einstellung überschreiben.",
-  "8ae95350a8a0186f": "Speicherort und Bereinigung von Worktrees sowie Artefakte und Protokolle.",
+  "8ae95350a8a0186f": "Speicherort und Bereinigung von Arbeitsbäumen sowie Artefakte und Protokolle.",
   "dc45ce3ddca31273": "automatisches Pullen standardmäßig",
   "4f2a1d5aef3f73a5": "Automatisches Pullen deaktivieren",
   "0c8037e10e1354fa": "Automatisches Pullen standardmäßig",
-  "acdeb0c1b0567098": "Speicherort der Worktrees",
-  "be9514e5dd387acf": "Ordner für neue Worktrees auf einem beliebigen Laufwerk, z. B. D:\\worktrees oder ~/worktrees. Bestehende Worktrees bleiben an ihrem Speicherort. Leer lassen, um den GOAT-Home-Ordner zu verwenden.",
+  "acdeb0c1b0567098": "Speicherort der Arbeitsbäume",
+  "be9514e5dd387acf": "Ordner für neue Arbeitsbäume auf einem beliebigen Laufwerk, z. B. D:\\worktrees oder ~/worktrees. Bestehende Arbeitsbäume bleiben an ihrem Speicherort. Leer lassen, um den GOAT-Home-Ordner zu verwenden.",
   "e40e6d4ec89b5365": "Standard"
 }
