@@ -179,7 +179,7 @@ export function ArchivedThreadsPanel() {
       const clicked = await readLocalApi()?.contextMenu.show(
         ARCHIVE_ACTIONS.map(({ action, label }) => ({
           id: action,
-          label,
+          label: m(label),
           destructive: action === "delete",
         })),
         position,
