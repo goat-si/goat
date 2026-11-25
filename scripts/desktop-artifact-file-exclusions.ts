@@ -4,6 +4,9 @@
 type DesktopBuildArch = "arm64" | "x64" | "universal";
 
 export const DESKTOP_FILE_EXCLUSIONS = [
+  // pnpm has already applied the staged patches to production dependencies before packaging.
+  "!patches",
+  "!patches/**/*",
   // Cursor walks from argv[1] to platform assets; helpers and native addons need real paths outside ASAR.
   "!**/node_modules/@cursor/sdk-*/**/*",
   "!apps/desktop/prod-resources/cursor-sdk",

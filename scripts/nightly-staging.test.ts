@@ -3,11 +3,12 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
-import { makeGitHubReleasesClient } from "./lib/github-releases.ts";
+import { GitHubReleaseError, makeGitHubReleasesClient } from "./lib/github-releases.ts";
 import {
   cleanupStaging,
   getHandoffs,
@@ -170,14 +171,64 @@ describe("nightly staging hand-off", () => {
       expect(draft.assets.map((asset) => asset.name).at(-1)).toBe("js-bundle.manifest.json");
 
       const dest = tempDir();
-      expect(yield* getHandoffs(client, { tag, names: ["js-bundle"], dir: dest })).toEqual([
-        "js-bundle",
-      ]);
+      // Force the second part to finish before the first, regardless of host speed.
+      const secondDownloaded = yield* Deferred.make<void>();
+      const completed: number[] = [];
+      const first = draft.assets[0]!.id;
+      const second = draft.assets[1]!.id;
+      const downloadAsset = Effect.fn(function* (id: number) {
+        if (id === first) yield* Deferred.await(secondDownloaded);
+        const bytes = yield* client.downloadAsset(id);
+        completed.push(id);
+        if (id === second) yield* Deferred.succeed(secondDownloaded, undefined);
+        return bytes;
+      });
+      expect(
+        yield* getHandoffs({ ...client, downloadAsset }, { tag, names: ["js-bundle"], dir: dest }),
+      ).toEqual(["js-bundle"]);
+      expect(completed.indexOf(second)).toBeLessThan(completed.indexOf(first));
       expect(NodeFS.readFileSync(NodePath.join(dest, "server/dist/index.mjs"), "utf8")).toBe(big);
       expect(
         NodeFS.readFileSync(NodePath.join(dest, "desktop/dist-electron/main.js"), "utf8"),
       ).toBe("main");
       expect(NodeFS.existsSync(NodePath.join(dest, "other"))).toBe(false);
+    }),
+  );
+
+  it.effect("propagates a concurrent download failure before and after a written batch", () =>
+    Effect.gen(function* () {
+      const github = fakeGitHub();
+      const client = yield* clientFor(github.fetch);
+      const source = tempDir();
+      writeTree(source, { "payload.txt": "x".repeat(5000) });
+      const manifest = yield* putHandoff(client, {
+        tag,
+        target: sha,
+        name: "failure",
+        dir: source,
+        paths: [],
+        partBytes: 1024,
+      });
+      expect(manifest.parts.length).toBeGreaterThan(3);
+      const assets = draftOf(github, "failure").assets;
+      for (const offset of [0, 2]) {
+        const siblingStarted = yield* Deferred.make<void>();
+        const failedId = assets[offset]!.id;
+        const siblingId = assets[offset + 1]!.id;
+        const downloadAsset = Effect.fn(function* (id: number) {
+          if (id === failedId) {
+            yield* Deferred.await(siblingStarted);
+            return yield* new GitHubReleaseError({ message: "injected download failure" });
+          }
+          if (id === siblingId) yield* Deferred.succeed(siblingStarted, undefined);
+          return yield* client.downloadAsset(id);
+        });
+        const error = yield* getHandoffs(
+          { ...client, downloadAsset },
+          { tag, names: ["failure"], dir: tempDir() },
+        ).pipe(Effect.flip);
+        expect(error.message).toContain("injected download failure");
+      }
     }),
   );
 
@@ -253,6 +304,13 @@ describe("nightly staging hand-off", () => {
         (yield* getHandoffs(client, { tag, names: ["x"], dir: tempDir() }).pipe(Effect.flip))
           .message,
       ).toContain("does not match its manifest");
+      draft.assets[1]!.bytes = new Uint8Array(1);
+      const truncatedDest = tempDir();
+      const truncated = yield* getHandoffs(client, { tag, names: ["x"], dir: truncatedDest }).pipe(
+        Effect.flip,
+      );
+      expect(truncated.message).toContain("x.tar.001 does not match its manifest");
+      expect(NodeFS.readdirSync(truncatedDest)).toEqual([]);
       draft.assets.splice(1, 1);
       const missing = yield* getHandoffs(client, {
         tag,
