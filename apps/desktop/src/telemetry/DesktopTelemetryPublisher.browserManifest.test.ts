@@ -55,6 +55,7 @@ function layerElectronApp(
 const layerShell = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
   installIntoProcess: Effect.succeed(true),
   awaitDiscovery: Effect.succeed(true),
+  discoverySettled: Effect.succeed(true),
   updates: Stream.empty,
 });
 const makeLayerCuaRouting = (shell = layerShell) =>
@@ -86,6 +87,7 @@ it.effect("sends shell environment only to the primary backend (#28556)", () => 
   const shell = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
     installIntoProcess: Effect.succeed(true),
     awaitDiscovery: Effect.succeed(true),
+    discoverySettled: Effect.succeed(true),
     updates: Stream.make({
       version: 1,
       type: "shellEnvironment",

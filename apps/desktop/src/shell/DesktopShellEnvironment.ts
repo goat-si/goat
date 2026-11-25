@@ -85,6 +85,7 @@ export class DesktopShellEnvironment extends Context.Service<
     // Desktop owns discovery, including on cache misses; the backend receives updates over fd4.
     readonly installIntoProcess: Effect.Effect<boolean>;
     readonly awaitDiscovery: Effect.Effect<boolean>;
+    readonly discoverySettled: Effect.Effect<boolean>;
     readonly updates: Stream.Stream<DesktopShellEnvironmentSnapshot>;
   }
 >()("@goat/desktop/shell/DesktopShellEnvironment") {}
@@ -760,6 +761,7 @@ export const make = Effect.gen(function* () {
   return DesktopShellEnvironment.of({
     installIntoProcess,
     awaitDiscovery: installIntoProcess.pipe(Effect.andThen(Deferred.await(discovered))),
+    discoverySettled: Deferred.isDone(discovered),
     updates,
   });
 });

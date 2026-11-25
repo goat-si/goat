@@ -20,6 +20,7 @@ const layerShellEnvironment = (prepared = true) =>
   Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
     installIntoProcess: Effect.succeed(prepared),
     awaitDiscovery: Effect.succeed(prepared),
+    discoverySettled: Effect.succeed(true),
     updates: Stream.empty,
   });
 export const layerBackendConfiguration = (prepared = true) =>
