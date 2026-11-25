@@ -9,6 +9,7 @@ import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
+import * as PlatformError from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -185,21 +186,53 @@ const layerPublishingSettings = (consent: TelemetryConsent) =>
     }),
   ).pipe(Layer.provide(ServerSettings.layerTest({ telemetryConsent: consent })));
 
-/** Removing `target` completes `removed`, so a test can await the install id's deletion. */
-const layerReportingRemoval = (target: string, removed: Deferred.Deferred<void>) =>
-  Layer.effect(
-    FileSystem.FileSystem,
-    Effect.map(FileSystem.FileSystem, (fileSystem) =>
-      FileSystem.FileSystem.of({
-        ...fileSystem,
-        remove: (path, options) =>
-          fileSystem
-            .remove(path, options)
-            .pipe(
-              Effect.ensuring(path === target ? Deferred.succeed(removed, undefined) : Effect.void),
+type RemoveId = (
+  remove: Effect.Effect<void, PlatformError.PlatformError>,
+) => Effect.Effect<void, PlatformError.PlatformError>;
+
+/**
+ * AnalyticsService for a granted install whose settings writes reach subscribers. Deleting the
+ * install id runs `removeId`, which decides whether and when the real removal happens.
+ */
+const layerWithdrawable = (client: HttpClient.HttpClient, removeId: RemoveId) =>
+  Layer.unwrap(
+    Effect.map(ServerConfig.ServerConfig, (config) =>
+      AnalyticsService.layer.pipe(
+        Layer.provide(
+          Layer.effect(
+            FileSystem.FileSystem,
+            Effect.map(FileSystem.FileSystem, (fileSystem) =>
+              FileSystem.FileSystem.of({
+                ...fileSystem,
+                remove: (path, options) =>
+                  path === config.anonymousIdPath
+                    ? removeId(fileSystem.remove(path, options))
+                    : fileSystem.remove(path, options),
+              }),
             ),
-      }),
+          ),
+        ),
+        Layer.provideMerge(layerPublishingSettings("granted")),
+      ),
     ),
+  ).pipe(
+    Layer.provideMerge(
+      ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-withdraw-" }),
+    ),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(HostProcess.Platform, "linux"),
+        Layer.succeed(HostProcess.Architecture, "x64"),
+        Layer.succeed(HttpClient.HttpClient, client),
+      ),
+    ),
+  );
+
+const decodeEvents = (bodies: ReadonlyArray<string>) =>
+  Effect.forEach(bodies, (body) => decodeSentBatch(body)).pipe(
+    Effect.map((sent) => sent.flatMap((body) => body.batch)),
+    Effect.orDie,
   );
 
 /**
@@ -368,34 +401,100 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         return before;
       }).pipe(
         Effect.provide(
-          Layer.unwrap(
-            Effect.map(ServerConfig.ServerConfig, (config) =>
-              AnalyticsService.layer.pipe(
-                Layer.provide(layerReportingRemoval(config.anonymousIdPath, removed)),
-                Layer.provideMerge(layerPublishingSettings("granted")),
-              ),
-            ),
-          ).pipe(
-            Layer.provideMerge(
-              ServerConfig.ServerConfig.layerTest(process.cwd(), {
-                prefix: "goat-telemetry-withdraw-",
-              }),
-            ),
-            Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(HostProcess.Platform, "linux"),
-                Layer.succeed(HostProcess.Architecture, "x64"),
-                Layer.succeed(HttpClient.HttpClient, client),
-              ),
-            ),
+          layerWithdrawable(client, (remove) =>
+            remove.pipe(Effect.ensuring(Deferred.succeed(removed, undefined))),
           ),
         ),
       );
-      const sent = yield* Effect.forEach(bodies, (body) => decodeSentBatch(body)).pipe(
-        Effect.orDie,
+      const events = yield* decodeEvents(bodies);
+      assert.deepEqual(
+        events.map((event) => event.event),
+        ["test.after-regrant"],
       );
-      const events = sent.flatMap((body) => body.batch);
+      assert.notEqual(events[0]?.distinct_id, before.distinctId);
+    }),
+  );
+
+  it.effect("a decline during a send keeps that batch from being retried after sharing again", () =>
+    Effect.gen(function* () {
+      const bodies: Array<string> = [];
+      const sending = yield* Deferred.make<void>();
+      const firstAnswer = yield* Deferred.make<number>();
+      const removed = yield* Deferred.make<void>();
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.body._tag === "Uint8Array")
+            bodies.push(new TextDecoder().decode(request.body.body));
+          const first = yield* Deferred.succeed(sending, undefined);
+          const status = first ? yield* Deferred.await(firstAnswer) : 204;
+          return HttpClientResponse.fromWeb(request, new Response(null, { status }));
+        }),
+      );
+      const before = yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* analytics.record("test.before-decline", {});
+        const before = yield* getTelemetryIdentity;
+        const flushing = yield* analytics.flush.pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(sending);
+        yield* settings.updateSettings({ telemetryConsent: "declined" });
+        yield* Deferred.await(removed);
+        yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* Deferred.succeed(firstAnswer, 503);
+        yield* Fiber.join(flushing);
+        yield* analytics.record("test.after-regrant", {});
+        yield* analytics.flush;
+        return before;
+      }).pipe(
+        Effect.provide(
+          layerWithdrawable(client, (remove) =>
+            remove.pipe(Effect.ensuring(Deferred.succeed(removed, undefined))),
+          ),
+        ),
+      );
+      const events = yield* decodeEvents(bodies);
+      assert.deepEqual(
+        events.map((event) => [event.event, event.distinct_id === before.distinctId]),
+        [
+          ["test.before-decline", true],
+          ["test.after-regrant", false],
+        ],
+      );
+    }),
+  );
+
+  it.effect("an install id that could not be deleted is never used again", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      const attempted = yield* Deferred.make<void>();
+      let attempts = 0;
+      const before = yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* analytics.record("test.before-decline", {});
+        const before = yield* getTelemetryIdentity;
+        yield* settings.updateSettings({ telemetryConsent: "declined" });
+        yield* Deferred.await(attempted);
+        yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.record("test.after-regrant", {});
+        yield* analytics.flush;
+        return before;
+      }).pipe(
+        Effect.provide(
+          layerWithdrawable(client, (remove) => {
+            attempts += 1;
+            if (attempts > 1) return remove;
+            return Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "remove",
+              }),
+            ).pipe(Effect.ensuring(Deferred.succeed(attempted, undefined)));
+          }),
+        ),
+      );
+      const events = yield* decodeEvents(bodies);
       assert.deepEqual(
         events.map((event) => event.event),
         ["test.after-regrant"],

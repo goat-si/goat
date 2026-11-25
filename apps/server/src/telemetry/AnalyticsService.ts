@@ -191,17 +191,39 @@ export const make = Effect.gen(function* () {
   >();
   const identityRef = yield* Ref.make<Option.Option<TelemetryIdentity>>(Option.none());
   const identityResetRef = yield* Ref.make(false);
-  const identity = Effect.gen(function* () {
-    const known = yield* Ref.get(identityRef);
-    if (Option.isSome(known)) return known.value;
-    const created = yield* getTelemetryIdentity.pipe(Effect.provide(identityContext));
-    yield* Ref.set(identityRef, Option.some(created));
-    return created;
+  // Held while the id file is deleted, so a new id is never read from a file that is going away.
+  const identityLock = yield* Semaphore.make(1);
+  // A deletion that failed: no id is used until the file is gone.
+  const resetPendingRef = yield* Ref.make(false);
+  const resetIdentity = Effect.gen(function* () {
+    yield* Ref.set(identityRef, Option.none());
+    const removed = yield* resetTelemetryIdentity.pipe(Effect.provide(identityContext));
+    yield* Ref.set(resetPendingRef, !removed);
+    return removed;
   });
+  const identity = identityLock.withPermit(
+    Effect.gen(function* () {
+      const known = yield* Ref.get(identityRef);
+      if (Option.isSome(known)) return known.value;
+      if ((yield* Ref.get(resetPendingRef)) && !(yield* resetIdentity)) {
+        return { distinctId: null, installId: null } satisfies TelemetryIdentity;
+      }
+      const created = yield* getTelemetryIdentity.pipe(Effect.provide(identityContext));
+      yield* Ref.set(identityRef, Option.some(created));
+      return created;
+    }),
+  );
   const crypto = yield* SecureRandom.SecureRandom;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const inFlightRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const deliveryRef = yield* Ref.make<DeliveryState>(IDLE_DELIVERY);
+  // Bumped whenever queued events are dropped, so work begun before cannot put events back.
+  const generationRef = yield* Ref.make(0);
+  const dropQueued = Effect.gen(function* () {
+    yield* Ref.update(generationRef, (generation) => generation + 1);
+    yield* Ref.set(bufferRef, []);
+    yield* Ref.set(deliveryRef, IDLE_DELIVERY);
+  });
   const recordedOwnersRef = yield* Ref.make<
     Readonly<Record<"server" | "client", ReadonlySet<string>>>
   >({ server: new Set(), client: new Set() });
@@ -245,10 +267,11 @@ export const make = Effect.gen(function* () {
 
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
+    generation: number,
   ) {
     if (!(yield* telemetryEnabled)) return;
     const { distinctId, installId } = yield* identity;
-    if (!distinctId) return;
+    if (!distinctId || (yield* Ref.get(generationRef)) !== generation) return;
 
     const payload = {
       api_key: telemetryConfig.posthogKey,
@@ -296,11 +319,9 @@ export const make = Effect.gen(function* () {
       yield* Ref.set(identityResetRef, false);
       return true;
     }
-    yield* Ref.set(bufferRef, []);
-    yield* Ref.set(deliveryRef, IDLE_DELIVERY);
+    yield* dropQueued;
     if ((yield* consent) === "declined" && !(yield* Ref.get(identityResetRef))) {
-      yield* resetTelemetryIdentity.pipe(Effect.provide(identityContext));
-      yield* Ref.set(identityRef, Option.none());
+      yield* identityLock.withPermit(resetIdentity);
       yield* Ref.set(identityResetRef, true);
     }
     return false;
@@ -310,6 +331,7 @@ export const make = Effect.gen(function* () {
   const flush: AnalyticsService["Service"]["flush"] = Effect.gen(function* () {
     if (!(yield* discardUnlessEnabled)) return;
     while (true) {
+      const generation = yield* Ref.get(generationRef);
       const delivery = yield* Ref.get(deliveryRef);
       const batch = delivery.failedBatch.length > 0 ? delivery.failedBatch : yield* takeBatch;
       if (batch.length === 0) {
@@ -317,8 +339,10 @@ export const make = Effect.gen(function* () {
       }
 
       yield* Ref.set(inFlightRef, batch);
-      const sent = yield* Effect.result(sendBatch(batch));
+      const sent = yield* Effect.result(sendBatch(batch, generation));
       yield* Ref.set(inFlightRef, []);
+      // Withdrawn while sending: this batch must not be retried.
+      if ((yield* Ref.get(generationRef)) !== generation) return;
       if (Result.isSuccess(sent)) {
         yield* Ref.set(deliveryRef, IDLE_DELIVERY);
         continue;
@@ -373,17 +397,16 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  // A saved answer other than "granted" acts at once, so sharing again before the next background
-  // check cannot send the old queue under the old id. Only GOAT_TELEMETRY_ENABLED=true outranks it.
+  // A saved answer other than "granted" acts at once, without waiting for a send in progress, so
+  // sharing again soon after cannot send the old queue or reuse the old id. Only
+  // GOAT_TELEMETRY_ENABLED=true outranks it.
   const withdraw = Effect.fn("AnalyticsService.withdraw")(function* (answer: TelemetryConsent) {
     if (answer === "granted" || (yield* environmentOverride) === "enabled") return;
-    yield* Ref.set(bufferRef, []);
-    yield* Ref.set(deliveryRef, IDLE_DELIVERY);
+    yield* dropQueued;
     if (answer !== "declined") return;
-    yield* resetTelemetryIdentity.pipe(Effect.provide(identityContext));
-    yield* Ref.set(identityRef, Option.none());
+    yield* identityLock.withPermit(resetIdentity);
     yield* Ref.set(identityResetRef, true);
-  }, flushLock.withPermit);
+  });
   const consentChanges = yield* settings.subscribeChanges;
   yield* Stream.runForEach(
     consentChanges.pipe(
@@ -395,11 +418,12 @@ export const make = Effect.gen(function* () {
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
+      const generation = yield* Ref.get(generationRef);
       if (!(yield* telemetryEnabled) || !(yield* identity).distinctId) return;
 
       // Catch Node UUID defects too; best-effort telemetry drops events without UUIDs.
       const uuid = yield* Effect.exit(crypto.uuidV7());
-      if (Exit.isFailure(uuid)) return;
+      if (Exit.isFailure(uuid) || (yield* Ref.get(generationRef)) !== generation) return;
 
       const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties);
       if (enqueueResult.dropped) {

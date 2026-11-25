@@ -147,16 +147,17 @@ export const getTelemetryIdentity = Effect.gen(function* () {
 
 export type TelemetryIdentity = Effect.Success<typeof getTelemetryIdentity>;
 
-/** Forgets the install id, so sharing turned on again reports as a new install. */
+/** Forgets the install id, so sharing turned on again reports as a new install. False if it stays. */
 export const resetTelemetryIdentity = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const { anonymousIdPath } = yield* ServerConfig.ServerConfig;
-  yield* fileSystem.remove(anonymousIdPath, { force: true }).pipe(
+  return yield* fileSystem.remove(anonymousIdPath, { force: true }).pipe(
+    Effect.as(true),
     Effect.catch((cause) =>
       Effect.logWarning("Failed to reset the telemetry install id", {
         filePath: anonymousIdPath,
         ...getTelemetryIdentityCauseAnnotations(cause),
-      }),
+      }).pipe(Effect.as(false)),
     ),
   );
 }).pipe(Effect.withSpan("resetTelemetryIdentity"));

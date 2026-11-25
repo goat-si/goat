@@ -22,7 +22,9 @@ events:
 - **ChatGPT sign-in**: whether a sign-in or profile transfer completed, how long it took, and how
   many accounts are connected.
 - **Ownership**: the hashed GOAT Connect account and the hashed random device identifier of each
-  client that connects, so one person's installations can be counted together.
+  client that connects, so one person's installations can be counted together. Clients always
+  pass these hashes to the GOAT server they connect to; the server discards them unless sharing is
+  on.
 
 Events never include prompts, responses, file contents, file paths, project or thread names,
 credentials or tokens, conversation IDs, raw provider events, child-agent output, or device names.
