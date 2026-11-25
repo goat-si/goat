@@ -925,6 +925,24 @@ describe("DesktopShellEnvironment", () => {
     }),
   );
 
+  it.effect("applies a saved Windows user telemetry choice missing from the launcher", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { PATH: "C:\\Windows\\System32" };
+
+      yield* runShellEnvironment({
+        env,
+        platform: "win32",
+        handler: (command) =>
+          command._tag === "StandardCommand" &&
+          String(command.args.at(-1)).includes("GOAT_TELEMETRY_ENABLED")
+            ? envOutput({ PATH: "C:\\Windows\\System32", GOAT_TELEMETRY_ENABLED: "false" })
+            : envOutput({ PATH: "C:\\Windows\\System32" }),
+      });
+
+      assert.equal(env.GOAT_TELEMETRY_ENABLED, "false");
+    }),
+  );
+
   it.effect("replaces a Path-spelled Windows PATH instead of adding a second key", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { Path: "C:\\Windows\\System32" };

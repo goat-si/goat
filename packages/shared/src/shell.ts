@@ -268,6 +268,18 @@ export function buildEnvironmentCaptureCommand(
     : command;
 }
 
+// A variable saved after this process started is only in the User or Machine registry scope.
+function windowsEnvironmentValueCommand(name: string): string {
+  if (name === "PATH") return "$value = [Environment]::GetEnvironmentVariable('PATH')";
+  return (
+    "$value = @(" +
+    `[Environment]::GetEnvironmentVariable('${name}','Process'),` +
+    `[Environment]::GetEnvironmentVariable('${name}','User'),` +
+    `[Environment]::GetEnvironmentVariable('${name}','Machine')` +
+    ") | Where-Object { $_ } | Select-Object -First 1"
+  );
+}
+
 function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -278,7 +290,7 @@ function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): st
 
       return [
         `Write-Output '${envCaptureStart(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        windowsEnvironmentValueCommand(name),
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${envCaptureEnd(name)}'`,
       ];
