@@ -7,6 +7,7 @@ import {
   listLoginShellCandidates,
   mergePathValues,
   setWindowsPath,
+  windowsEnvironmentValueCommand,
 } from "@goat/shared/shell";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -216,7 +217,9 @@ const captureWindowsEnvironmentCommand = (names: ReadonlyArray<string>) =>
     ...names.flatMap((name) => {
       return [
         `Write-Output '${startMarker(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        name === "GOAT_TELEMETRY_ENABLED" || name === "T3CODE_TELEMETRY_ENABLED" // goat-rename: legacy
+          ? windowsEnvironmentValueCommand(name)
+          : `$value = [Environment]::GetEnvironmentVariable('${name}')`,
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${endMarker(name)}'`,
       ];
@@ -411,10 +414,18 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (!config.env.FNM_MULTISHELL_PATH && profile.FNM_MULTISHELL_PATH) {
       config.env.FNM_MULTISHELL_PATH = profile.FNM_MULTISHELL_PATH;
     }
-    // A choice saved in the user's environment after the launcher started reaches the server too.
-    for (const name of ["GOAT_TELEMETRY_ENABLED", "T3CODE_TELEMETRY_ENABLED"] as const) {
-      // goat-rename: legacy
-      if (!config.env[name] && profile[name]) config.env[name] = profile[name];
+    // An opt-out discovered after launch overrides an inherited opt-in.
+    for (const name of [
+      "GOAT_TELEMETRY_ENABLED",
+      "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
+    ] as const) {
+      const value = profile[name];
+      if (
+        value &&
+        (!config.env[name] || !["true", "1", "yes", "on"].includes(value.trim().toLowerCase()))
+      ) {
+        config.env[name] = value;
+      }
     }
     return Boolean(noProfile.PATH && profile.PATH);
   },
