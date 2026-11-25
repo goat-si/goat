@@ -32,7 +32,9 @@ export interface ReplayedHandoffInput {
   readonly runOrdinal: number;
 }
 
-const SLASH_COMMAND = /^\s*\/[^\s/]+(?:\s|$)/u;
+// A command name, never a path: "/README.md explain" and "/tmp inspect" are ordinary prompts.
+const SLASH_COMMAND =
+  /^\s*\/(?!(?:tmp|usr|var|etc|opt|home|root|srv|mnt|dev|proc|bin|sbin|lib|nix|private|Users|Volumes|Applications|Library|System)(?:\s|$))[A-Za-z][\w:-]*(?:\s|$)/u;
 
 export const isSlashCommandMessage = (message: {
   readonly role: string;
