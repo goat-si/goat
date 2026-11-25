@@ -26,7 +26,11 @@ import {
   ANALYTICS_EVENT_PROPERTIES,
 } from "@goat/shared/analyticsAllowlist";
 
+import type { TelemetryConsent } from "@goat/contracts";
+import * as FileSystem from "effect/FileSystem";
+
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
@@ -127,6 +131,40 @@ const recordTwentyEvents = Effect.gen(function* () {
   }
 });
 
+/** Every batch body sent, answered 204. */
+const recordingClient = () => {
+  const bodies: Array<string> = [];
+  const client = HttpClient.make((request) =>
+    Effect.sync(() => {
+      if (request.body._tag === "Uint8Array")
+        bodies.push(new TextDecoder().decode(request.body.body));
+      return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }));
+    }),
+  );
+  return { bodies, client };
+};
+
+/** AnalyticsService with `env` as the server environment and the person's stored `consent`. */
+const layerWithConsent = (
+  client: HttpClient.HttpClient,
+  consent: TelemetryConsent,
+  env: Readonly<Record<string, unknown>> = {},
+) =>
+  AnalyticsService.layer.pipe(
+    Layer.provideMerge(
+      ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-consent-" }),
+    ),
+    Layer.provideMerge(ServerSettings.layerTest({ telemetryConsent: consent })),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(HostProcess.Platform, "linux"),
+        Layer.succeed(HostProcess.Architecture, "x64"),
+        Layer.succeed(HttpClient.HttpClient, client),
+      ),
+    ),
+  );
+
 /**
  * Runs `record` (20 events by default), then lets `minutes` of background
  * flushes run against a client that answers every send with `respond`.
@@ -155,6 +193,7 @@ const sendFor = (
       }),
     );
     const runtimeLayer = AnalyticsService.layer.pipe(
+      Layer.provide(ServerSettings.layerTest()),
       Layer.provideMerge(
         ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-retry-" }),
       ),
@@ -186,6 +225,94 @@ const sendFor = (
   });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService test", (it) => {
+  it.effect.each(["undecided", "declined"] as const)(
+    "sends nothing while the person's answer is %s and the environment does not decide",
+    (consent) =>
+      Effect.gen(function* () {
+        const { bodies, client } = recordingClient();
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+          yield* analytics.flush;
+          const config = yield* ServerConfig.ServerConfig;
+          assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(config.anonymousIdPath));
+        }).pipe(Effect.provide(layerWithConsent(client, consent)));
+        assert.deepEqual(bodies, []);
+      }),
+  );
+
+  it.effect("a granted install sends under its random install id", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+        yield* analytics.flush;
+      }).pipe(Effect.provide(layerWithConsent(client, "granted")));
+      const sent = yield* Effect.forEach(bodies, (body) => decodeSentBatch(body));
+      const events = sent.flatMap((body) => body.batch);
+      assert.deepEqual(
+        events.map((event) => event.event),
+        ["server.boot.heartbeat"],
+      );
+      assert.equal(events[0]?.distinct_id, events[0]?.properties.installId);
+    }),
+  );
+
+  it.effect.each([
+    { value: "true", consent: "undecided" },
+    { value: "false", consent: "granted" },
+  ] as const)(
+    "T3 Code's variable set to $value never sends for a $consent install",
+    ({ value, consent }) =>
+      Effect.gen(function* () {
+        const { bodies, client } = recordingClient();
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+          yield* analytics.flush;
+        }).pipe(
+          Effect.provide(layerWithConsent(client, consent)),
+          Effect.provideService(HostProcess.Environment, { T3CODE_TELEMETRY_ENABLED: value }), // goat-rename: legacy
+        );
+        assert.deepEqual(bodies, []);
+      }),
+  );
+
+  it.effect("GOAT_TELEMETRY_ENABLED=false wins over a granted answer", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+        yield* analytics.flush;
+      }).pipe(
+        Effect.provide(layerWithConsent(client, "granted", { GOAT_TELEMETRY_ENABLED: "false" })),
+      );
+      assert.deepEqual(bodies, []);
+    }),
+  );
+
+  it.effect("declining stops sending at once, drops queued events and forgets the install id", () =>
+    Effect.gen(function* () {
+      const { bodies, client } = recordingClient();
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* analytics.record("test.queued.before-decline", {});
+        assert.isTrue(yield* fileSystem.exists(config.anonymousIdPath));
+        yield* settings.updateSettings({ telemetryConsent: "declined" });
+        yield* analytics.record("test.after-decline", {});
+        yield* analytics.flush;
+        assert.isFalse(yield* fileSystem.exists(config.anonymousIdPath));
+        yield* settings.updateSettings({ telemetryConsent: "granted" });
+        yield* analytics.flush;
+      }).pipe(Effect.provide(layerWithConsent(client, "granted")));
+      assert.deepEqual(bodies, []);
+    }),
+  );
   it.effect("waits for desktop shell consent and honors a late telemetry opt-out", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
@@ -289,6 +416,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           }),
         );
         const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provideMerge(
             ServerConfig.ServerConfig.layerTest(process.cwd(), {
               prefix: "goat-telemetry-interrupted-",
@@ -354,6 +482,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         ),
       );
       const runtimeLayer = AnalyticsService.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provideMerge(
           ServerConfig.ServerConfig.layerTest(process.cwd(), {
             prefix: "goat-telemetry-deadline-",
@@ -392,6 +521,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
     return Effect.gen(function* () {
       const client = HttpClient.make(respondWithStatus(503));
       const runtimeLayer = AnalyticsService.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provideMerge(
           ServerConfig.ServerConfig.layerTest(process.cwd(), {
             prefix: "goat-telemetry-failed-shutdown-",
@@ -430,7 +560,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         prefix: "goat-telemetry-base-",
       });
 
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerTelemetry = AnalyticsService.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provideMerge(layerServerConfig),
+      );
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           GOAT_TELEMETRY_ENABLED: true,
@@ -531,7 +664,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
         prefix: "goat-telemetry-disabled-",
       });
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerTelemetry = AnalyticsService.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provideMerge(layerServerConfig),
+      );
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           GOAT_TELEMETRY_ENABLED: false,
@@ -589,6 +725,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           }),
         );
         const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provideMerge(
             ServerConfig.ServerConfig.layerTest(process.cwd(), {
               prefix: "goat-telemetry-default-",

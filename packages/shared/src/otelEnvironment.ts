@@ -318,6 +318,7 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
   Effect.orDie,
 );
 
+/** GOAT Connect relay spans leave the machine, so they need an explicit opt-in. */
 export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
   Config.all({
     ...sdkFlags,
@@ -325,7 +326,7 @@ export const isRelayTracingEnabled = (env: Readonly<Record<string, string | unde
   }).pipe(
     Effect.map(
       ({ telemetry, goat, spec }) =>
-        telemetry.value !== false && !(goat.value ?? spec.value ?? false),
+        telemetry.value === true && !(goat.value ?? spec.value ?? false),
     ),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
     Effect.orDie,
