@@ -81,7 +81,7 @@ const finishLocal = (
     yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id,thread_id,ordinal,provider,status,requested_at,payload_json)
     VALUES (${run},${child},1,'codex','completed','now','{}')`;
     yield* sql`INSERT INTO orchestration_v2_projection_context_transfers (context_transfer_id,source_thread_id,target_thread_id,target_run_id,type,status,updated_at,payload_json)
-    VALUES (${key},${child},${worker.threadId},${worker.runId!},'subagent_result','completed','now',json_object('sourcePoint',json_object('runId',${run})))`;
+    VALUES (${key},${child},${worker.threadId},${worker.runId!},'subagent_result','consumed','now',json_object('sourcePoint',json_object('runId',${run})))`;
     yield* sql`INSERT INTO thread_run_results (thread_id,run_id,report_json,reported_at)
     VALUES (${child},'unrelated-run','{"outcome":"succeeded"}','now')`;
     if (report)
