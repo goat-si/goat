@@ -25,6 +25,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -197,7 +198,9 @@ export const make = Effect.gen(function* () {
   // Held while the id file is deleted, so a new id is never read from a file that is going away.
   const identityLock = yield* Semaphore.make(1);
   // A deletion that failed: no id is used until the file is gone.
-  const resetPendingRef = yield* Ref.make(false);
+  const resetPendingRef = yield* Ref.make(
+    (yield* consent) === "declined" && (yield* environmentOverride) !== "enabled",
+  );
   const resetIdentity = Effect.gen(function* () {
     yield* Ref.set(identityRef, Option.none());
     const removed = yield* resetTelemetryIdentity.pipe(Effect.provide(identityContext));
@@ -330,10 +333,42 @@ export const make = Effect.gen(function* () {
     return false;
   });
 
+  // A saved answer other than granted withdraws the prior queue and identity.
+  const withdraw = Effect.fn("AnalyticsService.withdraw")(function* (answer: TelemetryConsent) {
+    if (answer === "granted" || (yield* environmentOverride) === "enabled") return;
+    yield* dropQueued;
+    if (answer !== "declined") return;
+    yield* identityLock.withPermit(resetIdentity);
+    yield* Ref.set(identityResetRef, true);
+  });
+  const consentChanges = yield* settings.subscribeChanges;
+  const revision = settings.changesRevision ?? Effect.succeed(0);
+  const processed = yield* SubscriptionRef.make(yield* revision);
+  let lastConsent = yield* consent;
+  const caughtUp = Effect.gen(function* () {
+    const current = yield* revision;
+    return (yield* SubscriptionRef.get(processed)) >= current;
+  });
+  const awaitCaughtUp = SubscriptionRef.changes(processed).pipe(
+    Stream.filterEffect((count) => Effect.map(revision, (current) => count >= current)),
+    Stream.runHead,
+  );
+  yield* Stream.runForEach(consentChanges, (current) =>
+    Effect.gen(function* () {
+      if (current.telemetryConsent !== lastConsent) {
+        lastConsent = current.telemetryConsent;
+        yield* withdraw(current.telemetryConsent);
+      }
+      yield* SubscriptionRef.update(processed, (count) => count + 1);
+    }),
+  ).pipe(Effect.forkScoped);
+
   // Back off even after dropping rejected batches so bad API keys cannot drain the queue in a tight loop.
   const flush: AnalyticsService["Service"]["flush"] = Effect.gen(function* () {
+    if (Option.isNone(yield* awaitCaughtUp.pipe(Effect.timeoutOption("5 seconds")))) return;
     if (!(yield* discardUnlessEnabled)) return;
     while (true) {
+      if (!(yield* caughtUp)) return;
       const generation = yield* Ref.get(generationRef);
       const delivery = yield* Ref.get(deliveryRef);
       const batch = delivery.failedBatch.length > 0 ? delivery.failedBatch : yield* takeBatch;
@@ -393,40 +428,26 @@ export const make = Effect.gen(function* () {
   }).pipe(flushLock.withPermit);
 
   const flushWhenDue = Effect.gen(function* () {
-    if (!(yield* discardUnlessEnabled)) return;
+    if (!(yield* caughtUp) || !(yield* discardUnlessEnabled)) return;
     const { retryAt } = yield* Ref.get(deliveryRef);
     if ((yield* Clock.currentTimeMillis) >= retryAt) {
       yield* flush;
     }
   });
 
-  // A saved answer other than "granted" acts at once, without waiting for a send in progress, so
-  // sharing again soon after cannot send the old queue or reuse the old id. Only
-  // GOAT_TELEMETRY_ENABLED=true outranks it.
-  const withdraw = Effect.fn("AnalyticsService.withdraw")(function* (answer: TelemetryConsent) {
-    if (answer === "granted" || (yield* environmentOverride) === "enabled") return;
-    yield* dropQueued;
-    if (answer !== "declined") return;
-    yield* identityLock.withPermit(resetIdentity);
-    yield* Ref.set(identityResetRef, true);
-  });
-  const consentChanges = yield* settings.subscribeChanges;
-  yield* Stream.runForEach(
-    consentChanges.pipe(
-      Stream.map((current) => current.telemetryConsent),
-      Stream.changes,
-    ),
-    withdraw,
-  ).pipe(Effect.forkScoped);
-
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
       const generation = yield* Ref.get(generationRef);
-      if (!(yield* telemetryEnabled) || !(yield* identity).distinctId) return;
+      if (!(yield* caughtUp) || !(yield* telemetryEnabled) || !(yield* identity).distinctId) return;
 
       // Catch Node UUID defects too; best-effort telemetry drops events without UUIDs.
       const uuid = yield* Effect.exit(crypto.uuidV7());
-      if (Exit.isFailure(uuid) || (yield* Ref.get(generationRef)) !== generation) return;
+      if (
+        Exit.isFailure(uuid) ||
+        !(yield* caughtUp) ||
+        (yield* Ref.get(generationRef)) !== generation
+      )
+        return;
 
       const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties);
       if (enqueueResult.dropped) {
