@@ -1,6 +1,11 @@
 import { parseMarkdownWithMath } from "@goat/shared/markdownMath";
 import { describe, expect, it } from "vite-plus/test";
-import { remarkThoughtPreview, THOUGHT_PREVIEW_MAX_LENGTH } from "./TimelineWorkEntryRow.logic";
+import {
+  remarkThoughtPreview,
+  sliceThoughtPreviewSource,
+  THOUGHT_PREVIEW_MAX_LENGTH,
+  THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
+} from "./TimelineWorkEntryRow.logic";
 
 describe("compact reasoning math", () => {
   it.each([
@@ -80,5 +85,15 @@ describe("compact reasoning math", () => {
     expect(tree.children.map((node) => [node.type, "value" in node ? node.value : null])).toEqual(
       expected,
     );
+  });
+
+  it("does not split a surrogate pair at the reasoning preview source limit", () => {
+    const prefix = `[l](${"u".repeat(8_100)}) `;
+    const filler = "c".repeat(THOUGHT_PREVIEW_SOURCE_MAX_LENGTH - 1 - prefix.length);
+    const sliced = sliceThoughtPreviewSource(`${prefix}${filler}😀 tail`);
+    const tree = parseMarkdownWithMath(sliced);
+    remarkThoughtPreview("Thinking")(tree);
+    expect(tree.children).toEqual([{ type: "text", value: `l ${filler}` }]);
+    expect(sliced).not.toContain("\uFFFD");
   });
 });

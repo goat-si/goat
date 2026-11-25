@@ -4,6 +4,7 @@ import { resolveWorkEntryToolPresentation } from "@goat/client-runtime/work-log/
 import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
 import { toolGroupAction } from "./MessagesTimeline.logic";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { splitsSurrogatePair } from "./timelineMinimapItems";
 import { type TimelineWorkEntry, type TimelineRow } from "./timelineRowContext";
 import { type WorkEntryIconName } from "./TimelineToolActivityIcon";
 
@@ -202,6 +203,15 @@ export function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconNa
 // or reference definition beyond this prefix remains unresolved by the parser.
 export const THOUGHT_PREVIEW_SOURCE_MAX_LENGTH = 8_192;
 export const THOUGHT_PREVIEW_MAX_LENGTH = 2_048;
+
+export function sliceThoughtPreviewSource(text: string): string {
+  return text.slice(
+    0,
+    splitsSurrogatePair(text, THOUGHT_PREVIEW_SOURCE_MAX_LENGTH)
+      ? THOUGHT_PREVIEW_SOURCE_MAX_LENGTH - 1
+      : THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
+  );
+}
 
 /** Compact reasoning keeps formulas while flattening other Markdown into label text. */
 export function remarkThoughtPreview(fallback: string) {
