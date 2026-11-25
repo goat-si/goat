@@ -8,6 +8,7 @@ import type {
   PullRequestMergeability,
   PullRequestReviewDecision,
   PullRequestState,
+  ScopedThreadRef,
 } from "@goat/contracts";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import {
@@ -23,6 +24,7 @@ import {
 } from "~/components/solar";
 import { Children, type CSSProperties, isValidElement, type ReactNode, useState } from "react";
 
+import { useOpenLink } from "~/browser/useOpenLink";
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../ui/badge";
@@ -418,13 +420,16 @@ export function PullRequestActorLabel({
   variant = "label",
   tooltip = true,
   profileUrl,
+  threadRef = null,
 }: {
   actor: PullRequestActor | null;
   className?: string;
   variant?: "label" | "avatar";
   tooltip?: boolean;
   profileUrl?: string | null;
+  threadRef?: ScopedThreadRef | null;
 }) {
+  const openLink = useOpenLink(threadRef);
   const login = actor?.login ?? "ghost";
   const label = (
     <span className={cn("flex min-w-0 items-baseline", variant === "label" && "gap-1.5")}>
@@ -451,6 +456,10 @@ export function PullRequestActorLabel({
                   aria-label={`Open ${login}'s profile`}
                 />
               }
+              onClick={(event) => {
+                event.preventDefault();
+                void openLink(profileUrl, { event }).catch(console.error);
+              }}
             />
           ) : (
             <span className={placement} />
