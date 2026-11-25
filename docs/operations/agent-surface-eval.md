@@ -167,6 +167,35 @@ version 1, recorded as `COMPOSITION_RULE_VERSION` in the report):
 A failed campaign leaves `goat_eval` opt-in. Record the verdict and the results folder in the
 D8 entry either way.
 
+## Measuring Bot worker order
+
+Run each case in a fresh member Bot on an isolated local GOAT project. From the repo root,
+prepare an unused directory **inside that project** and send the printed prompt unchanged.
+Each sample gets fresh values. Keep the fixture until the sample is scored.
+
+```sh
+runner=scripts/agent-surface/eval/worker-order.ts
+node "$runner" prepare parallel "$project/parallel-sample"
+node "$runner" prepare dependent "$project/dependent-sample"
+```
+
+Both workers run a 12-second probe. In the parallel case, the two measured probe intervals must
+overlap on the same host clock and in the corresponding recorded commands. In the dependent case,
+A returns a random value that selects B's input file. B must be launched after A completes, receive
+A's value in its assignment, and return the contents of the selected file. The checks also require
+two distinct workers, both delivered results, and a delivered Bot reply containing both values.
+
+After each Bot finishes, score the recorded input. When the same prompt was sent more than once,
+append the input ID from its channel receipt. The scorer takes a read-only transaction on the isolated server database. It prints one JSON
+record with each worker's timing, delivery state, overlap in milliseconds and separate check
+results. An unsuccessful sample exits with status 1. These local records measure work ordering;
+they do not establish timing guarantees across devices.
+
+```sh
+node "$runner" score parallel "$project/parallel-sample" "$database"
+node "$runner" score dependent "$project/dependent-sample" "$database"
+```
+
 ## Running a campaign
 
 Run campaigns only against a dev server with seeded data, started with `vp run dev` in a
