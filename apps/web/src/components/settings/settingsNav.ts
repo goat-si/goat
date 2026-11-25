@@ -65,7 +65,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   "/settings/keybindings": { text: "Keyboard shortcuts for this app." },
   "/settings/snap-shot": { text: "Capture part of your screen and attach it to a thread." },
   "/settings/providers": {
-    text: "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+    text: msg(
+      "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+    ),
     related: [{ label: "Hub", to: "/settings/hub" }],
   },
   "/settings/memory": { text: "What agents remember across threads, and who can read it." },
@@ -75,13 +77,15 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     ),
   },
   "/settings/source-control": {
-    text: "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    text: msg(
+      "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    ),
   },
-  "/settings/projects": { text: "Settings for the selected project." },
+  "/settings/projects": { text: msg("Settings for the selected project.") },
   "/settings/storage": {
-    text: "Where worktrees live, when they are cleaned up, and artifacts and logs.",
+    text: msg("Where worktrees live, when they are cleaned up, and artifacts and logs."),
   },
-  "/settings/archived": { text: "Threads you archived. Restore or delete them here." },
+  "/settings/archived": { text: msg("Threads you archived. Restore or delete them here.") },
   "/settings/goat-bot": {
     text: "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
   },
