@@ -243,6 +243,36 @@ it("does not claim there are no changes when an incomplete preview fails", async
     .not.toBeInTheDocument();
 });
 
+it("explains a branch diff whose only changes are hidden test files", async () => {
+  using context = setup("origin/orphan");
+  using _hideTestFiles = {
+    [Symbol.dispose]() {
+      window.localStorage.removeItem("goat.diffHideTestFiles");
+    },
+  };
+  const path = "math.test.ts";
+  const metadata = preview();
+  const source = {
+    ...metadata.sources[0]!,
+    files: [{ path, previousPath: null, additions: 1, deletions: 0 }],
+  };
+  state.previews.set("main", Atom.make(AsyncResult.success({ ...metadata, sources: [source] })));
+  useDiffPanelStore.getState().selectBranchBaseRef(context.threadRef, "main");
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <div style={{ height: 600, display: "flex", flexDirection: "column" }}>
+        <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+      </div>
+    </RegistryContext.Provider>,
+  );
+  await expect.element(screen.getByText(path, { exact: true })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Hide test files", exact: true }));
+  await expect.element(screen.getByText(path, { exact: true })).not.toBeInTheDocument();
+  await expect.element(screen.getByText("1 test file hidden", { exact: true })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Show test files", exact: true }));
+  await expect.element(screen.getByText(path, { exact: true })).toBeVisible();
+});
+
 const TURN_PATCH =
   "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -0,0 +1 @@\n+visible\n";
 const SIZE_LIMIT_NOTICE = "This preview exceeds the size limit. Changes shown are incomplete.";

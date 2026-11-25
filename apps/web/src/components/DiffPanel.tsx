@@ -69,7 +69,7 @@ import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView } from "./diffs/AnnotatableCodeView";
 import { DiffFileTree } from "./diffs/DiffFileTree";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
-import { Button } from "./ui/button";
+import { Button, InlineButton } from "./ui/button";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { Switch } from "./ui/switch";
 import {
@@ -1049,6 +1049,15 @@ export default function DiffPanel({
                   </p>
                 </div>
               )
+            ) : shownFileEntries.length === 0 && testFileCount > 0 ? (
+              <div className="flex h-full flex-wrap items-center justify-center gap-2 px-3 py-2 text-xs text-muted-foreground/70">
+                <p>
+                  {testFileCount === 1
+                    ? `${testFileCount} test file hidden`
+                    : `${testFileCount} test files hidden`}
+                </p>
+                <InlineButton onClick={() => setHideTestFiles(false)}>Show test files</InlineButton>
+              </div>
             ) : lazySource || renderablePatch?.kind === "files" ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 <div
