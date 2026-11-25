@@ -987,5 +987,12 @@
   "d2d02339e50a2443": "Unterhaltungen speichern",
   "f633ccf59f82fd24": "Modell für Erinnerungen",
   "2f46e6da3ef449fa": "GOAT fasst abgeschlossene Unterhaltungen als Erinnerungen zusammen. Deaktivieren stoppt neue Zusammenfassungen. Gespeicherte Erinnerungen bleiben erhalten.",
-  "773dc9457c17d15a": "„Automatisch“ verwendet das Modell für die Textgenerierung. Wähle bei Bedarf ein eigenes Modell für Zusammenfassungen."
+  "773dc9457c17d15a": "„Automatisch“ verwendet das Modell für die Textgenerierung. Wähle bei Bedarf ein eigenes Modell für Zusammenfassungen.",
+  "33ccb41fd69b950f": "Snapshots aktivieren",
+  "926c2ffadb27dfb6": "App-Text in Snapshots aufnehmen",
+  "153156f21b675e8e": "Whoosh abspielen",
+  "f749431acd9849fb": "Klick abspielen",
+  "a4a21025e979a813": "Erfasstes Fenster aufblitzen lassen",
+  "87157007bde61ece": "Snapshots animieren",
+  "a5fe262253b1a7f4": "Ein separates Speichermodell verwenden"
 }

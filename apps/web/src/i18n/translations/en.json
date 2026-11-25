@@ -987,5 +987,12 @@
   "d2d02339e50a2443": "Remember conversations",
   "f633ccf59f82fd24": "Memory model",
   "2f46e6da3ef449fa": "GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories.",
-  "773dc9457c17d15a": "Automatic follows the text generation model. Choose a separate model for memory summaries."
+  "773dc9457c17d15a": "Automatic follows the text generation model. Choose a separate model for memory summaries.",
+  "33ccb41fd69b950f": "Enable snapshots",
+  "926c2ffadb27dfb6": "Include app text in snapshots",
+  "153156f21b675e8e": "Play Whoosh",
+  "f749431acd9849fb": "Play Click",
+  "a4a21025e979a813": "Flash captured window",
+  "87157007bde61ece": "Animate snapshots",
+  "a5fe262253b1a7f4": "Use a separate memory model"
 }

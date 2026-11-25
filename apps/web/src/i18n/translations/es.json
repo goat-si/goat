@@ -987,5 +987,12 @@
   "d2d02339e50a2443": "Recordar conversaciones",
   "f633ccf59f82fd24": "Modelo de memoria",
   "2f46e6da3ef449fa": "GOAT resume las conversaciones terminadas en la memoria. Al desactivarlo no se generan más resúmenes y se conservan los recuerdos guardados.",
-  "773dc9457c17d15a": "La opción automática usa el modelo de generación de texto. Puedes elegir otro modelo para los resúmenes de memoria."
+  "773dc9457c17d15a": "La opción automática usa el modelo de generación de texto. Puedes elegir otro modelo para los resúmenes de memoria.",
+  "33ccb41fd69b950f": "Activar capturas",
+  "926c2ffadb27dfb6": "Incluir texto de la aplicación en las capturas",
+  "153156f21b675e8e": "Reproducir Whoosh",
+  "f749431acd9849fb": "Reproducir clic",
+  "a4a21025e979a813": "Iluminar la ventana capturada",
+  "87157007bde61ece": "Animar capturas",
+  "a5fe262253b1a7f4": "Usar un modelo de memoria independiente"
 }

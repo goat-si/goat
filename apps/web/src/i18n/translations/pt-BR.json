@@ -987,5 +987,12 @@
   "d2d02339e50a2443": "Lembrar conversas",
   "f633ccf59f82fd24": "Modelo de memória",
   "2f46e6da3ef449fa": "O GOAT resume conversas concluídas na memória. Desativar interrompe os novos resumos e mantém as memórias salvas.",
-  "773dc9457c17d15a": "A opção automática usa o modelo de geração de texto. Você pode escolher outro modelo para os resumos da memória."
+  "773dc9457c17d15a": "A opção automática usa o modelo de geração de texto. Você pode escolher outro modelo para os resumos da memória.",
+  "33ccb41fd69b950f": "Ativar capturas",
+  "926c2ffadb27dfb6": "Incluir texto do aplicativo nas capturas",
+  "153156f21b675e8e": "Reproduzir Whoosh",
+  "f749431acd9849fb": "Reproduzir clique",
+  "a4a21025e979a813": "Piscar a janela capturada",
+  "87157007bde61ece": "Animar capturas",
+  "a5fe262253b1a7f4": "Usar um modelo de memória separado"
 }

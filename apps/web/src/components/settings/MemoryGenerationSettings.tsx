@@ -146,7 +146,7 @@ export function MemoryGenerationSettings({
                 </>
               ) : null}
               <Switch
-                aria-label="Use a separate memory model"
+                aria-label={gt("Use a separate memory model")}
                 checked={separate}
                 disabled={!allowed || (!separate && !activeEntry)}
                 onCheckedChange={(checked) => {
