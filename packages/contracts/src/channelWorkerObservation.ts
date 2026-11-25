@@ -10,7 +10,11 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { PullRequestState } from "./pullRequest.ts";
-import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
+import {
+  ThreadResultObservedCheck,
+  ThreadResultTests,
+  ThreadResultOutcome,
+} from "./threadResultEvidence.ts";
 
 /**
  * What the channel ledger last saw in a task's worker thread besides its run status. A task keeps
@@ -73,6 +77,8 @@ export type ChannelTaskNeedsYou = typeof ChannelTaskNeedsYou.Type;
 /** Evidence belongs to one run; it never decides the channel task's outcome. */
 export const ChannelWorkerResult = Schema.Struct({
   runId: RunId,
+  /** Explicit result from the remote worker for this exact run. */
+  reportedOutcome: Schema.optionalKey(ThreadResultOutcome),
   tests: Schema.optional(ThreadResultTests),
   observedCheck: Schema.optional(ThreadResultObservedCheck),
   observedCheckPending: Schema.optional(Schema.Boolean),
@@ -103,6 +109,7 @@ export const channelWorkerObservationEquals = (
   const b = right ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
   return (
     a.result?.runId === b.result?.runId &&
+    a.result?.reportedOutcome === b.result?.reportedOutcome &&
     a.result?.observedCheckPending === b.result?.observedCheckPending &&
     a.result?.tests?.ok === b.result?.tests?.ok &&
     a.result?.tests?.command === b.result?.tests?.command &&

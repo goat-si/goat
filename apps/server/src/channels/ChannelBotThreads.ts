@@ -46,6 +46,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { readRequiredDeliverables } from "./channelDeliverables.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { clipText } from "./ChannelBotEvents.ts";
 import { listChildWork } from "./listChildWork.ts";
@@ -785,12 +786,16 @@ const make = Effect.gen(function* () {
       environmentId: bot.bot.environmentId,
     });
     const update = task.resultSummary?.trim();
+    const requiredDeliverables = yield* readRequiredDeliverables(sql, task).pipe(
+      Effect.mapError(failed),
+    );
     return {
       activity,
       attemptEvidence: {
         ...(update ? { summary: clipText(update, CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH) } : {}),
         ...(task.completionReport === undefined ? {} : { report: task.completionReport }),
       },
+      ...(requiredDeliverables ? { requiredDeliverables } : {}),
       task:
         known && row?.kind === "task"
           ? { state: "known" as const, row: { ...row, task: summary } }

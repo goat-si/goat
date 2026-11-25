@@ -7,8 +7,16 @@ import {
   RunId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
-export { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
+import {
+  ThreadResultObservedCheck,
+  ThreadResultTests,
+  ThreadResultOutcome,
+} from "./threadResultEvidence.ts";
+export {
+  ThreadResultObservedCheck,
+  ThreadResultTests,
+  ThreadResultOutcome,
+} from "./threadResultEvidence.ts";
 
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 
@@ -16,8 +24,6 @@ import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
  * How a dispatched thread's run ended, as its agent reported it. The run's own
  * status settles failed and cancelled runs that never reported.
  */
-export const ThreadResultOutcome = Schema.Literals(["succeeded", "failed", "blocked", "cancelled"]);
-export type ThreadResultOutcome = typeof ThreadResultOutcome.Type;
 
 export const THREAD_RESULT_SUMMARY_MAX_CHARS = 4000;
 

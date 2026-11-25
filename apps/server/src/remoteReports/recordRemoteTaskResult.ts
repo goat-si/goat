@@ -1,5 +1,6 @@
 import {
   CommandId,
+  ChannelWorkerObservation,
   type NodeId,
   type RunId,
   ThreadId,
@@ -264,3 +265,23 @@ export const recoverUnknownRemoteTaskLaunch = Effect.fn(
     summary: `launch outcome unknown; inspect goat_thread_list with host ${row.host} before retrying`,
   });
 });
+
+const encodeTaskObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
+/** Save the launched run's explicit outcome separately from its runtime status. */
+export function remoteTaskObservationJson(observed: RemoteObservedRun) {
+  if (!observed.reported || observed.status !== "completed") {
+    if (!observed.observation) return null;
+    const result = observed.observation.result;
+    if (!result?.reportedOutcome) return encodeTaskObservation(observed.observation);
+    const { reportedOutcome: _outcome, ...facts } = result;
+    return encodeTaskObservation({ ...observed.observation, result: facts });
+  }
+  return encodeTaskObservation({
+    ...(observed.observation ?? { pullRequests: [], needsYou: [] }),
+    result: {
+      ...observed.observation?.result,
+      runId: observed.runId,
+      reportedOutcome: observed.reported.outcome,
+    },
+  });
+}

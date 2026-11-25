@@ -29,3 +29,6 @@ export const ThreadResultObservedCheck = Schema.Struct({
   outputTail: Schema.optional(Schema.String),
 });
 export type ThreadResultObservedCheck = typeof ThreadResultObservedCheck.Type;
+
+export const ThreadResultOutcome = Schema.Literals(["succeeded", "failed", "blocked", "cancelled"]);
+export type ThreadResultOutcome = typeof ThreadResultOutcome.Type;

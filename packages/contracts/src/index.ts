@@ -56,6 +56,7 @@ export * from "./modelSelection.ts";
 export * from "./chatAttachment.ts";
 export * from "./channelCommon.ts";
 export * from "./channelChildWork.ts";
+export * from "./channelDeliverables.ts";
 export * from "./channelLedger.ts";
 export * from "./channelWorkerObservation.ts";
 export * from "./channelBrief.ts";

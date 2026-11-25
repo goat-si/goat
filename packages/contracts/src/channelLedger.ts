@@ -1,5 +1,6 @@
 import { BotProposalCard } from "./botProfile.ts";
 import * as Schema from "effect/Schema";
+import { ChannelDeliverables } from "./channelDeliverables.ts";
 
 import {
   EnvironmentId,
@@ -253,6 +254,7 @@ export type ChannelTaskKind = typeof ChannelTaskKind.Type;
 export const ChannelTaskDoneMeans = TrimmedNonEmptyString.check(Schema.isMaxLength(280));
 
 export const ChannelTask = Schema.Struct({
+  requiredDeliverables: Schema.optionalKey(ChannelDeliverables),
   taskId: ChannelTaskId,
   /** Missing on tasks stored before turns existed; those are work. */
   kind: Schema.optional(ChannelTaskKind),
@@ -384,6 +386,7 @@ export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.brief.frozen", { brief: ChannelTaskBrief }),
   taskEvent("task.worker.bound", { worker: ChannelWorkerAssignment }),
   taskEvent("task.progress", {
+    requiredDeliverables: Schema.optionalKey(ChannelDeliverables),
     generation: PositiveInt,
     doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
     summary: TrimmedNonEmptyString,

@@ -3,12 +3,14 @@ import type {
   ChannelReceptionInput,
   ChannelTask,
   ChannelTaskId,
+  RunId,
   ChatAttachment,
 } from "@goat/contracts";
 import { ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -127,3 +129,36 @@ export const current = (taskId: ChannelTaskId) =>
 /** The thread's run ids in order, and whether a send steered into them. */
 export const runsOf = (harness: ReturnType<typeof sessionHarness>, threadId: ThreadId) =>
   harness.world.runs.get(threadId) ?? [];
+
+/** A report as the session run with this server-issued run id would make it. */
+export const reportFrom = (
+  task: ChannelTask,
+  runId: RunId,
+  input: Partial<Parameters<ChannelWorkerReports.ChannelWorkerReports["Service"]["report"]>[0]>,
+) => {
+  const worker = task.worker;
+  if (!worker) return Effect.die("Test task has no assigned worker");
+  return ChannelWorkerReports.ChannelWorkerReports.pipe(
+    Effect.flatMap((reports) =>
+      reports.report(
+        {
+          taskId: task.taskId,
+          generation: task.generation,
+          eventId: "report" as never,
+          status: "running",
+          summary: "Working.",
+          ...input,
+        },
+        worker.threadId,
+      ),
+    ),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, {
+      thread: {
+        threadId: worker.threadId,
+        providerSessionId: "credential",
+        providerInstanceId: botModel.instanceId,
+        runId,
+      },
+    } as never),
+  );
+};

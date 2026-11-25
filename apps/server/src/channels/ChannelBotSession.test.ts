@@ -3,7 +3,7 @@ import { launchBrief } from "./testkit/providerBrief.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
-import type { ChannelTask, RunId } from "@goat/contracts";
+import type { RunId } from "@goat/contracts";
 import {
   ChatAttachmentId,
   CHANNEL_GATEWAY_WS_METHODS,
@@ -58,6 +58,7 @@ import {
   current,
   runsOf,
   sessionHarness,
+  reportFrom,
   settle,
 } from "./ChannelBotSession.testkit.ts";
 
@@ -71,36 +72,6 @@ const usage = (fields: Record<string, unknown>) => [
     },
   },
 ];
-
-/** A report as the session run with this server-issued run id would make it. */
-const reportFrom = (
-  task: ChannelTask,
-  runId: RunId,
-  input: Partial<Parameters<ChannelWorkerReports.ChannelWorkerReports["Service"]["report"]>[0]>,
-) =>
-  ChannelWorkerReports.ChannelWorkerReports.pipe(
-    Effect.flatMap((reports) =>
-      reports.report(
-        {
-          taskId: task.taskId,
-          generation: task.generation,
-          eventId: "report" as never,
-          status: "running",
-          summary: "Working.",
-          ...input,
-        },
-        task.worker!.threadId,
-      ),
-    ),
-    Effect.provideService(McpInvocationContext.McpInvocationContext, {
-      thread: {
-        threadId: task.worker!.threadId,
-        providerSessionId: "credential",
-        providerInstanceId: botModel.instanceId,
-        runId,
-      },
-    } as never),
-  );
 
 describe("GOAT Bot sessions", () => {
   it.effect(
