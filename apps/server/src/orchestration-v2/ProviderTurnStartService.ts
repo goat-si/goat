@@ -87,7 +87,11 @@ import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
-import { deliverContextHandoffs, isSlashCommandMessage } from "./ContextHandoffDelivery.ts";
+import {
+  deliverContextHandoffs,
+  isSlashCommandMessage,
+  slashCommandMessageIds,
+} from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -730,12 +734,7 @@ export const layer: Layer.Layer<
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
-        compactionMessageIds: () =>
-          new Set(
-            projection.messages
-              .filter((candidate) => isSlashCommandMessage(candidate, goalDriver))
-              .map((candidate) => candidate.id),
-          ),
+        compactionMessageIds: () => slashCommandMessageIds(projection.messages, goalDriver),
         run,
         attempts: projection.attempts,
       });

@@ -47,6 +47,18 @@ export const isSlashCommandMessage = (
   message.role === "user" &&
   (isCompactionCommandMessage(message) || (nativeGoals && parseGoalCommand(message) !== null));
 
+export const slashCommandMessageIds = <
+  M extends Parameters<typeof isSlashCommandMessage>[0] & { readonly id: string },
+>(
+  messages: ReadonlyArray<M>,
+  nativeGoals: boolean,
+) =>
+  new Set(
+    messages
+      .filter((message) => isSlashCommandMessage(message, nativeGoals))
+      .map((message) => message.id),
+  );
+
 /** Persist around injection; ambiguous delivery requires a fresh native thread. Call unsent if refused before prompt consumption. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(
   function* <InjectError = never, PersistError = never, BudgetError = never>(input: {
