@@ -120,6 +120,39 @@ describe("retrying a required worker", () => {
       }).pipe(Effect.provide(makeLayer())),
   );
 
+  it.effect(
+    "allows a finished worker with a missing report to retry only on failure evidence from that attempt",
+    () =>
+      Effect.gen(function* () {
+        const taskId = yield* seedWorker;
+        yield* seedPlan(taskId, [mac, linux]);
+        const first = yield* delegate(1);
+        const other = yield* admit("Build.", { clientRequestId: key(mac.id, 1) });
+        if (first._tag !== "admitted" || other._tag !== "admitted")
+          return yield* Effect.die("expected both delegates");
+        const children = yield* ChannelChildWork.ChannelChildWork;
+        yield* Effect.scoped(
+          children.claimLaunch(first.record, { host: "linux", correlationId: "linux" }),
+        );
+        yield* children.markTerminal(first.record, "completed");
+        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+        const old = yield* store.get(taskId, first.record.childWorkId);
+        const request = { id: "linux", attempt: 1 };
+        for (const observed of [
+          { state: "awaiting_acceptance", childWorkId: first.record.childWorkId },
+          { state: "failed", childWorkId: other.record.childWorkId },
+        ] as const)
+          assert.isUndefined(retryRequiredDeliverable([linux], request, old, observed));
+        assert.deepStrictEqual(
+          retryRequiredDeliverable([linux], request, old, {
+            state: "failed",
+            childWorkId: first.record.childWorkId,
+          }),
+          [{ ...linux, attempt: 2 }],
+        );
+      }).pipe(Effect.provide(makeLayer())),
+  );
+
   it.effect("ends a retry when the parent fails before the next child is admitted", () =>
     Effect.gen(function* () {
       const task = yield* seedWorker;
