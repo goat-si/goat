@@ -1125,5 +1125,9 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Flota: no hay tareas en curso",
   "e8d0653cf49cd57e": "y {count} más",
-  "7d5ab92b06b67598": "Decisiones, {count} pendientes"
+  "7d5ab92b06b67598": "Decisiones, {count} pendientes",
+  "61ee56caa5880fae": "Equipo del worker",
+  "0158b772ab348c18": "Última actualización",
+  "b949b3f1ed6bb373": "Informe del worker recibido",
+  "a7a2c522026264c0": "Falta el informe del worker"
 }

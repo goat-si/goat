@@ -752,3 +752,50 @@ it("shows Home guidance while the first list read is pending", async () => {
   await expect.element(screen.getByRole("button", { name: "Open Home" })).toBeVisible();
   expect(state.lookup).not.toHaveBeenCalled();
 });
+
+it("shows the current worker's result next to the completion criterion", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "known",
+        row: decodeBotThreadRow({
+          kind: "task",
+          task: {
+            taskId: "task-1",
+            title: "Run the Linux regression suite",
+            doneMeans: "All regression tests pass on the Linux runner.",
+            status: "failed",
+            generation: 2,
+            updatedAt: "2026-11-04T10:00:00.000Z",
+          },
+          view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+          lastActivityAt: "2026-11-04T10:00:00.000Z",
+          unread: false,
+          mainMessagesSinceQuiet: 0,
+        }),
+      },
+      attemptEvidence: {
+        summary: "31 passed, 1 failed. The Linux smoke test could not open its fixture.",
+      },
+      approvalObservation: {
+        worker: { environmentId: "lab", threadId: "test-worker", host: "linux-runner" },
+        needsYou: [],
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByText("All regression tests pass on the Linux runner."))
+    .toBeVisible();
+  await expect.element(screen.getByText("linux-runner", { exact: false })).toBeVisible();
+  await expect.element(screen.getByText("31 passed, 1 failed.", { exact: false })).toBeVisible();
+  await expect.element(screen.getByText("Worker report missing")).not.toBeInTheDocument();
+});

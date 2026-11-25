@@ -1125,5 +1125,9 @@
   "ae87266a748db24b": "Flotte: keine laufenden Aufgaben",
   "e8d0653cf49cd57e": "und {count} weitere",
   "7d5ab92b06b67598": "Entscheidungen, {count} ausstehend",
-  "f9153168b50dcc15": "Befehlspalette"
+  "f9153168b50dcc15": "Befehlspalette",
+  "61ee56caa5880fae": "Rechner des Workers",
+  "0158b772ab348c18": "Letzte Aktualisierung",
+  "b949b3f1ed6bb373": "Worker-Bericht erhalten",
+  "a7a2c522026264c0": "Worker-Bericht fehlt"
 }

@@ -3,6 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   acknowledgeTaskRead,
   botTaskWait,
+  botTaskAttemptEvidence,
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   goatBotTaskWait,
@@ -26,6 +27,7 @@ import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotUnavailableWork, GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotAttemptEvidence } from "./GoatBotAttemptEvidence";
 import { GoatBotTaskActivity } from "./GoatBotTaskActivity";
 import { GoatBotTaskSnooze } from "./GoatBotTaskSnooze";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
@@ -95,6 +97,7 @@ export function GoatBotTaskPane({
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
   const taskSummary =
     task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
+  const evidence = botTaskAttemptEvidence(lookup.value, taskSummary);
   const chip = chips.get(taskId);
   // What Home's row and the bot's face say this task waits for; an unlisted task has no view.
   const wait =
@@ -324,6 +327,7 @@ export function GoatBotTaskPane({
           </p>
         )}
       </header>
+      {evidence && <GoatBotAttemptEvidence evidence={evidence} />}
       {found?.state === "unavailable" && (
         <p id="task-view-unavailable" role="status">
           Task view unavailable; pin, done and read status cannot be determined.

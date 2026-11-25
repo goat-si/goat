@@ -1125,5 +1125,9 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Fleet: nothing running",
   "e8d0653cf49cd57e": "and {count} more",
-  "7d5ab92b06b67598": "Decisions, {count} waiting"
+  "7d5ab92b06b67598": "Decisions, {count} waiting",
+  "61ee56caa5880fae": "Worker machine",
+  "0158b772ab348c18": "Latest update",
+  "b949b3f1ed6bb373": "Worker report received",
+  "a7a2c522026264c0": "Worker report missing"
 }

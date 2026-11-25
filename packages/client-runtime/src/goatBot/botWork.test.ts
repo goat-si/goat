@@ -2,15 +2,23 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   BotRemoteWork,
   BotThreadRow,
+  BotWorkResult,
   ChannelChildWorkGroup,
   ChannelTaskId,
   EnvironmentId,
   type ChannelTaskChip,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { botHomeWork, COLLAPSED_FINISHED, groupBotWork, workRowCollapsed } from "./botWork.ts";
+import {
+  botTaskAttemptEvidence,
+  botHomeWork,
+  COLLAPSED_FINISHED,
+  groupBotWork,
+  workRowCollapsed,
+} from "./botWork.ts";
 
 const row = Schema.decodeUnknownSync(BotThreadRow);
+const decodeWork = Schema.decodeUnknownSync(BotWorkResult);
 const group = Schema.decodeUnknownSync(ChannelChildWorkGroup);
 const at = "2026-11-04T00:00:00.000Z";
 const task = (id: string, doneAt: string | null) =>
@@ -270,4 +278,36 @@ describe("workRowCollapsed", () => {
     // Without the chip the row is finished and sits past the collapsed tail.
     expect(workRowCollapsed(rows, env, [], id)).toBe(true);
   });
+});
+
+it("only presents the matching task and attempt, even while an older lookup is held", () => {
+  const entry = task("release", null);
+  if (entry.kind !== "task") throw new Error("expected a task");
+  const work = decodeWork({
+    task: { state: "known", row: entry },
+    attemptEvidence: { summary: "Build launched" },
+    approvalObservation: {
+      worker: { environmentId: "machine", threadId: "thread", host: "mac" },
+      needsYou: [],
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+  });
+  expect(botTaskAttemptEvidence(work, { ...entry.task, generation: 1 })).toEqual({
+    summary: "Build launched",
+    worker: work.approvalObservation?.worker,
+  });
+  expect(botTaskAttemptEvidence(work, { ...entry.task, generation: 2 })).toBeNull();
+  expect(botTaskAttemptEvidence(work, { ...entry.task, status: "failed" })).toBeNull();
+  expect(
+    botTaskAttemptEvidence(work, { ...entry.task, taskId: ChannelTaskId.make("other") }),
+  ).toBeNull();
+  expect(
+    botTaskAttemptEvidence(work, { ...entry.task, updatedAt: "2026-11-06T00:00:00.000Z" }),
+  ).toBeNull();
+  const { attemptEvidence: _evidence, ...legacy } = work;
+  expect(botTaskAttemptEvidence(legacy, entry.task)).toBeNull();
+  expect(botTaskAttemptEvidence(undefined, entry.task)).toBeNull();
 });

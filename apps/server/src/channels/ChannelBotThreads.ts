@@ -10,6 +10,7 @@ import {
   type BotThreadRow,
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
   CHANNEL_BOT_TASK_APPROVAL_LIMIT,
+  CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH,
   CHANNEL_BOT_THREADS_SNOOZED_LIMIT,
   ChannelTaskId,
   type ChannelListBotThreadsInput,
@@ -46,6 +47,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import { clipText } from "./ChannelBotEvents.ts";
 import { listChildWork } from "./listChildWork.ts";
 import {
   botRowPullRequests,
@@ -782,8 +784,13 @@ const make = Effect.gen(function* () {
       ownerId: owner.ownerId,
       environmentId: bot.bot.environmentId,
     });
+    const update = task.resultSummary?.trim();
     return {
       activity,
+      attemptEvidence: {
+        ...(update ? { summary: clipText(update, CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH) } : {}),
+        ...(task.completionReport === undefined ? {} : { report: task.completionReport }),
+      },
       task:
         known && row?.kind === "task"
           ? { state: "known" as const, row: { ...row, task: summary } }

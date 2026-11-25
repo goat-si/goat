@@ -192,6 +192,15 @@ export type ChannelProposedCompletion = typeof ChannelProposedCompletion.Type;
 export const ChannelTaskCompletionReport = Schema.Literals(["present", "missing"]);
 export type ChannelTaskCompletionReport = typeof ChannelTaskCompletionReport.Type;
 
+/** Only the single-task lookup carries the ledger's latest progress update or failure reason. */
+export const CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH = 1_000;
+export const ChannelTaskAttemptEvidence = Schema.Struct({
+  summary: Schema.optionalKey(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH)),
+  ),
+  report: Schema.optionalKey(ChannelTaskCompletionReport),
+});
+
 /**
  * The machine a task left when it continued on another one, because the first stopped answering.
  * `replicaCapturedAt` is when the work it continued from was copied off that machine.
