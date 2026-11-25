@@ -276,10 +276,14 @@ function CleanupResults({
       })}
       {report.omittedCount > 0 && (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-          {gt("{environment}: {count} more results.", {
-            environment: environmentLabel,
-            count: report.omittedCount,
-          })}
+          {gt(
+            "{omitted, plural, one {{environment}: {count} more result.} other {{environment}: {count} more results.}}",
+            {
+              omitted: report.omittedCount,
+              environment: environmentLabel,
+              count: report.omittedCount,
+            },
+          )}
         </p>
       )}
       {report.entries.length === 0 && report.omittedCount === 0 && (

@@ -3294,6 +3294,7 @@
   "d9bfa32de282be21": "Usar um modelo separado para guias de revisão",
   "d9c81b6a6bad8058": "Escolha uma opção acima",
   "d9d54dde0ba27d96": "Campo de entrada: Iniciar em segundo plano",
+  "d9e33a2a8d404a96": "{omitted, plural, one {{environment}: mais {count} resultado.} other {{environment}: mais {count} resultados.}}",
   "d9f18992007893f6": "Mantido",
   "da1abb584eb1b8f6": "As notificações passaram a incluir todas as execuções, pois as atualizações importantes exigem uma conversa existente.",
   "da26a5662fe1007d": "Paridade: {status}",

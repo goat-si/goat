@@ -3294,6 +3294,7 @@
   "d9bfa32de282be21": "Usar un modelo independiente para las guías de revisión",
   "d9c81b6a6bad8058": "Elige una de las opciones de arriba",
   "d9d54dde0ba27d96": "Redactor: Iniciar en segundo plano",
+  "d9e33a2a8d404a96": "{omitted, plural, one {{environment}: {count} resultado más.} other {{environment}: {count} resultados más.}}",
   "d9f18992007893f6": "Conservado",
   "da1abb584eb1b8f6": "Las notificaciones han cambiado a «Todas las ejecuciones» porque «Novedades importantes» requiere un hilo existente.",
   "da26a5662fe1007d": "Paridad: {status}",

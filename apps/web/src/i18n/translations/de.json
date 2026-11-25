@@ -3294,6 +3294,7 @@
   "d9bfa32de282be21": "Eigenes Modell für Review-Leitfäden verwenden",
   "d9c81b6a6bad8058": "Oben eine Option auswählen",
   "d9d54dde0ba27d96": "Eingabefeld: Im Hintergrund starten",
+  "d9e33a2a8d404a96": "{omitted, plural, one {{environment}: {count} weiteres Ergebnis.} other {{environment}: {count} weitere Ergebnisse.}}",
   "d9f18992007893f6": "Beibehalten",
   "da1abb584eb1b8f6": "Benachrichtigungen wurden auf „Alle Läufe“ umgestellt, da „Wichtige Aktualisierungen“ einen vorhandenen Thread erfordert.",
   "da26a5662fe1007d": "Übereinstimmung: {status}",

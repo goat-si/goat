@@ -3294,6 +3294,7 @@
   "d9bfa32de282be21": "Utiliser un modèle distinct pour les guides de revue",
   "d9c81b6a6bad8058": "Choisissez une option ci-dessus",
   "d9d54dde0ba27d96": "Zone de saisie : Démarrer en arrière-plan",
+  "d9e33a2a8d404a96": "{omitted, plural, one {{environment} : {count} autre résultat.} other {{environment} : {count} autres résultats.}}",
   "d9f18992007893f6": "Conservé",
   "da1abb584eb1b8f6": "Les notifications couvrent désormais toutes les exécutions, car les mises à jour importantes nécessitent un fil existant.",
   "da26a5662fe1007d": "Parité : {status}",
