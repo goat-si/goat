@@ -108,6 +108,8 @@ export const ChannelChildWork = Schema.Struct({
   /** The caller's clientRequestId, or a deterministic digest when none was passed. */
   requestKey: TrimmedNonEmptyString,
   promptDigest: TrimmedNonEmptyString,
+  /** Only required delegates record their launch options for a later, single-item retry. */
+  launchDigest: Schema.optionalKey(TrimmedNonEmptyString),
   /** The launch-target parts hashed into keyless request keys, kept for operators. */
   destinationHint: Schema.optional(TrimmedNonEmptyString),
   state: ChannelChildWorkState,
