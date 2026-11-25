@@ -410,8 +410,23 @@ it.live("answers content searches with git grep while a slow content index build
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const vcsProcess = yield* VcsProcess.VcsProcess;
-    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-content-warmup-" });
-    yield* vcsProcess.run({ operation: "test.gitInit", command: "git", args: ["init"], cwd });
+    const repoRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-content-warmup-" });
+    yield* vcsProcess.run({
+      operation: "test.gitInit",
+      command: "git",
+      args: ["init"],
+      cwd: repoRoot,
+    });
+    for (const setting of ["grep.column", "grep.fullName", "submodule.recurse"]) {
+      yield* vcsProcess.run({
+        operation: "test.gitConfig",
+        command: "git",
+        args: ["config", setting, "true"],
+        cwd: repoRoot,
+      });
+    }
+    const cwd = path.join(repoRoot, "project");
+    yield* fileSystem.makeDirectory(cwd);
     yield* fileSystem.writeFileString(path.join(cwd, ".gitignore"), "ignored.txt\n");
     yield* fileSystem.makeDirectory(path.join(cwd, "src"));
     yield* fileSystem.writeFileString(

@@ -80,6 +80,8 @@ const runGitGrep = Effect.fn("WorkspaceSearchIndex.gitGrep")(function* (
         "grep.column=false",
         "-c",
         "grep.fullName=false",
+        "-c",
+        "submodule.recurse=false",
         "--literal-pathspecs",
         "grep",
         "--untracked",
