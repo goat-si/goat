@@ -55,6 +55,8 @@ const fx = vi.hoisted(() => ({
   reads: [] as string[],
 }));
 // Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
+
 vi.mock("./useKeptPerComputer", () => ({
   useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
     live.data,

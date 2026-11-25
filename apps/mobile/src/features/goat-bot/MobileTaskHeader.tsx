@@ -15,6 +15,7 @@ import { Pressable, Text, View } from "react-native";
 
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotTaskActivity } from "./mobileBotWorkDetails";
+import { MobileRequiredResults } from "./MobileRequiredResults";
 import { MobileTaskActions } from "./MobileTaskActions";
 import {
   mobileBotTaskStatus,
@@ -60,7 +61,7 @@ export function MobileTaskHeader(props: {
     ReturnType<typeof useMobileTaskScreen>,
     "lookup" | "canUpdate" | "update" | "retried"
   > &
-    Partial<Pick<ReturnType<typeof useMobileTaskScreen>, "snooze">>;
+    Partial<Pick<ReturnType<typeof useMobileTaskScreen>, "snooze" | "listedDetails">>;
   /** The title the opener carried, else the conversation card's. */
   readonly title: string | null;
   readonly botName: string;
@@ -124,6 +125,10 @@ export function MobileTaskHeader(props: {
           <Text className="font-medium text-foreground">Done means</Text> {doneMeans}
         </Text>
       )}
+      <MobileRequiredResults
+        work={props.screen.listedDetails ?? result}
+        task={task?.row.task ?? unavailable?.task.task}
+      />
       {result?.activity && <MobileBotTaskActivity work={result} />}
       {!props.enabled ? (
         <Text className="text-foreground-muted">

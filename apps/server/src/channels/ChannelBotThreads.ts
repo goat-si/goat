@@ -778,17 +778,16 @@ const make = Effect.gen(function* () {
               ...botRowPullRequests([], observedPullRequestSource(task)),
             },
           ];
+    const requiredDeliverables = yield* readRequiredDeliverables(sql, task).pipe(
+      Effect.mapError(failed),
+    );
     const activity = yield* ledger.readTaskActivity({
       task,
       ownerId: owner.ownerId,
       environmentId: bot.bot.environmentId,
     });
-    const requiredDeliverables = yield* readRequiredDeliverables(sql, task).pipe(
-      Effect.mapError(failed),
-    );
     return {
       activity,
-      ...(requiredDeliverables ? { requiredDeliverables } : {}),
       task:
         known && row?.kind === "task"
           ? { state: "known" as const, row: { ...row, task: summary } }
@@ -798,6 +797,7 @@ const make = Effect.gen(function* () {
           ? [{ ...item, ...(item.title === undefined ? {} : cutBotWorkTitle(item.title)) }]
           : [],
       ),
+      ...(requiredDeliverables ? { requiredDeliverables } : {}),
       remoteWork: [...remotePrimary, ...built.remoteWork],
       launchesTruncated: built.launchesTruncated.length > 0,
       partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
