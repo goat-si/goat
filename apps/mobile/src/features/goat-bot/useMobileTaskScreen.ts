@@ -128,6 +128,11 @@ export function useMobileTaskScreen(input: {
   };
   const canUpdate = permitted && input.enabled;
   return {
+    // The current list owns status and actions. Its by-id read can still supply attempt evidence.
+    listedDetails:
+      input.holdsTask && (lookup.state === "known" || lookup.state === "unavailable")
+        ? lookup.result
+        : undefined,
     lookup: input.holdsTask ? { state: "off" as const } : lookup,
     approvalTask,
     /** This device may change task views here; the read mark's own gate as well. */

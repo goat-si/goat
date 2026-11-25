@@ -66,5 +66,10 @@
   "7ebd9f61d1766c38": "Install app update",
   "a840ff60c35b919d": "Check beta builds",
   "5df0a7f15501c3d9": "Could not open beta builds",
-  "78a04e0e625c0990": "Update failed"
+  "78a04e0e625c0990": "Update failed",
+  "de2c01041f849c5a": "Done means",
+  "61ee56caa5880fae": "Worker machine",
+  "0158b772ab348c18": "Latest update",
+  "b949b3f1ed6bb373": "Worker report received",
+  "a7a2c522026264c0": "Worker report missing"
 }
