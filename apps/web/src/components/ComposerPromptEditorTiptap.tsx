@@ -1,3 +1,4 @@
+import { ComposerContextReferenceNodeView } from "./composerReadOnlyContextChip";
 import { revealComposerCaret } from "./revealComposerCaret";
 import { caretLineRect } from "./composerCaretLineRect";
 import {
@@ -129,7 +130,6 @@ import { ContextChipPopover } from "./contextChipParts";
 import { Button } from "./ui/button";
 import {
   ComposerContextActionsContext,
-  ComposerContextReferenceChip,
   ComposerContextRecordsContext,
 } from "./composerContextPresentation";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -495,36 +495,6 @@ const ComposerContextReferenceExtension = Node.create({
     return ReactNodeViewRenderer(ComposerContextReferenceNodeView);
   },
 });
-
-function ComposerContextReferenceNodeView({ node, editor, getPos }: NodeViewProps) {
-  return (
-    <NodeViewWrapper
-      as="span"
-      className={CHIP_NODE_SELECTION_CLASS_NAME}
-      onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
-        // Paste and drop still add chips while dictation makes the editor read-only; a focused chip removes itself.
-        if (
-          editor.isEditable ||
-          (event.key !== "Backspace" && event.key !== "Delete") ||
-          !(event.target instanceof globalThis.Node) ||
-          !event.currentTarget.contains(event.target)
-        ) {
-          return;
-        }
-        const pos = typeof getPos === "function" ? getPos() : null;
-        if (typeof pos !== "number") return;
-        event.preventDefault();
-        editor.commands.deleteRange({ from: pos, to: pos + node.nodeSize });
-      }}
-    >
-      <ComposerContextReferenceChip
-        kind={(node.attrs.kind as string) ?? ""}
-        contextId={(node.attrs.contextId as string) ?? ""}
-        label={(node.attrs.label as string) ?? ""}
-      />
-    </NodeViewWrapper>
-  );
-}
 
 function hasAncestor($pos: ResolvedPos, name: string): boolean {
   for (let depth = $pos.depth; depth > 0; depth -= 1) {
