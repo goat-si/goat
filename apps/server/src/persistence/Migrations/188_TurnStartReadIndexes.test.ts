@@ -4,10 +4,10 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 
-it.effect("adds turn-start indexes when upgrading a database at migration 185", () =>
+it.effect("adds turn-start indexes when upgrading a database at migration 187", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 185 });
+    yield* runMigrations({ toMigrationInclusive: 187 });
     const names = [
       "orchestration_v2_projection_messages_deferred_command_idx",
       "orchestration_v2_projection_subagents_routable_idx",
@@ -16,13 +16,13 @@ it.effect("adds turn-start indexes when upgrading a database at migration 185", 
     const indexes = sql<{ readonly name: string }>`
       SELECT name FROM sqlite_schema WHERE type = 'index' AND name IN ${sql.in(names)}`;
     assert.isEmpty(yield* indexes);
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 186 }), [
-      [186, "TurnStartReadIndexes"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 188 }), [
+      [188, "TurnStartReadIndexes"],
     ]);
     assert.sameMembers(
       (yield* indexes).map((index) => index.name),
       names,
     );
-    assert.isEmpty(yield* runMigrations({ toMigrationInclusive: 186 }));
+    assert.isEmpty(yield* runMigrations({ toMigrationInclusive: 188 }));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

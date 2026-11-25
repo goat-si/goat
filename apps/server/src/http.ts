@@ -514,15 +514,22 @@ const requestPath = (request: HttpServerRequest.HttpServerRequest) => {
 };
 const isSignedUrlRequest = (request: HttpServerRequest.HttpServerRequest) => {
   const path = requestPath(request);
-  return path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) || path.startsWith(`${ASSET_ROUTE_PREFIX}/`) || path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`);
+  return (
+    path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
+    path.startsWith(`${ASSET_ROUTE_PREFIX}/`) ||
+    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`)
+  );
 };
 export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) =>
-  requestPath(request) === OTLP_TRACES_PROXY_PATH || isSignedUrlRequest(request) ||
+  requestPath(request) === OTLP_TRACES_PROXY_PATH ||
+  isSignedUrlRequest(request) ||
   (request.method === "POST" && requestPath(request) === COMPUTER_USE_LEASE_ROUTE);
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(untracedRequest);
 export const layerUnloggedSignedRequests = HttpRouter.middleware(
-  (httpEffect) => Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-    isSignedUrlRequest(request) ? HttpMiddleware.withLoggerDisabled(httpEffect) : httpEffect),
+  (httpEffect) =>
+    Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+      isSignedUrlRequest(request) ? HttpMiddleware.withLoggerDisabled(httpEffect) : httpEffect,
+    ),
   { global: true },
 );
 

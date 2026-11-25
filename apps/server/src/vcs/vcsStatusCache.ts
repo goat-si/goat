@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 
-export function makeStatusCache<T>(
+function makeStatusCache<T>(
   isRetained: (cwd: string) => boolean,
   onEvict: (cwd: string) => void,
 ) {

@@ -54,7 +54,7 @@ export function selectSideChatHandoffs(projection: HandoffProjection, run: Orche
   };
 }
 
-export const retireSideChatHandoffs = Effect.fn("ProviderTurnStartService.retireSideChatHandoffs")(
+const retireSideChatHandoffs = Effect.fn("ProviderTurnStartService.retireSideChatHandoffs")(
   function* (
     eventSink: EventSinkV2Shape,
     allocate: IdAllocatorV2Allocate,

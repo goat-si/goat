@@ -4,19 +4,19 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 
-it.effect("adds the usage-limit index when upgrading a database at migration 184", () =>
+it.effect("adds the usage-limit index when upgrading a database at migration 186", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 184 });
+    yield* runMigrations({ toMigrationInclusive: 186 });
     const indexName = "orchestration_v2_projection_turn_items_usage_limit_idx";
     assert.isEmpty(yield* sql`SELECT name FROM sqlite_schema WHERE name = ${indexName}`);
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 185 }), [
-      [185, "BackgroundRecoveryIndexes"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 187 }), [
+      [187, "BackgroundRecoveryIndexes"],
     ]);
     const indexes = yield* sql<{ readonly sql: string }>`
       SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ${indexName}`;
     assert.lengthOf(indexes, 1);
     assert.include(indexes[0]?.sql ?? "", "json_valid(payload_json)");
-    assert.isEmpty(yield* runMigrations({ toMigrationInclusive: 185 }));
+    assert.isEmpty(yield* runMigrations({ toMigrationInclusive: 187 }));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

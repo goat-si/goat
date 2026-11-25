@@ -540,20 +540,18 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
   let target = input.cwd;
   if (input.reveal === true) {
     // Explorer answers /select of a missing path by opening its default folder, not the parent.
-    const exists = yield* (yield* FileSystem.FileSystem)
-      .exists(target)
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ExternalLauncherEditorSpawnError({
-              editor: editorDef.id,
-              target,
-              command,
-              args: [],
-              cause,
-            }),
-        ),
-      );
+    const exists = yield* (yield* FileSystem.FileSystem).exists(target).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ExternalLauncherEditorSpawnError({
+            editor: editorDef.id,
+            target,
+            command,
+            args: [],
+            cause,
+          }),
+      ),
+    );
     if (!exists) {
       return yield* new ExternalLauncherRevealTargetMissingError({ editor: editorDef.id, target });
     }

@@ -763,9 +763,13 @@ export const makeWith = Effect.fn("AgentAwarenessRelay.make")(function* (
 
   schedulePublishRetry = Effect.fnUntraced(function* (threadId: ThreadId) {
     const attempts = publishRetries.get(threadId)?.attempts ?? 0;
-    const ladderDelay = RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts] ?? RELAY_AGENT_ACTIVITY_STEADY_RETRY_DELAY_MS;
+    const ladderDelay =
+      RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts] ?? RELAY_AGENT_ACTIVITY_STEADY_RETRY_DELAY_MS;
     if (attempts === RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS.length) {
-      yield* Effect.logWarning("agent activity publish retry budget exhausted; retrying every minute", { threadId });
+      yield* Effect.logWarning(
+        "agent activity publish retry budget exhausted; retrying every minute",
+        { threadId },
+      );
     }
     const delayMs = Math.max(ladderDelay, relayRetryAt - (yield* DateTime.now).epochMilliseconds);
     const retry = {

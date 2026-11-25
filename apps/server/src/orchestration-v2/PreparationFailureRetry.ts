@@ -8,7 +8,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
-export const persistPreparationFailure = Effect.fn("ThreadLaunchService.persistPreparationFailure")(
+const persistPreparationFailure = Effect.fn("ThreadLaunchService.persistPreparationFailure")(
   function* <A, E>(input: {
     persist: Effect.Effect<A, E>;
     isPreparing: Effect.Effect<boolean>;

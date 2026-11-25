@@ -115,7 +115,7 @@ export function stripDesktopOriginHeaders(
   return nextHeaders;
 }
 
-export function installMainWindowRemoteRequestHeaderPolicy(
+function installMainWindowRemoteRequestHeaderPolicy(
   session: Pick<Electron.Session, "webRequest">,
   policy: MainWindowRequestHeaderPolicy,
 ): () => void {

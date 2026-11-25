@@ -18,10 +18,15 @@ it.effect("keeps signed URLs out of HTTP server spans and request logs", () =>
   Effect.gen(function* () {
     const serverSpans: Array<string> = [];
     const loggedUrls: Array<unknown> = [];
-    const layerLogger = Logger.layer([Logger.make(({ fiber }) => {
-      const url = fiber.getRef(References.CurrentLogAnnotations)["http.url"];
-      if (url !== undefined) loggedUrls.push(url);
-    })], { mergeWithExisting: false });
+    const layerLogger = Logger.layer(
+      [
+        Logger.make(({ fiber }) => {
+          const url = fiber.getRef(References.CurrentLogAnnotations)["http.url"];
+          if (url !== undefined) loggedUrls.push(url);
+        }),
+      ],
+      { mergeWithExisting: false },
+    );
     const layerTracer = Layer.succeed(
       Tracer.Tracer,
       Tracer.make({

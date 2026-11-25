@@ -78,7 +78,6 @@ describe("AgentAwarenessRelay", () => {
     }).pipe(Effect.scoped),
   );
 
-
   it.effect.each(["command", "user_input"] as const)(
     "notifies the parent once when a child waits for %s",
     (kind) =>
