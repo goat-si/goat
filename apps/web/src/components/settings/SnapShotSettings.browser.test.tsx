@@ -106,7 +106,7 @@ it("keeps a failed preference unchanged without adding its own error", async () 
   );
   await vi.waitFor(() => expect(bridge.getSnapShotState).toHaveBeenCalled());
   await act(async () => settingsStore.set({ ...settingsStore.current, snapShotPlaySound: false }));
-  await expect.element(screen.getByRole("button", { name: "캡처 효과음: 끔" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "끔 캡처 효과음" })).toBeVisible();
   await act(async () =>
     settingsStore.set({
       ...settingsStore.current,
@@ -115,12 +115,12 @@ it("keeps a failed preference unchanged without adding its own error", async () 
     }),
   );
   await expect
-    .element(screen.getByRole("button", { name: "캡처 효과음: 휙 (기본값)" }))
+    .element(screen.getByRole("button", { name: "휙 (기본값) 캡처 효과음" }))
     .toBeVisible();
   await act(async () =>
     settingsStore.set({ ...settingsStore.current, snapShotSound: "camera-shutter" }),
   );
-  await expect.element(screen.getByRole("button", { name: "캡처 효과음: 클릭" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "클릭 캡처 효과음" })).toBeVisible();
   const flash = () =>
     screen.container.querySelector<HTMLButtonElement>(
       '[role="switch"][aria-label="캡처한 창 깜박이기"]',
