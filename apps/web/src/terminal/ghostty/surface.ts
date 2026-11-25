@@ -283,8 +283,11 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
   readonly canActivateLink?: (text: string) => boolean;
   readonly validateLink?: (text: string) => Promise<boolean>;
-  /** Reports hovered candidates once their rendered text is stable for 250 ms; null cancels. */
-  readonly onLinkHover?: (text: string | null) => void;
+  /**
+   * Reports hovered candidates once their rendered text is stable for 250 ms; null cancels.
+   * `fallbackText` is the candidate's shorter reading, used when `text` is no file.
+   */
+  readonly onLinkHover?: (text: string | null, fallbackText?: string) => void;
   /** The host must prevent the default menu; native Paste cannot reach a canvas terminal. */
   readonly onContextMenu?: (event: MouseEvent) => void;
 }
@@ -1382,7 +1385,7 @@ export class GhosttyTerminalSurface {
     const pointer = this.hoverPointer;
     const link = pointer ? this.findLinkAt(pointer.x, pointer.y) : null;
     this.updateLinkHover(link);
-    this.setHoveredLink(link && this.options.canActivateLink?.(link.text) !== false ? link : null);
+    this.setHoveredLink(link && this.activatableLink(link));
   }
 
   private updateLinkHover(link: TerminalLinkWithRange | null): void {
@@ -1402,13 +1405,17 @@ export class GhosttyTerminalSurface {
         changedAt = Math.max(changedAt, this.linkRowStability[y]?.changedAt ?? now);
       }
       const delay = Math.max(0, TERMINAL_LINK_HOVER_DELAY_MS - (now - changedAt));
+      const report = () =>
+        link.fallback
+          ? this.options.onLinkHover?.(link.text, link.fallback.text)
+          : this.options.onLinkHover?.(link.text);
       if (delay === 0) {
-        this.options.onLinkHover(link.text);
+        report();
         return;
       }
       this.linkHoverTimer = window.setTimeout(() => {
         this.linkHoverTimer = null;
-        this.options.onLinkHover?.(link.text);
+        report();
       }, delay);
     }
   }
@@ -1932,6 +1939,12 @@ export class GhosttyTerminalSurface {
     };
   }
 
+  private activatableLink(link: TerminalLinkWithRange): TerminalLinkWithRange | null {
+    const canActivate = this.options.canActivateLink;
+    if (!canActivate || canActivate(link.text)) return link;
+    return link.fallback && canActivate(link.fallback.text) ? link.fallback : null;
+  }
+
   private validateLink(text: string): Promise<boolean> | undefined {
     if (this.options.canActivateLink?.(text) !== false) return;
     const validation = this.options.validateLink?.(text);
@@ -1950,20 +1963,25 @@ export class GhosttyTerminalSurface {
       return;
     }
     const requestId = this.linkActivationRequestId;
-    void validation.then(
-      (valid) => {
-        if (
-          this.disposed ||
-          !this.visible ||
-          requestId !== this.linkActivationRequestId ||
-          !isSameTerminalLink(link, this.findLinkAt(event.clientX, event.clientY))
-        )
-          return;
-        if (valid) this.options.onLinkActivate(link.text, event);
-        else this.clearSelection();
-      },
-      () => {},
-    );
+    const settle = (candidate: TerminalLinkWithRange, pending: Promise<boolean>) =>
+      void pending.then(
+        (valid) => {
+          if (
+            this.disposed ||
+            !this.visible ||
+            requestId !== this.linkActivationRequestId ||
+            !isSameTerminalLink(link, this.findLinkAt(event.clientX, event.clientY))
+          )
+            return;
+          if (valid) return this.options.onLinkActivate(candidate.text, event);
+          const fallback = candidate.fallback;
+          const fallbackValidation = fallback && this.options.validateLink?.(fallback.text);
+          if (fallback && fallbackValidation) settle(fallback, fallbackValidation);
+          else this.clearSelection();
+        },
+        () => {},
+      );
+    settle(link, validation);
   }
 
   private linkAt(
@@ -1972,11 +1990,8 @@ export class GhosttyTerminalSurface {
     allowValidation = false,
   ): TerminalLinkWithRange | null {
     const link = this.findLinkAt(clientX, clientY);
-    return link &&
-      ((allowValidation && this.options.validateLink) ||
-        this.options.canActivateLink?.(link.text) !== false)
-      ? link
-      : null;
+    if (!link) return null;
+    return allowValidation && this.options.validateLink ? link : this.activatableLink(link);
   }
 
   private findLinkAt(clientX: number, clientY: number): TerminalLinkWithRange | null {

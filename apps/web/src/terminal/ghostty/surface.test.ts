@@ -727,6 +727,37 @@ describe("GhosttyTerminalSurface visibility", () => {
     },
   );
 
+  it.each([
+    { scenario: "the whole candidate exists", existing: "./a:1:22:DD", opened: "./a:1:22:DD" },
+    { scenario: "only its location exists", existing: "./a:1:22", opened: "./a:1:22" },
+    { scenario: "neither exists", existing: "", opened: null },
+  ])("opens a path with text after its location when $scenario", async ({ existing, opened }) => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const onLinkHover = vi.fn();
+    const validateLink = vi.fn(async (text: string) => text === existing);
+    const surface = await harness.create({
+      beforeKey: () => true,
+      canActivateLink: () => false,
+      validateLink,
+      onLinkActivate,
+      onLinkHover,
+    });
+    surface.write("./a:1:22:DD");
+    harness.flushFrame();
+    vi.advanceTimersByTime(250);
+    harness.pointer("pointermove", 5, 0);
+    expect(onLinkHover).toHaveBeenLastCalledWith("./a:1:22:DD", "./a:1:22");
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 5, 0);
+    await vi.waitFor(() =>
+      expect(validateLink).toHaveBeenCalledTimes(existing === "./a:1:22:DD" ? 1 : 2),
+    );
+    await Promise.resolve();
+    expect(onLinkActivate.mock.calls.map(([text]) => text)).toEqual(opened ? [opened] : []);
+  });
+
   it("only requests validation for a stable visible link under the pointer", async () => {
     const harness = createHarness();
     const onLinkHover = vi.fn();

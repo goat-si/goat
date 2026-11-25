@@ -448,7 +448,9 @@ function TerminalSessionViewport({
   const validateTerminalLink = useEffectEvent((text: string) =>
     linkValidation.validateTerminalLink(text),
   );
-  const setLinkPath = useEffectEvent((text: string | null) => linkValidation.setLinkPath(text));
+  const setHoveredLink = useEffectEvent((link: { text: string; fallback?: string } | null) =>
+    linkValidation.setHoveredLink(link),
+  );
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
@@ -619,7 +621,12 @@ function TerminalSessionViewport({
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         canActivateLink: (text) => canActivateTerminalLink(text),
         validateLink: (text) => validateTerminalLink(text),
-        onLinkHover: (text) => setLinkPath(text !== null && !isTerminalUrl(text) ? text : null),
+        onLinkHover: (text, fallback) =>
+          setHoveredLink(
+            text !== null && !isTerminalUrl(text)
+              ? { text, ...(fallback === undefined ? {} : { fallback }) }
+              : null,
+          ),
         // Surface listeners start before WASM loading finishes and the terminal handler exists.
         onContextMenu: (event) => {
           if (terminalRef.current) void showTerminalContextMenu(event);
