@@ -1,7 +1,6 @@
 import { useGT } from "gt-react";
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import { fileBasename } from "@goat/shared/path";
-import { useLocation } from "@tanstack/react-router";
 import { CheckIcon, ChevronDownIcon, FolderIcon, LayersIcon } from "~/components/solar";
 import { Fragment, useState, type ReactNode } from "react";
 
@@ -47,6 +46,7 @@ import {
   settingsScopeEnvironmentLabels,
   settingsScopeProjectMachines,
 } from "./settingsScopeAxis";
+import { useRenderedSettingsPathname } from "./useRenderedSettingsPathname";
 
 export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/appearance",
@@ -65,7 +65,7 @@ interface SettingsScopeMenuProps {
 export function SettingsScopeSentence() {
   const gt = useGT();
   const scope = useOptionalSettingsScope();
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const pathname = useRenderedSettingsPathname();
   const { environments } = useEnvironments();
   if (scope === null || SETTINGS_DEVICE_ONLY_PATHS.has(pathname)) return null;
   const props: SettingsScopeMenuProps = {

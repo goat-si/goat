@@ -1,5 +1,5 @@
 import { useGT } from "gt-react";
-import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useLocation, useRouter } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "~/components/solar";
 import { Button } from "../components/ui/button";
@@ -15,6 +15,7 @@ import { useEnvironments } from "../state/environments";
 import { SettingsScopeNotice } from "../components/settings/SettingsScopeNotice";
 import { SETTINGS_DEVICE_ONLY_PATHS } from "../components/settings/SettingsScopeSentence";
 import { SettingsPageContainer } from "../components/settings/settingsLayout";
+import { useRenderedSettingsPathname } from "../components/settings/useRenderedSettingsPathname";
 import {
   retainSettingsScope,
   settingsContentScopeKey,
@@ -45,7 +46,10 @@ function RestoreDeviceDefaultsButton({ onRestored }: { onRestored: () => void })
 function SettingsScopeBoundary({ pathname, children }: { pathname: string; children: ReactNode }) {
   const { scope, connectedEnvironments } = useSettingsScope();
   const { environments } = useEnvironments();
-  const hash = useLocation({ select: (location) => location.hash });
+  // A pending navigation's hash targets the page still loading, not the one on screen.
+  const hash = useLocation({
+    select: (location) => (location.pathname === pathname ? location.hash : ""),
+  });
   const searchTarget = getSettingsSearchTargetScope(hash);
   const autoSettlementAvailability = searchTarget?.requiresThreadAutoSettlement
     ? getThreadAutoSettlementSearchAvailability(environments, scope)
@@ -108,27 +112,23 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
 }
 
 function SettingsContentLayout() {
-  const location = useLocation();
+  const pathname = useRenderedSettingsPathname();
   const { search, environment } = useSettingsScope();
-  const contentScopeKey = settingsContentScopeKey(
-    location.pathname,
-    search,
-    environment?.environmentId,
-  );
+  const contentScopeKey = settingsContentScopeKey(pathname, search, environment?.environmentId);
   const [restoreSignal, setRestoreSignal] = useState(0);
 
   return (
     <SettingsPageShell
-      pathname={location.pathname}
+      pathname={pathname}
       actions={
-        location.pathname === "/settings/general" ? (
+        pathname === "/settings/general" ? (
           <RestoreDeviceDefaultsButton onRestored={() => setRestoreSignal((value) => value + 1)} />
         ) : null
       }
     >
       <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
         <AutomationHoldNotices />
-        <SettingsScopeBoundary pathname={location.pathname}>
+        <SettingsScopeBoundary pathname={pathname}>
           <Outlet />
         </SettingsScopeBoundary>
       </div>
@@ -139,7 +139,8 @@ function SettingsContentLayout() {
 function SettingsRouteLayout() {
   const rawSearch = Route.useSearch();
   const navigate = Route.useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const router = useRouter();
+  const pathname = useRenderedSettingsPathname();
   return (
     <SettingsScopeProvider
       search={rawSearch}
@@ -148,7 +149,9 @@ function SettingsRouteLayout() {
       onChange={(next) => {
         // Send every axis so retain middleware recognizes "all" as an explicit target.
         void navigate({
-          to: pathname,
+          // Read at call time: subscribing would hand every scope consumer a new context value on
+          // each click. A pending navigation's target wins over the page still on screen.
+          to: router.state.location.pathname,
           search: () => ({
             project: next.project,
             machine: next.machine,

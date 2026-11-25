@@ -99,6 +99,7 @@ import { Label } from "../ui/label";
 import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/menu";
 import { ToggleGroup, Toggle } from "../ui/toggle-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "../ui/empty";
+import { Skeleton } from "../ui/skeleton";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { createModelSelection } from "@goat/shared/model";
@@ -317,6 +318,9 @@ function ScheduledTaskEnvironmentList({
 
   const loaded = states.filter((state) => state.connected && state.error === null && state.tasks);
   const populated = loaded.filter((state) => state.tasks && state.tasks.length > 0);
+  const loading = states.some((state) => state.connected && state.error === null && !state.tasks);
+  // Until one machine has tasks to show, rows stand in for the list instead of a status line.
+  const placeholder = loading && populated.length === 0;
   const summaries = {
     disconnected: {
       text: (list: string) => gt("Not connected: {list}", { list }),
@@ -341,7 +345,7 @@ function ScheduledTaskEnvironmentList({
     } else if (error !== null) {
       summaries.failed.entries.push(`${label}: ${error}`);
     } else if (!tasks) {
-      summaries.loading.entries.push(label);
+      if (!placeholder) summaries.loading.entries.push(label);
     } else if (tasks.length === 0 && populated.length > 0) {
       summaries.empty.entries.push(label);
     }
@@ -389,7 +393,8 @@ function ScheduledTaskEnvironmentList({
           role="status"
         />
       ) : null}
-      {populated.length === 0 && loaded.length > 0 ? (
+      {placeholder ? <ScheduledTaskRowsSkeleton /> : null}
+      {populated.length === 0 && loaded.length > 0 && !loading ? (
         <SettingsRow
           title={gt("No scheduled tasks")}
           description={gt("No tasks match this environment and project selection.")}
@@ -484,7 +489,7 @@ function ScheduledTaskEnvironmentSection({
       ) : tasksQuery.error ? (
         <SettingsRow title={gt("Could not load scheduled tasks")} description={tasksQuery.error} />
       ) : !tasks ? (
-        <SettingsRow title={gt("Loading scheduled tasks…")} role="status" />
+        <ScheduledTaskRowsSkeleton />
       ) : (
         <>
           {taskId && !linkedTask ? (
@@ -515,6 +520,37 @@ function ScheduledTaskEnvironmentSection({
         </>
       )}
     </SettingsSection>
+  );
+}
+
+const SKELETON_ROWS = [0, 1] as const;
+
+function ScheduledTaskRowsSkeleton() {
+  const gt = useGT();
+  return (
+    <div
+      role="status"
+      aria-label={gt("Loading scheduled tasks…")}
+      className="divide-y divide-border/50"
+    >
+      {SKELETON_ROWS.map((row) => (
+        <div
+          key={row}
+          aria-hidden
+          className="flex items-center justify-between gap-3 px-3 py-3 sm:px-4"
+        >
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton shape="pill" className="h-4 w-40" />
+            <Skeleton shape="pill" className="h-3 w-full max-w-sm" />
+            <Skeleton shape="pill" className="h-3 w-48" />
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Skeleton shape="pill" className="h-5 w-9" />
+            <Skeleton className="size-7" />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

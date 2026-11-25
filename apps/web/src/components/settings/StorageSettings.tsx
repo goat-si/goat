@@ -554,14 +554,6 @@ export function StorageSettingsPanel() {
   return (
     <SettingsPageContainer>
       {!isProjectScope && <DiskUsageSection />}
-      {!isProjectScope && (
-        <DatabaseStorageNotice
-          environments={connectedEnvironments.filter(
-            (environment) =>
-              environment.serverConfig?.environment.capabilities.databaseStorage === true,
-          )}
-        />
-      )}
       <SettingsSection id="storage-worktrees" title={gt("Worktrees")}>
         {!isProjectScope && <WorktreesDirectoryRow />}
         {isProjectScope && (
@@ -796,6 +788,15 @@ export function StorageSettingsPanel() {
         </SettingsSection>
       )}
       {!isProjectScope && <CleanupSection />}
+      {/* Machines report their databases after the page renders, so the notice goes last to push nothing down. */}
+      {!isProjectScope && (
+        <DatabaseStorageNotice
+          environments={connectedEnvironments.filter(
+            (environment) =>
+              environment.serverConfig?.environment.capabilities.databaseStorage === true,
+          )}
+        />
+      )}
     </SettingsPageContainer>
   );
 }

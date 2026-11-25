@@ -1,14 +1,43 @@
 import { useGT } from "gt-react";
+import type { KeybindingCommand } from "@goat/contracts";
 import type { ReactNode, RefObject } from "react";
 import { MinusIcon, SearchIcon, TriangleAlertIcon } from "~/components/solar";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
+import { Skeleton } from "../ui/skeleton";
 import type { KeybindingRow } from "./KeybindingsSettings.logic";
+import { keybindingSearchAnchorId } from "./settingsSearch";
 import { useKeybindingDisplayLabel } from "./useKeybindingDisplayLabel";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { handleKeybindingsSearchEscape } from "./keybindingsSearchEscape";
+
+export function keybindingAnchorIds(rows: ReadonlyArray<KeybindingRow>) {
+  const ids = new Map<string, string>();
+  const seen = new Set<KeybindingCommand>();
+  for (const row of rows) {
+    if (seen.has(row.command)) continue;
+    seen.add(row.command);
+    ids.set(row.id, keybindingSearchAnchorId(row.command));
+  }
+  return ids;
+}
+
+export function KeybindingsGroupsSkeleton() {
+  return (
+    <>
+      <div aria-hidden className="space-y-2.5">
+        <Skeleton shape="pill" className="h-3 w-24" />
+        <Skeleton shape="card" className="h-96" />
+      </div>
+      <div aria-hidden className="space-y-2.5">
+        <Skeleton shape="pill" className="h-3 w-24" />
+        <Skeleton shape="card" className="h-72" />
+      </div>
+    </>
+  );
+}
 
 export function KeybindingsSearchInput({
   query,
