@@ -37,6 +37,7 @@ import {
   type SshHostCaller,
 } from "./SshHostAuthorization.ts";
 import * as Setup from "./SshHostSetup.ts";
+import * as Dispatch from "./SshRemoteDispatch.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export const SshDeviceAddInput = Schema.Struct({
@@ -132,6 +133,7 @@ const make = Effect.gen(function* () {
   const sessions = yield* Sessions.SessionStore;
   const threads = yield* Threads.ThreadManagementService;
   const hub = yield* HubNodes.HubNodes;
+  const dispatch = yield* Dispatch.SshRemoteDispatch;
   const addDevice: SshDeviceAdd["Service"]["addDevice"] = (input, caller) =>
     Effect.gen(function* () {
       if (caller.kind !== "mcp")
@@ -331,6 +333,10 @@ const make = Effect.gen(function* () {
               Effect.forkChild,
               Effect.flatMap(Fiber.join),
             );
+          const reachedEnvironmentId = yield* dispatch
+            .identifyTarget({ alias, hostname: alias, username: null, port: null })
+            .pipe(Effect.orElseSucceed(() => null));
+          yield* assertFullAccess(yield* liveCaller, fullAccessMessage);
           // Once the desktop has answered, its save is registered on the hub even if the call is cut.
           const settled = yield* Effect.uninterruptibleMask((restore) =>
             restore(
@@ -338,6 +344,7 @@ const make = Effect.gen(function* () {
                 {
                   type: "add_ssh",
                   host: alias,
+                  ...(reachedEnvironmentId === null ? {} : { reachedEnvironmentId }),
                   ...(input.label ? { label: input.label } : {}),
                   addedBy,
                 },

@@ -285,7 +285,6 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(Observability.layer),
   Layer.provideMerge(layerResourceAttribution),
 );
-
 const layerPtyAdapter = NodePtyAdapter.layer;
 
 export const layerServerSettings = ServerSettings.layer.pipe(
@@ -983,6 +982,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // SshHostSetup routes approvals of agent-requested provider syncs to ProviderHostSync.
   Layer.provide(
     SshDeviceAdd.layer.pipe(
+      Layer.provide(SshRemoteDispatchLive.layerWithPenRoutes),
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
           Layer.provide(

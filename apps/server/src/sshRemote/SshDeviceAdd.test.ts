@@ -28,6 +28,8 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as Setup from "./SshHostSetup.ts";
 import * as DeviceAdd from "./SshDeviceAdd.ts";
+import * as Dispatch from "./SshRemoteDispatch.ts";
+import type { ConnectionCatalogOperation } from "@goat/contracts";
 
 const threadId = ThreadId.make("caller");
 const scope: McpInvocationScope = {
@@ -77,6 +79,8 @@ const hubNode: HubNode = {
 };
 const fixture = (
   options: {
+    identity?: "matched" | "error";
+    refused?: boolean;
     blocked?: "failed" | "needs_review";
     catalog?: "absent" | "detached" | "timeout";
     /** unidentified: GOAT never ran there; preparing: identified only after a prepare. */
@@ -98,6 +102,7 @@ const fixture = (
   Effect.gen(function* () {
     const calls: string[] = [];
     const hubSaves: string[] = [];
+    const operations: ConnectionCatalogOperation[] = [];
     let pinned = !options.typed && !options.configured;
     const managedAlias = options.configured ? "goat-build" : "build";
     const checkedHosts: string[] = [];
@@ -207,6 +212,26 @@ const fixture = (
                 return options.prepareResult ?? prepared;
               }),
           }),
+          Layer.mock(Dispatch.SshRemoteDispatch)({
+            identifyTarget: (target) => {
+              expect(target).toEqual({
+                alias: target.alias,
+                hostname: target.alias,
+                username: null,
+                port: null,
+              });
+              return options.identity === "error"
+                ? Effect.fail(
+                    new Dispatch.SshRemoteDispatchError({
+                      reason: "host_unavailable",
+                      message: "unavailable",
+                    }),
+                  )
+                : Effect.succeed(
+                    options.identity === "matched" ? EnvironmentId.make("build") : null,
+                  );
+            },
+          }),
           Layer.mock(HubNodes.HubNodes)({
             disposableRoute: (target) =>
               Effect.sync(() =>
@@ -242,6 +267,13 @@ const fixture = (
             invoke: (operation, timeout) =>
               Effect.gen(function* () {
                 calls.push("broker");
+                operations.push(operation);
+                if (options.refused)
+                  return {
+                    type: "failure" as const,
+                    reason: "refused" as const,
+                    message: "Machine replaced",
+                  };
                 expect(operation.type).toBe("add_ssh");
                 expect(timeout).toBe(600_000);
                 if (options.catalog === "absent")
@@ -285,6 +317,7 @@ const fixture = (
       call,
       calls,
       hubSaves,
+      operations,
       checkedHosts,
       report,
       approve: () => {
@@ -709,5 +742,29 @@ it.effect("outside-thread handoff guidance also keeps fingerprints private", () 
     expect(result).toMatchObject({ kind: "error", saved: false, preflight: { ready: false } });
     expect(JSON.stringify(result)).not.toContain("fingerprint");
     expect(JSON.stringify(result)).not.toContain("SHA256:private");
+  }),
+);
+
+it.effect.each([undefined, "error", "matched"] as const)(
+  "passes only a successfully identified SSH environment (%s)",
+  (identity) =>
+    Effect.gen(function* () {
+      const f = yield* fixture(identity === undefined ? {} : { identity });
+      yield* f.call();
+      if (identity === "matched")
+        expect(f.operations[0]).toHaveProperty("reachedEnvironmentId", EnvironmentId.make("build"));
+      else expect(f.operations[0]).not.toHaveProperty("reachedEnvironmentId");
+    }),
+);
+it.effect("desktop refusal fails the add without registering the hub", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture({ identity: "matched", refused: true });
+    expect(yield* f.call().pipe(Effect.flip)).toMatchObject({
+      _tag: "OrchestratorMcpFailure",
+      code: "invalid_request",
+      message: "Machine replaced",
+    });
+    expect(f.calls).toEqual(["preflight", "broker"]);
+    expect(f.hubSaves).toEqual([]);
   }),
 );
