@@ -15,7 +15,12 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
 
 /** Settings whose writes reach subscribers, as the live service's do. */
-const layerPublishingSettings = (consent: TelemetryConsent, gate?: Deferred.Deferred<void>) =>
+const layerPublishingSettings = (
+  consent: TelemetryConsent,
+  gate?: Deferred.Deferred<void>,
+  beforeRead?: () => Effect.Effect<void>,
+  declineAtSnapshot = false,
+) =>
   Layer.effect(
     ServerSettings.ServerSettingsService,
     Effect.gen(function* () {
@@ -24,6 +29,18 @@ const layerPublishingSettings = (consent: TelemetryConsent, gate?: Deferred.Defe
       const revision = yield* Ref.make(0);
       return ServerSettings.ServerSettingsService.of({
         ...settings,
+        getSettings: Effect.suspend(() =>
+          beforeRead
+            ? beforeRead().pipe(Effect.andThen(settings.getSettings))
+            : settings.getSettings,
+        ),
+        withSettingsSnapshot: Effect.fn("testSettings.withSettingsSnapshot")((f) =>
+          declineAtSnapshot
+            ? settings
+                .updateSettings({ telemetryConsent: "declined" })
+                .pipe(Effect.andThen(settings.withSettingsSnapshot(f)))
+            : settings.withSettingsSnapshot(f),
+        ),
         updateSettings: Effect.fn("testSettings.updateSettings")(
           (
             ...args: Parameters<ServerSettings.ServerSettingsService["Service"]["updateSettings"]>
@@ -64,6 +81,8 @@ export const layerWithdrawable = (
   client: HttpClient.HttpClient,
   removeId: RemoveId,
   gate?: Deferred.Deferred<void>,
+  beforeRead?: () => Effect.Effect<void>,
+  declineAtSnapshot = false,
 ) =>
   Layer.unwrap(
     Effect.map(ServerConfig.ServerConfig, (config) =>
@@ -84,7 +103,7 @@ export const layerWithdrawable = (
             ),
           ),
         ),
-        Layer.provideMerge(layerPublishingSettings("granted", gate)),
+        Layer.provideMerge(layerPublishingSettings("granted", gate, beforeRead, declineAtSnapshot)),
       ),
     ),
   ).pipe(

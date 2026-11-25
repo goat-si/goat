@@ -200,9 +200,7 @@ export const make = Effect.gen(function* () {
   // Held while the id file is deleted, so a new id is never read from a file that is going away.
   const identityLock = yield* Semaphore.make(1);
   // A deletion that failed: no id is used until the file is gone.
-  const resetPendingRef = yield* Ref.make(
-    (yield* consent) === "declined" && (yield* environmentOverride) !== "enabled",
-  );
+  const resetPendingRef = yield* Ref.make(false);
   const resetIdentity = Effect.gen(function* () {
     yield* Ref.set(identityRef, Option.none());
     const removed = yield* resetTelemetryIdentity.pipe(Effect.provide(identityContext));
@@ -244,76 +242,33 @@ export const make = Effect.gen(function* () {
   const enqueueBufferedEvent = (
     uuid: string,
     event: string,
-    properties?: Readonly<Record<string, unknown>>,
+    properties: Readonly<Record<string, unknown>> | undefined,
+    now: DateTime.DateTime,
   ) =>
-    Effect.flatMap(DateTime.now, (now) =>
-      Ref.modify(bufferRef, (current) => {
-        const appended = [
-          ...current,
-          {
-            uuid,
-            event,
-            ...(properties ? { properties } : {}),
-            capturedAt: DateTime.formatIso(now),
-          } satisfies BufferedAnalyticsEvent,
-        ];
+    Ref.modify(bufferRef, (current) => {
+      const appended = [
+        ...current,
+        {
+          uuid,
+          event,
+          ...(properties ? { properties } : {}),
+          capturedAt: DateTime.formatIso(now),
+        } satisfies BufferedAnalyticsEvent,
+      ];
 
-        const next =
-          appended.length > telemetryConfig.maxBufferedEvents
-            ? appended.slice(appended.length - telemetryConfig.maxBufferedEvents)
-            : appended;
+      const next =
+        appended.length > telemetryConfig.maxBufferedEvents
+          ? appended.slice(appended.length - telemetryConfig.maxBufferedEvents)
+          : appended;
 
-        return [
-          {
-            size: next.length,
-            dropped: next.length !== appended.length,
-          } as const,
-          next,
-        ] as const;
-      }),
-    );
-
-  const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
-    events: ReadonlyArray<BufferedAnalyticsEvent>,
-    generation: number,
-  ) {
-    if (!(yield* telemetryEnabled)) return;
-    const { distinctId, installId } = yield* identity;
-    if (!distinctId || (yield* Ref.get(generationRef)) !== generation) return;
-
-    const payload = {
-      api_key: telemetryConfig.posthogKey,
-      batch: events.map((event) => ({
-        uuid: event.uuid,
-        event: event.event,
-        distinct_id: distinctId,
-        properties: {
-          ...event.properties,
-          ...(installId === null ? {} : { installId }),
-          $process_person_profile: false,
-          platform: hostPlatform,
-          wsl: Option.getOrUndefined(telemetryConfig.wslDistroName),
-          arch: hostArchitecture,
-          t3CodeVersion: packageJson.version,
-          telemetryChannel: ServerConfig.telemetryChannel,
-          clientType,
-          serverOs: serverOsFromNodePlatform(hostPlatform),
-          serverArch: hostArchitecture,
-          serverWslDistro: Option.getOrUndefined(telemetryConfig.wslDistroName),
-          serverAppVersion: packageJson.version,
-          serverMode: serverConfig.mode,
-        },
-        timestamp: event.capturedAt,
-      })),
-    };
-
-    yield* HttpClientRequest.post(`${telemetryConfig.posthogHost}/batch/`).pipe(
-      HttpClientRequest.bodyJson(payload),
-      Effect.flatMap(httpClient.execute),
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.timeout(SEND_TIMEOUT),
-    );
-  });
+      return [
+        {
+          size: next.length,
+          dropped: next.length !== appended.length,
+        } as const,
+        next,
+      ] as const;
+    });
 
   const takeBatch = Ref.modify(bufferRef, (current) => {
     const nextBatch = current.slice(0, telemetryConfig.flushBatchSize);
@@ -350,6 +305,10 @@ export const make = Effect.gen(function* () {
       return { changes, revision: yield* revision, consent: current.telemetryConsent };
     }),
   );
+  yield* Ref.set(
+    resetPendingRef,
+    baseline.consent === "declined" && (yield* environmentOverride) !== "enabled",
+  );
   const consentChanges = baseline.changes;
   const processed = yield* SubscriptionRef.make(baseline.revision);
   let lastConsent = baseline.consent;
@@ -357,6 +316,50 @@ export const make = Effect.gen(function* () {
     const current = yield* revision;
     return (yield* SubscriptionRef.get(processed)) >= current;
   });
+  const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
+    events: ReadonlyArray<BufferedAnalyticsEvent>,
+    generation: number,
+  ) {
+    if (!(yield* telemetryEnabled)) return false;
+    const { distinctId, installId } = yield* identity;
+    if (!distinctId || !(yield* caughtUp) || (yield* Ref.get(generationRef)) !== generation)
+      return false;
+
+    const payload = {
+      api_key: telemetryConfig.posthogKey,
+      batch: events.map((event) => ({
+        uuid: event.uuid,
+        event: event.event,
+        distinct_id: distinctId,
+        properties: {
+          ...event.properties,
+          ...(installId === null ? {} : { installId }),
+          $process_person_profile: false,
+          platform: hostPlatform,
+          wsl: Option.getOrUndefined(telemetryConfig.wslDistroName),
+          arch: hostArchitecture,
+          t3CodeVersion: packageJson.version,
+          telemetryChannel: ServerConfig.telemetryChannel,
+          clientType,
+          serverOs: serverOsFromNodePlatform(hostPlatform),
+          serverArch: hostArchitecture,
+          serverWslDistro: Option.getOrUndefined(telemetryConfig.wslDistroName),
+          serverAppVersion: packageJson.version,
+          serverMode: serverConfig.mode,
+        },
+        timestamp: event.capturedAt,
+      })),
+    };
+
+    yield* HttpClientRequest.post(`${telemetryConfig.posthogHost}/batch/`).pipe(
+      HttpClientRequest.bodyJson(payload),
+      Effect.flatMap(httpClient.execute),
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.timeout(SEND_TIMEOUT),
+    );
+    return true;
+  });
+
   const awaitCaughtUp = SubscriptionRef.changes(processed).pipe(
     Stream.filterEffect((count) => Effect.map(revision, (current) => count >= current)),
     Stream.runHead,
@@ -390,6 +393,10 @@ export const make = Effect.gen(function* () {
       // Withdrawn while sending: this batch must not be retried.
       if ((yield* Ref.get(generationRef)) !== generation) return;
       if (Result.isSuccess(sent)) {
+        if (!sent.success) {
+          yield* Ref.set(deliveryRef, { ...delivery, failedBatch: batch });
+          return;
+        }
         yield* Ref.set(deliveryRef, IDLE_DELIVERY);
         continue;
       }
@@ -450,6 +457,7 @@ export const make = Effect.gen(function* () {
 
       // Catch Node UUID defects too; best-effort telemetry drops events without UUIDs.
       const uuid = yield* Effect.exit(crypto.uuidV7());
+      const now = yield* DateTime.now;
       if (
         Exit.isFailure(uuid) ||
         !(yield* caughtUp) ||
@@ -457,7 +465,7 @@ export const make = Effect.gen(function* () {
       )
         return;
 
-      const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties);
+      const enqueueResult = yield* enqueueBufferedEvent(uuid.value, event, properties, now);
       if (enqueueResult.dropped) {
         yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
           size: enqueueResult.size,
