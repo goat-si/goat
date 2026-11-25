@@ -208,7 +208,7 @@ const { autoBootstrapProjectFromCwd: _autoBootstrapProjectFromCwd, ...serveComma
 
 export const serveCommand = Command.make("serve", serveCommandFlags).pipe(
   Command.withDescription(
-    "Run the GOAT server without opening a browser and print headless pairing details.",
+    "Run the GOAT server without opening a browser. In a terminal it prints pairing details; for a background service, run `goat pair` to connect a device.",
   ),
   Command.withHandler((flags) =>
     runServerCommand(

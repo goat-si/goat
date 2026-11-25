@@ -17,6 +17,9 @@ run these commands on the machine that will host GOAT:
 | Restart                         | `goat service restart`            |
 | Stop and remove from startup    | `goat service uninstall`          |
 
+The service never writes a pairing code to its log. To connect a device, run
+`goat pair` on the host, or `goat up` to set up access from your other devices.
+
 Uninstalling the service leaves your projects, threads, and settings intact.
 Running `goat service install` again repairs a service that `goat service status`
 reports as broken.
