@@ -50,6 +50,10 @@ vi.mock("electron", () => ({
   session: {
     fromPartition,
   },
+  systemPreferences: {
+    getMediaAccessStatus: vi.fn(() => "granted"),
+    askForMediaAccess: vi.fn(() => Promise.resolve(true)),
+  },
 }));
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
