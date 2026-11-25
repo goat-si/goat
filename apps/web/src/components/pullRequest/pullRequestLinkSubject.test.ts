@@ -83,5 +83,12 @@ describe("pullRequestLinkSubject", () => {
     const cut = pullRequestLinkSubject(`${pr}#issuecomment-5`, long);
     const excerpt = cut && "excerpt" in cut ? cut.excerpt : null;
     expect(excerpt).toMatch(/^(?:i ?)+…$/u);
+    const between = comment
+      ? { ...activity, comments: [{ ...comment, body: `${"a".repeat(278)} word` }] }
+      : activity;
+    const cutBetween = pullRequestLinkSubject(`${pr}#issuecomment-5`, between);
+    expect(cutBetween && "excerpt" in cutBetween ? cutBetween.excerpt : null).toBe(
+      `${"a".repeat(278)}…`,
+    );
   });
 });
