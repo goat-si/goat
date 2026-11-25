@@ -42,7 +42,10 @@ vi.mock("~/state/environments", async (importOriginal) => ({
   useEnvironments: () => ({ environments: mocks.environments ?? [] }),
 }));
 vi.mock("./settingsSearch", () => ({
-  searchableSetting: (id: string) => ({ id, title: id }),
+  searchableSetting: (id: string) => ({
+    id,
+    title: id === "tailscale-https" ? "Tailscale HTTPS" : id,
+  }),
 }));
 // The production layout subscribes to settings search state this flow does not use.
 vi.mock("./settingsLayout", () => ({
@@ -202,7 +205,7 @@ it("phone QR: offers Tailscale HTTPS only while Serve is off; an unreachable Ser
     expect(dialog().getByRole("button", { name: "Turn on Tailscale HTTPS" }).query()).toBeNull();
     await dialog().getByRole("button", { name: "Done" }).click();
     // The switch follows the saved setting, so an unreachable Serve can still be turned off.
-    const serveSwitch = page.getByRole("switch", { name: "Enable Tailscale HTTPS" });
+    const serveSwitch = page.getByRole("switch", { name: "Tailscale HTTPS" });
     await expect.element(serveSwitch).toBeChecked();
     await serveSwitch.click();
     expect(actions.onTurnOffTailscaleHttps).toHaveBeenCalledTimes(1);
