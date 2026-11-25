@@ -880,6 +880,15 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         yield* sql`ALTER TABLE channel_tasks DROP COLUMN status_version`;
         yield* sql`DELETE FROM channel_runtime_state WHERE key = 'bot-task-activity-since'`;
         yield* sql`ALTER TABLE channel_conversations DROP COLUMN slack_bot_id`;
+        for (const trigger of [
+          "count_insert",
+          "count_update",
+          "count_delete",
+          "run_insert",
+          "run_delete",
+        ])
+          yield* sql.unsafe(`DROP TRIGGER orchestration_v2_thread_item_counts_${trigger}`);
+        yield* sql`DROP TABLE orchestration_v2_projection_thread_item_counts`;
         assert.isUndefined(yield* checkOldBuild(176));
         assert.deepStrictEqual(
           yield* runMigrations({ toMigrationInclusive: 177 }).pipe(
@@ -897,6 +906,12 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
           [183, "ChannelInputSessionAuthority"],
           [184, "RemoteDispatchEnvironment"],
           [185, "TurnMemoryReceipts"],
+          [186, "ProviderTurnAttemptIndex"],
+          [187, "BackgroundRecoveryIndexes"],
+          [188, "TurnStartReadIndexes"],
+          [189, "ThreadItemCounts"],
+          [190, "WorktreePathKeyIndex"],
+          [191, "DeferredSlashCommandIndex"],
         ]);
         for (const through of [176, 177] as const) {
           assert.include(
