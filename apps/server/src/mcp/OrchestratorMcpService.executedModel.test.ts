@@ -77,6 +77,13 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
       ],
       contextTransfers: [
         {
+          id: ContextTransferId.make("transfer:mcp-ack-preparation-failed"),
+          type: "subagent_result",
+          sourceThreadId: childThreadId,
+          targetThreadId: parentThreadId,
+          sourcePoint: { runId: childRunId },
+        },
+        {
           id: resultTransferId,
           type: "subagent_result",
           sourceThreadId: childThreadId,
@@ -194,6 +201,7 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
       assert.equal(result.latestTerminalRunId, childRunId);
       assert.equal(result.latestTerminalStatus, "completed");
       assert.equal(result.resultContextTransferId, resultTransferId);
+      assert.isNull(result.latestTerminalResultContextTransferId);
       const commandIds = yield* Ref.get(acknowledgementCommandIds);
       assert.equal(commandIds.length, 2);
       assert.notEqual(commandIds[0], commandIds[1]);
