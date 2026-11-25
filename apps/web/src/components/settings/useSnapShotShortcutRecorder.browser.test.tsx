@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
 import { act, render } from "../../../test/render";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts";
 import { userEvent } from "vite-plus/test/browser";
@@ -69,4 +71,21 @@ it("ignores late suppression acknowledgements after cancellation", async () => {
   await screen.expectRecording(false);
   expect(suppress).toHaveBeenLastCalledWith(false);
   expect(recorded).not.toHaveBeenCalled();
+});
+
+it("localizes the shortcut recorder name with and without a current shortcut", async () => {
+  setup();
+  using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <Recorder shortcutLabel="Ctrl+Shift+2" />
+    </GTProvider>,
+  );
+  await expect.element(screen.getByRole("button", { name: /스냅샷 단축키 기록.*2/ })).toBeVisible();
+  await screen.rerender(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <Recorder shortcutLabel="invalid shortcut" />
+    </GTProvider>,
+  );
+  await expect.element(screen.getByRole("button", { name: "스냅샷 단축키 변경" })).toBeVisible();
 });

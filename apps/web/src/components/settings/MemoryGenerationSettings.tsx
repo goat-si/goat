@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection, pickModelSelection } from "@goat/shared/model";
@@ -26,6 +27,7 @@ export function MemoryGenerationSettings({
   environmentId: EnvironmentId;
   hideModelWhenDisabled?: boolean;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const settings = useEnvironmentSettings(environmentId);
   const providers = useEnvironmentProviders().get(environmentId) ?? [];
@@ -68,13 +70,15 @@ export function MemoryGenerationSettings({
     });
   }
   return (
-    <SettingsSection title="Memory">
+    <SettingsSection title={gt("Memory")}>
       <SettingsRow
-        title="Remember conversations"
-        description="GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories."
+        title={gt("Remember conversations")}
+        description={gt(
+          "GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories.",
+        )}
         control={
           <Switch
-            aria-label="Remember conversations"
+            aria-label={gt("Remember conversations")}
             checked={settings.memoryEnabled}
             disabled={!allowed}
             onCheckedChange={(checked) => save({ memoryEnabled: checked })}
@@ -83,8 +87,10 @@ export function MemoryGenerationSettings({
       />
       {(!hideModelWhenDisabled || settings.memoryEnabled) && (
         <SettingsRow
-          title="Memory model"
-          description="Automatic follows the text generation model. Choose a separate model for memory summaries."
+          title={gt("Memory model")}
+          description={gt(
+            "Automatic follows the text generation model. Choose a separate model for memory summaries.",
+          )}
           control={
             <div className="flex flex-wrap items-center justify-end gap-2">
               {selection === null ? (
@@ -103,7 +109,7 @@ export function MemoryGenerationSettings({
                     instanceEntries={entries}
                     modelOptionsByInstance={options}
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    triggerAriaLabel="Memory model"
+                    triggerAriaLabel={gt("Memory model")}
                     disabled={!allowed}
                     onInstanceModelChange={(instanceId, model) =>
                       save({
@@ -140,7 +146,7 @@ export function MemoryGenerationSettings({
                 </>
               ) : null}
               <Switch
-                aria-label="Use a separate memory model"
+                aria-label={gt("Use a separate memory model")}
                 checked={separate}
                 disabled={!allowed || (!separate && !activeEntry)}
                 onCheckedChange={(checked) => {

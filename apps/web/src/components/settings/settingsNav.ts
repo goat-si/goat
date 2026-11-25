@@ -63,14 +63,14 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/appearance": { text: "Theme, fonts, and layout of this app on this device." },
   "/settings/keybindings": { text: "Keyboard shortcuts for this app." },
-  "/settings/snap-shot": { text: "Capture part of your screen and attach it to a thread." },
+  "/settings/snap-shot": { text: msg("Capture part of your screen and attach it to a thread.") },
   "/settings/providers": {
     text: msg(
       "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
     ),
     related: [{ label: "Hub", to: "/settings/hub" }],
   },
-  "/settings/memory": { text: "What agents remember across threads, and who can read it." },
+  "/settings/memory": { text: msg("What agents remember across threads, and who can read it.") },
   "/settings/integrations": {
     text: msg(
       "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
@@ -87,12 +87,14 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/archived": { text: msg("Threads you archived. Restore or delete them here.") },
   "/settings/goat-bot": {
-    text: "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    text: msg(
+      "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    ),
   },
   "/settings/decision-inbox": {
-    text: "Questions agents left for you, each with a recommendation and a deadline.",
+    text: msg("Questions agents left for you, each with a recommendation and a deadline."),
   },
-  "/settings/scheduled-tasks": { text: "Prompts that run on a schedule." },
+  "/settings/scheduled-tasks": { text: msg("Prompts that run on a schedule.") },
   "/settings/hub": {
     text: msg(
       "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",

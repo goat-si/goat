@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { decisionAnswerReason } from "@goat/client-runtime/state/decision-inbox";
@@ -16,13 +17,14 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 export function DecisionInboxSettings() {
+  const gt = useGT();
   const { connectedEnvironments } = useSettingsScope();
   const [includeClosed, setIncludeClosed] = useState(false);
   return (
     <SettingsPageContainer>
       <SettingsSection
         id="decision-inbox"
-        title="Decision inbox"
+        title={gt("Decision inbox")}
         headerAction={
           <Button
             size="xs"
@@ -30,13 +32,13 @@ export function DecisionInboxSettings() {
             aria-pressed={includeClosed}
             onClick={() => setIncludeClosed(!includeClosed)}
           >
-            {includeClosed ? "Show open only" : "Show answered and expired"}
+            {includeClosed ? gt("Show open only") : gt("Show answered and expired")}
           </Button>
         }
       >
         {connectedEnvironments.length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">
-            Connect an environment to view decisions.
+            {gt("Connect an environment to view decisions.")}
           </p>
         ) : (
           connectedEnvironments.map((environment) => (
@@ -62,6 +64,7 @@ function EnvironmentDecisions({
   readonly label: string;
   readonly includeClosed: boolean;
 }) {
+  const gt = useGT();
   const query = useEnvironmentQuery(
     serverEnvironment.decisionItems({
       environmentId,
@@ -73,7 +76,7 @@ function EnvironmentDecisions({
       <div className="flex items-center justify-between gap-3 px-4 py-2">
         <h3 className="text-sm font-medium">{label}</h3>
         <Button size="xs" variant="ghost" onClick={query.refresh} disabled={query.isPending}>
-          Refresh
+          {gt("Refresh")}
         </Button>
       </div>
       {query.error ? (
@@ -88,11 +91,11 @@ function EnvironmentDecisions({
       ))}
       {!query.data ? (
         <p className="px-4 pb-3 text-sm text-muted-foreground">
-          {query.error ? "Could not load decisions. Try Refresh." : "Loading decisions…"}
+          {query.error ? gt("Could not load decisions. Try Refresh.") : gt("Loading decisions…")}
         </p>
       ) : query.data.items.length === 0 ? (
         <p className="px-4 pb-3 text-sm text-muted-foreground">
-          {includeClosed ? "No decisions yet." : "No open decisions."}
+          {includeClosed ? gt("No decisions yet.") : gt("No open decisions.")}
         </p>
       ) : (
         <ul className="divide-y divide-border/50">
@@ -110,7 +113,9 @@ function EnvironmentDecisions({
         </ul>
       )}
       {query.data?.truncated ? (
-        <p className="px-4 py-2 text-xs text-muted-foreground">Some decisions are not shown.</p>
+        <p className="px-4 py-2 text-xs text-muted-foreground">
+          {gt("Some decisions are not shown.")}
+        </p>
       ) : null}
     </div>
   );
