@@ -1,9 +1,9 @@
-import { describe, expect, it } from "@effect/vitest";
+// @effect-diagnostics nodeBuiltinImport:off - inspect the temporary SQLite spool after a failed batch.
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
-import { vi } from "vitest";
 
 import type { UsageContribution } from "./usageAggregation.ts";
 import { UsageHistoryPages } from "./usageHistoryPages.ts";
@@ -36,14 +36,15 @@ describe("usage contribution spool", () => {
     vi.stubEnv("TMPDIR", directory);
     let journalMode: unknown;
     const exec = NodeSqlite.DatabaseSync.prototype.exec;
-    using _exec = vi
-      .spyOn(NodeSqlite.DatabaseSync.prototype, "exec")
-      .mockImplementation(function (sql) {
-        exec.call(this, sql);
-        if (sql.includes("CREATE TABLE pages")) {
-          journalMode = this.prepare("PRAGMA journal_mode").get()?.journal_mode;
-        }
-      });
+    using _exec = vi.spyOn(NodeSqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: NodeSqlite.DatabaseSync,
+      sql: string,
+    ) {
+      exec.call(this, sql);
+      if (sql.includes("CREATE TABLE pages")) {
+        journalMode = this.prepare("PRAGMA journal_mode").get()?.journal_mode;
+      }
+    });
     const pages = new UsageHistoryPages();
     try {
       const scan = pages.contributions();
