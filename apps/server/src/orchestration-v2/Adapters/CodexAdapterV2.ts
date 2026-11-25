@@ -4027,7 +4027,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (
               rootProviderThreads.has(payload.threadId) &&
               (goalsByNativeThread.get(payload.threadId)?.status === "active" ||
-                goalStops.has(payload.threadId))
+                goalStops.has(payload.threadId) ||
+                goalsPausedForWake.has(payload.threadId))
             ) {
               yield* Effect.logWarning("orchestration-v2.codex-goal-turn-without-run", {
                 nativeThreadId: payload.threadId,
