@@ -13,6 +13,26 @@ The same runner checks the context diet's core listing against the full one
 summarized in [post-ship regression measurement](../internals/agent-surface.md#post-ship-regression-measurement).
 Results live beside their raw rows in [results](../../scripts/agent-surface/eval/results/).
 
+## Direct Bot chat
+
+To check whether the Bot answers an ordinary question itself, create a fresh member Bot in an
+isolated GOAT instance, select the model to evaluate, and send this message once:
+
+> What is the capital of France? Please reply with just the city name.
+
+After the reply appears, score the recorded samples in the instance's database:
+
+```sh
+node scripts/agent-surface/eval/direct-chat.ts /path/to/isolated/userdata/statev2.sqlite
+```
+
+An optional second argument selects a specific channel input ID. Each JSON line records the
+executed model, task and child counts, unexpected tool calls, and pass status. Passing requires
+a completed Bot turn that delivered “Paris” to the requester. Child-work admissions, extra channel tasks, subagents,
+provider commands and tool calls beyond tool discovery and progress or result reporting fail this
+direct-answer control. The command exits unsuccessfully if a sample fails or no matching sample
+exists. Use one fresh Bot per sample so unrelated turns cannot contaminate the result.
+
 ## The task set
 
 [tasks.json](../../scripts/agent-surface/eval/tasks.json) is fixed and versioned. Changing a
