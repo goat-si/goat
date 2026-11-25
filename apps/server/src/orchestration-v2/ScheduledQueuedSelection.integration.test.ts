@@ -9,8 +9,8 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { nextTurnSelectionHarness, runSelection } from "./testkit/SteeringHarness.ts";
 
-it.effect.each(["bound", "pinned", "legacy", "fresh_session", "promoted", "ordinary"] as const)(
-  "delivers a %s queued message with its intended model",
+it.effect.each(["bound", "pinned", "legacy", "fresh_session", "promoted"] as const)(
+  "delivers a %s scheduled message with its intended model",
   (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -31,9 +31,7 @@ it.effect.each(["bound", "pinned", "legacy", "fresh_session", "promoted", "ordin
             text: "Scheduled follow-up",
             attachments: [],
             dispatchMode: { type: "queue_after_active" },
-            ...(scenario === "ordinary"
-              ? {}
-              : { scheduledTaskId: ScheduledTaskId.make("schedule:queued") }),
+            scheduledTaskId: ScheduledTaskId.make("schedule:queued"),
             ...(scenario === "pinned" ? { modelSelection: runSelection } : {}),
             ...(scenario === "fresh_session" ? { freshContext: true } : {}),
             createdBy: "agent",

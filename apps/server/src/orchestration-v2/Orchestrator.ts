@@ -5718,11 +5718,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode.type === "queue_after_active";
     const shouldQueue = queueBehindRun !== undefined && startsOrQueuesRun;
     const followsThreadSelection =
-      command.modelSelection === undefined &&
-      (command.scheduledTaskId !== undefined ||
-        (shouldQueue &&
-          !followsCurrentConversation({ ...command, delegatedCompletion }) &&
-          !isBufferedProviderNotification({ ...command, delegatedCompletion })))
+      command.scheduledTaskId !== undefined && command.modelSelection === undefined
         ? (true as const)
         : undefined;
     const incomingMessage = { ...command, delegatedCompletion, followsThreadSelection };
