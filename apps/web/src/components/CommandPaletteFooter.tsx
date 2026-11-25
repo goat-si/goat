@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import type { AddProjectCloneFlow } from "./CommandPalette.logic";
 import { CommandFooterAction } from "./ui/command";
 
@@ -12,14 +13,14 @@ export function paletteFooterLabel(input: {
 }) {
   return input.isNew
     ? input.highlighted === null
-      ? "Create"
+      ? msg("Create")
       : input.highlighted === input.toggleValue
-        ? "Toggle"
-        : "Select"
+        ? msg("Toggle")
+        : msg("Select")
     : input.cloneFlow?.step === "repository"
-      ? (input.remoteLabel ?? "Continue")
+      ? (input.remoteLabel ?? msg("Continue"))
       : !input.canSubmitBrowsePath || input.hasHighlightedBrowseItem
-        ? "Select"
+        ? msg("Select")
         : undefined;
 }
 
