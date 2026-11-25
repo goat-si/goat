@@ -49,8 +49,8 @@ browser, so their desktop rows are not applicable. Headless `codex exec` has no 
 Desktop tasks have an observer: one long-lived osascript that samples the app through System Events
 and CoreGraphics (Calculator every 50 ms, the others every 250 ms), so it never needs a per-app
 Automation permission. It follows windows by their CoreGraphics id and leaves a window's text
-unknown when its title is not unique. A run passes only when the result was seen: the product on
-Calculator's display; one new Finder
+unknown when its title is not unique. A run passes only when the result was seen: a fresh product on
+Calculator's display with the final display reset to zero; one new Finder
 window showing Downloads and then Recents; the sentence in a new TextEdit window that is gone at the
 end with no new document file. Not seeing a result proves nothing, since a short state can fall
 between samples, so that run is unverified; only positive evidence, such as the sentence still open,
