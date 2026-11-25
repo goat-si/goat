@@ -2930,7 +2930,7 @@ function OpenCommandPaletteDialog(props: {
   return (
     <CommandPaletteContent
       key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${newProjectFlow ? "new-project" : (addProjectCloneFlow?.step ?? "none")}`}
-      aria-label="Command palette"
+      aria-label={gt("Command palette")}
       autoHighlight={autoHighlightsFirstRow ? "always" : false}
       footerActionLabel={footerActionLabel === undefined ? undefined : m(footerActionLabel)}
       footerTrailing={footerTrailing}
@@ -2954,7 +2954,7 @@ function OpenCommandPaletteDialog(props: {
                 <button
                   type="button"
                   className="flex cursor-pointer items-center"
-                  aria-label="Back"
+                  aria-label={gt("Back")}
                   onClick={popView}
                 >
                   <ArrowLeftIcon />

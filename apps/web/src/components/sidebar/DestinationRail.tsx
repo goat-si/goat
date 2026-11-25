@@ -311,6 +311,8 @@ function MemberRailItem({ bot, onOpen }: { bot: BotProfile; onOpen: () => void }
 
 /** Home returns to the last thread or draft, switches back from bots, and stays put when one is already open. */
 export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boolean }) {
+  const gt = useGT();
+  const home = gt("Home");
   const setMode = useGlobalAgentStore((state) => state.setMode);
   const destination = useHomeRailDestination();
   const params = useParams({ strict: false });
@@ -331,14 +333,14 @@ export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boo
     if (onHomeThread && plainClick) event.preventDefault();
   };
   const shared = {
-    "aria-label": "Home",
+    "aria-label": home,
     "aria-current": current ? ("page" as const) : undefined,
     className: railItemClassName(current),
     onClick: handleClick,
     children: <HomeIcon aria-hidden />,
   };
   return (
-    <RailTooltip label="Home">
+    <RailTooltip label={home}>
       {destination.kind === "thread" ? (
         <Link
           to="/$environmentId/$threadId"

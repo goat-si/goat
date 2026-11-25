@@ -317,6 +317,7 @@ it("translates the add-project source picker and keeps English search aliases", 
     </GTProvider>,
   );
   await act(() => openCommandPalette({ open: "add-project" }));
+  await expect.element(page.getByRole("button", { name: "返回", exact: true })).toBeVisible();
   const input = page.getByPlaceholder("搜索…", { exact: true });
   for (const label of ["来源", "新建项目", "本地文件夹", "Git 地址", "选择", "返回", "关闭"]) {
     await expect.element(page.getByText(label, { exact: true })).toBeVisible();
