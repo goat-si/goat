@@ -952,6 +952,28 @@ describe("DesktopShellEnvironment", () => {
     }),
   );
 
+  it.effect.each([
+    { platform: "win32", name: "GOAT_TELEMETRY_ENABLED" },
+    { platform: "darwin", name: "OTEL_SDK_DISABLED" },
+    { platform: "darwin", name: "GOAT_OTEL_SDK_DISABLED" },
+    { platform: "win32", name: "OTEL_SDK_DISABLED" },
+    { platform: "win32", name: "GOAT_OTEL_SDK_DISABLED" },
+  ] as const)("loads $name from the shell profile on $platform", ({ platform, name }) =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+      const value = name === "GOAT_TELEMETRY_ENABLED" ? "false" : "true";
+      yield* runShellEnvironment({
+        env,
+        platform,
+        handler: (command) =>
+          command._tag === "StandardCommand" && String(command.args.at(-1)).includes(name)
+            ? envOutput({ PATH: "/usr/bin", [name]: value })
+            : envOutput({ PATH: "/usr/bin" }),
+      });
+      assert.equal(env[name], value);
+    }),
+  );
+
   it.effect("replaces a Path-spelled Windows PATH instead of adding a second key", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { Path: "C:\\Windows\\System32" };

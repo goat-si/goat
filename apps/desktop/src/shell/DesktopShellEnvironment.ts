@@ -115,6 +115,8 @@ const LOGIN_SHELL_ENV_NAMES = [
   "GOAT_RELEASE_BASE_URL",
   "GOAT_TELEMETRY_ENABLED",
   "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
+  "GOAT_OTEL_SDK_DISABLED",
+  "OTEL_SDK_DISABLED",
   "__MISE_DIFF",
   "JAVA_HOME",
 ] as const;
@@ -125,6 +127,8 @@ const WINDOWS_PROFILE_ENV_NAMES = [
   "GOAT_RELEASE_BASE_URL",
   "GOAT_TELEMETRY_ENABLED",
   "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
+  "GOAT_OTEL_SDK_DISABLED",
+  "OTEL_SDK_DISABLED",
 ] as const;
 const ANDROID_SDK_ENV_NAMES = ["ANDROID_HOME", "ANDROID_SDK_ROOT"] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
@@ -427,6 +431,10 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
         config.env[name] = value;
       }
     }
+    // A kill switch saved in the user's environment after the launcher started reaches the server too.
+    for (const name of ["GOAT_OTEL_SDK_DISABLED", "OTEL_SDK_DISABLED"] as const) {
+      if (!config.env[name] && profile[name]) config.env[name] = profile[name];
+    }
     return Boolean(noProfile.PATH && profile.PATH);
   },
 );
@@ -507,6 +515,8 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       "JAVA_HOME",
       "GOAT_TELEMETRY_ENABLED",
       "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
+      "GOAT_OTEL_SDK_DISABLED",
+      "OTEL_SDK_DISABLED",
     ] as const) {
       if (!config.env[name] && shellEnvironment[name]) {
         config.env[name] = shellEnvironment[name];

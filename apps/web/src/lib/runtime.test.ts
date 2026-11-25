@@ -26,11 +26,11 @@ describe("web runtime relay telemetry policy", () => {
       desktopBridge: { getRelayTelemetryEnabled: () => true },
       exports: true,
     },
-    { surface: "older desktop bridge", desktopBridge: {}, exports: true },
+    { surface: "older desktop bridge", desktopBridge: {}, exports: false },
     {
-      surface: "ordinary browser ignores host opt-out",
+      surface: "ordinary browser",
       desktopBridge: undefined,
-      exports: true,
+      exports: false,
     },
   ])("applies $surface before the first relay span", async ({ desktopBridge, exports }) => {
     vi.resetModules();
