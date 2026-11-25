@@ -9,6 +9,7 @@ import { assert, it } from "@effect/vitest";
 import { applyProviderStatusChanges } from "@goat/shared/providerStatusChanges";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 
 import {
@@ -142,5 +143,60 @@ it.effect("late endpoint discovery emits a compatible config snapshot", () =>
     const event = events[0];
     assert.equal(event?.type, "snapshot");
     if (event?.type === "snapshot") assert.deepEqual(event.config.directEndpoints, [endpoint]);
+  }),
+);
+
+it.effect("publishes the telemetry override after shell discovery settles", () =>
+  Effect.gen(function* () {
+    const initial = {
+      availableEditors: [],
+      directEndpoints: [],
+      providers: [],
+      observability: {},
+    } as unknown as ServerConfig;
+    const settled = yield* Deferred.make<"enabled" | "disabled" | undefined>();
+    const events = yield* withLateEditorConfig(
+      initial,
+      Stream.empty,
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.sync(() => undefined),
+      },
+      Stream.empty,
+      Stream.empty,
+      Effect.succeed([]),
+      Deferred.await(settled),
+    ).pipe(Stream.runCollect, Effect.forkChild);
+    yield* Deferred.succeed(settled, "disabled");
+    const result = yield* Fiber.join(events);
+    assert.equal(result.length, 1);
+    const event = result[0];
+    assert.equal(event?.type, "snapshot");
+    if (event?.type === "snapshot")
+      assert.equal(event.config.observability.telemetryOverride, "disabled");
+  }),
+);
+
+it.effect("does not send a duplicate snapshot when the telemetry override is unchanged", () =>
+  Effect.gen(function* () {
+    const initial = {
+      availableEditors: [],
+      directEndpoints: [],
+      providers: [],
+      observability: { telemetryOverride: "enabled" },
+    } as unknown as ServerConfig;
+    const events = yield* withLateEditorConfig(
+      initial,
+      Stream.empty,
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.sync(() => undefined),
+      },
+      Stream.empty,
+      Stream.empty,
+      Effect.succeed([]),
+      Effect.succeed("enabled" as const),
+    ).pipe(Stream.runCollect);
+    assert.equal(events.length, 0);
   }),
 );

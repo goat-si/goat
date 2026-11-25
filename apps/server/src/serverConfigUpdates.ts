@@ -92,6 +92,7 @@ export const withLateEditorConfig = <E, R>(
   lateEndpoints: Effect.Effect<ReadonlyArray<ServerDirectEndpoint>> = Effect.succeed(
     config.directEndpoints ?? [],
   ),
+  lateTelemetryOverride?: Effect.Effect<"enabled" | "disabled" | undefined>,
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -124,13 +125,26 @@ export const withLateEditorConfig = <E, R>(
         Stream.catchCause(() => Stream.empty),
         Stream.map((endpoints) => ({ type: "directEndpointsResolved" as const, endpoints })),
       ),
-      Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+      Stream.merge(
+        (lateTelemetryOverride ? Stream.fromEffect(lateTelemetryOverride) : Stream.empty).pipe(
+          Stream.map((override) => ({ type: "telemetryOverrideResolved" as const, override })),
+        ),
+        Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+      ),
     ),
   ).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
         switch (event.type) {
+          case "telemetryOverrideResolved": {
+            if (current.observability.telemetryOverride === event.override) return [current, []];
+            const next = {
+              ...current,
+              observability: { ...current.observability, telemetryOverride: event.override },
+            };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "directEndpointsResolved": {
             if (JSON.stringify(current.directEndpoints ?? []) === JSON.stringify(event.endpoints))
               return [current, []];

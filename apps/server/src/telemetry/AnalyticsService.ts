@@ -33,6 +33,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { DesktopShellDiscovery } from "../resourceTelemetry/DesktopShellDiscovery.ts";
 import {
   getTelemetryIdentity,
   resetTelemetryIdentity,
@@ -104,6 +105,7 @@ export class AnalyticsService extends Context.Service<
 
     /** GOAT_TELEMETRY_ENABLED's decision, which outranks the person's setting; doubles may leave it out. */
     readonly telemetryOverride?: Effect.Effect<"enabled" | "disabled" | undefined>;
+    readonly telemetryOverrideResolved?: Effect.Effect<"enabled" | "disabled" | undefined>;
 
     /**
      * Records `install.owner_observed` for each owner of this install that the
@@ -341,10 +343,16 @@ export const make = Effect.gen(function* () {
     yield* identityLock.withPermit(resetIdentity);
     yield* Ref.set(identityResetRef, true);
   });
-  const consentChanges = yield* settings.subscribeChanges;
   const revision = settings.changesRevision ?? Effect.succeed(0);
-  const processed = yield* SubscriptionRef.make(yield* revision);
-  let lastConsent = yield* consent;
+  const baseline = yield* settings.withSettingsSnapshot((current) =>
+    Effect.gen(function* () {
+      const changes = yield* settings.subscribeChanges;
+      return { changes, revision: yield* revision, consent: current.telemetryConsent };
+    }),
+  );
+  const consentChanges = baseline.changes;
+  const processed = yield* SubscriptionRef.make(baseline.revision);
+  let lastConsent = baseline.consent;
   const caughtUp = Effect.gen(function* () {
     const current = yield* revision;
     return (yield* SubscriptionRef.get(processed)) >= current;
@@ -503,7 +511,18 @@ export const make = Effect.gen(function* () {
     override === "pending" ? undefined : override,
   );
 
-  return AnalyticsService.of({ record, flush, telemetryOverride, recordOwners });
+  const discovery = yield* DesktopShellDiscovery;
+  const telemetryOverrideResolved = Effect.gen(function* () {
+    if (hostEnvironment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1") yield* discovery.await;
+    return yield* telemetryOverride;
+  });
+  return AnalyticsService.of({
+    record,
+    flush,
+    telemetryOverride,
+    telemetryOverrideResolved,
+    recordOwners,
+  });
 });
 
 export const layer = Layer.effect(AnalyticsService, make);

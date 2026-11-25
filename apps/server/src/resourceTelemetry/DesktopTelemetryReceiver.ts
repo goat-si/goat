@@ -1,3 +1,4 @@
+import { DesktopShellDiscovery } from "./DesktopShellDiscovery.ts";
 import { makeApplyDesktopShellEnvironmentSnapshot } from "./DesktopShellEnvironmentReceiver.ts";
 import { HostPathChanged } from "../provider/hostPathChanged.ts";
 import { makeDesktopControlWriter } from "./DesktopControlWriter.ts";
@@ -415,6 +416,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
     environment,
     platform,
     pathChanged,
+    Effect.asVoid((yield* DesktopShellDiscovery).open),
   );
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const latest = yield* Ref.make(Option.none<DesktopHostTelemetrySnapshot>());

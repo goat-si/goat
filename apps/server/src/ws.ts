@@ -3207,6 +3207,7 @@ export const layerWsRpc = (
                   checkoutHealthChanges,
                   automationHold.changes,
                   Fiber.join(directResult),
+                  analytics.telemetryOverrideResolved,
                 ),
               );
               return input.providerStatusChanges === true
