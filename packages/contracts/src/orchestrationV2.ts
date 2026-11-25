@@ -1,3 +1,5 @@
+import { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
+export { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
 import {
   OrchestrationV2ThreadCreateInitialMessage,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -784,16 +786,6 @@ export const OrchestrationV2SubagentWorkflow = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationV2SubagentWorkflow = typeof OrchestrationV2SubagentWorkflow.Type;
-
-export const OrchestrationV2TaskRole = Schema.Literals([
-  "implementation",
-  "research",
-  "review",
-  "design",
-  "test",
-  "general",
-]);
-export type OrchestrationV2TaskRole = typeof OrchestrationV2TaskRole.Type;
 
 /**
  * Wire-only, for clients that opted in with `acceptDedupedBodies` or `dedupeBodies=1`: the field
