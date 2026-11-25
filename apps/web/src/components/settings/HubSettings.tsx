@@ -233,7 +233,7 @@ function HubControls({
           }
           control={
             <Switch
-              aria-label="This machine is the hub"
+              aria-label={setting("hub-enabled").title}
               checked={hub.settings.enabled}
               disabled={hub.saving || !hub.canConfigure}
               onCheckedChange={(enabled) => void hub.save({ enabled })}
@@ -248,7 +248,7 @@ function HubControls({
             description="Standing consent for every trusted device signed in to the linked GOAT Connect account to reach hub devices. After enabling, sign out of GOAT Connect and sign back in. Turning this off ends privileged Connect sessions, including direct hub access. The preference stays saved while the hub is off."
             control={
               <Switch
-                aria-label="Allow GOAT Connect devices to reach hub devices"
+                aria-label={setting("hub-connect-access").title}
                 checked={hub.settings.connectDevicesHubProxy}
                 disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
                 onCheckedChange={(connectDevicesHubProxy) =>
@@ -271,7 +271,7 @@ function HubControls({
                 if (value === "hub" || value === "auto") void hub.save({ cloudHolder: value });
               }}
             >
-              <SelectTrigger size="sm" aria-label="Cloud runs">
+              <SelectTrigger size="sm" aria-label={setting("hub-cloud-holder").title}>
                 <SelectValue>
                   {(value: HubSettingsValue["cloudHolder"]) => CLOUD_HOLDER_LABEL[value]}
                 </SelectValue>
@@ -300,7 +300,7 @@ function HubControls({
           }
           control={
             <Switch
-              aria-label="Join new cloud machines"
+              aria-label={setting("hub-cloud-auto-join").title}
               checked={hub.settings.autoJoinCloudMachines}
               disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
               onCheckedChange={(checked) => void hub.saveCloudAutoJoin(checked)}
@@ -331,7 +331,7 @@ function HubControls({
           }
           control={
             <Switch
-              aria-label="Permission profiles"
+              aria-label={setting("hub-permission-profiles").title}
               checked={hub.goatclaw.enabled}
               disabled={hub.saving || !hub.canConfigure}
               onCheckedChange={(enabled) => void hub.saveGoatclaw({ enabled })}
@@ -351,7 +351,7 @@ function HubControls({
                 if (typeof value === "string") void hub.saveGoatclaw({ defaultProfile: value });
               }}
             >
-              <SelectTrigger size="sm" aria-label="Default profile">
+              <SelectTrigger size="sm" aria-label={setting("hub-default-profile").title}>
                 <SelectValue>{(value: string) => profileLabel(value)}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>

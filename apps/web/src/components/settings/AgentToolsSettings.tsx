@@ -308,7 +308,7 @@ export function AgentBrowserAccessSetting() {
         resetAction={
           settings.enableAgentBrowserAccess !== DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess ? (
             <SettingResetButton
-              label="default browser access"
+              label={setting.title}
               onClick={() =>
                 updateSettings({
                   enableAgentBrowserAccess: DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess,

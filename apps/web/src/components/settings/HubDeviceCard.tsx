@@ -46,7 +46,6 @@ import {
   connectReachabilityStep,
   tailscaleUnreachableMessage,
 } from "./ConnectReachabilityNotice";
-import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { heldOrGranted } from "./hubAccessScopes";
@@ -76,6 +75,7 @@ type IssuedPhoneQr = {
 };
 
 function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
+  const gt = useGT();
   const expired = useDeadlinePassed(DateTime.toEpochMillis(issued.result.expiresAt));
   if (expired) {
     return <p role="status">This QR has expired. Close this dialog and show a new QR.</p>;
@@ -96,7 +96,7 @@ function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
           size={240}
           level="M"
           marginSize={4}
-          title="Scan to pair the GOAT app"
+          title={gt("Scan to pair the GOAT app")}
         />
       </div>
       {issued.hubAccess === null ? null : (
@@ -226,7 +226,7 @@ export function HubDeviceCard({
   const serveOn = exposure?.tailscaleServeEnabled ?? false;
   const tailscaleRow = showTailscaleRow ? (
     <SettingsRow
-      title={searchableSetting("tailscale-https").title}
+      title={setting("tailscale-https").title}
       description={
         tailscaleHttpsEndpoint?.status === "available"
           ? tailscaleHttpsEndpoint.httpBaseUrl
@@ -246,7 +246,7 @@ export function HubDeviceCard({
               else if (tailscaleHttpsEndpoint)
                 connectActions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint);
             }}
-            aria-label="Enable Tailscale HTTPS"
+            aria-label={setting("tailscale-https").title}
           />
         ) : connectReachabilityStep(exposure, null) === "network-access" ? (
           <Button
@@ -339,7 +339,7 @@ export function HubDeviceCard({
                           <Switch
                             checked={hubAccess}
                             onCheckedChange={(checked) => setHubAccess(checked)}
-                            aria-label="Also open hub devices"
+                            aria-label={gt("Also open hub devices")}
                           />
                         </label>
                       ) : null}
