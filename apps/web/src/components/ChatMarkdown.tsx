@@ -203,6 +203,7 @@ import {
   nodeToPlainText,
 } from "./chat/MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./chat/markdownActionFailure";
+import { useShouldFadeStreaming } from "./chat/useStreamingReveal";
 import {
   handleMarkdownLinkAuxClick,
   markdownLinkNeedsExternalBridge,
@@ -222,6 +223,8 @@ interface ChatMarkdownProps {
   environmentId?: EnvironmentId | undefined;
   onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
   isStreaming?: boolean;
+  /** Identifies a streaming reply across remounts, so text already shown does not fade in again. */
+  streamingId?: string | undefined;
   skills?: ReadonlyArray<ServerProviderSkill>;
   className?: string;
   lineBreaks?: boolean;
@@ -1542,6 +1545,7 @@ function ChatMarkdown({
   const { componentState, handleCopy, markdownRef, localMediaPreview, closeLocalMediaPreview } =
     useChatMarkdownState({ text, inline, ...props });
   const hasInsights = renderInsights && text.includes("★ Insight");
+  const shouldFadeStreaming = useShouldFadeStreaming(text, props.isStreaming, props.streamingId);
   // Streaming re-renders only the last block; offsets for task edits need the whole text.
   const streamingBlocks =
     props.isStreaming === true &&
@@ -1590,7 +1594,7 @@ function ChatMarkdown({
           "text-sm leading-relaxed text-foreground/[calc(92%+var(--appearance-contrast-boost)/12.5)]",
         className,
       )}
-      data-streaming={componentState.isStreaming ? "" : undefined}
+      data-streaming={componentState.isStreaming && shouldFadeStreaming ? "" : undefined}
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
