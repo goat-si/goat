@@ -152,7 +152,11 @@ export function SnapShotSettings() {
     shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
   const soundSelection = settings.snapShotPlaySound ? settings.snapShotSound : "off";
   const soundLabel =
-    soundSelection === "off" ? "Off" : soundSelection === "soft-pop" ? "Whoosh (Default)" : "Click";
+    soundSelection === "off"
+      ? gt("Off")
+      : soundSelection === "soft-pop"
+        ? gt("Whoosh (Default)")
+        : gt("Click");
 
   const setup = async (action: DesktopSnapShotSetupAction) => {
     if (!bridge?.setupSnapShot || setupBusy) return;

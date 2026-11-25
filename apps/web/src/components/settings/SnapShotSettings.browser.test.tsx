@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
 import {
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettingsPatch,
@@ -95,11 +97,33 @@ it("keeps a failed preference unchanged without adding its own error", async () 
   });
   settingsStore.update.mockResolvedValueOnce(false);
   await using stack = new AsyncDisposableStack();
-  const screen = stack.use(await render(<SnapShotSettings />));
+  const screen = stack.use(
+    await render(
+      <GTProvider locale="ko" translations={{ ko }}>
+        <SnapShotSettings />
+      </GTProvider>,
+    ),
+  );
   await vi.waitFor(() => expect(bridge.getSnapShotState).toHaveBeenCalled());
+  await act(async () => settingsStore.set({ ...settingsStore.current, snapShotPlaySound: false }));
+  await expect.element(screen.getByRole("button", { name: "캡처 효과음: 끔" })).toBeVisible();
+  await act(async () =>
+    settingsStore.set({
+      ...settingsStore.current,
+      snapShotPlaySound: true,
+      snapShotSound: "soft-pop",
+    }),
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "캡처 효과음: 휙 (기본값)" }))
+    .toBeVisible();
+  await act(async () =>
+    settingsStore.set({ ...settingsStore.current, snapShotSound: "camera-shutter" }),
+  );
+  await expect.element(screen.getByRole("button", { name: "캡처 효과음: 클릭" })).toBeVisible();
   const flash = () =>
     screen.container.querySelector<HTMLButtonElement>(
-      '[role="switch"][aria-label="Flash captured window"]',
+      '[role="switch"][aria-label="캡처한 창 깜박이기"]',
     )!;
   expect(flash().getAttribute("aria-checked")).toBe("true");
   await act(async () => flash().click());
