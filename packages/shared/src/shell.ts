@@ -20,9 +20,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
-
 import type { ShellEnvironmentPatch } from "@goat/contracts";
 import * as HostProcess from "./HostProcess.ts";
+import { windowsTelemetryValueSelectionCommand } from "./windowsTelemetryValueSelection.ts";
 import { locateXcodeGitWithXcrun } from "./macosGit.ts";
 import * as Context from "effect/Context";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
@@ -284,7 +284,7 @@ export function windowsEnvironmentValueCommand(name: string): string {
     ].includes(name)
   ) {
     // Any explicit opt-out must win over an inherited opt-in.
-    return `$values = @(${values}); $value = $values | Where-Object { $_.Trim().ToLowerInvariant() -notin @('true','1','yes','on') } | Select-Object -First 1; if ($null -eq $value) { $value = $values | Select-Object -First 1 }`;
+    return windowsTelemetryValueSelectionCommand(values);
   }
   return `$value = ${values} | Select-Object -First 1`;
 }
