@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { DesktopWindowMaterialSetting } from "./DesktopWindowMaterialSetting";
 import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
@@ -36,7 +37,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { TypographySection } from "./TypographySettings";
 
@@ -44,14 +45,14 @@ const ENVIRONMENT_IDENTIFICATION_LABELS: Record<
   Exclude<EnvironmentIdentificationMode, "artwork">,
   string
 > = {
-  pill: "Channel badge",
-  none: "None",
+  pill: msg("Channel badge"),
+  none: msg("None"),
 };
 
 const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
-  comfortable: "Comfortable",
-  wide: "Wide",
-  full: "Full",
+  comfortable: msg("Comfortable"),
+  wide: msg("Wide"),
+  full: msg("Full"),
 };
 
 const BACKDROP_ERROR_MESSAGES = {
@@ -61,6 +62,8 @@ const BACKDROP_ERROR_MESSAGES = {
 } as const;
 
 function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | "custom" }) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const updateSettings = useUpdateScopedSettings();
   const presence = useCustomBackdropPresence();
   const { state } = useDesktopWindowMaterial();
@@ -78,7 +81,7 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
 
   return (
     <SettingsRow
-      {...searchableSetting("appearance-background")}
+      {...setting("appearance-background")}
       description={description}
       control={
         <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
@@ -91,7 +94,11 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
               }
             }}
           >
-            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Background">
+            <SelectTrigger
+              size="sm"
+              className="w-full sm:w-40"
+              aria-label={setting("appearance-background").title}
+            >
               <SelectValue>{glassBackdrop === "custom" ? "Custom image" : "Built-in"}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -101,7 +108,7 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
           </Select>
           <input
             ref={fileInputRef}
-            aria-label="Background image"
+            aria-label={gt("Background image")}
             className="sr-only"
             type="file"
             accept="image/*"
@@ -146,6 +153,9 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
 }
 
 export function AppearanceSettingsPanel() {
+  const gt = useGT();
+  const m = useMessages();
+  const setting = useTranslatedSearchableSetting();
   const {
     appearanceMode,
     refreshTheme,
@@ -190,7 +200,7 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="appearance" title="Colors & themes">
+      <SettingsSection id="appearance" title={gt("Colors & themes")}>
         <ThemeLibrary
           appearanceMode={appearanceMode}
           customThemes={customThemes}
@@ -206,14 +216,14 @@ export function AppearanceSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection id="appearance-interface" title="Interface">
+      <SettingsSection id="appearance-interface" title={gt("Interface")}>
         <SettingsRow
-          {...searchableSetting("appearance-style")}
-          description="Choose the look of panels, menus, and dialogs."
+          {...setting("appearance-style")}
+          description={gt("Choose the look of panels, menus, and dialogs.")}
           resetAction={
             settings.appearancePreset !== DEFAULT_UNIFIED_SETTINGS.appearancePreset ? (
               <SettingResetButton
-                label="style"
+                label={setting("appearance-style").title}
                 onClick={() =>
                   updateSettings({ appearancePreset: DEFAULT_UNIFIED_SETTINGS.appearancePreset })
                 }
@@ -229,14 +239,20 @@ export function AppearanceSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Style">
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-40"
+                aria-label={setting("appearance-style").title}
+              >
                 <SelectValue>
-                  {settings.appearancePreset === "liquid-glass" ? "Liquid Glass" : "Default"}
+                  {settings.appearancePreset === "liquid-glass"
+                    ? gt("Liquid Glass")
+                    : gt("Default")}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem value="default">Default</SelectItem>
-                <SelectItem value="liquid-glass">Liquid Glass</SelectItem>
+                <SelectItem value="default">{gt("Default")}</SelectItem>
+                <SelectItem value="liquid-glass">{gt("Liquid Glass")}</SelectItem>
               </SelectPopup>
             </Select>
           }
@@ -247,12 +263,12 @@ export function AppearanceSettingsPanel() {
         ) : null}
 
         <SettingsRow
-          {...searchableSetting("setting-appearance-contrast")}
-          description="Adjust the contrast of colors and borders across the interface."
+          {...setting("setting-appearance-contrast")}
+          description={gt("Adjust the contrast of colors and borders across the interface.")}
           resetAction={
             settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast ? (
               <SettingResetButton
-                label="contrast"
+                label={setting("setting-appearance-contrast").title}
                 onClick={() =>
                   updateSettings({
                     appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
@@ -270,7 +286,7 @@ export function AppearanceSettingsPanel() {
                 {settings.appearanceContrast}%
               </output>
               <input
-                aria-label="Contrast"
+                aria-label={setting("setting-appearance-contrast").title}
                 className="settings-slider min-w-0 flex-1"
                 id="appearance-contrast"
                 max={MAX_APPEARANCE_CONTRAST}
@@ -295,16 +311,16 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("setting-glass-opacity")}
+          {...setting("setting-glass-opacity")}
           description={
             settings.appearancePreset === "liquid-glass"
-              ? "Higher values make panels, menus, dialogs, and the composer more solid."
-              : "Higher values make menus, dialogs, and the composer more solid."
+              ? gt("Higher values make panels, menus, dialogs, and the composer more solid.")
+              : gt("Higher values make menus, dialogs, and the composer more solid.")
           }
           resetAction={
             settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
               <SettingResetButton
-                label="glass opacity"
+                label={setting("setting-glass-opacity").title}
                 onClick={() =>
                   updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
                 }
@@ -320,7 +336,7 @@ export function AppearanceSettingsPanel() {
                 {settings.glassOpacity}%
               </output>
               <input
-                aria-label="Glass opacity"
+                aria-label={setting("setting-glass-opacity").title}
                 className="settings-slider min-w-0 flex-1"
                 id="glass-opacity"
                 max={MAX_GLASS_OPACITY}
@@ -348,12 +364,12 @@ export function AppearanceSettingsPanel() {
 
         {showEnvironmentIdentification ? (
           <SettingsRow
-            {...searchableSetting("environment-identification")}
-            description="Show a Dev or Nightly badge next to the GOAT logo."
+            {...setting("environment-identification")}
+            description={gt("Show a Dev or Nightly badge next to the GOAT logo.")}
             resetAction={
               settings.environmentIdentificationMode !== DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE ? (
                 <SettingResetButton
-                  label="environment identification"
+                  label={setting("environment-identification").title}
                   onClick={() =>
                     updateSettings({
                       environmentIdentificationMode: DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
@@ -374,16 +390,16 @@ export function AppearanceSettingsPanel() {
                 <SelectTrigger
                   size="sm"
                   className="w-full sm:w-40"
-                  aria-label="Environment identification"
+                  aria-label={setting("environment-identification").title}
                 >
                   <SelectValue>
-                    {ENVIRONMENT_IDENTIFICATION_LABELS[environmentIdentificationMode]}
+                    {m(ENVIRONMENT_IDENTIFICATION_LABELS[environmentIdentificationMode])}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   {Object.entries(ENVIRONMENT_IDENTIFICATION_LABELS).map(([value, label]) => (
                     <SelectItem hideIndicator key={value} value={value}>
-                      {label}
+                      {m(label)}
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -393,12 +409,12 @@ export function AppearanceSettingsPanel() {
         ) : null}
 
         <SettingsRow
-          {...searchableSetting("diff-color-scheme")}
-          description="Choose colors for additions and deletions, including change counts."
+          {...setting("diff-color-scheme")}
+          description={gt("Choose colors for additions and deletions, including change counts.")}
           resetAction={
             settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme ? (
               <SettingResetButton
-                label="diff colors"
+                label={setting("diff-color-scheme").title}
                 onClick={() =>
                   updateSettings({ diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme })
                 }
@@ -414,7 +430,11 @@ export function AppearanceSettingsPanel() {
                     updateSettings({ diffColorScheme: value });
                 }}
               >
-                <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Diff colors">
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label={setting("diff-color-scheme").title}
+                >
                   <span
                     aria-hidden="true"
                     className={
@@ -427,12 +447,14 @@ export function AppearanceSettingsPanel() {
                     <span className="size-2 rounded-full bg-diff-addition" />
                   </span>
                   <SelectValue>
-                    {settings.diffColorScheme === "blue-orange" ? "Blue & orange" : "Red & green"}
+                    {settings.diffColorScheme === "blue-orange"
+                      ? gt("Blue & orange")
+                      : gt("Red & green")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="red-green">Red & green (default)</SelectItem>
-                  <SelectItem value="blue-orange">Blue & orange</SelectItem>
+                  <SelectItem value="red-green">{gt("Red & green (default)")}</SelectItem>
+                  <SelectItem value="blue-orange">{gt("Blue & orange")}</SelectItem>
                 </SelectPopup>
               </Select>
             </div>
@@ -440,13 +462,15 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("composer-context")}
-          description="Keep branch and worktree controls below the composer after a thread starts."
+          {...setting("composer-context")}
+          description={gt(
+            "Keep branch and worktree controls below the composer after a thread starts.",
+          )}
           resetAction={
             settings.persistComposerContextStrip !==
             DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip ? (
               <SettingResetButton
-                label="composer context"
+                label={setting("composer-context").title}
                 onClick={() =>
                   updateSettings({
                     persistComposerContextStrip:
@@ -462,18 +486,18 @@ export function AppearanceSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ persistComposerContextStrip: Boolean(checked) })
               }
-              aria-label="Keep composer context visible in active threads"
+              aria-label={setting("composer-context").title}
             />
           }
         />
 
         <SettingsRow
-          {...searchableSetting("chat-width")}
-          description="Set how wide messages and the composer can grow on large screens."
+          {...setting("chat-width")}
+          description={gt("Set how wide messages and the composer can grow on large screens.")}
           resetAction={
             settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? (
               <SettingResetButton
-                label="chat width"
+                label={setting("chat-width").title}
                 onClick={() => updateSettings({ chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth })}
               />
             ) : null
@@ -487,25 +511,31 @@ export function AppearanceSettingsPanel() {
                     updateSettings({ chatWidth: value });
                 }}
               >
-                <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Chat width">
-                  <SelectValue>{CHAT_WIDTH_LABELS[settings.chatWidth]}</SelectValue>
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label={setting("chat-width").title}
+                >
+                  <SelectValue>{m(CHAT_WIDTH_LABELS[settings.chatWidth])}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="comfortable">Comfortable (default)</SelectItem>
-                  <SelectItem value="wide">Wide</SelectItem>
-                  <SelectItem value="full">Full</SelectItem>
+                  <SelectItem value="comfortable">{gt("Comfortable (default)")}</SelectItem>
+                  <SelectItem value="wide">{gt("Wide")}</SelectItem>
+                  <SelectItem value="full">{gt("Full")}</SelectItem>
                 </SelectPopup>
               </Select>
             </div>
           }
         />
         <SettingsRow
-          {...searchableSetting("math-rendering")}
-          description="Typeset LaTeX math, such as $x^2$ or \[x^2\], in messages and Markdown previews. The composer keeps TeX source editable."
+          {...setting("math-rendering")}
+          description={gt(
+            "Typeset LaTeX math, such as $x^2$ or \\[x^2\\], in messages and Markdown previews. The composer keeps TeX source editable.",
+          )}
           resetAction={
             settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled ? (
               <SettingResetButton
-                label="math rendering"
+                label={setting("math-rendering").title}
                 onClick={() =>
                   updateSettings({
                     mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
@@ -520,16 +550,16 @@ export function AppearanceSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ mathRenderingEnabled: Boolean(checked) })
               }
-              aria-label="Render math"
+              aria-label={setting("math-rendering").title}
             />
           }
         />
       </SettingsSection>
 
-      <SettingsSection id="motion" title="Motion">
+      <SettingsSection id="motion" title={gt("Motion")}>
         <SettingsRow
-          {...searchableSetting("panel-animations")}
-          description="Set how fast panels open and close."
+          {...setting("panel-animations")}
+          description={gt("Set how fast panels open and close.")}
           control={
             <div className="grid w-full grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 sm:w-auto sm:grid-cols-[7rem_13rem] sm:gap-4">
               <PanelAnimationsPreview durationMs={settings.panelAnimationDurationMs} />
@@ -541,7 +571,7 @@ export function AppearanceSettingsPanel() {
                   {settings.panelAnimationDurationMs} ms
                 </output>
                 <input
-                  aria-label="Panel animation duration"
+                  aria-label={setting("panel-animations").title}
                   className="settings-slider min-w-0 flex-1"
                   id="panel-animation-duration"
                   max={MAX_PANEL_ANIMATION_DURATION_MS}
@@ -568,7 +598,7 @@ export function AppearanceSettingsPanel() {
             settings.panelAnimationDurationMs !==
             DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs ? (
               <SettingResetButton
-                label="panel animations"
+                label={setting("panel-animations").title}
                 onClick={() =>
                   updateSettings({
                     panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,

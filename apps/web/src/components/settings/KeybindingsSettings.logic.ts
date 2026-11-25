@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import {
   STATIC_KEYBINDING_COMMANDS,
   type ClientSettings,
@@ -231,18 +232,18 @@ export interface KeybindingGroup {
 const KEYBINDING_GROUPS = [
   {
     id: "navigation",
-    title: "Navigation",
+    title: msg("Navigation"),
     prefixes: ["sidebar", "rightPanel", "commandPalette", "filePicker", "projectSearch", "editor"],
   },
-  { id: "files", title: "Files", prefixes: ["files"] },
-  { id: "threads", title: "Threads", prefixes: ["thread", "chat", "pullRequest"] },
-  { id: "composer", title: "Composer", prefixes: ["composer", "modelPicker"] },
-  { id: "terminal", title: "Terminal", prefixes: ["terminal"] },
-  { id: "preview", title: "Preview & diff", prefixes: ["preview", "diff"] },
-  { id: "appearance", title: "Appearance", prefixes: ["theme", "appearance", "themeEditor"] },
-  { id: "scripts", title: "Project scripts", prefixes: ["script"] },
+  { id: "files", title: msg("Files"), prefixes: ["files"] },
+  { id: "threads", title: msg("Threads"), prefixes: ["thread", "chat", "pullRequest"] },
+  { id: "composer", title: msg("Composer"), prefixes: ["composer", "modelPicker"] },
+  { id: "terminal", title: msg("Terminal"), prefixes: ["terminal"] },
+  { id: "preview", title: msg("Preview & diff"), prefixes: ["preview", "diff"] },
+  { id: "appearance", title: msg("Appearance"), prefixes: ["theme", "appearance", "themeEditor"] },
+  { id: "scripts", title: msg("Project scripts"), prefixes: ["script"] },
 ] as const;
-const OTHER_KEYBINDING_GROUP = { id: "other", title: "Other" } as const;
+const OTHER_KEYBINDING_GROUP = { id: "other", title: msg("Other") } as const;
 
 function keybindingGroupFor(command: KeybindingCommand): { id: string; title: string } {
   const prefix = String(command).split(".")[0] ?? "";
@@ -344,6 +345,7 @@ export function buildKeybindingRows(
 export function filterKeybindingRows(
   rows: ReadonlyArray<KeybindingRow>,
   query: string,
+  visibleLabel?: (command: KeybindingCommand) => string,
 ): ReadonlyArray<KeybindingRow> {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return rows;
@@ -351,6 +353,7 @@ export function filterKeybindingRows(
     return (
       row.command.toLowerCase().includes(normalizedQuery) ||
       commandLabel(row.command).toLowerCase().includes(normalizedQuery) ||
+      visibleLabel?.(row.command).toLowerCase().includes(normalizedQuery) ||
       row.key.toLowerCase().includes(normalizedQuery) ||
       row.when.toLowerCase().includes(normalizedQuery) ||
       row.source.toLowerCase().includes(normalizedQuery)

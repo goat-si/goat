@@ -1,6 +1,10 @@
+import { useGT } from "gt-react";
 import type { ReactNode, RefObject } from "react";
 import { SearchIcon, TriangleAlertIcon } from "~/components/solar";
 import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge";
+import type { KeybindingRow } from "./KeybindingsSettings.logic";
+import { useKeybindingDisplayLabel } from "./useKeybindingDisplayLabel";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -15,6 +19,8 @@ export function KeybindingsSearchInput({
   onChange: (next: string) => void;
   inputRef: RefObject<HTMLInputElement | null>;
 }) {
+  const gt = useGT();
+  const label = gt("Search keybindings");
   return (
     <InputGroup className="min-w-0 basis-full **:[input]:h-9 sm:basis-0 sm:flex-1 sm:**:[input]:h-8">
       <InputGroupAddon>
@@ -26,8 +32,8 @@ export function KeybindingsSearchInput({
         value={query}
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={(event) => handleKeybindingsSearchEscape(event, query, onChange)}
-        placeholder="Search keybindings"
-        aria-label="Search keybindings"
+        placeholder={label}
+        aria-label={label}
         size="sm"
       />
     </InputGroup>
@@ -116,6 +122,28 @@ export function BrowserKeybindingNotice() {
       <TooltipPopup side="top" className="max-w-72">
         {message}
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function KeybindingSourceBadge({ source }: { source: KeybindingRow["source"] }) {
+  if (source === "Default") return null;
+  return (
+    <Badge variant="outline" size="sm">
+      {source}
+    </Badge>
+  );
+}
+
+export function KeybindingRowTitle({ row }: { row: KeybindingRow }) {
+  const labelForCommand = useKeybindingDisplayLabel();
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="flex items-center gap-2" />}>
+        {labelForCommand(row.command)}
+        <KeybindingSourceBadge source={row.source} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{row.command}</TooltipPopup>
     </Tooltip>
   );
 }

@@ -9,7 +9,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 function materialStatus(state: DesktopWindowMaterialState | null): string {
@@ -43,6 +43,7 @@ function materialStatus(state: DesktopWindowMaterialState | null): string {
 }
 
 export function DesktopWindowMaterialSetting() {
+  const setting = useTranslatedSearchableSetting();
   const { available, state } = useDesktopWindowMaterial();
   const enabled = useScopedSettings((settings) => settings.desktopSystemMaterialEnabled);
   const appearancePreset = useClientSettings((settings) => settings.appearancePreset);
@@ -64,7 +65,7 @@ export function DesktopWindowMaterialSetting() {
   return (
     <>
       <SettingsRow
-        {...searchableSetting("desktop-system-material")}
+        {...setting("desktop-system-material")}
         description={
           presetForcesMaterial && !statusTakesPriority
             ? "On while the Liquid Glass style is selected."
@@ -78,7 +79,7 @@ export function DesktopWindowMaterialSetting() {
               </Button>
             ) : null}
             <Switch
-              aria-label="System glass"
+              aria-label={setting("desktop-system-material").title}
               checked={enabled || presetForcesMaterial}
               disabled={presetForcesMaterial || !state?.capability.supported}
               onCheckedChange={(checked) =>
