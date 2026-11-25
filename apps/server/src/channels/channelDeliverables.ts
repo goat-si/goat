@@ -72,7 +72,7 @@ export const readRequiredDeliverables = Effect.fn("ChannelTask.readRequiredDeliv
         JOIN orchestration_v2_projection_runs run
           ON run.thread_id=transfer.source_thread_id AND run.run_id=json_extract(transfer.payload_json,'$.sourcePoint.runId')
         LEFT JOIN thread_run_results report ON report.thread_id=run.thread_id AND report.run_id=run.run_id
-        WHERE transfer.type='subagent_result' AND transfer.source_thread_id=s.child_thread_id
+        WHERE transfer.type='subagent_result' AND transfer.status='consumed' AND transfer.source_thread_id=s.child_thread_id
           AND transfer.target_thread_id=s.thread_id AND transfer.target_run_id=s.run_id
         ORDER BY run.ordinal DESC,transfer.updated_at DESC LIMIT 1
       ) END AS reported
@@ -80,6 +80,9 @@ export const readRequiredDeliverables = Effect.fn("ChannelTask.readRequiredDeliv
     LEFT JOIN remote_dispatches remote ON json_extract(child,'$.surface')='delegate_remote'
       AND remote.correlation_id=json_extract(child,'$.destination.correlationId')
       AND remote.origin_thread_id=json_extract(child,'$.callerThreadId') AND remote.kind='task'
+      AND remote.host=json_extract(child,'$.destination.host')
+      AND (json_extract(child,'$.destination.threadId') IS NULL
+        OR remote.remote_thread_id=json_extract(child,'$.destination.threadId'))
     LEFT JOIN orchestration_v2_projection_subagents s ON s.thread_id=json_extract(child,'$.callerThreadId')
       AND s.origin='app_owned' AND
         ((remote.task_id IS NOT NULL AND s.subagent_id=remote.task_id) OR
