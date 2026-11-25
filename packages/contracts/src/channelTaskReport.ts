@@ -17,7 +17,12 @@ export const ChannelTaskReportInput = Schema.Struct({
         "Declare every mandatory child result before launching workers. On task.create use clientRequestId required:<id>:1 for each item.",
     }),
   ),
-  retryDeliverable: Schema.optionalKey(ChannelDeliverableRetry),
+  retryDeliverable: Schema.optionalKey(
+    ChannelDeliverableRetry.annotate({
+      description:
+        "Retry this item's current attempt. Launch its next attempt with the original task and target using the new request key.",
+    }),
+  ),
   reviewDeliverable: Schema.optionalKey(
     ChannelDeliverableReview.annotate({
       description:
