@@ -52,6 +52,9 @@ export interface ChatShortcutsInput {
  */
 export function useChatShortcuts(input: ChatShortcutsInput) {
   const handleShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (event.target instanceof Element && event.target.closest("[data-keybinding-capture]")) {
+      return;
+    }
     const { keybindings } = input;
     const inSideChat =
       event.target instanceof Element && event.target.closest("[data-side-chat-surface]") !== null;

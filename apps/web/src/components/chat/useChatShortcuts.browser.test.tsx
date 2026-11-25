@@ -1,3 +1,4 @@
+import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@goat/contracts";
 import { useEffect } from "react";
 import { expect, it } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -18,6 +19,11 @@ const shortcutContext = {
 };
 
 const focusOnMount = (element: HTMLElement | null) => element?.focus();
+
+const ctrl = (key: string, command: KeybindingCommand, shiftKey = false) => ({
+  command,
+  shortcut: { key, metaKey: false, ctrlKey: true, shiftKey, altKey: false, modKey: false },
+});
 
 // Stands in for the right panel's launcher, which needs the whole app around it. Like the
 // real one it takes focus, advertises its letters in `data-surface-launcher-keys`, and
@@ -46,11 +52,16 @@ function Launcher(props: { keys: string; received: string[] }) {
 
 // The chat's shortcut listener registers when the chat mounts, so a launcher that opens
 // later registers after it. Tests mount the chat first and add the launcher by rerendering.
-function Chat(props: { composerKeys: string[]; launcher?: { keys: string; received: string[] } }) {
+function Chat(props: {
+  composerKeys: string[];
+  launcher?: { keys: string; received: string[] };
+  scriptKeybindings?: ResolvedKeybindingsConfig;
+  scriptsRan?: string[];
+}) {
   useChatShortcuts({
     enabled: true,
     keybindings: [],
-    scriptKeybindings: [],
+    scriptKeybindings: props.scriptKeybindings ?? [],
     getShortcutContext: () => shortcutContext,
     threadFindActive: false,
     // Type-to-focus only calls insertTextAtEnd, so the stand-in composer implements just that.
@@ -65,7 +76,8 @@ function Chat(props: { composerKeys: string[]; launcher?: { keys: string; receiv
     branchToolbarRef: { current: null },
     closeThreadFind: () => {},
     commands: {},
-    fallback: () => undefined,
+    fallback: (command) =>
+      props.scriptsRan ? () => void props.scriptsRan?.push(command) : undefined,
   });
   return props.launcher ? <Launcher {...props.launcher} /> : null;
 }
@@ -235,4 +247,37 @@ it("leaves keys to a focused video player with controls", async () => {
   (document.activeElement as HTMLElement).blur();
   await userEvent.keyboard("a");
   expect(composerKeys).toEqual(["a"]);
+});
+
+it("leaves project-script shortcuts alone inside a keybinding capture field", async () => {
+  const scriptsRan: string[] = [];
+  const prevented: boolean[] = [];
+  await using screen = await render(
+    <>
+      <Chat
+        composerKeys={[]}
+        scriptKeybindings={[ctrl("y", "script.build.run", true)]}
+        scriptsRan={scriptsRan}
+      />
+      <input
+        ref={focusOnMount}
+        aria-label="Keybinding"
+        data-keybinding-capture=""
+        readOnly
+        onKeyDown={(event) => {
+          if (event.key.toLowerCase() === "y") prevented.push(event.defaultPrevented);
+        }}
+      />
+      <button type="button">Outside</button>
+    </>,
+    options,
+  );
+
+  await userEvent.keyboard("{Control>}{Shift>}Y{/Shift}{/Control}");
+  expect(scriptsRan).toEqual([]);
+  expect(prevented).toEqual([false]);
+
+  await userEvent.click(screen.getByRole("button", { name: "Outside" }));
+  await userEvent.keyboard("{Control>}{Shift>}Y{/Shift}{/Control}");
+  expect(scriptsRan).toEqual(["script.build.run"]);
 });
