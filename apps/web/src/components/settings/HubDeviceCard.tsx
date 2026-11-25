@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import {
   AuthAccessWriteScope,
@@ -44,7 +46,6 @@ import {
   connectReachabilityStep,
   tailscaleUnreachableMessage,
 } from "./ConnectReachabilityNotice";
-import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { heldOrGranted } from "./hubAccessScopes";
@@ -74,6 +75,7 @@ type IssuedPhoneQr = {
 };
 
 function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
+  const gt = useGT();
   const expired = useDeadlinePassed(DateTime.toEpochMillis(issued.result.expiresAt));
   if (expired) {
     return <p role="status">This QR has expired. Close this dialog and show a new QR.</p>;
@@ -94,7 +96,7 @@ function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
           size={240}
           level="M"
           marginSize={4}
-          title="Scan to pair the GOAT app"
+          title={gt("Scan to pair the GOAT app")}
         />
       </div>
       {issued.hubAccess === null ? null : (
@@ -121,6 +123,8 @@ export function HubDeviceCard({
   networkAccessError,
   onPairingLinkCreated,
 }: HubDeviceCardProps) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const [dialogOpen, setDialogOpen] = useState(false);
   // A relaunch for Network access or Tailscale HTTPS reopens the dialog; it stays open, showing
   // loading state, until the user closes it, so a remount while state loads keeps it.
@@ -222,7 +226,7 @@ export function HubDeviceCard({
   const serveOn = exposure?.tailscaleServeEnabled ?? false;
   const tailscaleRow = showTailscaleRow ? (
     <SettingsRow
-      title={searchableSetting("tailscale-https").title}
+      title={setting("tailscale-https").title}
       description={
         tailscaleHttpsEndpoint?.status === "available"
           ? tailscaleHttpsEndpoint.httpBaseUrl
@@ -242,7 +246,7 @@ export function HubDeviceCard({
               else if (tailscaleHttpsEndpoint)
                 connectActions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint);
             }}
-            aria-label="Enable Tailscale HTTPS"
+            aria-label={setting("tailscale-https").title}
           />
         ) : connectReachabilityStep(exposure, null) === "network-access" ? (
           <Button
@@ -274,10 +278,10 @@ export function HubDeviceCard({
   );
 
   return (
-    <SettingsSection {...searchableSetting("hub-device")}>
+    <SettingsSection {...setting("hub-device")}>
       {tailscaleRow}
       <SettingsRow
-        title="Phone pairing"
+        title={gt("Phone pairing")}
         description={phoneDescription}
         status={networkAccessError ? <span role="alert">{networkAccessError}</span> : undefined}
         control={
@@ -287,11 +291,11 @@ export function HubDeviceCard({
                 render={<Button size="sm" variant="outline" disabled={!allowed || unavailable} />}
               >
                 <QrCodeIcon aria-hidden />
-                Show phone QR
+                {gt("Show phone QR")}
               </DialogTrigger>
               <DialogPopup showCloseButton={!isCreating}>
                 <DialogHeader>
-                  <DialogTitle>Pair your phone</DialogTitle>
+                  <DialogTitle>{gt("Pair your phone")}</DialogTitle>
                   <DialogDescription>
                     Scan with the GOAT app on your phone: Connect hub → Scan QR code.
                   </DialogDescription>
@@ -335,7 +339,7 @@ export function HubDeviceCard({
                           <Switch
                             checked={hubAccess}
                             onCheckedChange={(checked) => setHubAccess(checked)}
-                            aria-label="Also open hub devices"
+                            aria-label={gt("Also open hub devices")}
                           />
                         </label>
                       ) : null}

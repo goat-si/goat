@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
@@ -283,6 +285,8 @@ export function AgentToolListingSetting() {
 }
 
 export function AgentBrowserAccessSetting() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting()("agent-browser-access");
   const { scope } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
@@ -293,16 +297,18 @@ export function AgentBrowserAccessSetting() {
       <SettingsRow
         serverScoped
         settingKeys={["enableAgentBrowserAccess"]}
-        {...searchableSetting("agent-browser-access")}
+        {...setting}
         description={
           isProjectScope
-            ? "Allow agents in this project to use the shared browser. Applies when the agent session next starts."
-            : "Allow agents to use the shared browser. Projects can override it."
+            ? gt(
+                "Allow agents in this project to use the shared browser. Applies when the agent session next starts.",
+              )
+            : gt("Allow agents to use the shared browser. Projects can override it.")
         }
         resetAction={
           settings.enableAgentBrowserAccess !== DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess ? (
             <SettingResetButton
-              label="default browser access"
+              label={setting.title}
               onClick={() =>
                 updateSettings({
                   enableAgentBrowserAccess: DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess,
@@ -314,7 +320,7 @@ export function AgentBrowserAccessSetting() {
         control={
           <ScopedSwitch
             settingKeys={["enableAgentBrowserAccess"]}
-            aria-label="Agent browser access"
+            aria-label={setting.title}
             checked={settings.enableAgentBrowserAccess}
             onCheckedChange={(enabled) => updateSettings({ enableAgentBrowserAccess: enabled })}
           />

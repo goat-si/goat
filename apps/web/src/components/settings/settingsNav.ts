@@ -70,7 +70,9 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/memory": { text: "What agents remember across threads, and who can read it." },
   "/settings/integrations": {
-    text: "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    text: msg(
+      "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    ),
   },
   "/settings/source-control": {
     text: "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
@@ -88,14 +90,18 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   },
   "/settings/scheduled-tasks": { text: "Prompts that run on a schedule." },
   "/settings/hub": {
-    text: "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    text: msg(
+      "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    ),
     related: [
       { label: "Connect your phone", to: "/settings/connections", hash: "hub-device" },
       { label: "OpenCodex Home for Codex", to: "/settings/providers" },
     ],
   },
   "/settings/connections": {
-    text: "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+    text: msg(
+      "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+    ),
     related: [{ label: "Hub", to: "/settings/hub" }],
   },
 };

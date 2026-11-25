@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { cloudAutoJoinSaveError, connectHubProxySaveError } from "@goat/client-runtime/hub-devices";
@@ -34,7 +36,6 @@ import { HubDeviceListSection } from "./HubDeviceList";
 import { HubRelayWarningRow } from "./HubRelayWarningSettings";
 import { PenHubNodesSetting } from "./PenHubNodesSetting";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 const CLOUD_HOLDER_LABEL: Record<HubSettingsValue["cloudHolder"], string> = {
@@ -101,6 +102,8 @@ function homeStatusText(
 }
 
 export function HubSettings() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const { environment } = useSettingsScope();
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
@@ -114,9 +117,9 @@ export function HubSettings() {
           local={environment.entry.target._tag === "PrimaryConnectionTarget"}
         />
       ) : (
-        <SettingsSection id="hub" title="Hub">
+        <SettingsSection id="hub" title={gt("Hub")}>
           <SettingsRow
-            {...searchableSetting("hub-enabled")}
+            {...setting("hub-enabled")}
             description="Connect an environment to choose whether it runs your fleet as the hub."
           />
         </SettingsSection>
@@ -187,6 +190,8 @@ function HubControls({
   readonly label: string;
   readonly local: boolean;
 }) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const registry = useContext(RegistryContext);
   const hub = useHubSettings(environmentId);
   const atom = hostStatusAtom(environmentId);
@@ -211,9 +216,9 @@ function HubControls({
 
   return (
     <>
-      <SettingsSection id="hub" title="Hub">
+      <SettingsSection id="hub" title={gt("Hub")}>
         <SettingsRow
-          {...searchableSetting("hub-enabled")}
+          {...setting("hub-enabled")}
           serverScoped
           settingKeys={["hub"]}
           description={`${label} checks every linked device's parity every 30 minutes and holds cloud runs. When a device cannot reach it, goal work there pauses and you get a decision. Devices and OpenCodex settings stay as they are.`}
@@ -228,7 +233,7 @@ function HubControls({
           }
           control={
             <Switch
-              aria-label="This machine is the hub"
+              aria-label={setting("hub-enabled").title}
               checked={hub.settings.enabled}
               disabled={hub.saving || !hub.canConfigure}
               onCheckedChange={(enabled) => void hub.save({ enabled })}
@@ -237,13 +242,13 @@ function HubControls({
         />
         {isGoatConnectEnabled() && (
           <SettingsRow
-            {...searchableSetting("hub-connect-access")}
+            {...setting("hub-connect-access")}
             serverScoped
             settingKeys={["hub"]}
             description="Standing consent for every trusted device signed in to the linked GOAT Connect account to reach hub devices. After enabling, sign out of GOAT Connect and sign back in. Turning this off ends privileged Connect sessions, including direct hub access. The preference stays saved while the hub is off."
             control={
               <Switch
-                aria-label="Allow GOAT Connect devices to reach hub devices"
+                aria-label={setting("hub-connect-access").title}
                 checked={hub.settings.connectDevicesHubProxy}
                 disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
                 onCheckedChange={(connectDevicesHubProxy) =>
@@ -254,7 +259,7 @@ function HubControls({
           />
         )}
         <SettingsRow
-          {...searchableSetting("hub-cloud-holder")}
+          {...setting("hub-cloud-holder")}
           serverScoped
           settingKeys={["hub"]}
           description="Where Claude Cloud, Cursor Cloud and Devin Cloud runs start by default."
@@ -266,7 +271,7 @@ function HubControls({
                 if (value === "hub" || value === "auto") void hub.save({ cloudHolder: value });
               }}
             >
-              <SelectTrigger size="sm" aria-label="Cloud runs">
+              <SelectTrigger size="sm" aria-label={setting("hub-cloud-holder").title}>
                 <SelectValue>
                   {(value: HubSettingsValue["cloudHolder"]) => CLOUD_HOLDER_LABEL[value]}
                 </SelectValue>
@@ -282,7 +287,7 @@ function HubControls({
           }
         />
         <SettingsRow
-          {...searchableSetting("hub-cloud-auto-join")}
+          {...setting("hub-cloud-auto-join")}
           serverScoped
           settingKeys={["hub"]}
           description="A cloud machine this hub creates joins as a Child the first time it is used: GOAT installs OpenCodex and Codex, links it, and verifies one request through Home, so it needs no sign-in there. Off: new machines stay standalone, and linked ones stay linked."
@@ -295,7 +300,7 @@ function HubControls({
           }
           control={
             <Switch
-              aria-label="Join new cloud machines"
+              aria-label={setting("hub-cloud-auto-join").title}
               checked={hub.settings.autoJoinCloudMachines}
               disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
               onCheckedChange={(checked) => void hub.saveCloudAutoJoin(checked)}
@@ -308,7 +313,7 @@ function HubControls({
           warning={home?.link.relayWarning ?? null}
         />
         <SettingsRow
-          {...searchableSetting("hub-permission-profiles")}
+          {...setting("hub-permission-profiles")}
           serverScoped
           settingKeys={["goatclaw"]}
           description="Agents can launch, merge or change settings only as far as their profile allows. Agents without one get the default profile. Applies to every connected host: switching it here switches it there too."
@@ -326,7 +331,7 @@ function HubControls({
           }
           control={
             <Switch
-              aria-label="Permission profiles"
+              aria-label={setting("hub-permission-profiles").title}
               checked={hub.goatclaw.enabled}
               disabled={hub.saving || !hub.canConfigure}
               onCheckedChange={(enabled) => void hub.saveGoatclaw({ enabled })}
@@ -334,7 +339,7 @@ function HubControls({
           }
         />
         <SettingsRow
-          {...searchableSetting("hub-default-profile")}
+          {...setting("hub-default-profile")}
           serverScoped
           settingKeys={["goatclaw"]}
           description="The profile for agents launched without one."
@@ -346,7 +351,7 @@ function HubControls({
                 if (typeof value === "string") void hub.saveGoatclaw({ defaultProfile: value });
               }}
             >
-              <SelectTrigger size="sm" aria-label="Default profile">
+              <SelectTrigger size="sm" aria-label={setting("hub-default-profile").title}>
                 <SelectValue>{(value: string) => profileLabel(value)}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
