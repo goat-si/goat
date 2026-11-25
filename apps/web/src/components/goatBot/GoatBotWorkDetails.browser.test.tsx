@@ -51,6 +51,20 @@ const childWork = Atom.make(() => {
             taskId: "task-1",
             truncated: false,
             children: [
+              ...["known-local", "reserved-local"].map((threadId) => ({
+                childWorkId: threadId,
+                ownerId: "owner",
+                taskId: "task-1",
+                generation: 1,
+                surface: "delegate_local",
+                callerThreadId: "caller",
+                requestKey: threadId,
+                promptDigest: "digest",
+                state: "launched",
+                destination: { threadId },
+                createdAt: "2026-11-04T00:00:00.000Z",
+                updatedAt: "2026-11-04T00:00:00.000Z",
+              })),
               {
                 childWorkId: "sub",
                 ownerId: "owner",
@@ -61,7 +75,7 @@ const childWork = Atom.make(() => {
                 requestKey: "request",
                 promptDigest: "digest",
                 state: "unknown",
-                destination: { host: "recovered host" },
+                destination: { host: "recovered host", threadId: "known-local" },
                 createdAt: "2026-11-04T00:00:00.000Z",
                 updatedAt: "2026-11-04T00:00:00.000Z",
               },
@@ -278,10 +292,16 @@ it.each(["failed", "cancelled", "released"] as const)(
 it("retries a failed sub-work read and shows the returned subagent", async () => {
   setup();
   state.supported = true;
+  state.shellTitles = { "known-local": "Launch evidence" };
   await using screen = await render(details());
   await expect.element(screen.getByText("Couldn't load subagents.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
   await expect.element(screen.getByText(/recovered host/)).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: "Launch evidence" }))
+    .toHaveAttribute("href", "/env-studio/known-local");
+  await expect.element(screen.getByText("Subagent · launched")).toBeVisible();
+  expect(screen.getByRole("link", { name: "Launch evidence" }).all()).toHaveLength(1);
   expect(state.reads).toBe(2);
 });
 

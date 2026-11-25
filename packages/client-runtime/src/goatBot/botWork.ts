@@ -1,7 +1,9 @@
 import {
   isGoatBotConversationThreadId,
+  localChildThreadId,
   type BotRemoteWork,
   type BotThreadRow,
+  type BotWorkResult,
   type ChannelChildWork,
   type ChannelTaskId,
   type ChannelTaskChip,
@@ -12,6 +14,23 @@ import {
 
 import { goatBotTaskWait } from "./activity.ts";
 
+/** A list refresh and the by-id lookup can arrive in either order, especially on retry. */
+export function botTaskAttemptEvidence(
+  work: BotWorkResult | undefined,
+  task: Extract<BotThreadRow, { kind: "task" }>["task"] | undefined,
+) {
+  if (work?.attemptEvidence === undefined || task === undefined) return null;
+  const found = work.task.state === "known" ? work.task.row.task : work.task.task;
+  if (
+    found.taskId !== task.taskId ||
+    (found.generation ?? 1) !== (task.generation ?? 1) ||
+    found.status !== task.status ||
+    found.updatedAt !== task.updatedAt
+  )
+    return null;
+  return { ...work.attemptEvidence, worker: work.approvalObservation?.worker };
+}
+
 export interface BotWorkTask {
   readonly row: Extract<BotThreadRow, { readonly kind: "task" }>;
   readonly subagents: ReadonlyArray<{
@@ -20,6 +39,7 @@ export interface BotWorkTask {
     readonly label: string;
     readonly host?: string;
     readonly destinationHint?: string;
+    readonly thread?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
   }>;
   readonly threads: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -71,7 +91,10 @@ export function groupBotWork(
     }
     for (const child of group?.children ?? []) {
       if (child.surface === "delegate_local" || child.surface === "delegate_remote") {
+        const threadId =
+          child.surface === "delegate_local" ? localChildThreadId(child.destination) : undefined;
         subagents.push({
+          ...(threadId === undefined ? {} : { thread: { environmentId, threadId } }),
           childWorkId: child.childWorkId,
           state: child.state,
           label: child.state === "unknown" ? "uncertain" : child.state,

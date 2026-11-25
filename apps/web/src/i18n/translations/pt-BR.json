@@ -1125,5 +1125,9 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Frota: nenhuma tarefa em andamento",
   "e8d0653cf49cd57e": "e mais {count}",
-  "7d5ab92b06b67598": "Decisões, {count} pendentes"
+  "7d5ab92b06b67598": "Decisões, {count} pendentes",
+  "61ee56caa5880fae": "Máquina do worker",
+  "0158b772ab348c18": "Última atualização",
+  "b949b3f1ed6bb373": "Relatório do worker recebido",
+  "a7a2c522026264c0": "Relatório do worker ausente"
 }

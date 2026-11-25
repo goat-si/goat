@@ -3,6 +3,7 @@ import {
   BotId,
   BotWorkResult,
   CHANNEL_BOT_TASK_APPROVAL_LIMIT,
+  CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH,
   ChannelSnoozeBotTaskInput,
   ChannelTaskId,
   EnvironmentId,
@@ -46,6 +47,30 @@ import {
 const decodeSnoozeInput = Schema.decodeEffect(ChannelSnoozeBotTaskInput);
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect(
+    "bounds the latest update and preserves whether the ledger recorded a worker report",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          yield* insertTask("release-build", { status: "completed", createdAt: at(1) });
+          const sql = yield* SqlClient.SqlClient;
+          const service = yield* BotThreads.ChannelBotThreads;
+          const input = { taskId: ChannelTaskId.make("release-build"), botId: BotId.make("main") };
+          const lookup = () => service.getBotTask(input, owner);
+          assert.deepStrictEqual((yield* lookup()).attemptEvidence, {});
+          const prefix = "x".repeat(CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH - 2);
+          const update = prefix + "😀 and more";
+          yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.resultSummary', ${update}, '$.completionReport', 'missing') WHERE task_id = 'release-build'`;
+          assert.deepStrictEqual((yield* lookup()).attemptEvidence, {
+            summary: prefix + "…",
+            report: "missing",
+          });
+          yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.resultSummary', '  ', '$.completionReport', 'present') WHERE task_id = 'release-build'`;
+          assert.deepStrictEqual((yield* lookup()).attemptEvidence, { report: "present" });
+        }),
+      ),
+  );
   it.effect("keeps a bounded approval observation in the task lookup response", () =>
     provide(
       Effect.gen(function* () {

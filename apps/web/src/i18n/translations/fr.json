@@ -1125,5 +1125,9 @@
   "ae87266a748db24b": "Parc : aucune tâche en cours",
   "e8d0653cf49cd57e": "et {count} de plus",
   "7d5ab92b06b67598": "Décisions, {count} en attente",
-  "f9153168b50dcc15": "Palette de commandes"
+  "f9153168b50dcc15": "Palette de commandes",
+  "61ee56caa5880fae": "Machine du worker",
+  "0158b772ab348c18": "Dernière mise à jour",
+  "b949b3f1ed6bb373": "Rapport du worker reçu",
+  "a7a2c522026264c0": "Rapport du worker manquant"
 }

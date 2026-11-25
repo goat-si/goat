@@ -40,6 +40,7 @@ import {
   ChannelTaskStatus,
   ChannelWorkerRef,
   ChannelTaskDoneMeans,
+  ChannelTaskAttemptEvidence,
 } from "./channelLedger.ts";
 import { ChannelSkillProposal } from "./channelSkillProposal.ts";
 import { ChannelTaskNeedsYou, ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
@@ -668,6 +669,7 @@ export const BotWorkResult = Schema.Struct({
   codingRows: Schema.Array(BotCodingRow),
   remoteWork: Schema.Array(BotRemoteWork),
   activity: Schema.optionalKey(ChannelBotTaskActivity),
+  attemptEvidence: Schema.optionalKey(ChannelTaskAttemptEvidence),
   launchesTruncated: Schema.Boolean,
   partial: Schema.Boolean,
   approvalObservation: Schema.optional(
