@@ -25,7 +25,7 @@ function pullRequestSearchLabels(raw: unknown): PullRequestsSearch["labels"] {
   const seen = new Set<string>();
   for (const rawValue of values) {
     if (typeof rawValue !== "string") continue;
-    const value = rawValue.trim().slice(0, 200);
+    const value = sliceWhole(rawValue.trim(), 200);
     const key = value.toLowerCase();
     if (value.length === 0 || seen.has(key)) continue;
     labels.push(value);
@@ -78,9 +78,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       : {}),
     ...(raw.checks === "passing" || raw.checks === "failing" ? { checks: raw.checks } : {}),
     author:
-      typeof raw.author === "string" && raw.author.trim()
-        ? raw.author.trim().slice(0, 200)
-        : undefined,
+      typeof raw.author === "string" ? sliceWhole(raw.author.trim(), 200) || undefined : undefined,
     labels: pullRequestSearchLabels(raw.labels),
     ...(raw.upstream === "include" ? { upstream: "include" as const } : {}),
   }),
