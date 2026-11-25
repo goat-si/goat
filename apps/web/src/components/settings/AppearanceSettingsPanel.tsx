@@ -62,6 +62,7 @@ const BACKDROP_ERROR_MESSAGES = {
 } as const;
 
 function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | "custom" }) {
+  const gt = useGT();
   const setting = useTranslatedSearchableSetting();
   const updateSettings = useUpdateScopedSettings();
   const presence = useCustomBackdropPresence();
@@ -107,7 +108,7 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
           </Select>
           <input
             ref={fileInputRef}
-            aria-label={setting("appearance-background").title}
+            aria-label={gt("Background image")}
             className="sr-only"
             type="file"
             accept="image/*"
