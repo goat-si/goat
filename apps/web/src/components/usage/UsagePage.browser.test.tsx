@@ -142,6 +142,9 @@ describe("usage period selection", () => {
       await expect.poll(() => fixture.queries.has(month.sinceDay)).toBe(true);
       await click("90 days");
       await expect.poll(() => fixture.queries.has(quarter.sinceDay)).toBe(true);
+      await expect
+        .poll(() => dialog.element().querySelector("[role=status]")?.textContent ?? "")
+        .toContain("Loading usage");
       // Complete the older request after the new selection has taken effect.
       await answer(month, 56.78);
       await expect.element(dialog.getByText("$12.34", { exact: true }).first()).toBeVisible();
@@ -157,6 +160,9 @@ describe("usage period selection", () => {
         .toContain("Could not load usage");
       await expect.element(dialog.getByText("$12.34", { exact: true }).first()).toBeVisible();
       await click("7 days");
+      await expect
+        .poll(() => dialog.element().querySelector("[role=status]")?.textContent ?? "")
+        .toBe("");
       await expect.element(dialog.getByText("$12.34", { exact: true }).first()).toBeVisible();
       expect(fixture.reads.filter((day) => day === initial.sinceDay)).toHaveLength(1);
       await screen.unmount();
