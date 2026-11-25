@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { FleetMachine, FleetThread } from "@goat/client-runtime/state/fleet";
 import { FLEET_HEAT_LABEL, FLEET_HEAT_TIERS } from "@goat/client-runtime/state/fleet-heat";
 import { Link } from "@tanstack/react-router";
@@ -38,9 +39,6 @@ import { slowConnectionWaits } from "./fleetTelemetry";
 import { FleetThreadList, STATE_DOT, STATE_LABEL } from "./FleetThreadList";
 import { FleetUncountedHosts } from "./FleetUncountedHosts";
 
-const plural = (count: number, one: string, many = one + "s") =>
-  count + " " + (count === 1 ? one : many);
-
 const HEAT_DOT = {
   warm: "bg-heat-warm",
   hot: "bg-heat-hot",
@@ -65,6 +63,7 @@ function groupThreadsByMachine(threads: ReadonlyArray<FleetThread>) {
 
 /** Everything running across connected machines, as a graph and a list grouped by machine. */
 export function FleetPage() {
+  const gt = useGT();
   const live = useFleetSnapshot();
   const liveHeat = useFleetHostMetrics();
   const cloudAgents = useFleetCloudAgents();
@@ -105,30 +104,37 @@ export function FleetPage() {
     <SidebarInset>
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
         <WorkspacePageHeader electron={isElectron}>
-          <h1>Fleet</h1>
+          <h1>{gt("Fleet")}</h1>
         </WorkspacePageHeader>
         <main className="min-h-0 flex-1 overflow-y-auto">
           <WorkspacePageContainer width="expanded">
             <FleetConsoleSlot snapshot={snapshot} connections={connections} heat={heat} />
             <p className="text-sm text-muted-foreground" role="status">
               {totals.running + totals.attention === 0
-                ? "Nothing running on " + plural(totals.machines, "machine")
-                : plural(totals.running, "thread") +
-                  " running, " +
-                  totals.attention +
-                  " need you, on " +
-                  plural(totals.machines, "machine")}
+                ? gt("Nothing running on {machines, plural, one {# machine} other {# machines}}", {
+                    machines: totals.machines,
+                  })
+                : gt(
+                    "{running, plural, one {# thread} other {# threads}} running, {attention} need you, on {machines, plural, one {# machine} other {# machines}}",
+                    {
+                      running: totals.running,
+                      attention: totals.attention,
+                      machines: totals.machines,
+                    },
+                  )}
               {uncounted.length > 0 ? " " : null}
               <FleetUncountedHosts hosts={uncounted} />.
               {totals.reported > 0
                 ? " " +
-                  plural(totals.reported, "launch", "launches") +
-                  " on SSH hosts as last reported."
+                  gt(
+                    "{count, plural, one {# launch} other {# launches}} on SSH hosts as last reported.",
+                    { count: totals.reported },
+                  )
                 : null}
-              {loading ? " Checking SSH hosts and cloud machines…" : null}
+              {loading ? " " + gt("Checking SSH hosts and cloud machines…") : null}
             </p>
             <section
-              aria-label="Fleet graph"
+              aria-label={gt("Fleet graph")}
               className="@container/fleet-graph overflow-hidden rounded-xl border bg-card"
             >
               <FleetGraph
@@ -144,7 +150,9 @@ export function FleetPage() {
                 {(["running", "attention", "reported"] as const).map((state) => (
                   <span key={state} className="inline-flex items-center gap-1.5">
                     <span aria-hidden className={cn("size-2 rounded-full", STATE_DOT[state])} />
-                    {STATE_LABEL[state]}
+                    {gt(STATE_LABEL[state], {
+                      $context: "Thread status in the Fleet graph legend",
+                    })}
                   </span>
                 ))}
                 {connectionLegend.length > 0 ? (
@@ -153,7 +161,7 @@ export function FleetPage() {
                 {connectionLegend.map((entry) => (
                   <span key={entry.label} className="inline-flex items-center gap-1.5">
                     <FleetConnectionIcon state={entry.state} />
-                    {entry.label}
+                    {gt(entry.label)}
                   </span>
                 ))}
                 {heatLegend.length > 0 ? (
@@ -162,11 +170,11 @@ export function FleetPage() {
                 {heatLegend.map((tier) => (
                   <span key={tier} className="inline-flex items-center gap-1.5">
                     <span aria-hidden className={cn("size-2 rounded-full", HEAT_DOT[tier])} />
-                    {FLEET_HEAT_LABEL[tier]}
+                    {gt(FLEET_HEAT_LABEL[tier])}
                   </span>
                 ))}
                 <span className="ml-auto hidden text-muted-foreground/80 @min-[40rem]/fleet-graph:inline">
-                  Select a machine to show only its threads.
+                  {gt("Select a machine to show only its threads.")}
                 </span>
               </div>
             </section>
