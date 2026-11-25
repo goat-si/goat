@@ -3,6 +3,7 @@
  * arms, step counting from either transcript format, the oracles that compare an agent's report
  * with what an independent observer saw, and the scored report. run.ts does all I/O.
  */
+import { calculatorMultiply } from "./calculator.ts";
 import { type Json, type JsonObject, extractAnswer } from "../agent-surface/eval/core.ts";
 
 export type Surface = "desktop" | "web";
@@ -693,23 +694,7 @@ const trackWindows = (
 };
 
 export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResult>> = {
-  calculatorMultiply: ({ task, samples }) => {
-    const target = digits(task.expect["result"]);
-    // After "=", Calculator shows the expression and the result in separate texts.
-    const saw = samples.some((sample) =>
-      [
-        sample.value["display"],
-        ...(Array.isArray(sample.value["texts"]) ? sample.value["texts"] : []),
-      ].some((text) => digits(text) === target),
-    );
-    // Not seeing it proves nothing: a read and reset can fall between two samples.
-    return {
-      actual: saw ? "done" : "unverified",
-      notes: saw ? [] : ["the observer never saw " + target + " on Calculator's display"],
-      violations: [],
-    };
-  },
-
+  calculatorMultiply,
   finderSidebar: ({ baseline, samples, final }) => {
     const track = trackWindows("Finder", baseline, samples, final);
     const visited = [...track.created.values()].some((rows) => {
