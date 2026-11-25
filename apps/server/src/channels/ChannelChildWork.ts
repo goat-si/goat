@@ -33,6 +33,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
+import { stableStringify } from "@goat/shared/relaySigning";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -399,13 +400,6 @@ const make = Effect.gen(function* () {
       ...(input.callerRunId === undefined ? {} : { callerRunId: input.callerRunId }),
       requestKey,
       promptDigest,
-      ...(requestKey.startsWith("required:")
-        ? {
-            launchDigest: childWorkPromptDigestFor(
-              JSON.stringify([input.surface, input.destinationKey, input.launchOptions]),
-            ),
-          }
-        : {}),
       ...(input.destinationHint === undefined ? {} : { destinationHint: input.destinationHint }),
       state: "reserved",
       createdAt: now,
@@ -413,7 +407,15 @@ const make = Effect.gen(function* () {
     };
     const capacity = channelChildWorkCapacityFor(input.surface);
     const result = yield* store
-      .admitReserved(record, capacity)
+      .admitReserved(
+        record,
+        capacity,
+        requestKey.startsWith("required:")
+          ? childWorkPromptDigestFor(
+              stableStringify([input.surface, input.destinationKey, input.launchOptions ?? null]),
+            )
+          : undefined,
+      )
       .pipe(Effect.mapError((error) => toError("Unable to record child work.", error)));
     if (result._tag === "owner_settled") {
       return yield* new ChannelChildWorkError({
@@ -435,17 +437,10 @@ const make = Effect.gen(function* () {
           " active subagents or threads. Let one finish, or stop it, before launching more.",
       });
     }
-    if (result._tag === "existing") {
-      return {
-        _tag: "existing",
-        record: result.record,
-        requestKey: requestKey.startsWith("required:") ? record.childWorkId : requestKey,
-      } as const satisfies ChannelChildWorkAdmission;
-    }
     return {
-      _tag: "admitted",
-      record,
-      requestKey: requestKey.startsWith("required:") ? record.childWorkId : requestKey,
+      _tag: result._tag,
+      record: result.record,
+      requestKey: result.record.launchDigest ? result.record.childWorkId : requestKey,
     } as const satisfies ChannelChildWorkAdmission;
   });
 
