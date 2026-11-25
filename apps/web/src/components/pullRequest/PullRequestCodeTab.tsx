@@ -4,7 +4,7 @@ import { useWithheldPullRequestFiles } from "./useWithheldPullRequestFiles";
 import { PullRequestWithheldFileNotice } from "./PullRequestWithheldFileNotice";
 import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
-import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
+import { placedReviewThreadIds, reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { useCodeLinkTarget, useRevealCodeLink } from "./usePullRequestCodeLink";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
@@ -82,7 +82,7 @@ import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -106,7 +106,6 @@ import {
   getFileViewedRange,
   flipFileDiffFold,
   isFileDiffCollapsed,
-  isLineInFileDiff,
   withFileDiffFold,
   type DiffFoldOverride,
   type FileDiffFoldChoices,
@@ -460,19 +459,7 @@ function PullRequestCodeTab({
   const fileTreeEntries = diffFileTreeEntries(files);
   const threadsByPath = reviewThreadsByPath(detail.reviewThreads);
   // File membership does not guarantee a rendered hunk for the thread.
-  const placedThreadIds = (() => {
-    const placed = new Set<string>();
-    // Commit diffs use different line coordinates; list conversations separately.
-    if (commit !== null) return placed;
-    for (const file of files) {
-      for (const thread of threadsByPath.get(resolveFileDiffPath(file)) ?? []) {
-        if (thread.line !== null && isLineInFileDiff(file, thread.side, thread.line)) {
-          placed.add(thread.id);
-        }
-      }
-    }
-    return placed;
-  })();
+  const placedThreadIds = placedReviewThreadIds(files, threadsByPath, commit);
 
   const imagePreviewUrl = pullRequestImagePreviewUrl(detail, commit);
   const annotatedFiles = files.map((fileDiff) => {
@@ -935,6 +922,10 @@ function PullRequestCodeTab({
     </div>
   );
 
+  const hiddenTestFilesLabel =
+    hiddenTestFileCount > 0
+      ? `${hiddenTestFileCount} test ${hiddenTestFileCount === 1 ? "file" : "files"} hidden`
+      : null;
   const changeIgnoreWhitespace = (next: boolean) => {
     setIgnoreWhitespace(next);
     if (!draftStale) closeDraft();
@@ -950,15 +941,27 @@ function PullRequestCodeTab({
           onShowMore={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
         />
         <PullRequestMetaLine>
-          <span className="shrink-0 tabular-nums">
-            {files.length} {files.length === 1 ? "file" : "files"}
-            {nextCursor === null ? "" : "+"}
+          <span className="flex shrink-0 items-center gap-1.5">
+            <span className="tabular-nums">
+              {files.length} {files.length === 1 ? "file" : "files"}
+              {nextCursor === null ? "" : "+"}
+            </span>
+            {hiddenTestFilesLabel !== null && (files.length > 0 || nextCursor !== null) ? (
+              <span className="hidden items-center gap-1.5 @2xl:flex">
+                <span aria-hidden className="text-muted-foreground/50">
+                  ·
+                </span>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="link"
+                  onClick={() => setHideTestFiles(false)}
+                >
+                  {hiddenTestFilesLabel}
+                </Button>
+              </span>
+            ) : null}
           </span>
-          {hiddenTestFileCount > 0 ? (
-            <Button type="button" size="xs" variant="link" onClick={() => setHideTestFiles(false)}>
-              {hiddenTestFileCount} test {hiddenTestFileCount === 1 ? "file" : "files"} hidden
-            </Button>
-          ) : null}
           {filesViewed.enabled && files.length > 0 ? (
             <span className="flex min-w-0 items-center gap-1 tabular-nums">
               <span className="shrink-0">
@@ -1305,6 +1308,14 @@ function PullRequestCodeTab({
   }
 
   if (items.length === 0 && nextCursor === null) {
+    if (hiddenTestFilesLabel !== null && files.length === 0) {
+      return withToolbar(
+        <div className="flex flex-wrap items-center gap-2 px-4 py-5 text-sm text-muted-foreground">
+          <p>{hiddenTestFilesLabel}</p>
+          <InlineButton onClick={() => setHideTestFiles(false)}>Show test files</InlineButton>
+        </div>,
+      );
+    }
     return withToolbar(
       <p className="px-4 py-5 text-sm text-muted-foreground">
         {commit === null ? `This ${term} has no file changes.` : "This commit has no file changes."}

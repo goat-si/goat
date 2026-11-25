@@ -16,6 +16,7 @@ import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 
 const {
   diffAtom,
+  onlyTestFilesDiffAtom,
   pagedDiffAtom,
   imageDiffAtom,
   withheldPageAtom,
@@ -138,6 +139,9 @@ const {
     diffAtom: Atom.make(() =>
       AsyncResult.success(mocks.refreshed ? refreshedFirstPage : firstPage),
     ),
+    onlyTestFilesDiffAtom: Atom.make(
+      AsyncResult.success({ ...firstPage, patch: filePatch("a.test.ts") }),
+    ),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
       Atom.make(() => AsyncResult.success(pages[cursor]!)),
@@ -148,6 +152,7 @@ const {
 const mocks = vi.hoisted(() => ({
   paged: false,
   refreshed: false,
+  onlyTestFiles: false,
   image: false,
   withheld: false,
   inlineWithheldPage: false,
@@ -220,6 +225,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
         mocks.diffCommits.push(input.commit);
         if (mocks.image) return imageDiffAtom;
         if (mocks.withheld) return withheldPageAtom(mocks.withheldFixture);
+        if (mocks.onlyTestFiles) return onlyTestFilesDiffAtom;
         return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
       }) as never,
     },
@@ -288,6 +294,7 @@ const detail: PullRequestDetailView = {
 function setup(paged = false, image = false) {
   mocks.paged = paged;
   mocks.refreshed = false;
+  mocks.onlyTestFiles = false;
   mocks.image = image;
   mocks.withheld = false;
   mocks.inlineWithheldPage = false;
@@ -335,6 +342,19 @@ it("keeps the diff after a refresh that brings back the same page", async () => 
     .element(screen.getByText("This pull request has no file changes."))
     .not.toBeInTheDocument();
   await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+});
+
+it("can show test files again from the narrow Code tab empty state", async () => {
+  setup();
+  mocks.onlyTestFiles = true;
+  const container = document.createElement("div");
+  container.className = "h-[700px] w-[429px]";
+  await using screen = await render(tab(0), { container });
+  await screen.getByRole("button", { name: "Hide test files", exact: true }).click();
+
+  await expect.element(screen.getByText("1 test file hidden", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "Show test files", exact: true }).click();
+  await expect.element(screen.getByText("a.test.ts", { exact: true }).first()).toBeVisible();
 });
 
 it("never requests the diff of a selected commit the pull request no longer has", async () => {
