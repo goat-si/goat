@@ -293,7 +293,7 @@ export function DraftHeroHeadline({
           }
         >
           <DraftProjectName value={pickerLabel} singleLine />
-          <ChevronDownIcon aria-hidden="true" className="size-5 shrink-0" />
+          <ChevronDownIcon aria-hidden="true" className="size-[0.65em] shrink-0 opacity-70" />
         </TooltipTrigger>
         {activeProjectTitle && !isScratchDraft ? (
           <TooltipPopup side="top">{activeProjectTitle}</TooltipPopup>

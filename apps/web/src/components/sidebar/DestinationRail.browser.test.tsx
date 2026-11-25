@@ -47,6 +47,7 @@ vi.mock("../goatBot/useGoatBotMemberStatus", () => ({
 // The rail reads each bot's status alone: no conversation shell or items are loaded here.
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => null,
+  useQuietThreadShell: () => null,
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => [],
 }));

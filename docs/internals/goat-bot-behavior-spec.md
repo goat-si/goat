@@ -101,14 +101,23 @@ Acceptance:
   and approval replies, explicit task answers and worker reports retain their checked paths.
 - Setting `goatBotSessionRouting` to `reception` sends new inputs to reception; existing session
   claims continue and recover normally.
-- The same read-only session that receives an eligible request MUST begin with one line naming
-  its concrete first step, before any tool call, or with the answer itself when no work is needed.
-  Its first sealed assistant line is the receipt. Read-only lookups may proceed while it reaches
-  the person; launches, writes, questions and approvals MUST wait until its delivery settles.
-- If the session has not supplied its line after 20 seconds from acceptance, acknowledgment-only
-  reception takes over. It describes work already begun and MUST NOT choose or discard actions.
-  If that acknowledgment fails or hangs, at 55 seconds the bot commits “Working on it — I'll
-  reply here.” The task continues. A late session line MUST NOT become a second receipt.
+- The same read-only session that receives an eligible request MUST answer a message that needs
+  no tools (a greeting, small talk, who the bot is, a question its prompt or the conversation
+  already answers) at once, with the whole answer as its only message and no tool call. Any other
+  request MUST begin with one line naming its concrete first step, before any tool call. The
+  receipt is the session's first assistant message, whole, once that message has ended or a tool
+  call follows it, so a direct answer of several lines is one message. Read-only lookups may
+  proceed while it reaches the person; launches, writes, questions and approvals MUST wait until
+  its delivery settles.
+- A working signal is not a message. While the session is still composing its first message (its
+  run has started and has made no tool call), the bot sends nothing: the GOAT app shows the
+  message as being read. From 20 seconds after acceptance, acknowledgment-only reception takes
+  over only when the session has made tool calls without its first message, its run is queued
+  behind another request, or its progress cannot be read. It names the steps the session has
+  taken or says the request is queued, never that work has begun, and MUST NOT choose or discard
+  actions. At 55 seconds without a receipt the bot commits “Working on it — I'll reply here.” The
+  task continues. Whichever receipt commits first is the only one; a late session line MUST NOT
+  become a second receipt.
 - Every input MUST have at most one receipt. Its commit and transport hand-off MUST be independent
   of other model calls, ordinary passes and other receipt sends. The bot SHOULD normally reply
   within 10 seconds. Inputs on reception retain its fixed failure reply at 55 seconds.
@@ -126,17 +135,22 @@ Acceptance:
 
 Acceptance:
 
-- An eligible request calls no reception model; its delivered receipt is the session's first line.
+- An eligible request calls no reception model unless a takeover happens; its delivered receipt is
+  the session's first message.
 - Open work, a busy session and worker capacity do not block session claims. Unsupported providers
   and requester admission failures keep reception.
-- A silent session gets acknowledgment-only reception at 20 seconds, or the session fixed line at
-  55 seconds if that call hangs. It gets exactly one receipt and its task remains running.
+- A simple message the session answers before 55 seconds, without a takeover, gets exactly one
+  message, even when the answer has several lines, and no acknowledgment before it.
+- A session still composing at 20 seconds gets no acknowledgment. One that has made tool calls
+  without its first message, or whose run is queued, gets acknowledgment-only reception naming its
+  steps or the queue, or the session fixed line at 55 seconds if that call hangs. Each input gets
+  exactly one receipt and its task remains running.
 - Any number of hung receipt transports leave another input's receipt able to start and settle
   within its own deadline. Retry-After cannot extend that deadline.
 - Claims, acknowledgment takeover and committed receipt source survive restart. A stopped owner
   and a late attempt cannot overwrite a newer claim or a terminal delivery.
 - Read-only tools progress during the hold. Writes and native questions reach no person until
-  settlement; a one-line direct answer is sent once.
+  settlement; a direct answer is sent once, as one message.
 
 ## 3. Answer first, natural length, warm
 
@@ -387,7 +401,8 @@ Acceptance:
 ## 15. Tool use: direct reads vs workers
 
 - An eligible input is received first by the same read-only GOAT Bot session that will answer
-  and work on it. It names its first step before calling tools. Bounded reads of memory, work
+  and work on it. It answers a message that needs no tools at once without calling any, and
+  otherwise names its first step before calling tools. Bounded reads of memory, work
   history, status, files, logs and the web may proceed before receipt settlement; actions that
   change anything or reach a person wait for it (section 2).
 - Inputs that are not eligible keep reception's bounded, permission-checked reads and routing.

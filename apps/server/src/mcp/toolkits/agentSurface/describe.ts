@@ -139,8 +139,22 @@ export const makeDescribe = (
     };
   };
 
+  /** What one asked-for path needs to be called: its arguments a level deep, guide and examples. */
+  const usage = (entry: AgentSurfaceRegistryEntry, caller: Caller) => ({
+    ...listed(entry, caller, "summary"),
+    ...signatureOf(entry, PATH_SIGNATURE_DEPTH),
+    ...(guideOf(entry) === undefined ? {} : { guide: guideOf(entry) }),
+    ...(examplesOf(entry).length === 0 ? {} : { examples: examplesOf(entry) }),
+  });
+
+  // JSON schemas only on request: a harness that cuts tool output near 10 KB (Antigravity) lost
+  // the middle of thread.launch's 18 KB answer.
   const described = (entry: AgentSurfaceRegistryEntry, caller: Caller, detail: Detail) =>
-    detail === "full" ? full(entry, caller) : listed(entry, caller, detail);
+    detail === "full"
+      ? full(entry, caller)
+      : detail === "names"
+        ? listed(entry, caller, detail)
+        : usage(entry, caller);
 
   const matched = (
     { entry, match, matchedWords, unmatchedWords }: Match<AgentSurfaceRegistryEntry>,
@@ -249,6 +263,9 @@ export const makeDescribe = (
   }) {
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const detail = input.detail ?? "summary";
+    // Another GOAT forwarding goat_describe {host} arrives as a client, and an older one decodes
+    // only the full or summary entry it knows, so only a thread's agent gets usage by default.
+    const pathDetail = input.detail ?? (scope.thread === undefined ? "full" : "summary");
     // The surface depth names resources only, so it never pays for resolving a profile.
     const caller: Caller = {
       scope,
@@ -279,9 +296,7 @@ export const makeDescribe = (
       }
       return {
         depth: "paths" as const,
-        entries: [...found.values()].map((entry) =>
-          described(entry, caller, input.detail ?? "full"),
-        ),
+        entries: [...found.values()].map((entry) => described(entry, caller, pathDetail)),
         missing,
       } satisfies DescribeResult;
     }
@@ -328,7 +343,7 @@ export const makeDescribe = (
     if (entry !== undefined)
       return {
         depth: "path" as const,
-        entry: described(entry, caller, input.detail ?? "full"),
+        entry: described(entry, caller, pathDetail),
       } satisfies DescribeResult;
     const inResource = entries.filter((candidate) => candidate.resource === input.path);
     return {

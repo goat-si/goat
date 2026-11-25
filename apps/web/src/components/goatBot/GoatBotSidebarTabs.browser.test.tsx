@@ -59,17 +59,20 @@ vi.mock("@tanstack/react-router", async (original) => ({
   Link: ({
     to,
     params,
+    activeOptions: _activeOptions,
     children,
     ...props
   }: ComponentProps<"a"> & {
     to: string;
     params?: { environmentId: string; threadId: string };
+    activeOptions?: object;
   }) => (
     <a
       {...props}
       href={params ? `/${params.environmentId}/${params.threadId}` : to}
       onClick={(event) => {
         event.preventDefault();
+        props.onClick?.(event);
         navigation.pathname = params ? `/${params.environmentId}/${params.threadId}` : to;
         navigation.environmentId = params?.environmentId ?? "";
         navigation.threadId = params?.threadId ?? "";
@@ -82,12 +85,19 @@ vi.mock("@tanstack/react-router", async (original) => ({
 vi.mock("./useGoatBotHome", () => ({ useGoatBotHome: () => undefined }));
 vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: true }) }));
 vi.mock("./useGoatBotWaitingCount", () => ({ useGoatBotWaitingCount: () => 3 }));
+vi.mock("./useGoatBotReadMenu", () => ({ useGoatBotReadMenu: () => ({}) }));
+// No settings store here: the rail is on its defaults, GOAT Bot included.
+vi.mock("~/hooks/useSettings", async (original) => ({
+  ...(await original<typeof import("~/hooks/useSettings")>()),
+  useClientSettingsHydrationStatus: () => "ready",
+}));
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberWaitingCount: () => 0,
   useGoatBotMemberStatus: () => ({ waitingCount: 0, sidebarWaitingCount: 0, latest: undefined }),
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
+  useEnvironments: () => ({ environments: [], isReady: true }),
   useEnvironment: () => ({
     connection: { phase: "connected" },
     serverConfig: {
@@ -105,6 +115,7 @@ vi.mock("~/state/entities", async (original) => {
   const entities = await original<typeof import("~/state/entities")>();
   return {
     ...entities,
+    useQuietThreadShell: () => null,
     useThreadShell: (ref: Parameters<typeof entities.useThreadShell>[0]) => {
       const shell = entities.useThreadShell(ref);
       return ref?.threadId === "member-session" ? bots.memberShell : shell;
@@ -139,8 +150,9 @@ vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
 vi.mock("../ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children, render }: { children: ReactNode; render?: ReactElement }) =>
-    render ? cloneElement(render, {}, children) : <>{children}</>,
+  TooltipTrigger: ({ children, render }: { children?: ReactNode; render?: ReactElement }) =>
+    // A rail item passes its whole link as render, with no children to replace its icon.
+    render ? children === undefined ? render : cloneElement(render, {}, children) : <>{children}</>,
   TooltipPopup: () => null,
 }));
 vi.mock("../ui/sidebar", () => ({
@@ -201,6 +213,8 @@ vi.mock("./useBotRoster", () => ({
 import { GoatBotSidebarTabs } from "./GoatBotSidebarTabs";
 import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
 import { resetNavigationHoldsForTests } from "~/lib/navigationHolds";
+import { HomeRailItem } from "../sidebar/DestinationRail";
+import { DestinationRailVisibleContext } from "../sidebar/destinationRailVisibility";
 
 /** A create answer the test releases when it chooses. */
 function deferred<T>() {
@@ -264,6 +278,35 @@ it("Bots tab lists the main bot and its task threads and keeps its selection whe
     .element(screen.getByRole("tab", { name: "Bots" }))
     .toHaveAttribute("aria-selected", "true");
   await expect.element(screen.getByText("Fix code")).toBeVisible();
+});
+
+it("beside a rail that carries GOAT Bot, the sidebar drops its own Bots and Threads tabs, and Home returns to Threads", async () => {
+  setup();
+  useGlobalAgentStore.getState().setMode("bot");
+  await using screen = await render(
+    <DestinationRailVisibleContext value={true}>
+      <HomeRailItem active={false} />
+      <GoatBotSidebarTabs />
+    </DestinationRailVisibleContext>,
+    { router: false },
+  );
+  await expect.element(screen.getByText("Helper Main")).toBeVisible();
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  expect(screen.getByRole("tab").elements()).toHaveLength(0);
+  await userEvent.click(screen.getByRole("link", { name: "Home" }));
+  await expect.element(screen.getByText("Helper Main")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab").elements()).toHaveLength(0);
+});
+
+it("keeps the Bots and Threads tabs where no rail is on screen, such as the narrow sheet", async () => {
+  setup();
+  useGlobalAgentStore.getState().setMode("bot");
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect
+    .element(screen.getByRole("tab", { name: "Bots" }))
+    .toHaveAttribute("aria-selected", "true");
+  await userEvent.click(screen.getByRole("tab", { name: "Threads" }));
+  await expect.element(screen.getByText("Helper Main")).not.toBeInTheDocument();
 });
 
 it("updates a task view and refreshes the roster after the server accepts it", async () => {

@@ -11,6 +11,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -28,7 +29,8 @@ import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { noticeMessageIds } from "./channelNoticeAnswers.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
-import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
+import { isSessionClaim, sealedSessionReceipt, sessionClaim } from "./channelSessionReceipt.ts";
+import { progressSummary, sessionProgress } from "./channelSessionProgress.ts";
 import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
 import { personMessageEntry } from "./channelPersonMessage.ts";
 import { isSharedBotNoteRequest } from "./channelSharedBotNote.ts";
@@ -54,6 +56,11 @@ export class ChannelSessionFirst extends Context.Service<
 >()("goat/channels/ChannelSessionFirst") {}
 
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
+const ACK_MS = 20_000;
+const FIXED_LINE_MS = 55_000;
+// A progress read slower than this takes over as if the session could not be read.
+const CHECK_READ_MS = 5_000;
+const CHECK_INTERVAL_MS = 5_000;
 const mapError = (cause: unknown) =>
   isLedgerError(cause)
     ? cause
@@ -79,6 +86,8 @@ const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const acknowledgments = new Map<ChannelInputId, Fiber.Fiber<void, unknown>>();
   const ackStarted = new Set<ChannelInputId>();
+  const checks = new Map<ChannelInputId, Fiber.Fiber<void, unknown>>();
+  const checkedAt = new Map<ChannelInputId, number>();
   const scheduled = new Set<string>();
 
   // The bot's copy of the message shows when the session took it, as reception's copy does.
@@ -396,9 +405,9 @@ const make = Effect.gen(function* () {
               next.type !== "assistant_message" &&
               next.type !== "reasoning",
           );
-          const line = sealedSessionLine(item.text, item.streaming && !boundary);
-          if (line === undefined) break;
-          yield* commit(stored, owner, "session", line, item.runId, item.id);
+          const receipt = sealedSessionReceipt(item.text, item.streaming && !boundary);
+          if (receipt === undefined) break;
+          yield* commit(stored, owner, "session", receipt, item.runId, item.id);
           break;
         }
       }
@@ -408,6 +417,7 @@ const make = Effect.gen(function* () {
   const startAck = Effect.fn("ChannelSessionFirst.startAck")(function* (
     stored: ChannelLedger.ChannelStoredInput,
     owner: string,
+    summary?: string,
   ) {
     const inputId = stored.snapshot.inputId;
     if (ackStarted.has(inputId) || stored.requester === undefined) return;
@@ -424,7 +434,7 @@ const make = Effect.gen(function* () {
           taskEvent: {
             taskId: task.task.taskId,
             type: "task.started",
-            summary: "Work on the request has begun: " + task.task.instruction.slice(0, 500),
+            summary: summary ?? progressSummary(undefined, task.task),
           },
           tail: [{ role: "user", text: stored.message.text, at: stored.message.receivedAt }],
           tasks: [],
@@ -451,6 +461,67 @@ const make = Effect.gen(function* () {
     acknowledgments.set(inputId, fiber);
   });
 
+  // A session still composing its answer gets no acknowledgment: the answer is the one reply.
+  // Takeover is for a session working without its line, a queued request, or one it cannot read.
+  const check = Effect.fn("ChannelSessionFirst.check")(function* (
+    stored: ChannelLedger.ChannelStoredInput,
+    owner: string,
+  ) {
+    const inputId = stored.snapshot.inputId;
+    const task = yield* ledger.getTask(taskIdFor(inputId, 0));
+    if (task === undefined) return;
+    const progress = yield* sessionProgress(sql, threads, task.task).pipe(
+      Effect.timeoutOption(CHECK_READ_MS),
+      Effect.map(Option.getOrUndefined),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (progress?.kind === "answering" || progress?.kind === "composing") return;
+    const expected = stored.snapshot.receptionId;
+    if (
+      expected === undefined ||
+      !(yield* ledger.takeSessionAcknowledgment({
+        owner,
+        inputId,
+        expectedReceptionId: expected,
+        receptionId: ChannelReceptionId.make(
+          "channel-session-ack:" + inputId + ":" + NodeCrypto.randomUUID(),
+        ),
+        // From 55 seconds the fixed line owns the receipt.
+        before: DateTime.formatIso(
+          DateTime.makeUnsafe(Date.parse(stored.snapshot.acceptedAt) + FIXED_LINE_MS),
+        ),
+      }))
+    )
+      return;
+    const taken = yield* ledger.getInput(inputId);
+    if (taken !== undefined) yield* startAck(taken, owner, progressSummary(progress, task.task));
+  });
+
+  const startCheck = Effect.fn("ChannelSessionFirst.startCheck")(function* (
+    stored: ChannelLedger.ChannelStoredInput,
+    owner: string,
+  ) {
+    const inputId = stored.snapshot.inputId;
+    if (checks.has(inputId) || ackStarted.has(inputId)) return;
+    // A composing session is read again every few seconds, not on every one-second scan.
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (now < (checkedAt.get(inputId) ?? Number.NEGATIVE_INFINITY) + CHECK_INTERVAL_MS) return;
+    checkedAt.set(inputId, now);
+    const fiber = yield* check(stored, owner).pipe(
+      Effect.tapCause((cause) =>
+        Effect.logWarning("channel session progress check failed", { inputId, cause }),
+      ),
+      Effect.ignore,
+      Effect.ensuring(
+        Effect.sync(() => {
+          checks.delete(inputId);
+        }),
+      ),
+      Effect.forkIn(scope),
+    );
+    checks.set(inputId, fiber);
+  });
+
   const deadlines: ChannelSessionFirst["Service"]["deadlines"] = Effect.fn(
     "ChannelSessionFirst.deadlines",
   )(function* (owner: string) {
@@ -461,11 +532,11 @@ const make = Effect.gen(function* () {
       WHERE state = 'processing' AND (reception_id LIKE 'channel-session:%' OR reception_id LIKE 'channel-session-ack:%')`;
     let changed = 0;
     for (const row of rows) {
-      let stored = yield* ledger.getInput(row.input_id);
+      const stored = yield* ledger.getInput(row.input_id);
       if (stored === undefined) continue;
       yield* schedule(stored, owner);
       const age = now - Date.parse(stored.snapshot.acceptedAt);
-      if (age >= 55_000) {
+      if (age >= FIXED_LINE_MS) {
         if (yield* commit(stored, owner, "fixed", CHANNEL_COPY.sessionWorking)) {
           changed += 1;
           const fiber = acknowledgments.get(row.input_id);
@@ -473,24 +544,11 @@ const make = Effect.gen(function* () {
         }
         continue;
       }
-      if (age < 20_000) continue;
-      if (stored.snapshot.receptionId === sessionClaim(row.input_id)) {
-        const expected = stored.snapshot.receptionId;
-        if (
-          !(yield* ledger.takeSessionAcknowledgment({
-            owner,
-            inputId: row.input_id,
-            expectedReceptionId: expected,
-            receptionId: ChannelReceptionId.make(
-              "channel-session-ack:" + row.input_id + ":" + NodeCrypto.randomUUID(),
-            ),
-          }))
-        )
-          continue;
-        changed += 1;
-        stored = yield* ledger.getInput(row.input_id);
-      }
-      if (stored !== undefined) yield* startAck(stored, owner);
+      if (age < ACK_MS) continue;
+      // A takeover claimed before a restart still owes its acknowledgment.
+      if (stored.snapshot.receptionId === sessionClaim(row.input_id))
+        yield* startCheck(stored, owner);
+      else yield* startAck(stored, owner);
     }
     return changed;
   }, Effect.mapError(mapError));
@@ -504,7 +562,7 @@ const make = Effect.gen(function* () {
     scheduled.add(key);
     yield* markRead(stored);
     const accepted = Date.parse(stored.snapshot.acceptedAt);
-    for (const delay of [20_000, 55_000, 60_000]) {
+    for (const delay of [ACK_MS, FIXED_LINE_MS, 60_000]) {
       const remaining = accepted + delay - DateTime.toEpochMillis(yield* DateTime.now);
       yield* Effect.sleep(Math.max(0, remaining)).pipe(
         Effect.andThen(
@@ -521,6 +579,7 @@ const make = Effect.gen(function* () {
             ? Effect.sync(() => {
                 scheduled.delete(key);
                 ackStarted.delete(stored.snapshot.inputId);
+                checkedAt.delete(stored.snapshot.inputId);
               })
             : Effect.void,
         ),
@@ -532,10 +591,13 @@ const make = Effect.gen(function* () {
   const settle = (ids: ReadonlyArray<ChannelInputId>) =>
     Effect.forEach(
       ids,
-      (id) => {
-        const fiber = acknowledgments.get(id);
-        return fiber === undefined ? Effect.void : Fiber.await(fiber).pipe(Effect.asVoid);
-      },
+      (id) =>
+        Effect.gen(function* () {
+          const pending = checks.get(id);
+          if (pending !== undefined) yield* Fiber.await(pending);
+          const fiber = acknowledgments.get(id);
+          if (fiber !== undefined) yield* Fiber.await(fiber);
+        }),
       { discard: true },
     );
   return ChannelSessionFirst.of({ offer, observe, deadlines, settle });

@@ -52,7 +52,8 @@ import {
   SidebarCollapsedBrand,
 } from "./sidebar/SidebarChrome";
 import { isAppModalPage, isSettingsPage } from "./sidebar/mainAppLocation";
-import { DestinationRail, DestinationRailVisibleContext } from "./sidebar/DestinationRail";
+import { DestinationRail } from "./sidebar/DestinationRail";
+import { DestinationRailVisibleContext } from "./sidebar/destinationRailVisibility";
 import { DESTINATION_RAIL_WIDTH_PX } from "./sidebar/destinationRail.logic";
 import { useSidebarActivityToggle } from "./sidebar/SidebarViewToggles";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";

@@ -66,6 +66,26 @@ interface Listed {
   readonly available?: Available;
 }
 
+type Described = Extract<DescribeResult, { readonly depth: "path" }>["entry"];
+
+/** A host's full entry as a thread's agent gets one by default here: without JSON schemas. */
+const asUsage = (entry: Described): Described => {
+  if (!("inputSchema" in entry)) return entry;
+  const { path, name, summary, effect, requires, available, description } = entry;
+  return {
+    path,
+    name,
+    summary,
+    effect,
+    requires,
+    available,
+    description,
+    ...(entry.signature === undefined ? {} : { signature: entry.signature }),
+    ...(entry.guide === undefined ? {} : { guide: entry.guide }),
+    ...(entry.examples === undefined ? {} : { examples: entry.examples }),
+  };
+};
+
 export interface HostDescribeInput {
   readonly host: string;
   readonly path?: string | undefined;
@@ -172,6 +192,10 @@ export const makeHostDescribe = (
       const reason = refusedHere(entry.path);
       return reason === undefined ? entry : { ...entry, available: { now: false, reason } };
     };
+    // A host answers a forwarder at full, which an older forwarder also decodes, so the usage
+    // a thread's agent gets by default is cut here.
+    const shown = (entry: Described) =>
+      fold(input.detail === undefined && scope.thread !== undefined ? asUsage(entry) : entry);
 
     switch (result.depth) {
       case "surface":
@@ -179,9 +203,9 @@ export const makeHostDescribe = (
       case "resource":
         return { ...result, entries: result.entries.map(fold) };
       case "path":
-        return { ...result, entry: fold(result.entry) };
+        return { ...result, entry: shown(result.entry) };
       case "paths":
-        return { ...result, entries: result.entries.map(fold) };
+        return { ...result, entries: result.entries.map(shown) };
       case "search": {
         const { nextCursor, ...rest } = result;
         return {

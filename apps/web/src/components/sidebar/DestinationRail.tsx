@@ -5,13 +5,12 @@ import type { FleetMachineSummary } from "@goat/client-runtime/state/fleet";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import {
-  createContext,
   Fragment,
   lazy,
   memo,
   Suspense,
-  useContext,
   useState,
+  type MouseEvent,
   type ReactElement,
 } from "react";
 
@@ -65,6 +64,7 @@ import {
 } from "../goatBot/GoatBotAvatar";
 import { useBotRoster } from "../goatBot/useBotRoster";
 import { useGoatBotReadMenu } from "../goatBot/useGoatBotReadMenu";
+import { isHomeThreadRoute, useHomeRailDestination } from "./homeReturnThread";
 import {
   isMemoryEnvironmentAvailable,
   validateMemorySettingsSearch,
@@ -94,13 +94,6 @@ const AddProviderInstanceDialog = lazy(() =>
     default: module.AddProviderInstanceDialog,
   })),
 );
-
-/** True while the desktop destination rail is on screen; the sidebar footer drops its duplicates. */
-export const DestinationRailVisibleContext = createContext(false);
-
-export function useDestinationRailVisible(): boolean {
-  return useContext(DestinationRailVisibleContext);
-}
 
 // The rail owns aria-current; Link's own fuzzy matching would also mark /settings on its
 // subpages.
@@ -304,6 +297,51 @@ function MemberRailItem({ bot, onOpen }: { bot: BotProfile; onOpen: () => void }
     </RailTooltip>
   );
 }
+
+/** Home returns to the last thread or draft, switches back from bots, and stays put when one is already open. */
+export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boolean }) {
+  const setMode = useGlobalAgentStore((state) => state.setMode);
+  const destination = useHomeRailDestination();
+  const params = useParams({ strict: false });
+  const botRef = useGlobalAgentStore((state) => state.botRef);
+  const onHomeThread = isHomeThreadRoute(params, botRef);
+  // Member bot threads resolve to Home, but their own rail item is the current page there.
+  const current = active && (onHomeThread || resolveThreadRouteTarget(params) === null);
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (useGlobalAgentStore.getState().mode === "bot") {
+      try {
+        setMode("thread");
+      } catch {
+        // Blocked or full storage must never prevent navigating Home.
+      }
+    }
+    const plainClick =
+      event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+    if (onHomeThread && plainClick) event.preventDefault();
+  };
+  const shared = {
+    "aria-label": "Home",
+    "aria-current": current ? ("page" as const) : undefined,
+    className: railItemClassName(current),
+    onClick: handleClick,
+    children: <HomeIcon aria-hidden />,
+  };
+  return (
+    <RailTooltip label="Home">
+      {destination.kind === "thread" ? (
+        <Link
+          to="/$environmentId/$threadId"
+          params={{ environmentId: destination.environmentId, threadId: destination.threadId }}
+          {...shared}
+        />
+      ) : destination.kind === "draft" ? (
+        <Link to="/draft/$draftId" params={{ draftId: destination.draftId }} {...shared} />
+      ) : (
+        <Link to="/" activeOptions={EXACT_MATCH} {...shared} />
+      )}
+    </RailTooltip>
+  );
+});
 
 const DecisionsRailItem = memo(function DecisionsRailItem({ active }: { active: boolean }) {
   const { count } = useAtomValue(decisionInbox.summaryAtom);
@@ -621,17 +659,7 @@ export const DestinationRail = memo(function DestinationRail() {
       />
       {/* Scrolls on short windows so the bottom controls stay reachable. */}
       <div className="flex min-h-0 w-full flex-1 scrollbar-gutter-both flex-col items-center gap-1 overflow-y-auto pt-2 pb-3">
-        <RailTooltip label="Home">
-          <Link
-            to="/"
-            aria-label="Home"
-            activeOptions={EXACT_MATCH}
-            aria-current={active === "home" ? "page" : undefined}
-            className={railItemClassName(active === "home")}
-          >
-            <HomeIcon aria-hidden />
-          </Link>
-        </RailTooltip>
+        <HomeRailItem active={active === "home"} />
         {preferences === null
           ? null
           : shownItems.map((item, index) => (

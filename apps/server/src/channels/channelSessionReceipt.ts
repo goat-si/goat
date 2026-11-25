@@ -7,11 +7,10 @@ export const sessionClaim = (inputId: string) => "channel-session:" + inputId;
 export const isSessionClaim = (id: string | undefined) =>
   id?.startsWith("channel-session:") === true || id?.startsWith("channel-session-ack:") === true;
 
-export const sealedSessionLine = (text: string, streaming: boolean) => {
-  const newline = text.indexOf("\n");
-  if (newline < 0 && streaming) return undefined;
-  const line = (newline < 0 ? text : text.slice(0, newline)).replace(/\r$/u, "");
-  return line.trim() === "" ? undefined : line;
+/** The session's first assistant message, whole once it has ended, so a direct answer is one reply. */
+export const sealedSessionReceipt = (text: string, open: boolean) => {
+  const receipt = open ? "" : text.trim();
+  return receipt === "" ? undefined : receipt;
 };
 
 export const sessionFinalText = Effect.fn("channel.sessionFinalText")(function* (

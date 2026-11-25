@@ -5,6 +5,7 @@ import type * as SchemaAST from "effect/SchemaAST";
 import { McpSchema, Tool } from "effect/ai";
 
 import { withParameterNotes, withTypeSideDescriptions } from "./servedDescriptions.ts";
+import { withReadableShapes } from "./advertisedShapes.ts";
 
 type Json = unknown;
 type JsonObject = { [key: string]: Json };
@@ -171,7 +172,9 @@ const describedInput = (name: string, schema: JsonObject, parameters?: SchemaAST
     resolveAgentSurfaceEntry(name),
     withParameterNotes(
       notesOf(resolveAgentSurfaceEntry(name)),
-      parameters === undefined ? schema : withTypeSideDescriptions(parameters, schema),
+      parameters === undefined
+        ? schema
+        : withTypeSideDescriptions(parameters, withReadableShapes(parameters, schema)),
     ),
   );
 

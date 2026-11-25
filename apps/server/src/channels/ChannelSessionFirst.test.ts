@@ -159,7 +159,7 @@ describe("session first receipts", () => {
         { ...child, status: "completed", completedAt: yield* DateTime.now },
       ]);
       const answer = "A found line 129. B could not read its file.";
-      harness.assistant(task, "Checking.\n", true);
+      harness.assistant(task, "Checking.");
       yield* runtime.runPass;
       yield* runtime.settle([input.inputId]);
       let run = harness.world.latestRun(worker.threadId)!;
@@ -271,11 +271,17 @@ describe("session first receipts", () => {
         assert.isDefined(stored?.task.worker);
         const task = stored!.task;
         if (variant === "fallback") {
+          // Working with tools and no first line yet, so acknowledgment-only reception replies.
+          harness.tool(task, "date");
           yield* TestClock.adjust("20 seconds");
           yield* runtime.expireOverdue;
           yield* runtime.settle([input.inputId]);
         } else {
-          harness.assistant(task, variant === "same item" ? "Four." : "Checking.\n", true);
+          harness.assistant(
+            task,
+            variant === "same item" ? "Four." : "Checking.",
+            variant === "same item",
+          );
           if (variant === "same item") harness.assistant(task, "Four.");
           yield* runtime.runPass;
           yield* runtime.settle([input.inputId]);
@@ -442,28 +448,35 @@ describe("session first receipts", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("a silent session gets acknowledgment-only reception at 20 seconds", () => {
-    const harness = makeHarness({ botWorkspace: true });
-    const modes: string[] = [];
-    harness.script.current = (input) => {
-      modes.push(input.mode);
-      return defaultScript(input);
-    };
-    return Effect.gen(function* () {
-      yield* setupBot;
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const ledger = yield* ChannelLedger.ChannelLedger;
-      const input = yield* gateway.ingest(goatInput("Inspect this machine", "silent"), rpcContext);
-      yield* runtime.drain;
-      assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
-      yield* TestClock.adjust("20 seconds");
-      yield* runtime.expireOverdue;
-      yield* runtime.settle([input.inputId]);
-      assert.deepStrictEqual(modes, ["task_event"]);
-      assert.isDefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
-    }).pipe(Effect.provide(harness.layer));
-  });
+  it.effect(
+    "a session working without its first line gets acknowledgment-only reception at 20 seconds",
+    () => {
+      const harness = makeSessionHarness();
+      const modes: string[] = [];
+      harness.script.current = (input) => {
+        modes.push(input.mode);
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("Inspect this machine", "silent"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        harness.tool((yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task, "uname -a");
+        assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+        yield* TestClock.adjust("20 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(modes, ["task_event"]);
+        assert.isDefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("offers an idle per-run session the request without calling reception", () => {
     const harness = makeHarness({ botWorkspace: true });
@@ -506,7 +519,7 @@ describe("session first receipts", () => {
         assert.isDefined(readAt);
         assert.strictEqual(inbound?.channel?.readAt, readAt);
 
-        harness.assistant(task, "Checking the disks now.\n", true);
+        harness.assistant(task, "Checking the disks now.");
         yield* runtime.runPass;
         yield* runtime.settle([input.inputId]);
         yield* runtime.drain;
@@ -530,7 +543,7 @@ describe("session first receipts", () => {
   );
 
   it.effect("a silent session's acknowledgment names the task it started", () => {
-    const harness = makeHarness({ botWorkspace: true });
+    const harness = makeSessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
@@ -540,6 +553,8 @@ describe("session first receipts", () => {
         rpcContext,
       );
       yield* runtime.drain;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      harness.tool((yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task, "uname -a");
       yield* TestClock.adjust("20 seconds");
       yield* runtime.expireOverdue;
       yield* runtime.settle([input.inputId]);
@@ -597,6 +612,240 @@ describe("session first receipts", () => {
         outcome: { type: "retry", at: now, errorCode: "late" },
       });
       assert.strictEqual(yield* ledger.getDeliveryState(deliveryId), "ambiguous");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("a simple question gets one reply", () => {
+  const replies = (inputId: string) =>
+    Effect.map(botMessages, ({ messages }) =>
+      messages
+        .filter((message) => message.channel?.inReplyToInputId === inputId)
+        .map((message) => message.text),
+    );
+
+  it.effect(
+    "regression: a direct answer of several lines reaches the person as one message",
+    () => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(goatInput("안녕, 너는 누구니?", "whole"), rpcContext);
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        const answer = "안녕하세요!\n저는 GOAT Bot이에요. 이 대화에서 요청을 받아 처리해요.";
+        // The answer is still streaming its second line: nothing reaches the person yet.
+        harness.assistant(task, "안녕하세요!\n저는", true);
+        yield* runtime.runPass;
+        assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+        harness.assistant(task, answer);
+        yield* runtime.runPass;
+        yield* runtime.settle([input.inputId]);
+        // A direct answer needs no report: the run ends with the answer as its only message.
+        harness.world.setStatus(task.worker!.threadId, 1, "completed");
+        yield* runtime.drain;
+        assert.deepStrictEqual(yield* replies(input.inputId), [answer]);
+        assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "completed");
+        assert.strictEqual(
+          (yield* ledger.outcomeDeliveries([task.taskId])).get(task.taskId),
+          "delivered",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "regression: a session still composing at 20 seconds gets no acknowledgment, and its answer is the only reply",
+    () => {
+      const harness = makeSessionHarness();
+      const modes: string[] = [];
+      harness.script.current = (input) => {
+        modes.push(input.mode);
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(goatInput("안녕, 너는 누구니?", "slow"), rpcContext);
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        yield* TestClock.adjust("21 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(modes, []);
+        assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+        const answer = "안녕하세요! 저는 GOAT Bot이에요.";
+        harness.assistant(task, answer);
+        yield* runtime.runPass;
+        yield* runtime.settle([input.inputId]);
+        harness.world.setStatus(task.worker!.threadId, 1, "completed");
+        yield* runtime.drain;
+        assert.deepStrictEqual(yield* replies(input.inputId), [answer]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "regression: a session working with tools but no first line is acknowledged with the step it is taking",
+    () => {
+      const harness = makeSessionHarness();
+      const summaries: string[] = [];
+      harness.script.current = (input) => {
+        if (input.mode === "task_event") summaries.push(input.taskEvent?.summary ?? "");
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("How full is the disk?", "tools"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        harness.tool(task, "df -h /");
+        yield* TestClock.adjust("20 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.lengthOf(summaries, 1);
+        assert.include(summaries[0], "df -h /");
+        assert.notInclude(summaries[0], "has begun");
+        assert.isDefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a request queued behind the session's current one is told it is queued", () => {
+    const harness = makeSessionHarness();
+    const summaries: string[] = [];
+    harness.script.current = (input) => {
+      if (input.mode === "task_event") summaries.push(input.taskEvent?.summary ?? "");
+      return defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const first = yield* gateway.ingest(goatInput("Inspect disk", "queue-first"), rpcContext);
+      yield* runtime.drain;
+      // The first request names its step and keeps the session busy with its tools.
+      const busy = (yield* ledger.getTask(taskIdFor(first.inputId, 0)))!.task;
+      harness.assistant(busy, "Checking the disk.");
+      harness.tool(busy, "du -sh ~", 1);
+      yield* runtime.runPass;
+      yield* runtime.settle([first.inputId]);
+      const second = yield* gateway.ingest(
+        goatInput("What is pending?", "queue-second"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const queued = (yield* ledger.getTask(taskIdFor(second.inputId, 0)))!.task;
+      const run = harness.world.runs
+        .get(queued.worker!.threadId)
+        ?.find((candidate) => candidate.id === queued.worker!.runId);
+      assert.strictEqual(run?.status, "queued");
+      yield* TestClock.adjust("20 seconds");
+      yield* runtime.expireOverdue;
+      yield* runtime.settle([second.inputId]);
+      assert.lengthOf(summaries, 1);
+      assert.include(summaries[0], "queued");
+      assert.isDefined((yield* ledger.getInput(second.inputId))?.snapshot.reply);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "a composing session that starts tools without a first line is acknowledged on a later check",
+    () => {
+      const harness = makeSessionHarness();
+      const summaries: string[] = [];
+      harness.script.current = (input) => {
+        if (input.mode === "task_event") summaries.push(input.taskEvent?.summary ?? "");
+        return defaultScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("How full is the disk?", "later"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        yield* TestClock.adjust("20 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(summaries, []);
+        harness.tool(task, "df -h /");
+        // The next one-second scan does not read the session again yet.
+        yield* TestClock.adjust("1 second");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.deepStrictEqual(summaries, []);
+        yield* TestClock.adjust("4 seconds");
+        yield* runtime.expireOverdue;
+        yield* runtime.settle([input.inputId]);
+        assert.lengthOf(summaries, 1);
+        assert.include(summaries[0], "df -h /");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a streaming first message is sealed whole once a tool call follows it", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const input = yield* gateway.ingest(
+        goatInput("How full is the disk?", "boundary"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      const step = "Checking the disk now.\nI'll start with the home folder.";
+      harness.assistant(task, step, true);
+      yield* runtime.runPass;
+      assert.isUndefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
+      harness.tool(task, "du -sh ~", 1);
+      yield* runtime.runPass;
+      yield* runtime.settle([input.inputId]);
+      yield* runtime.drain;
+      assert.deepStrictEqual(yield* replies(input.inputId), [step]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a session whose thread cannot be read still gets its acknowledgment", () => {
+    const harness = makeSessionHarness();
+    const modes: string[] = [];
+    harness.script.current = (input) => {
+      modes.push(input.mode);
+      return defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const input = yield* gateway.ingest(goatInput("Inspect disk", "unreadable"), rpcContext);
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      harness.world.recordFailures.add(task.worker!.threadId);
+      yield* TestClock.adjust("20 seconds");
+      yield* runtime.expireOverdue;
+      yield* runtime.settle([input.inputId]);
+      assert.deepStrictEqual(modes, ["task_event"]);
+      assert.isDefined((yield* ledger.getInput(input.inputId))?.snapshot.reply);
     }).pipe(Effect.provide(harness.layer));
   });
 });

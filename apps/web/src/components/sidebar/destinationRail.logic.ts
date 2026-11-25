@@ -185,3 +185,12 @@ export function railPreferencesForHydration(
   if (status === "failed") return DEFAULT_RAIL_PREFERENCES;
   return null;
 }
+
+/**
+ * Whether the rail offers GOAT Bot. GOAT Bot is always available and shown by default, so only
+ * the person hiding it takes it away. Before settings load the rail shows none of its items, so
+ * the sidebar keeps its own switch until then.
+ */
+export function railShowsBot(preferences: RailPreferences | null): boolean {
+  return preferences !== null && choiceOf(preferences, "bot") !== "hidden";
+}

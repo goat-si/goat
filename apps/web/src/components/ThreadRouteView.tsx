@@ -26,7 +26,7 @@ import {
 import { isGoatBotThread } from "../globalAgentRoute";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import { useEnvironmentThreadRefs, useThreadRefs, useQuietThreadShell } from "../state/entities";
+import { useThreadRefs, useQuietThreadShell } from "../state/entities";
 import { environmentShell, useEnvironmentShellStatus } from "../state/shell";
 import { threadFamilies, useEnvironmentThread } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -111,7 +111,6 @@ export function ThreadRouteView({
 
   const shellStatus = useEnvironmentShellStatus(serverThreadRef?.environmentId ?? null);
   const serverThreadShell = serverThread;
-  const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shellStatus);
   const draftThread = useComposerDraftStore((store) =>
     serverThreadRef ? store.getDraftThreadByRef(serverThreadRef) : null,
@@ -133,9 +132,6 @@ export function ThreadRouteView({
   if (nextChatViewKey !== chatViewKey) {
     setChatViewKey(nextChatViewKey);
   }
-  const environmentHasDraftThreads = useComposerDraftStore((store) =>
-    serverThreadRef ? store.hasDraftThreadsInEnvironment(serverThreadRef.environmentId) : false,
-  );
   // Until the shell lists the thread, its own load (HTTP, then the socket)
   // decides whether it exists. Read only then: once listed, ChatView keeps
   // this stream open and its updates need not re-render the route.
@@ -160,7 +156,6 @@ export function ThreadRouteView({
     draftThreadExists: draftThread !== null,
   });
   const serverThreadStarted = threadHasStarted(serverThreadShell);
-  const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
 
   useEffect(() => {
     if (!inferredThreadRef || draftSession?.promotedTo) {
@@ -203,14 +198,13 @@ export function ThreadRouteView({
     if (renderState === "missing") {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
       clearPendingFileDropsForThread(target.threadRef);
-      if (environmentHasAnyThreads && !background) {
+      if (!background) {
         void navigate({ to: "/", replace: true });
       }
     }
   }, [
     background,
     bootstrapComplete,
-    environmentHasAnyThreads,
     goatBotThread,
     goatBotMemberPending,
     navigate,

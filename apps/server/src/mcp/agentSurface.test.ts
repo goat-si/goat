@@ -785,7 +785,14 @@ it.effect("goat_describe answers at three depths with availability for this call
       reason: "This MCP client was approved for read-only access.",
     });
     expect((yield* detail(readOnly, "goat_call")).available).toEqual({ now: true });
-    expect((yield* detail(thread, "thread.send")).inputSchema).toMatchObject({ type: "object" });
+    expect((yield* detail(thread, "thread.send")).inputSchema).toBeUndefined();
+    const full = yield* asCaller(thread)(
+      server.callTool({
+        name: "goat_describe",
+        arguments: { path: "thread.send", detail: "full" },
+      }),
+    );
+    expect(full.structuredContent).toMatchObject({ entry: { inputSchema: { type: "object" } } });
 
     // A name that is no path or resource is searched, never answered with absence.
     expect(yield* describe(thread, "teleport")).toMatchObject({ depth: "search", total: 0 });

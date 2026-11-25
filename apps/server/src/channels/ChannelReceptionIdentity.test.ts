@@ -10,6 +10,8 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { taskIdFor } from "./channelIds.ts";
+import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 import {
   botMessages,
   defaultScript,
@@ -124,8 +126,8 @@ describe("GOAT Bot reception and the bot's profile", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("acknowledges a silent session request as the renamed bot", () => {
-    const harness = makeHarness({ botWorkspace: true });
+  it.effect("acknowledges a session working without its first line as the renamed bot", () => {
+    const harness = makeSessionHarness();
     const seen: Array<ChannelReceptionInput> = [];
     harness.script.current = (input) => {
       seen.push(input);
@@ -136,8 +138,10 @@ describe("GOAT Bot reception and the bot's profile", () => {
       yield* rename;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
       const input = yield* gateway.ingest(goatInput("Inspect this machine", "a1"), rpcContext);
       yield* runtime.drain;
+      harness.tool((yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task, "uname -a");
       yield* TestClock.adjust("20 seconds");
       yield* runtime.expireOverdue;
       yield* runtime.settle([input.inputId]);

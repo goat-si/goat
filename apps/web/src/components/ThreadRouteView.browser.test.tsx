@@ -70,9 +70,10 @@ vi.mock("../state/shell", () => ({
   useEnvironmentShellStatus: () =>
     sync === "live" ? "live" : sync === "error" ? "empty" : "cached",
 }));
+// Other threads the environment lists; a missing ordinary thread goes home either way.
+const listed = vi.hoisted(() => ({ threads: [{ environmentId: "env", threadId: "other" }] }));
 vi.mock("../state/entities", () => ({
-  // Another thread exists in the environment, so a missing ordinary thread redirects home.
-  useEnvironmentThreadRefs: () => [{ environmentId: "env", threadId: "other" }],
+  useEnvironmentThreadRefs: () => listed.threads,
   useThreadRefs: () => [],
   useQuietThreadShell: (ref: { threadId: string } | null) =>
     ref?.threadId === "worker" ? { deletedAt: null, archivedAt: null } : null,
@@ -181,6 +182,17 @@ it("still sends a missing ordinary thread home", async () => {
   await renderThread(ThreadId.make("gone"));
   expect(container.querySelector("[data-view]")).toBeNull();
   expect(navigate).toHaveBeenCalledWith({ to: "/", replace: true });
+});
+
+it("sends a missing ordinary thread home when its machine lists no other thread", async () => {
+  const threads = listed.threads;
+  listed.threads = [];
+  try {
+    await renderThread(ThreadId.make("gone"));
+    expect(navigate).toHaveBeenCalledWith({ to: "/", replace: true });
+  } finally {
+    listed.threads = threads;
+  }
 });
 
 it("opens the chip worker target in the coding ChatView rather than the bot view", async () => {

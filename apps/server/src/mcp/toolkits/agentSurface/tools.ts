@@ -18,6 +18,9 @@ const Availability = Schema.Struct({
   reason: Schema.optionalKey(Schema.String),
 });
 const Requires = Schema.Literals(["thread", "client", "either"]);
+const Examples = Schema.Array(
+  Schema.Struct({ title: Schema.String, args: Schema.Record(Schema.String, Schema.Unknown) }),
+);
 /** At detail "names" only path, name and summary; "summary" adds the rest. */
 const EntrySummary = Schema.Struct({
   path: Schema.String,
@@ -29,6 +32,9 @@ const EntrySummary = Schema.Struct({
   description: Schema.optionalKey(Schema.String),
   /** The path's arguments on one line, such as (thread.read :threadId :host? ...). */
   signature: Schema.optionalKey(Schema.String),
+  /** For a path asked for by path or paths: its guide and worked calls. */
+  guide: Schema.optionalKey(Schema.String),
+  examples: Schema.optionalKey(Examples),
 });
 const SearchMatch = Schema.Struct({
   ...EntrySummary.fields,
@@ -60,11 +66,7 @@ const FullEntry = Schema.Struct({
   inputSchema: Schema.Unknown,
   outputSchema: Schema.NullOr(Schema.Unknown),
   /** Worked calls: pass args to goat_call with this path. */
-  examples: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({ title: Schema.String, args: Schema.Record(Schema.String, Schema.Unknown) }),
-    ),
-  ),
+  examples: Schema.optionalKey(Examples),
 });
 
 export const DescribeResult = Schema.Union([
@@ -153,7 +155,7 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
         .check(Schema.isMinLength(1), Schema.isMaxLength(10))
         .annotate({
           description:
-            'Up to 10 paths or tool names, each answered with its schema in one call, without path or query. Example: {paths:["thread.read","task.create"]}',
+            'Up to 10 paths or tool names answered in one call, without path or query, each with its arguments, guide and examples. Example: {paths:["thread.read","task.create"]}',
         }),
     ),
     query: Schema.optional(
@@ -165,7 +167,7 @@ const DescribeTool = Tool.make(agentSurfaceRegistry["surface.describe"].name, {
     detail: Schema.optional(
       Schema.Literals(["names", "summary", "full"]).annotate({
         description:
-          "names: path, name, summary. summary (default): adds effect, availability and description. full: one path with its schemas and guide.",
+          "names: path, name, summary. summary (default; outside a GOAT thread, path or paths default to full): adds effect, availability, description and arguments, and for path or paths the guide and examples. full: for path or paths, adds the JSON input and output schemas.",
       }),
     ),
     limit: Schema.optional(

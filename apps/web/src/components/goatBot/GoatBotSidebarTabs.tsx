@@ -28,6 +28,7 @@ import { Button } from "../ui/button";
 import { SidebarGroup, useSidebar, useSidebarVisibility } from "../ui/sidebar";
 import { Tabs, TabsList, TabsTab } from "../ui/tabs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useDestinationRailShowsBot } from "../sidebar/destinationRailVisibility";
 import { GoatBotNeedsYou } from "./GoatBotNeedsYou";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
@@ -54,6 +55,8 @@ export function GoatBotSidebarTabs() {
   const { enabled } = useGoatBotEnabled();
   const mode = useGlobalAgentStore(selectGlobalAgentMode);
   const setMode = useGlobalAgentStore((state) => state.setMode);
+  // The rail's GOAT Bot and Home items already switch between the bots and the thread list.
+  const railSwitches = useDestinationRailShowsBot();
   const {
     bots,
     botsError,
@@ -70,14 +73,16 @@ export function GoatBotSidebarTabs() {
   if (!enabled) return null;
   return (
     <>
-      <SidebarGroup>
-        <Tabs value={mode} onValueChange={(value: typeof mode) => setMode(value)}>
-          <TabsList aria-label={gt("Sidebar")}>
-            <TabsTab value="bot">{gt("Bots")}</TabsTab>
-            <TabsTab value="thread">{gt("Threads")}</TabsTab>
-          </TabsList>
-        </Tabs>
-      </SidebarGroup>
+      {!railSwitches && (
+        <SidebarGroup>
+          <Tabs value={mode} onValueChange={(value: typeof mode) => setMode(value)}>
+            <TabsList aria-label={gt("Sidebar")}>
+              <TabsTab value="bot">{gt("Bots")}</TabsTab>
+              <TabsTab value="thread">{gt("Threads")}</TabsTab>
+            </TabsList>
+          </Tabs>
+        </SidebarGroup>
+      )}
       {environmentId && (
         <GoatBotNeedsYou
           key={environmentId}

@@ -108,10 +108,7 @@ vi.mock("./sidebar/mainAppLocation", async (original) => ({
   ...(await original<typeof import("./sidebar/mainAppLocation")>()),
   MainAppLocationTracker: () => null,
 }));
-vi.mock("./sidebar/DestinationRail", async () => {
-  const { createContext } = await import("react");
-  return { DestinationRail: () => null, DestinationRailVisibleContext: createContext(false) };
-});
+vi.mock("./sidebar/DestinationRail", () => ({ DestinationRail: () => null }));
 vi.mock("../panelAnimations", () => ({
   PanelAnimationSuppressionProvider: () => null,
   usePanelAnimationSettings: () => ({}),

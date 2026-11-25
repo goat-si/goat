@@ -15,8 +15,8 @@ Run `node scripts/agent-surface/inventory.ts` for the JSON inventory, including 
 | Mutating tools, by enforced handler access             | 195               |
 | Mutating tools that accept clientRequestId             | 80                |
 | Mutating tools whose clientRequestId GOAT deduplicates | 74                |
-| Input parameters with a description                    | 568 of 1225 (46%) |
-| Tools with a worked example                            | 76 of 312         |
+| Input parameters with a description                    | 672 of 1225 (55%) |
+| Tools with a worked example                            | 77 of 312         |
 | CLI commands, listed / unlisted                        | 62 / 23           |
 | CLI commands with usage examples                       | 0 of 85           |
 | Listed CLI leaf commands with --json                   | 11 of 47          |
@@ -195,16 +195,16 @@ One intent is spelled several ways (tool counts in parentheses):
 
 ## Descriptions and examples
 
-Only 46% of input parameters carry a description. 112 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_answer`, `channel_task_export`, `channel_task_follow_up`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_stop`, `delete_scheduled_task`, and 102 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
+Only 55% of input parameters carry a description. 107 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_answer`, `channel_task_export`, `channel_task_follow_up`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_stop`, `delete_scheduled_task`, and 97 more. Optional fields state no default, so an agent learns defaults only from prose.
 
-76 of 312 tools show a worked call, in their description or as examples `goat_describe` serves (68 tools). 176 tools have no `Tool.Title`. Description length is uneven; the longest are:
+77 of 312 tools show a worked call, in their description or as examples `goat_describe` serves (69 tools). 176 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
 | Tool                     | Characters | Declared at                                           |
 | ------------------------ | ---------- | ----------------------------------------------------- |
-| `goat_call`              | 1708       | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `goat_call`              | 1828       | packages/contracts/src/agentSurface/surfaceEntries.ts |
 | `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts   |
+| `goat_describe`          | 399        | packages/contracts/src/agentSurface/surfaceEntries.ts |
 | `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts    |
-| `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts |
 | `goat_thread_read`       | 395        | packages/contracts/src/agentSurface/entries/thread.ts |
 | `goat_hub_device_move`   | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
 
@@ -264,19 +264,19 @@ Every `goat ...` invocation in the docs names a real command and flags it accept
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat triage`.
 
-The server's `/llms.txt` lists public registry paths with their summaries. `goat_describe` serves input and output schemas from the registered tools, and examples for 68 of them.
+The server's `/llms.txt` lists public registry paths with their summaries. `goat_describe` serves input and output schemas from the registered tools, and examples for 69 of them.
 
 ## Fixes ranked by agent impact
 
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (266 `return`, 46 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Complete the on-demand tool reference.** 160 tools appear in no doc or prompt. `/llms.txt` filters its public index for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 68 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 657 of 1225 parameters have no description, and 112 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
+3. **Complete the on-demand tool reference.** 160 tools appear in no doc or prompt. `/llms.txt` filters its public index for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 69 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
+4. **Describe every parameter.** 553 of 1225 parameters have no description, and 107 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
 5. **Retry keys on every mutating tool.** 115 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 6. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 7. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.
 8. **`--json` on every listed leaf command.** Only 11 of 47 offer it; agents parse human tables otherwise.
-9. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 76 tools show a call. Registry examples are data that goat_describe serves and a test decodes against each tool's parameters; render them into CLI help too, and run them in a smoke test.
+9. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 77 tools show a call. Registry examples are data that goat_describe serves and a test decodes against each tool's parameters; render them into CLI help too, and run them in a smoke test.
 10. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_attachment_pending_list`, `goat_browser_claim_list`, `goat_channel_bot_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_hub_machine_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_schedule_delivery_list`, `goat_ssh_host_list`, `goat_terminal_list`, `goat_thread_watch_list`, `list_scheduled_tasks`).
-11. **Move routing policy out of tool descriptions.** The longest description is 1708 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
+11. **Move routing policy out of tool descriptions.** The longest description is 1828 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 12. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.
