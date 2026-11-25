@@ -102,6 +102,7 @@ const fixture = (
   Effect.gen(function* () {
     const calls: string[] = [];
     const hubSaves: string[] = [];
+    const hubExpected: Array<EnvironmentId | undefined> = [];
     const operations: ConnectionCatalogOperation[] = [];
     let pinned = !options.typed && !options.configured;
     const managedAlias = options.configured ? "goat-build" : "build";
@@ -244,6 +245,7 @@ const fixture = (
                 calls.push("hub");
                 expect(input).toMatchObject({ kind: "ssh", hostname: null });
                 expect(hubOptions.requireIdentity).toBe(true);
+                hubExpected.push(hubOptions.expectEnvironmentId);
                 if (
                   options.hub === "unidentified" ||
                   (options.hub === "preparing" && !preparedOnce)
@@ -317,6 +319,7 @@ const fixture = (
       call,
       calls,
       hubSaves,
+      hubExpected,
       operations,
       checkedHosts,
       report,
@@ -409,7 +412,7 @@ it.effect(
       expect(prepare.calls).toEqual(["preflight", "broker", "hub"]);
     }),
 );
-it.effect("a saved desktop connection is also registered on the hub", () =>
+it.effect("a saved desktop connection is registered on the hub only as that machine (#3914)", () =>
   Effect.gen(function* () {
     const f = yield* fixture();
     expect(yield* f.call()).toMatchObject({
@@ -418,6 +421,7 @@ it.effect("a saved desktop connection is also registered on the hub", () =>
       desktopCatalog: "saved",
     });
     expect(f.calls).toEqual(["preflight", "broker", "hub"]);
+    expect(f.hubExpected).toEqual([EnvironmentId.make("build")]);
   }),
 );
 it.effect("a call cut after the desktop saved the connection still registers it on the hub", () =>
@@ -495,6 +499,7 @@ it.effect("an absent catalog saves the identified host to the hub alone", () =>
     });
     expect(isAddResult(result)).toBe(true);
     expect(f.calls).toEqual(["preflight", "broker", "hub"]);
+    expect(f.hubExpected).toEqual([undefined]);
   }),
 );
 it.effect("an absent catalog registers a host on the hub once preparation identifies it", () =>

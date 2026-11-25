@@ -1,5 +1,6 @@
 import {
   EnvironmentAuthorizationError,
+  type EnvironmentId,
   HandoffError,
   HandoffSummary,
   HubNode,
@@ -292,7 +293,7 @@ const make = Effect.gen(function* () {
           const latest = yield* liveCaller;
           yield* assertFullAccess(latest, fullAccessMessage);
           const alias = resolved.host;
-          const nodeRegistration = () =>
+          const nodeRegistration = (expectEnvironmentId?: EnvironmentId) =>
             hub.add(
               {
                 kind: "ssh",
@@ -309,13 +310,14 @@ const make = Effect.gen(function* () {
                   Effect.flatMap((caller) => assertFullAccess(caller, fullAccessMessage)),
                 ),
                 requireIdentity: true,
+                ...(expectEnvironmentId === undefined ? {} : { expectEnvironmentId }),
               },
             );
           register = nodeRegistration;
           // The desktop already saved it; a hub failure is reported, not turned into a failed add.
           // A child fiber stays interruptible, so its own limit ends it even though a cut cannot.
-          const registerSaved = () =>
-            nodeRegistration().pipe(
+          const registerSaved = (saved: EnvironmentId) =>
+            nodeRegistration(saved).pipe(
               Effect.map(({ node }) => ({ saved: true as const, node })),
               Effect.catchTags({
                 HubNodesError: (error) =>
@@ -373,7 +375,11 @@ const make = Effect.gen(function* () {
               Effect.flatMap(
                 Effect.fnUntraced(function* (answer) {
                   if (answer?.type !== "add_ssh") return { kind: "other" as const, answer };
-                  return { kind: "saved" as const, answer, hub: yield* registerSaved() };
+                  return {
+                    kind: "saved" as const,
+                    answer,
+                    hub: yield* registerSaved(answer.connection.environmentId),
+                  };
                 }),
               ),
             ),

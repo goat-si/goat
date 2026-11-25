@@ -260,7 +260,7 @@ describe("connection catalog host", () => {
       expect(inputs).toEqual([]);
     }),
   );
-  it.effect("refuses an alias that now answers as a different environment", () =>
+  it.effect("refuses an alias that now answers as a different environment (#3914)", () =>
     Effect.gen(function* () {
       const entry = sshEntry();
       const { result, inputs, removed, entries } = yield* run(
