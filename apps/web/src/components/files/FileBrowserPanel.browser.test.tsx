@@ -595,6 +595,72 @@ describe("file viewer path copy shortcuts", () => {
     expect(new Set(state.revalidate.mock.calls.flat())).toEqual(new Set(["src", ""]));
   });
 
+  it("opens a chain of single folders from one click and keeps it closed once closed", async () => {
+    setup();
+    const cwd = "/repo-single-folder-chain";
+    using _stored = {
+      [Symbol.dispose]: () => writeExpandedDirectories(`remote-ssh:${cwd}`, []),
+    };
+    const chain: ProjectEntry[] = [
+      { path: "tests", kind: "directory" },
+      { path: "tests/edit", kind: "directory" },
+      { path: "tests/edit/unit", kind: "directory" },
+      { path: "tests/edit/unit/a.ts", kind: "file" },
+    ];
+    const panel = () => (
+      <FileBrowserPanel
+        environmentId={EnvironmentId.make("remote-ssh")}
+        cwd={cwd}
+        workspaceRoot={cwd}
+        hostFolder={false}
+        projectName="repo"
+        selectedPath={null}
+        selectedPathRevealId={0}
+        onOpenFile={() => {}}
+        workspaceMutationId={null}
+      />
+    );
+    const findRow = (container: HTMLElement, path: string) =>
+      treeRoot(container).querySelector<HTMLElement>(`[data-item-path="${path}"]`);
+    state.listing = chain.slice(0, 1);
+    {
+      await using screen = await render(panel(), { router: false /* no links */ });
+      const testsRow = await row(screen.container, "tests/");
+      testsRow.click();
+      await vi.waitFor(() => expect(testsRow.getAttribute("aria-expanded")).toBe("true"));
+      for (const listed of [2, 3, 4]) {
+        state.listing = chain.slice(0, listed);
+        await screen.rerender(panel());
+      }
+      await row(screen.container, "tests/edit/unit/a.ts");
+
+      findRow(screen.container, "tests/edit/unit/")!.click();
+      await vi.waitFor(() => expect(findRow(screen.container, "tests/edit/unit/a.ts")).toBeNull());
+      state.listing = [...chain, { path: "tests/edit/unit/b.ts", kind: "file" }];
+      await screen.rerender(panel());
+      expect(findRow(screen.container, "tests/edit/unit/")!.getAttribute("aria-expanded")).toBe(
+        "false",
+      );
+    }
+
+    state.listing = [...chain, { path: "pkg", kind: "directory" }];
+    await using remounted = await render(panel(), { router: false /* no links */ });
+    const unitRow = await row(remounted.container, "tests/edit/unit/");
+    expect(unitRow.getAttribute("aria-expanded")).toBe("false");
+
+    // An ignored folder can hold tens of thousands of entries, so it still opens by hand.
+    const pkgRow = await row(remounted.container, "pkg/");
+    pkgRow.click();
+    await vi.waitFor(() => expect(pkgRow.getAttribute("aria-expanded")).toBe("true"));
+    state.listing = [
+      ...state.listing,
+      { path: "pkg/node_modules", kind: "directory", ignored: true },
+    ];
+    await remounted.rerender(panel());
+    const ignoredRow = await row(remounted.container, "pkg/node_modules/");
+    expect(ignoredRow.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("opens collapsed when the stored folders cannot be read, and expands when they cannot be saved", async () => {
     setup();
     localStorage.setItem("goat.fileTreeExpandedDirectories", "{not json");
