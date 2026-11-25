@@ -20,3 +20,12 @@ it("keeps catalog keys and ICU argument names aligned across locales", () => {
     }
   }
 });
+
+it("does not repeat catalog keys in the raw JSON", () => {
+  const directory = NodePath.join(__dirname, "translations");
+  for (const locale of ["en", "de", "es", "fr", "ja", "ko", "pt-BR", "ru", "zh"]) {
+    const contents = NodeFS.readFileSync(NodePath.join(directory, `${locale}.json`), "utf8");
+    const keys = [...contents.matchAll(/^\s*"([a-f0-9]{16})":/gmu)].map((match) => match[1]);
+    expect(new Set(keys).size, locale).toBe(keys.length);
+  }
+});
