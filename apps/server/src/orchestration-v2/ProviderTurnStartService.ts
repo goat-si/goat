@@ -726,12 +726,15 @@ export const layer: Layer.Layer<
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       if (session.providerSession === undefined)
         return yield* missingProviderSession(runId, session.driver);
+      const goalDriver = hasNativeGoals(session);
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
         compactionMessageIds: () =>
           new Set(
-            projection.messages.filter(isSlashCommandMessage).map((candidate) => candidate.id),
+            projection.messages
+              .filter((candidate) => isSlashCommandMessage(candidate, goalDriver))
+              .map((candidate) => candidate.id),
           ),
         run,
         attempts: projection.attempts,
@@ -792,8 +795,7 @@ export const layer: Layer.Layer<
         observeOnly || nativeResume
           ? userText
           : yield* appendRemoteWorkerNotes(sql, projection.thread, providerMessage.id, userText);
-      const goalDriver = hasNativeGoals(session);
-      const slashCommand = isSlashCommandMessage(turnMessage);
+      const slashCommand = isSlashCommandMessage(turnMessage, goalDriver);
       const restartNote = [
         yield* sideChatNote(projectionStore, projection.thread, userText),
         restartCancelledWork.length === 0

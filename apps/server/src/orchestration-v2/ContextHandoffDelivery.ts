@@ -34,15 +34,18 @@ export interface ReplayedHandoffInput {
   readonly runOrdinal: number;
 }
 
-// Only commands GOAT itself recognizes defer pending context. A provider command and a
-// path-led prompt ("/data inspect this") look alike without the provider's command list.
-export const isSlashCommandMessage = (message: {
-  readonly role: string;
-  readonly text: string;
-  readonly attachments?: ReadonlyArray<unknown> | undefined;
-}): boolean =>
+// Only commands GOAT itself recognizes defer pending context: compaction, and /goal where the
+// session runs goals natively. A provider command and a path-led prompt look alike.
+export const isSlashCommandMessage = (
+  message: {
+    readonly role: string;
+    readonly text: string;
+    readonly attachments?: ReadonlyArray<unknown> | undefined;
+  },
+  nativeGoals: boolean,
+): boolean =>
   message.role === "user" &&
-  (isCompactionCommandMessage(message) || parseGoalCommand(message) !== null);
+  (isCompactionCommandMessage(message) || (nativeGoals && parseGoalCommand(message) !== null));
 
 /** Persist around injection; ambiguous delivery requires a fresh native thread. Call unsent if refused before prompt consumption. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(

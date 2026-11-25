@@ -37,7 +37,7 @@ export function selectSideChatHandoffs(projection: HandoffProjection, run: Orche
       return (
         source.status === "completed" &&
         projection.messages.some(
-          (message) => message.id === source.userMessageId && isSlashCommandMessage(message),
+          (message) => message.id === source.userMessageId && isSlashCommandMessage(message, true),
         )
       );
     });

@@ -83,7 +83,7 @@ export function readyHandoffsForRun(
                   // Slash commands defer history to the next turn.
                   projection.messages.some(
                     (message) =>
-                      message.id === source.userMessageId && isSlashCommandMessage(message),
+                      message.id === source.userMessageId && isSlashCommandMessage(message, true),
                   ))),
           ))),
   );

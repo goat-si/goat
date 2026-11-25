@@ -25,7 +25,8 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const GROK_DRIVER = ProviderDriverKind.make("acp");
 
 it.live.each([
-  { name: "a goal command", text: "/goal do X", verbatim: true },
+  // ACP runs no native goals, so /goal is an ordinary prompt there, as before.
+  { name: "a goal command", text: "/goal do X", verbatim: false },
   // GOAT cannot tell a provider command from a path without the provider's command list.
   { name: "a provider command", text: "/implement do X", verbatim: false },
   { name: "a message opening with a path", text: "/usr/lib/foo is broken", verbatim: false },

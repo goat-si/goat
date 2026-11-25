@@ -54,7 +54,7 @@ export function missedTurnImages(input: {
     const run = runs.get(attempt.runId);
     if (!run || run.ordinal >= input.run.ordinal || missed.has(run.id)) continue;
     const message = messages.get(run.userMessageId);
-    if (message && isSlashCommandMessage(message)) continue;
+    if (message && isSlashCommandMessage(message, input.goalDriver)) continue;
     // A replay may have carried older missed images alongside its identified source.
     lastPossibleDelivery = Math.max(lastPossibleDelivery, run.ordinal);
   }
