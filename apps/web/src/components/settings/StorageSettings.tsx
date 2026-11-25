@@ -87,6 +87,7 @@ function useUnavailableWorktreesDirectories() {
 }
 
 function WorktreesDirectoryRow() {
+  const gt = useGT();
   const setting = useTranslatedSearchableSetting();
   const { connectedEnvironments, targets } = useSettingsScope();
   const settings = useScopedSettings();
@@ -107,9 +108,9 @@ function WorktreesDirectoryRow() {
   return (
     <SettingsRow
       {...setting("storage-worktrees-location")}
-      description={
-        "Folder where new worktrees are created, on any drive, such as D:\\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the GOAT home folder."
-      }
+      description={gt(
+        "Folder where new worktrees are created, on any drive, such as D:\\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the GOAT home folder.",
+      )}
       serverScoped
       settingKeys={["worktreesDirectory"]}
       status={
@@ -130,7 +131,7 @@ function WorktreesDirectoryRow() {
       resetAction={
         mixed || settings.worktreesDirectory !== "" ? (
           <SettingResetButton
-            label="worktree location"
+            label={gt("worktree location")}
             onClick={() => updateSettings({ worktreesDirectory: "" })}
           />
         ) : null
@@ -138,10 +139,10 @@ function WorktreesDirectoryRow() {
       control={
         <Input
           key={`${scopeKey}:${mixed}:${settings.worktreesDirectory}`}
-          aria-label="Worktree location"
+          aria-label={gt("Worktree location")}
           autoCapitalize="none"
           spellCheck={false}
-          placeholder={mixed ? "Mixed" : "Default"}
+          placeholder={mixed ? gt("Mixed") : gt("Default")}
           defaultValue={mixed ? "" : settings.worktreesDirectory}
           onFocus={(event) => {
             draft.current = event.target.value;

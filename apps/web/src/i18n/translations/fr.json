@@ -975,5 +975,11 @@
   "78f82fef9e0c8661": "Dépôts",
   "fd5e987709679db9": "Maintient la branche par défaut de ce projet à jour si la copie de travail n’a aucune modification ni aucun commit local.",
   "a8d6b69e67c6015e": "Maintient la branche par défaut à jour si la copie de travail n’a aucune modification ni aucun commit local. Les projets peuvent modifier ce réglage.",
-  "8ae95350a8a0186f": "Emplacement et nettoyage des arbres de travail, ainsi que les artefacts et les journaux."
+  "8ae95350a8a0186f": "Emplacement et nettoyage des arbres de travail, ainsi que les artefacts et les journaux.",
+  "dc45ce3ddca31273": "récupération automatique par défaut",
+  "4f2a1d5aef3f73a5": "Désactiver la récupération automatique",
+  "0c8037e10e1354fa": "Récupération automatique par défaut",
+  "acdeb0c1b0567098": "emplacement des worktrees",
+  "be9514e5dd387acf": "Dossier de création des nouveaux worktrees sur n’importe quel lecteur, par exemple D:\\worktrees ou ~/worktrees. Les worktrees existants restent en place. Laissez vide pour utiliser le dossier personnel GOAT.",
+  "e40e6d4ec89b5365": "Par défaut"
 }

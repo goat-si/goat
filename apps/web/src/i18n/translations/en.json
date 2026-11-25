@@ -975,5 +975,11 @@
   "78f82fef9e0c8661": "Repositories",
   "fd5e987709679db9": "Keeps this project's default branch current when the checkout has no local changes or commits.",
   "a8d6b69e67c6015e": "Keeps the default branch current when the checkout has no local changes or commits. Projects can override it.",
-  "8ae95350a8a0186f": "Where worktrees live, when they are cleaned up, and artifacts and logs."
+  "8ae95350a8a0186f": "Where worktrees live, when they are cleaned up, and artifacts and logs.",
+  "dc45ce3ddca31273": "default automatic pull",
+  "4f2a1d5aef3f73a5": "Reset automatic pull to off",
+  "0c8037e10e1354fa": "Default automatic pull",
+  "acdeb0c1b0567098": "worktree location",
+  "be9514e5dd387acf": "Folder where new worktrees are created, on any drive, such as D:\\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the GOAT home folder.",
+  "e40e6d4ec89b5365": "Default"
 }

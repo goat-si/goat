@@ -975,5 +975,11 @@
   "78f82fef9e0c8661": "Repositórios",
   "fd5e987709679db9": "Mantém a branch padrão deste projeto atualizada quando o checkout não tem alterações nem commits locais.",
   "a8d6b69e67c6015e": "Mantém a branch padrão atualizada quando o checkout não tem alterações nem commits locais. Cada projeto pode substituir esta configuração.",
-  "8ae95350a8a0186f": "Local e limpeza de worktrees, além de artefatos e logs."
+  "8ae95350a8a0186f": "Local e limpeza de worktrees, além de artefatos e logs.",
+  "dc45ce3ddca31273": "pull automático padrão",
+  "4f2a1d5aef3f73a5": "Desativar pull automático",
+  "0c8037e10e1354fa": "Pull automático padrão",
+  "acdeb0c1b0567098": "localização dos worktrees",
+  "be9514e5dd387acf": "Pasta onde novos worktrees são criados, em qualquer unidade, como D:\\worktrees ou ~/worktrees. Os worktrees existentes permanecem onde estão. Deixe vazio para usar a pasta inicial do GOAT.",
+  "e40e6d4ec89b5365": "Padrão"
 }
