@@ -1080,5 +1080,8 @@
   "0c8037e10e1354fa": "Default automatic pull",
   "acdeb0c1b0567098": "worktree location",
   "be9514e5dd387acf": "Folder where new worktrees are created, on any drive, such as D:\\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the GOAT home folder.",
-  "e40e6d4ec89b5365": "Default"
+  "e40e6d4ec89b5365": "Default",
+  "ca912768c320689c": "Could not load usage for the selected period.",
+  "5e6e0fcae447fc1e": "Loading usage for the selected period…",
+  "9ee0e697adcf5366": "Showing {range}."
 }

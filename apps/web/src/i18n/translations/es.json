@@ -1080,5 +1080,8 @@
   "87374bfe1fd81fdf": "Editar condición para {command}",
   "4da9b09518a3f47a": "Acciones para {command}",
   "bd8e87512fd9bdf2": "Sin asignar",
-  "326001d549448f2e": "Imagen de fondo"
+  "326001d549448f2e": "Imagen de fondo",
+  "ca912768c320689c": "No se pudo cargar el uso del periodo seleccionado.",
+  "5e6e0fcae447fc1e": "Cargando el uso del periodo seleccionado…",
+  "9ee0e697adcf5366": "Se muestra {range}."
 }

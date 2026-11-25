@@ -1080,5 +1080,8 @@
   "87374bfe1fd81fdf": "Modifier la condition pour {command}",
   "4da9b09518a3f47a": "Actions pour {command}",
   "bd8e87512fd9bdf2": "Non attribué",
-  "326001d549448f2e": "Image de fond"
+  "326001d549448f2e": "Image de fond",
+  "ca912768c320689c": "Impossible de charger les données d’utilisation pour la période sélectionnée.",
+  "5e6e0fcae447fc1e": "Chargement des données d’utilisation pour la période sélectionnée…",
+  "9ee0e697adcf5366": "Période affichée : {range}."
 }
