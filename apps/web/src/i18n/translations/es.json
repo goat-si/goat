@@ -946,5 +946,6 @@
   "87a604067ec76d8b": "Rutas de cuota inferidas para {hosts}",
   "05c31d948cc5627c": "Los hosts no indicaron qué instancias usan esta reserva, por lo que se asociaron por controlador de proveedor. Los hosts antiguos lo indican tras actualizar GOAT.",
   "edaebeea1915f9c1": "Cuenta",
-  "022be4c560f02e1a": "Cuenta {plan}"
+  "022be4c560f02e1a": "Cuenta {plan}",
+  "1eb63b662c5a7792": "{count} omitidos"
 }

@@ -322,7 +322,9 @@ function HostRow({
               <span className="flex min-w-0 gap-1 overflow-hidden text-3xs text-muted-foreground">
                 {inferred ? <span className="shrink-0 text-warning">{gt("inferred")}</span> : null}
                 {omitted === null ? null : (
-                  <span className="shrink-0 text-warning">{omitted.count} omitted</span>
+                  <span className="shrink-0 text-warning">
+                    {gt("{count} omitted", { count: omitted.count })}
+                  </span>
                 )}
                 {hub === null ? null : <span className="min-w-0 truncate">{hub}</span>}
               </span>

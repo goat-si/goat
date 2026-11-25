@@ -946,5 +946,6 @@
   "87a604067ec76d8b": "Kontingentrouting für {hosts} abgeleitet",
   "05c31d948cc5627c": "Da die Hosts die Zuordnung zum Pool nicht gemeldet haben, wurden die Instanzen anhand des Anbietertreibers zugeordnet. Ältere Hosts melden dies nach einem GOAT-Update.",
   "edaebeea1915f9c1": "Konto",
-  "022be4c560f02e1a": "{plan}-Konto"
+  "022be4c560f02e1a": "{plan}-Konto",
+  "1eb63b662c5a7792": "{count} ausgelassen"
 }

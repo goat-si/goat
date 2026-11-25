@@ -946,5 +946,6 @@
   "87a604067ec76d8b": "Routage de quota déduit pour {hosts}",
   "05c31d948cc5627c": "Les hôtes n’ayant pas indiqué quelles instances utilisent ce pool, le parc les a associées selon le pilote du fournisseur. Les anciens hôtes le signalent après une mise à jour de GOAT.",
   "edaebeea1915f9c1": "Compte",
-  "022be4c560f02e1a": "Compte {plan}"
+  "022be4c560f02e1a": "Compte {plan}",
+  "1eb63b662c5a7792": "{count} omis"
 }
