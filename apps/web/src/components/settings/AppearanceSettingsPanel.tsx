@@ -93,7 +93,11 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
               }
             }}
           >
-            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Background">
+            <SelectTrigger
+              size="sm"
+              className="w-full sm:w-40"
+              aria-label={setting("appearance-background").title}
+            >
               <SelectValue>{glassBackdrop === "custom" ? "Custom image" : "Built-in"}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -103,7 +107,7 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
           </Select>
           <input
             ref={fileInputRef}
-            aria-label="Background image"
+            aria-label={setting("appearance-background").title}
             className="sr-only"
             type="file"
             accept="image/*"
@@ -218,7 +222,7 @@ export function AppearanceSettingsPanel() {
           resetAction={
             settings.appearancePreset !== DEFAULT_UNIFIED_SETTINGS.appearancePreset ? (
               <SettingResetButton
-                label="style"
+                label={setting("appearance-style").title}
                 onClick={() =>
                   updateSettings({ appearancePreset: DEFAULT_UNIFIED_SETTINGS.appearancePreset })
                 }
@@ -263,7 +267,7 @@ export function AppearanceSettingsPanel() {
           resetAction={
             settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast ? (
               <SettingResetButton
-                label="contrast"
+                label={setting("setting-appearance-contrast").title}
                 onClick={() =>
                   updateSettings({
                     appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
@@ -315,7 +319,7 @@ export function AppearanceSettingsPanel() {
           resetAction={
             settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? (
               <SettingResetButton
-                label="glass opacity"
+                label={setting("setting-glass-opacity").title}
                 onClick={() =>
                   updateSettings({ glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity })
                 }
@@ -364,7 +368,7 @@ export function AppearanceSettingsPanel() {
             resetAction={
               settings.environmentIdentificationMode !== DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE ? (
                 <SettingResetButton
-                  label="environment identification"
+                  label={setting("environment-identification").title}
                   onClick={() =>
                     updateSettings({
                       environmentIdentificationMode: DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
@@ -409,7 +413,7 @@ export function AppearanceSettingsPanel() {
           resetAction={
             settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme ? (
               <SettingResetButton
-                label="diff colors"
+                label={setting("diff-color-scheme").title}
                 onClick={() =>
                   updateSettings({ diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme })
                 }
@@ -465,7 +469,7 @@ export function AppearanceSettingsPanel() {
             settings.persistComposerContextStrip !==
             DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip ? (
               <SettingResetButton
-                label="composer context"
+                label={setting("composer-context").title}
                 onClick={() =>
                   updateSettings({
                     persistComposerContextStrip:
@@ -481,7 +485,7 @@ export function AppearanceSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ persistComposerContextStrip: Boolean(checked) })
               }
-              aria-label="Keep composer context visible in active threads"
+              aria-label={setting("composer-context").title}
             />
           }
         />
@@ -492,7 +496,7 @@ export function AppearanceSettingsPanel() {
           resetAction={
             settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? (
               <SettingResetButton
-                label="chat width"
+                label={setting("chat-width").title}
                 onClick={() => updateSettings({ chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth })}
               />
             ) : null
@@ -506,7 +510,11 @@ export function AppearanceSettingsPanel() {
                     updateSettings({ chatWidth: value });
                 }}
               >
-                <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Chat width">
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label={setting("chat-width").title}
+                >
                   <SelectValue>{m(CHAT_WIDTH_LABELS[settings.chatWidth])}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -526,7 +534,7 @@ export function AppearanceSettingsPanel() {
           resetAction={
             settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled ? (
               <SettingResetButton
-                label="math rendering"
+                label={setting("math-rendering").title}
                 onClick={() =>
                   updateSettings({
                     mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
@@ -541,7 +549,7 @@ export function AppearanceSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ mathRenderingEnabled: Boolean(checked) })
               }
-              aria-label="Render math"
+              aria-label={setting("math-rendering").title}
             />
           }
         />
@@ -562,7 +570,7 @@ export function AppearanceSettingsPanel() {
                   {settings.panelAnimationDurationMs} ms
                 </output>
                 <input
-                  aria-label="Panel animation duration"
+                  aria-label={setting("panel-animations").title}
                   className="settings-slider min-w-0 flex-1"
                   id="panel-animation-duration"
                   max={MAX_PANEL_ANIMATION_DURATION_MS}
@@ -589,7 +597,7 @@ export function AppearanceSettingsPanel() {
             settings.panelAnimationDurationMs !==
             DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs ? (
               <SettingResetButton
-                label="panel animations"
+                label={setting("panel-animations").title}
                 onClick={() =>
                   updateSettings({
                     panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,

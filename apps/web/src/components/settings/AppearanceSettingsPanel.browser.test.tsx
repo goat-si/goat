@@ -129,7 +129,7 @@ it("saves a chosen image and selects the custom background", async () => {
   await screen.getByRole("combobox", { name: "Style" }).click();
   await screen.getByRole("option", { name: "Liquid Glass" }).click();
   const image = new File(["image"], "background.png", { type: "image/png" });
-  await userEvent.upload(screen.getByLabelText("Background image"), image);
+  await userEvent.upload(screen.getByLabelText("Background", { exact: true }).nth(1), image);
   await vi.waitFor(() => expect(backdrop.save).toHaveBeenCalledWith(image));
   await vi.waitFor(() => expect(getClientSettings().glassBackdrop).toBe("custom"));
   await expect
@@ -150,7 +150,7 @@ it("shows the image validation error in the Background row", async () => {
   await screen.getByRole("combobox", { name: "Style" }).click();
   await screen.getByRole("option", { name: "Liquid Glass" }).click();
   await userEvent.upload(
-    screen.getByLabelText("Background image"),
+    screen.getByLabelText("Background", { exact: true }).nth(1),
     new File(["text"], "not-image.png", { type: "image/png" }),
   );
   await expect.element(screen.getByText("Choose an image file.")).toBeVisible();

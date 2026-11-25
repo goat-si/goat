@@ -717,6 +717,7 @@ function KeybindingKeyControl({
     captureKeybinding,
     pillRef,
   } = editor;
+  const labelForCommand = useKeybindingDisplayLabel();
   const showPill = !isRecording && keyDraft === row.key && row.key.length > 0 && !isDirty;
 
   return (
@@ -735,7 +736,7 @@ function KeybindingKeyControl({
           ref={pillRef}
           type="button"
           onClick={() => setDraft({ isRecording: true })}
-          aria-label={`Edit shortcut for ${commandLabel(row.command)}: ${row.isUnassigned ? "Unassigned" : formatShortcutLabel(row.binding.shortcut)}`}
+          aria-label={`Edit shortcut for ${labelForCommand(row.command)}: ${row.isUnassigned ? "Unassigned" : formatShortcutLabel(row.binding.shortcut)}`}
           className={cn(
             "inline-flex h-8 cursor-pointer items-center rounded-md border border-transparent px-1.5 sm:h-7 outline-none transition-colors hover:border-border/70 hover:bg-accent focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/24",
             pillClassName,
@@ -751,7 +752,7 @@ function KeybindingKeyControl({
         <Input
           data-keybinding-capture=""
           autoFocus={isRecording}
-          aria-label={`Keybinding for ${commandLabel(row.command)}`}
+          aria-label={`Keybinding for ${labelForCommand(row.command)}`}
           value={isRecording ? "" : keyDraft}
           placeholder={isRecording ? "Press shortcut" : "Unassigned"}
           size="sm"
@@ -828,6 +829,7 @@ function KeybindingRowMenu({
   onUnassign: (row: KeybindingRow) => void;
   onRemove: (row: KeybindingRow) => void;
 }) {
+  const labelForCommand = useKeybindingDisplayLabel();
   const canReset = row.source === "Custom" && row.defaultKey !== null;
   const canUnassign = row.source === "Default";
   const canRemove = row.source !== "Default" && !row.isUnassigned;
@@ -841,7 +843,7 @@ function KeybindingRowMenu({
             variant="ghost-muted"
             size="icon-sm"
             disabled={isSaving}
-            aria-label={`Actions for ${commandLabel(row.command)}`}
+            aria-label={`Actions for ${labelForCommand(row.command)}`}
           />
         }
       >

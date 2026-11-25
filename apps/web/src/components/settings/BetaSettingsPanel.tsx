@@ -36,7 +36,7 @@ export function BetaSettingsPanel() {
           resetAction={
             settings.redesignEnabled !== DEFAULT_UNIFIED_SETTINGS.redesignEnabled ? (
               <SettingResetButton
-                label="new design"
+                label={setting("new-design").title}
                 onClick={() =>
                   updateSettings({ redesignEnabled: DEFAULT_UNIFIED_SETTINGS.redesignEnabled })
                 }
@@ -131,7 +131,7 @@ function GuestLinksRow() {
           settingKeys={["guestSharingEnabled"]}
           checked={settings.guestSharingEnabled}
           onCheckedChange={(checked) => updateSettings({ guestSharingEnabled: Boolean(checked) })}
-          aria-label="Guest links"
+          aria-label={setting("guest-links").title}
         />
       }
     />
