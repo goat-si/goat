@@ -144,6 +144,7 @@ export * from "./repositoryReference.ts";
 export * from "./opencodex.ts";
 export * from "./opencodexLinkTraffic.ts";
 export * from "./penSettings.ts";
+export * from "./telemetryConsent.ts";
 export * from "./opencodexChildReady.ts";
 export * from "./hubParity.ts";
 export * from "./hubSettings.ts";

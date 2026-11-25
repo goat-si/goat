@@ -1,32 +1,41 @@
 # Product analytics
 
-The server owns analytics delivery, opt-out, and identity for every connected client.
+The server owns analytics delivery, consent, and identity for every connected client.
 Clients do not load an analytics SDK. Client-use events require an
 authenticated connection, so visiting the hosted app without connecting does not
 count as product use.
 
+## Consent
+
+Nothing is recorded or sent until a person says yes. The server's `telemetryConsent` setting
+starts `undecided`, which sends nothing, exactly like `declined`; existing installs decode to
+`undecided` too, so an update never turns sharing on. It is classified `person` in
+`SETTINGS_ACCESS`: an agent must not answer for the person it describes.
+`GOAT_TELEMETRY_ENABLED` overrides the setting either way for headless servers. The legacy
+upstream variable can only turn sharing off, and its "off" outranks `GOAT_TELEMETRY_ENABLED`, since a
+leftover upstream opt-in is not consent to GOAT.
+
+[AnalyticsService](../../apps/server/src/telemetry/AnalyticsService.ts) reads consent on every
+record and send, so turning it off stops delivery at once. It also follows settings changes: saving
+any answer but `granted` drops queued and failed batches right away, and declining deletes the
+install id, so sharing again soon after starts fresh. GOAT Connect relay tracing needs
+`GOAT_TELEMETRY_ENABLED=true` explicitly.
+
 ## Installs and owners
 
-`distinct_id` keeps the rule every build has used: the hashed Codex workspace,
-else the Claude machine id, else the install's anonymous id. It can change when
-someone logs in, and a Codex Team shares one, but keeping it keeps history
-comparable across builds. Do not change it; add a field instead.
+`distinct_id` and `installId` are the same value: the hash of a random id in the state
+directory, created by the first event after consent. If that file cannot be written, nothing is
+sent, so an install never reports under a changing id. Builds before consent used a hashed Codex
+workspace or Claude machine id as `distinct_id`; histories from those builds do not join to new
+installs.
 
-Every event also carries `installId` when the server can save its state: the hash
-of a random id in the state directory, which never changes for the install. If
-that file cannot be written, events still go out under `distinct_id`, as before. Count installs
-with it. Who an install belongs to is a separate fact, sent as
-`install.owner_observed`. Owners are resolved at query time in our own store, so
-a rule can change and apply to all history.
-
-[Owner sources](../../apps/server/src/telemetry/Identify.ts), strongest first:
-GOAT Connect, then the OpenAI and Claude person ids, then the client device. The
-server reports what it can read itself: the linked Connect account and provider
-logins. A connecting client reports its signed-in Connect account and its device,
-which links every environment opened from one phone, browser, or desktop. Use the
-OpenAI `user_id` claim, not the Codex `account_id` (the ChatGPT workspace, which a
-whole Team shares) or the token `sub` (one per login method). Two Connect accounts are never the same person, whatever
-weaker ids they share.
+Never derive an id from provider login or config files such as `~/.codex/auth.json` or
+`~/.claude.json`. They belong to the provider, and reading them to identify people is what the
+upstream project was criticized for. Who an install belongs to is sent as `install.owner_observed`, from
+[two sources](../../apps/server/src/telemetry/Identify.ts): the GOAT Connect account (read by the
+server from its linked account, and reported by a connecting client) and the client device's own
+random id. Owners are resolved at query time in our own store, so a rule can change and apply to
+all history. Two Connect accounts are never the same person.
 
 Every id is SHA-256 hashed with [one helper](../../packages/shared/src/telemetryId.ts)
 on both sides, so a Connect account hashes the same on the client and the server.

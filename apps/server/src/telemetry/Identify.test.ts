@@ -10,6 +10,7 @@ import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as References from "effect/References";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
@@ -42,9 +43,6 @@ const findIdentityLog = (
   errorTag: string,
 ) => logs.find((log) => log.annotations.source === source && log.annotations.errorTag === errorTag);
 
-const unsignedJwt = (claims: Readonly<Record<string, unknown>>) =>
-  ["e30", Buffer.from(JSON.stringify(claims)).toString("base64url"), "signature"].join(".");
-
 const layerIdentity = (prefix: string, logs?: CapturedLog[]) =>
   Layer.provideMerge(
     ServerSecretStore.layer,
@@ -70,39 +68,88 @@ const writeHomeFile = Effect.fn("test.writeHomeFile")(function* (
   return filePath;
 });
 
+/** Codex and Claude logins as their CLIs store them; identity must never read these. */
+const writeProviderLogins = Effect.fn("test.writeProviderLogins")(function* (
+  homeDirectory: string,
+) {
+  yield* writeHomeFile(
+    homeDirectory,
+    ".codex/auth.json",
+    JSON.stringify({
+      tokens: {
+        account_id: "team-workspace",
+        id_token: [
+          "e30",
+          Buffer.from(
+            JSON.stringify({ "https://api.openai.com/auth": { user_id: "user-openai-person" } }),
+          ).toString("base64url"),
+          "sig",
+        ].join("."),
+      },
+    }),
+  );
+  yield* writeHomeFile(
+    homeDirectory,
+    ".claude.json",
+    JSON.stringify({ userID: "claude-machine", oauthAccount: { accountUuid: "claude-person" } }),
+  );
+});
+
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identity", (it) => {
-  it.effect("keeps the old distinct_id rule and a fixed install id as logins change", () =>
+  it.effect(
+    "derives the identity only from the install's random id, never from provider logins",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const homeDirectory = path.join(config.baseDir, "home");
+        yield* writeProviderLogins(homeDirectory);
+        const anonymousId = "persisted-anonymous-id";
+        yield* fileSystem.writeFileString(config.anonymousIdPath, anonymousId);
+        const installId = yield* sha256(anonymousId);
+
+        const identity = yield* Identify.getTelemetryIdentity.pipe(
+          Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+        );
+
+        assert.deepEqual(identity, { distinctId: installId, installId });
+      }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-install-"))),
+  );
+
+  it.effect("reports only the GOAT Connect account as a server owner", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
       const path = yield* Path.Path;
       const homeDirectory = path.join(config.baseDir, "home");
-      const anonymousId = "persisted-anonymous-id";
-      yield* fileSystem.writeFileString(config.anonymousIdPath, anonymousId);
-      const installId = yield* sha256(anonymousId);
-      const identity = () => Identify.getTelemetryIdentityForHome(homeDirectory);
+      yield* secrets.set(CLOUD_LINKED_USER_ID, new TextEncoder().encode("user_connect"));
+      yield* writeProviderLogins(homeDirectory);
 
-      assert.deepEqual(yield* identity(), { distinctId: installId, installId });
+      const owners = yield* Identify.getServerOwners.pipe(
+        Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+      );
 
-      yield* writeHomeFile(homeDirectory, ".claude.json", `{"userID":"claude-machine"}`);
-      assert.deepEqual(yield* identity(), {
-        distinctId: yield* sha256("claude-machine"),
-        installId,
-      });
+      assert.deepEqual(owners, [{ source: "connect", ownerId: yield* sha256("user_connect") }]);
+    }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-owners-"))),
+  );
 
-      yield* writeHomeFile(homeDirectory, ".codex/auth.json", `{"auth_mode":"apikey"}`);
-      assert.equal((yield* identity()).distinctId, yield* sha256("claude-machine"));
+  it.effect("resetting the identity gives the install a new id", () =>
+    Effect.gen(function* () {
+      const before = yield* Identify.getTelemetryIdentity;
+      yield* Identify.resetTelemetryIdentity;
+      const after = yield* Identify.getTelemetryIdentity;
 
-      yield* writeHomeFile(homeDirectory, ".codex/auth.json", `{"tokens":{"account_id":"ws-1"}}`);
-      assert.deepEqual(yield* identity(), { distinctId: yield* sha256("ws-1"), installId });
-    }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-install-"))),
+      assert.isNotNull(before.installId);
+      assert.isNotNull(after.installId);
+      assert.notEqual(after.installId, before.installId);
+    }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-reset-"))),
   );
 
   it.effect("leaves no torn anonymous id behind when its write fails midway", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const tornWrites = FileSystem.FileSystem.of({
         ...fileSystem,
         writeFileString: (filePath, data, options) =>
@@ -122,9 +169,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identi
             ),
       });
 
-      const identity = yield* Identify.getTelemetryIdentityForHome(
-        path.join(config.baseDir, "home"),
-      ).pipe(Effect.provideService(FileSystem.FileSystem, tornWrites));
+      const identity = yield* Identify.getTelemetryIdentity.pipe(
+        Effect.provideService(FileSystem.FileSystem, tornWrites),
+      );
 
       assert.deepEqual(identity, { distinctId: null, installId: null });
       assert.isFalse(yield* fileSystem.exists(config.anonymousIdPath));
@@ -137,12 +184,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identi
     return Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       yield* fileSystem.makeDirectory(config.anonymousIdPath);
 
-      const identity = yield* Identify.getTelemetryIdentityForHome(
-        path.join(config.baseDir, "home"),
-      );
+      const identity = yield* Identify.getTelemetryIdentity;
       assert.deepEqual(identity, { distinctId: null, installId: null });
       assert.deepEqual(yield* fileSystem.readDirectory(config.anonymousIdPath), []);
 
@@ -155,117 +199,4 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identi
       );
     }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-read-", logs)));
   });
-
-  it.effect("reads the Connect account and each provider account as owners", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const secrets = yield* ServerSecretStore.ServerSecretStore;
-      const path = yield* Path.Path;
-      const homeDirectory = path.join(config.baseDir, "home");
-      yield* secrets.set(CLOUD_LINKED_USER_ID, new TextEncoder().encode("user_connect"));
-      yield* writeHomeFile(
-        homeDirectory,
-        ".codex/auth.json",
-        JSON.stringify({
-          tokens: {
-            account_id: "team-workspace",
-            id_token: unsignedJwt({
-              sub: "google-oauth2|login-method",
-              "https://api.openai.com/auth": { user_id: "user-openai-person" },
-            }),
-          },
-        }),
-      );
-      yield* writeHomeFile(
-        homeDirectory,
-        ".claude.json",
-        JSON.stringify({
-          userID: "claude-machine",
-          oauthAccount: { accountUuid: "claude-person" },
-        }),
-      );
-
-      const owners = yield* Identify.getServerOwnersForHome(homeDirectory);
-
-      assert.deepEqual(owners, [
-        { source: "connect", ownerId: yield* sha256("user_connect") },
-        { source: "openai", ownerId: yield* sha256("user-openai-person") },
-        { source: "claude", ownerId: yield* sha256("claude-person") },
-      ]);
-    }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-owners-"))),
-  );
-
-  it.effect.each([
-    {
-      login: "an API key",
-      secret: "sk-private-openai-api-key",
-      authJson: (secret: string) => `{"auth_mode":"apikey","OPENAI_API_KEY":"${secret}"}`,
-    },
-    {
-      login: "an agent identity",
-      secret: "private-agent-identity-jwt",
-      authJson: (secret: string) =>
-        `{"auth_mode":"agentIdentity","OPENAI_API_KEY":null,"agent_identity":"${secret}"}`,
-    },
-    {
-      login: "a personal access token",
-      secret: "private-personal-access-token",
-      authJson: (secret: string) => `{"OPENAI_API_KEY":null,"personal_access_token":"${secret}"}`,
-    },
-  ])(
-    "adds no owner and logs nothing when Codex authenticates with $login",
-    ({ secret, authJson }) => {
-      const logs: CapturedLog[] = [];
-
-      return Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        const path = yield* Path.Path;
-        const homeDirectory = path.join(config.baseDir, "home");
-        yield* writeHomeFile(homeDirectory, ".codex/auth.json", authJson(secret));
-
-        assert.deepEqual(yield* Identify.getServerOwnersForHome(homeDirectory), []);
-        assert.deepEqual(logs, []);
-      }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-tokenless-", logs)));
-    },
-  );
-
-  it.effect(
-    "warns about malformed Codex auth without its tokens and keeps the other owners",
-    () => {
-      const logs: CapturedLog[] = [];
-
-      return Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        const path = yield* Path.Path;
-        const homeDirectory = path.join(config.baseDir, "home");
-        const privateAccessToken = "private-codex-access-token";
-        const codexAuthPath = yield* writeHomeFile(
-          homeDirectory,
-          ".codex/auth.json",
-          `{"tokens":{"access_token":"${privateAccessToken}"}}`,
-        );
-        yield* writeHomeFile(
-          homeDirectory,
-          ".claude.json",
-          `{"oauthAccount":{"accountUuid":"claude-person"}}`,
-        );
-
-        assert.deepEqual(yield* Identify.getServerOwnersForHome(homeDirectory), [
-          { source: "claude", ownerId: yield* sha256("claude-person") },
-        ]);
-        const decodeLog = findIdentityLog(logs, "codex", "TelemetryIdentityDecodeError");
-        assert.equal(
-          decodeLog?.message,
-          `Failed to decode codex telemetry identity at '${codexAuthPath}'.`,
-        );
-        assert.equal(decodeLog?.annotations.causeKind, "schema");
-        assert.notInclude(
-          Object.values(decodeLog?.annotations ?? {})
-            .map(String)
-            .join("\n"),
-          privateAccessToken,
-        );
-      }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-decode-", logs)));
-    },
-  );
 });
