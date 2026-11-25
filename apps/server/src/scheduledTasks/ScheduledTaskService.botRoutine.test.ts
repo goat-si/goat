@@ -10,7 +10,11 @@ import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { hasPendingMigrations, runMigrations } from "../persistence/Migrations.ts";
+import {
+  hasPendingMigrations,
+  migrationManifest,
+  runMigrations,
+} from "../persistence/Migrations.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import type { BotEvent } from "../channels/ChannelBotEvents.ts";
 import { watchRoutines } from "../channels/ChannelBotRoutineEvents.ts";
@@ -897,22 +901,10 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
           [[177, "WorkTriggerAuthorityFence"]],
         );
         assert.isUndefined(yield* checkOldBuild(177));
-        assert.deepStrictEqual(yield* migrate, [
-          [178, "WebhookDeliveryFiringEvidence"],
-          [179, "ChannelWorkerGenerations"],
-          [180, "ChannelBotTaskSnooze"],
-          [181, "ChannelBotAttention"],
-          [182, "SlackConversationBot"],
-          [183, "ChannelInputSessionAuthority"],
-          [184, "RemoteDispatchEnvironment"],
-          [185, "TurnMemoryReceipts"],
-          [186, "ProviderTurnAttemptIndex"],
-          [187, "BackgroundRecoveryIndexes"],
-          [188, "TurnStartReadIndexes"],
-          [189, "ThreadItemCounts"],
-          [190, "WorktreePathKeyIndex"],
-          [191, "DeferredSlashCommandIndex"],
-        ]);
+        assert.deepStrictEqual(
+          yield* migrate,
+          migrationManifest.filter(([id]) => id >= 178),
+        );
         for (const through of [176, 177] as const) {
           assert.include(
             (yield* checkOldBuild(through))?.message ?? "",
