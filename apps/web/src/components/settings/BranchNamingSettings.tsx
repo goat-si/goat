@@ -82,7 +82,9 @@ function BranchNamingFields() {
           >
             <SelectTrigger size="sm" aria-label={gt("Worktree branch naming")}>
               <SelectValue>
-                {(value: BranchNamingMode | null) => (value === null ? "Mixed" : m(MODES[value]))}
+                {(value: BranchNamingMode | null) =>
+                  value === null ? gt("Mixed") : m(MODES[value])
+                }
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>

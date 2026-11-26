@@ -336,7 +336,7 @@ function DiscoveryItemRow({
                 variant="ghost-muted"
                 onClick={() => setIsExpanded((open) => !open)}
                 aria-expanded={isExpanded}
-                aria-label={`Toggle ${item.label} details`}
+                aria-label={gt("Toggle {label} details", { label: item.label })}
               >
                 <ChevronDownIcon
                   className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
@@ -351,7 +351,9 @@ function DiscoveryItemRow({
                       checked={offered.checked}
                       disabled={offered.disabled}
                       onCheckedChange={offered.onChange}
-                      aria-label={`Offer ${item.label} when adding or publishing a project`}
+                      aria-label={gt("Offer {label} when adding or publishing a project", {
+                        label: item.label,
+                      })}
                     />
                   }
                 />
@@ -360,7 +362,11 @@ function DiscoveryItemRow({
                 </TooltipPopup>
               </Tooltip>
             ) : !isVcsNotReady(item) ? (
-              <Switch checked={enabled} disabled aria-label={`${item.label} availability`} />
+              <Switch
+                checked={enabled}
+                disabled
+                aria-label={gt("{label} availability", { label: item.label })}
+              />
             ) : null}
           </div>
         </div>
