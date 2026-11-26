@@ -24,6 +24,7 @@ import { hubProxyRefusal } from "./hubProxyHttp.ts";
 import {
   BearerConnectionTarget,
   ConnectionAttemptSuperseded,
+  ConnectionBlockedError,
   ConnectionTransientError,
   HubProxyConnectionTarget,
   PrimaryConnectionTarget,
@@ -581,4 +582,41 @@ it.effect("SSH lease opens a probe socket without re-preparing", () =>
       expect(urls).toEqual([`${prepared.socketUrl}?wsTicket=fresh-ticket`]);
     }),
   ),
+);
+
+it.effect("a silent route's network failure does not hide an answered route's refusal", () =>
+  Effect.gen(function* () {
+    const secondTarget = new SshConnectionTarget({
+      environmentId: target.environmentId,
+      label: target.label,
+      connectionId: "ssh:fixture-second",
+    });
+    const twoRoutes: ConnectionCatalogEntry = {
+      ...entry,
+      alternateRoutes: [{ target: secondTarget, profile: Option.none() }],
+    };
+    const refused = new ConnectionBlockedError({
+      reason: "authentication",
+      hop: "server",
+      detail: "Session token revoked.",
+    });
+    const attempted: Array<string> = [];
+    const error = yield* Driver.connectOverRoutes(
+      twoRoutes,
+      (route) =>
+        Effect.succeed<Driver.RouteCheck>(route.target === target ? "answered" : "silent"),
+      (route) => {
+        attempted.push(route.target.label);
+        return route.target === target
+          ? Effect.fail(refused)
+          : Effect.fail(
+              new ConnectionTransientError({ reason: "transport", detail: "Timed out." }),
+            );
+      },
+    ).pipe(Effect.scoped, Effect.flip);
+
+    // A refusal does not retry, so the silent route still gets its chance to connect.
+    expect(attempted).toHaveLength(2);
+    expect(error).toBe(refused);
+  }),
 );
