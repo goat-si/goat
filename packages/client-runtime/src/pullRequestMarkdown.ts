@@ -183,6 +183,8 @@ const definitionParser = unified().use(remarkParse).use(remarkGfm);
  * stands outside the quote or list it was written in.
  */
 function referenceDefinitions(body: string): string[] {
+  // remark-parse omits one initial BOM from its source offsets.
+  const source = body.replace(/^\uFEFF/u, "");
   const definitions = new Map<string, string>();
   const visit = (node: Root | RootContent, quotes: number) => {
     if (node.type === "definition" && !definitions.has(node.identifier)) {
@@ -190,7 +192,7 @@ function referenceDefinitions(body: string): string[] {
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
       if (start !== undefined && end !== undefined) {
-        definitions.set(node.identifier, body.slice(start, end).replace(wrap, " "));
+        definitions.set(node.identifier, source.slice(start, end).replace(wrap, " "));
       }
     }
     if (!("children" in node)) return;
@@ -221,10 +223,11 @@ function withDefinitions(
     };
   }
   if (!segment.text.includes("[")) return segment;
+  const bomLength = segment.sourceOffset === 0 && segment.text.startsWith("\uFEFF") ? 1 : 0;
   return {
     ...segment,
-    text: definitions + segment.text,
-    sourceOffset: segment.sourceOffset - definitions.length,
+    text: definitions + segment.text.slice(bomLength),
+    sourceOffset: segment.sourceOffset + bomLength - definitions.length,
   };
 }
 
