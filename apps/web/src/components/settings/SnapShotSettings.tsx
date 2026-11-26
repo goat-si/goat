@@ -30,7 +30,7 @@ import {
 } from "../../state/desktopSnapShot";
 import { toastManager } from "../ui/toast";
 import { primaryServerKeybindingsAtom } from "../../state/server";
-import { commandLabel } from "./KeybindingsSettings.logic";
+import { useKeybindingDisplayLabel } from "./useKeybindingDisplayLabel";
 import {
   snapShotStatus,
   snapShotShortcutStatus,
@@ -82,6 +82,7 @@ type ShortcutCheck =
 
 export function SnapShotSettings() {
   const gt = useGT();
+  const keybindingLabel = useKeybindingDisplayLabel();
   const m = useMessages();
   const setting = useTranslatedSearchableSetting();
   const settings = useClientSettings((current) => ({
@@ -266,7 +267,9 @@ export function SnapShotSettings() {
   const shortcutStatus = recording
     ? gt("Press your shortcut. Esc cancels.")
     : candidateConflict
-      ? gt('GOAT already uses this for "{command}".', { command: commandLabel(candidateConflict) })
+      ? gt('GOAT already uses this for "{command}".', {
+          command: keybindingLabel(candidateConflict),
+        })
       : shortcutCheck.status === "checking"
         ? gt("Checking shortcut…")
         : shortcutCheck.availability
