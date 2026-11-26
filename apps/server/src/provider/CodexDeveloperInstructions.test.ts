@@ -128,7 +128,10 @@ describe("buildCodexAdditionalContext", () => {
     const sections = Object.keys(context)
       .filter((key) => key.startsWith("goat_code_orchestration_"))
       .sort()
-      .map((key) => context[key]!);
+      .map((key) => ({
+        ...context[key]!,
+        value: context[key]!.value.replaceAll("tools.mcp__goat__", ""),
+      }));
 
     NodeAssert.deepEqual(
       sections,

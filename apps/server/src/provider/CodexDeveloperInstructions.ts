@@ -7,12 +7,14 @@ import {
 
 import {
   goatBrowserInstructions,
-  GOAT_ORCHESTRATION_SECTIONS,
+  goatOrchestrationSections,
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
+
+const CODEX_ORCHESTRATION_SECTIONS = goatOrchestrationSections("tools.mcp__goat__");
 
 const GOAT_DEVICE_TOOL_INSTRUCTIONS = `## GOAT devices
 
@@ -69,7 +71,7 @@ export function buildCodexAdditionalContext(
   return {
     ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(
-      GOAT_ORCHESTRATION_SECTIONS.map((section, index) => [
+      CODEX_ORCHESTRATION_SECTIONS.map((section, index) => [
         `goat_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),
