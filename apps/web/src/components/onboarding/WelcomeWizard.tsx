@@ -96,6 +96,7 @@ import { Spinner } from "../ui/spinner";
 import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "./OnboardingWizard";
 import { Dialog } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
+import { useGT } from "gt-react";
 import { cn } from "../../lib/utils";
 
 type WizardStep = "connection" | "agents" | "memory" | "import";
@@ -1222,6 +1223,7 @@ function ImportStep({
     importDetails?: React.ReactNode,
   ) => Promise<boolean>;
 }) {
+  const gt = useGT();
   const { environments } = useEnvironments();
   const writableEnvironments = useEnvironmentsWithScope(scans, AuthOrchestrationOperateScope);
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
@@ -1467,7 +1469,7 @@ function ImportStep({
       importDetailsRef.current = (
         <div className="max-h-52 overflow-y-auto whitespace-pre-line break-words">
           {skipped
-            .map(({ project, thread, reason }) => `${project} · ${thread}: ${reason}`)
+            .map(({ project, thread, reason }) => `${project} · ${thread}: ${gt(reason)}`)
             .join("\n\n")}
         </div>
       );
@@ -1620,7 +1622,10 @@ function ImportStep({
           onClick={() => void runImport(selected)}
         >
           {isImporting
-            ? `Importing… ${progress.processed} of ${progress.total} projects processed`
+            ? gt("Importing… {processed} of {total} projects processed", {
+                processed: progress.processed,
+                total: progress.total,
+              })
             : `Import ${selected.length} ${selected.length === 1 ? "project" : "projects"}`}
         </Button>
       </div>
