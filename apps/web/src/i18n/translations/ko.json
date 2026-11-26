@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "지원되지 않는 클라이언트",
   "7b94c564f855783b": "끄기",
   "c10efd795708cd88": "켜기",
+  "26bd5e0c4918654d": "{count, plural, other {경로 #개}}",
+  "5173c50b0a60847c": "업데이트 가능: {serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "경로 숨기기",
   "32f5a22aa78ece11": "MCP URL 복사",
   "29a4d835f0dfbb09": "추적 ID 복사",

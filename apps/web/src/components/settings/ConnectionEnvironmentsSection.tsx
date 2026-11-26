@@ -367,11 +367,17 @@ function SavedBackendListRow({
 
   const statusTooltip = isGoatConnectUnavailable(environment.entry)
     ? gt("Coming soon. Connect with Tailscale for now.")
-    : `${status.tooltipText}${snapshotAge === null ? "" : ` · ${snapshotAge}`}${
+    : [
+        [status.tooltipText, snapshotAge].filter(Boolean).join(" · "),
         versionMismatch
-          ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
-          : ""
-      }`;
+          ? gt("Update available: {serverVersion} → {clientVersion}", {
+              serverVersion: versionMismatch.serverVersion,
+              clientVersion: versionMismatch.clientVersion,
+            })
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
   return (
     <EnvironmentRow
@@ -413,7 +419,9 @@ function SavedBackendListRow({
             onClick={() => setRoutesOpen((open) => !open)}
             className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            {routeCount === 1 ? gt("Routes") : `${routeCount} routes`}
+            {routeCount === 1
+              ? gt("Routes")
+              : gt("{count, plural, one {# route} other {# routes}}", { count: routeCount })}
             <ChevronRightIcon
               aria-hidden
               className={cn(

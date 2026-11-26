@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "不支持此客户端",
   "7b94c564f855783b": "关闭",
   "c10efd795708cd88": "开启",
+  "26bd5e0c4918654d": "{count, plural, other {# 条路由}}",
+  "5173c50b0a60847c": "有可用更新：{serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "隐藏连接路径",
   "32f5a22aa78ece11": "复制 MCP 地址",
   "29a4d835f0dfbb09": "复制跟踪 ID",

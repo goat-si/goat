@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "Client nicht unterstützt",
   "7b94c564f855783b": "Ausschalten",
   "c10efd795708cd88": "Einschalten",
+  "26bd5e0c4918654d": "{count, plural, one {# Route} other {# Routen}}",
+  "5173c50b0a60847c": "Update verfügbar: {serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "Routen ausblenden",
   "32f5a22aa78ece11": "MCP-URL kopieren",
   "29a4d835f0dfbb09": "Trace-ID kopieren",

@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "Cliente no compatible",
   "7b94c564f855783b": "Desactivar",
   "c10efd795708cd88": "Activar",
+  "26bd5e0c4918654d": "{count, plural, one {# ruta} other {# rutas}}",
+  "5173c50b0a60847c": "Actualización disponible: {serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "Ocultar rutas",
   "32f5a22aa78ece11": "Copiar URL de MCP",
   "29a4d835f0dfbb09": "Copiar ID de traza",
