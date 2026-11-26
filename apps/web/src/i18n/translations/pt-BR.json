@@ -2413,7 +2413,7 @@
   "9d1944a284912b34": "Não foi possível salvar a conversa importada.",
   "23fbdaecd72f9468": "Importando… {processed} de {total} projetos processados",
   "28c4aee6105fd014": "Resultados obrigatórios aceitos",
-  "96db07a16d81979f": "Worker em {host}",
+  "96db07a16d81979f": "Executor em {host}",
   "cd9e0573b4527cba": "Não iniciado",
   "9756b09ffd8a55c6": "Em andamento",
   "b185ea720a85e9c2": "Aguardando aceite",
