@@ -1125,5 +1125,15 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Flota: no hay tareas en curso",
   "e8d0653cf49cd57e": "y {count} más",
-  "7d5ab92b06b67598": "Decisiones, {count} pendientes"
+  "7d5ab92b06b67598": "Decisiones, {count} pendientes",
+  "aead644e2cf1233f": "Mostrar todas",
+  "f001fa7b329c8fbf": "Ocultar las exitosas",
+  "ad208e3e32c85029": "Ocultar todas",
+  "5a543f8af34abca6": "Modo zen",
+  "0e3eebdc9ad239b4": "Oculta los comandos, las ediciones y las búsquedas de los agentes para leer el hilo como una conversación. Al ocultar las llamadas exitosas, los fallos siguen visibles. El modo zen también oculta los mensajes intermedios y muestra solo las respuestas finales. Las aprobaciones, las preguntas y los errores siempre se muestran.",
+  "c4044f008123f399": "Comparte un hilo con un invitado que puede seguirlo en directo en su navegador y enviar mensajes que tú apruebas.",
+  "d74cae03e5184cb7": "Inicia sesión en GOAT Connect para usar enlaces de invitado.",
+  "4681c4c9541539a4": "Iniciar sesión",
+  "f239f97357fdcb0f": "Para usar enlaces de invitado, inicia sesión en GOAT Connect y vincula este equipo. Si desactivas esta opción, todos los enlaces de invitado dejarán de funcionar.",
+  "88f6bae5adcdb0ec": "Abrir conexiones"
 }

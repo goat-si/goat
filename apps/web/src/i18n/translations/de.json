@@ -1125,5 +1125,15 @@
   "ae87266a748db24b": "Flotte: keine laufenden Aufgaben",
   "e8d0653cf49cd57e": "und {count} weitere",
   "7d5ab92b06b67598": "Entscheidungen, {count} ausstehend",
-  "f9153168b50dcc15": "Befehlspalette"
+  "f9153168b50dcc15": "Befehlspalette",
+  "aead644e2cf1233f": "Alle anzeigen",
+  "f001fa7b329c8fbf": "Erfolgreiche ausblenden",
+  "ad208e3e32c85029": "Alle ausblenden",
+  "5a543f8af34abca6": "Zen-Modus",
+  "0e3eebdc9ad239b4": "Blende Befehle, Änderungen und Suchvorgänge der Agenten aus, damit sich der Thread wie ein Gespräch liest. Beim Ausblenden erfolgreicher Aufrufe bleiben fehlgeschlagene sichtbar. Der Zen-Modus verbirgt auch Zwischenmeldungen und zeigt nur abschließende Antworten. Genehmigungen, Fragen und Fehler bleiben immer sichtbar.",
+  "c4044f008123f399": "Teile einen Thread mit einem Gast. Der Gast kann ihn live im Browser verfolgen und Nachrichten senden, die du freigibst.",
+  "d74cae03e5184cb7": "Melde dich bei GOAT Connect an, um Gastlinks zu verwenden.",
+  "4681c4c9541539a4": "Anmelden",
+  "f239f97357fdcb0f": "Melde dich bei GOAT Connect an und verknüpfe diesen Rechner, um Gastlinks zu verwenden. Wenn du diese Option ausschaltest, werden alle Gastlinks deaktiviert.",
+  "88f6bae5adcdb0ec": "Verbindungen öffnen"
 }
