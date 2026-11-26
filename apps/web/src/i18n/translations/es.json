@@ -259,7 +259,7 @@
   "6636e7393b63c7bd": "Instrucciones enviadas al agente",
   "e5de50fce39b5756": "La ejecución está prevista al cerrarse la ventana y aún no ha comenzado.",
   "825ace433c575c98": "No se inició ninguna ejecución para esta solicitud.",
-  "31187a4538e8d77b": "Marcadores vacíos:",
+  "85997c1618130558": "Marcadores vacíos: {fields}",
   "4d3cc9f81db78869": "Cuerpo (truncado)",
   "4f1d3ffa2da32c93": "Cuerpo",
   "4d32a8389bc57934": "Cargando entregas…",

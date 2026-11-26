@@ -431,3 +431,15 @@ export const isBotRoutineDraft = (
   liveTask?.goatBotRoutine === true &&
   draft.threadId !== "" &&
   draft.threadId === liveTask.threadId;
+
+/** A run time as "in 5 min", "in 23 hours" or "in 2 days". Days stay numeric: a run later today is never "tomorrow". */
+export function formatScheduledRelativeTime(diffMs: number, locale: string): string {
+  const auto = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+  const minutes = Math.ceil(diffMs / 60_000);
+  if (minutes === 0) return auto.format(0, "second");
+  if (Math.abs(minutes) < 60) return auto.format(minutes, "minute");
+  const always = new Intl.RelativeTimeFormat(locale, { numeric: "always", style: "short" });
+  const round = (value: number) => (diffMs > 0 ? Math.round(value) : Math.ceil(value));
+  if (Math.abs(diffMs) < 86_400_000) return always.format(round(diffMs / 3_600_000), "hour");
+  return always.format(round(diffMs / 86_400_000), "day");
+}

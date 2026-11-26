@@ -259,7 +259,7 @@
   "6636e7393b63c7bd": "Prompt sent to the agent",
   "e5de50fce39b5756": "Run scheduled when the window closes; no run started yet.",
   "825ace433c575c98": "No run was started for this request.",
-  "31187a4538e8d77b": "Empty placeholders:",
+  "85997c1618130558": "Empty placeholders: {fields}",
   "4d3cc9f81db78869": "Body (truncated)",
   "4f1d3ffa2da32c93": "Body",
   "4d32a8389bc57934": "Loading deliveries…",

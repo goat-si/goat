@@ -131,8 +131,9 @@ export function WebhookDeliveriesDialog({
               </DeliveryBlock>
               {selected.missingFields.length > 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  {gt("Empty placeholders:")}
-                  {selected.missingFields.join(", ")}
+                  {gt("Empty placeholders: {fields}", {
+                    fields: selected.missingFields.join(", "),
+                  })}
                 </p>
               ) : null}
               <DeliveryBlock title={gt("Headers")}>
