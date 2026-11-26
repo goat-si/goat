@@ -3474,5 +3474,15 @@
   "eee5af21197fc4a3": "Dieser Thread enthält bereits Aktivitäten in GOAT.",
   "9d1944a284912b34": "Die importierte Konversation konnte nicht gespeichert werden.",
   "23fbdaecd72f9468": "Importieren… {processed} von {total} Projekten bearbeitet",
-  "07246e498374788d": "Und {count} weitere"
+  "07246e498374788d": "Und {count} weitere",
+  "1f6b058fb5000ba2": "Weitere Blöcke wurden gestoppt. Ein bereits gesendeter Import kann noch angewendet werden.",
+  "de73827690f29421": "Einige Elemente wurden möglicherweise angewendet. Prüfe das Importergebnis.",
+  "fed20b9eea7642bd": "Der Speicherimport ist nicht verfügbar",
+  "291f9186e43260c6": "Stelle die Verbindung wieder her und prüfe das Importergebnis.",
+  "1c8ebc37bff986c9": "Der Importfortschritt konnte nicht gespeichert werden. Aus diesem Stapel wurde nichts importiert.",
+  "d95d6adf5aa437ff": "Prüfe das gespeicherte Importergebnis, bevor du weitere Elemente importierst.",
+  "bb122f1d94960037": "Das Ergebnis ist unbekannt. Stelle die Verbindung wieder her und prüfe das Importergebnis.",
+  "4e506a7c2f37a858": "Die Auswahl hat sich geändert. Prüfe die Vorschau vor dem Import erneut.",
+  "68a5236a421d0f4c": "Prüfe das Ergebnis und die Vorschau erneut, bevor du weitere Elemente importierst.",
+  "95cec271a3e79153": "Das gespeicherte Ergebnis ist nicht verfügbar. Frühere Elemente wurden möglicherweise angewendet. Prüfe die Vorschau erneut."
 }
