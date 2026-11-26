@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   diagnoseGoatBot,
@@ -73,6 +74,7 @@ export function GoatBotStatusCard({
   /** Show nothing while every line is fine, as the bot's home does. */
   readonly quietWhenReady?: boolean;
 }) {
+  const gt = useGT();
   const openName = useGoatBotName();
   const mainBotName = useGoatBotMainName();
   const name = botName ?? openName;
@@ -185,7 +187,7 @@ export function GoatBotStatusCard({
     </section>
   );
   return quietWhenReady ? (
-    <GoatBotSectionCard title="Status">
+    <GoatBotSectionCard title={gt("Status")}>
       <div className="px-3 py-3">{content}</div>
     </GoatBotSectionCard>
   ) : (

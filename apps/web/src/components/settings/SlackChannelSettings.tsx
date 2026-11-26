@@ -1,3 +1,5 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT, msg, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -30,7 +32,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection, SettingsUnavailableGroup } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 import { SlackBotBindingEditor } from "./SlackBotBindingEditor";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
@@ -48,13 +49,13 @@ import {
 const NO_PROJECT = "__none__";
 
 const CHANNEL_SCOPE_LABELS: Record<SlackChannelScope, string> = {
-  all: "Every channel it's in",
-  listed: "These channels only",
+  all: msg("Every channel it's in"),
+  listed: msg("These channels only"),
 };
 
 const USER_ACCESS_LABELS: Record<SlackUserAccess, string> = {
-  workspace: "Everyone in the workspace",
-  linked: "Linked accounts only",
+  workspace: msg("Everyone in the workspace"),
+  linked: msg("Linked accounts only"),
 };
 
 const failureMessage = (
@@ -67,6 +68,8 @@ const failureMessage = (
 
 /** Slack connection for the selected environment. Tokens stay on that server. */
 export function SlackChannelSettings() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { environment: selected } = useSettingsScope();
   const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
   const environmentId = connected ? selected.environmentId : null;
@@ -93,8 +96,10 @@ export function SlackChannelSettings() {
       ) : (
         <SettingsUnavailableGroup message={slackSettingsUnavailableMessage(availability)}>
           <SettingsRow
-            {...searchableSetting("slack-connection")}
-            description="Take @mentions and direct messages from Slack, and reply in the same thread."
+            {...localizedSetting("slack-connection")}
+            description={gt(
+              "Take @mentions and direct messages from Slack, and reply in the same thread.",
+            )}
           />
         </SettingsUnavailableGroup>
       )}
@@ -111,6 +116,7 @@ function SlackConnectionControls({
   accessChoices: boolean;
   bindingChoices: boolean;
 }) {
+  const localizedSetting = useTranslatedSearchableSetting();
   const settingsQuery = useEnvironmentQuery(
     channelEnvironment.slackSettings({ environmentId, input: {} }),
   );
@@ -134,7 +140,7 @@ function SlackConnectionControls({
   if (settingsQuery.data === null) {
     return (
       <SettingsRow
-        {...searchableSetting("slack-connection")}
+        {...localizedSetting("slack-connection")}
         description={settingsQuery.error ?? "Loading Slack settings…"}
       />
     );
@@ -173,6 +179,9 @@ function SlackConnectionForm(props: {
   bindingBots: ReadonlyArray<BotProfile> | null;
   onSaved: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { environmentId, connection } = props;
   const configure = useAtomCommand(channelEnvironment.slackConfigure, { reportFailure: false });
   const disconnect = useAtomCommand(channelEnvironment.slackDisconnect, { reportFailure: false });
@@ -269,8 +278,10 @@ function SlackConnectionForm(props: {
   return (
     <>
       <SettingsRow
-        {...searchableSetting("slack-connection")}
-        description="Take @mentions and direct messages from Slack, and reply in the same thread."
+        {...localizedSetting("slack-connection")}
+        description={gt(
+          "Take @mentions and direct messages from Slack, and reply in the same thread.",
+        )}
         status={
           connection === undefined ? null : (
             <span>
@@ -284,7 +295,7 @@ function SlackConnectionForm(props: {
         }
         control={
           <Switch
-            aria-label="Use Slack"
+            aria-label={gt("Use Slack")}
             checked={draft.enabled}
             disabled={busy}
             onCheckedChange={(checked) => update({ enabled: checked })}
@@ -292,15 +303,15 @@ function SlackConnectionForm(props: {
         }
       />
       <SettingsRow
-        title="App-level token"
-        description="Opens the Socket Mode connection. Needs connections:write."
+        title={gt("App-level token")}
+        description={gt("Opens the Socket Mode connection. Needs connections:write.")}
         control={
           <Input
             size="sm"
             type="password"
             autoComplete="off"
-            aria-label="Slack app-level token"
-            placeholder={connection?.hasAppToken ? "Saved" : "xapp-…"}
+            aria-label={gt("Slack app-level token")}
+            placeholder={connection?.hasAppToken ? gt("Saved") : "xapp-…"}
             value={draft.appToken}
             disabled={busy}
             onChange={(event) => update({ appToken: event.target.value })}
@@ -308,15 +319,17 @@ function SlackConnectionForm(props: {
         }
       />
       <SettingsRow
-        title="Bot token"
-        description="Reads mentions and DMs and replies. Needs chat:write, app_mentions:read, im:history."
+        title={gt("Bot token")}
+        description={gt(
+          "Reads mentions and DMs and replies. Needs chat:write, app_mentions:read, im:history.",
+        )}
         control={
           <Input
             size="sm"
             type="password"
             autoComplete="off"
-            aria-label="Slack bot token"
-            placeholder={connection?.hasBotToken ? "Saved" : "xoxb-…"}
+            aria-label={gt("Slack bot token")}
+            placeholder={connection?.hasBotToken ? gt("Saved") : "xoxb-…"}
             value={draft.botToken}
             disabled={busy}
             onChange={(event) => update({ botToken: event.target.value })}
@@ -324,11 +337,13 @@ function SlackConnectionForm(props: {
         }
       />
       <SettingsRow
-        title="Channels"
+        title={gt("Channels")}
         description={
           accessChoices
-            ? "Invite the bot to a channel before mentioning it there; it can't hear channels it isn't in. DMs always work."
-            : "Update GOAT on this machine to answer in every channel or without a link."
+            ? gt(
+                "Invite the bot to a channel before mentioning it there; it can't hear channels it isn't in. DMs always work.",
+              )
+            : gt("Update GOAT on this machine to answer in every channel or without a link.")
         }
         control={
           <Select
@@ -338,13 +353,13 @@ function SlackConnectionForm(props: {
               if (value !== null) update({ channelScope: value as SlackChannelScope });
             }}
           >
-            <SelectTrigger size="sm" aria-label="Slack channels the bot answers in">
-              <SelectValue>{CHANNEL_SCOPE_LABELS[draft.channelScope]}</SelectValue>
+            <SelectTrigger size="sm" aria-label={gt("Slack channels the bot answers in")}>
+              <SelectValue>{m(CHANNEL_SCOPE_LABELS[draft.channelScope])}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
               {(Object.keys(CHANNEL_SCOPE_LABELS) as SlackChannelScope[]).map((scope) => (
                 <SelectItem key={scope} value={scope}>
-                  {CHANNEL_SCOPE_LABELS[scope]}
+                  {m(CHANNEL_SCOPE_LABELS[scope])}
                 </SelectItem>
               ))}
             </SelectPopup>
@@ -353,12 +368,12 @@ function SlackConnectionForm(props: {
       />
       {draft.channelScope === "listed" ? (
         <SettingsRow
-          title="Channel IDs"
-          description="Separated by commas. Find an ID under the channel's details."
+          title={gt("Channel IDs")}
+          description={gt("Separated by commas. Find an ID under the channel's details.")}
           control={
             <Input
               size="sm"
-              aria-label="Allowed Slack channel IDs"
+              aria-label={gt("Allowed Slack channel IDs")}
               placeholder="C0123456789"
               value={draft.channels}
               disabled={busy}
@@ -376,11 +391,11 @@ function SlackConnectionForm(props: {
         />
       )}
       <SettingsRow
-        title="Who can use it"
+        title={gt("Who can use it")}
         description={
           draft.userAccess === "workspace"
-            ? "People who haven't linked an account work at the level below."
-            : "Others get a reply explaining how to link."
+            ? gt("People who haven't linked an account work at the level below.")
+            : gt("Others get a reply explaining how to link.")
         }
         control={
           <Select
@@ -390,13 +405,13 @@ function SlackConnectionForm(props: {
               if (value !== null) update({ userAccess: value as SlackUserAccess });
             }}
           >
-            <SelectTrigger size="sm" aria-label="Who can use the Slack bot">
-              <SelectValue>{USER_ACCESS_LABELS[draft.userAccess]}</SelectValue>
+            <SelectTrigger size="sm" aria-label={gt("Who can use the Slack bot")}>
+              <SelectValue>{m(USER_ACCESS_LABELS[draft.userAccess])}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
               {(Object.keys(USER_ACCESS_LABELS) as SlackUserAccess[]).map((access) => (
                 <SelectItem key={access} value={access}>
-                  {USER_ACCESS_LABELS[access]}
+                  {m(USER_ACCESS_LABELS[access])}
                 </SelectItem>
               ))}
             </SelectPopup>
@@ -405,8 +420,8 @@ function SlackConnectionForm(props: {
       />
       {draft.userAccess === "workspace" ? (
         <SettingsRow
-          title="Access without a link"
-          description="The most work started by someone without a linked account may do."
+          title={gt("Access without a link")}
+          description={gt("The most work started by someone without a linked account may do.")}
           control={
             <Select
               disabled={busy}
@@ -415,13 +430,15 @@ function SlackConnectionForm(props: {
                 if (value !== null) update({ unlinkedRuntimeModeCeiling: value as RuntimeMode });
               }}
             >
-              <SelectTrigger size="sm" aria-label="Access for Slack users without a link">
-                <SelectValue>{RUNTIME_MODE_LABELS[draft.unlinkedRuntimeModeCeiling]}</SelectValue>
+              <SelectTrigger size="sm" aria-label={gt("Access for Slack users without a link")}>
+                <SelectValue>
+                  {m(RUNTIME_MODE_LABELS[draft.unlinkedRuntimeModeCeiling])}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 {(Object.keys(RUNTIME_MODE_LABELS) as RuntimeMode[]).map((mode) => (
                   <SelectItem key={mode} value={mode}>
-                    {RUNTIME_MODE_LABELS[mode]}
+                    {m(RUNTIME_MODE_LABELS[mode])}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -430,8 +447,8 @@ function SlackConnectionForm(props: {
         />
       ) : null}
       <SettingsRow
-        title="Default project"
-        description="Where work from Slack runs when the request doesn't say."
+        title={gt("Default project")}
+        description={gt("Where work from Slack runs when the request doesn't say.")}
         control={
           <Select
             disabled={busy}
@@ -440,11 +457,11 @@ function SlackConnectionForm(props: {
               update({ projectId: value === null || value === NO_PROJECT ? "" : value })
             }
           >
-            <SelectTrigger size="sm" aria-label="Default project for Slack work">
-              <SelectValue>{selectedProject?.title ?? "Ask each time"}</SelectValue>
+            <SelectTrigger size="sm" aria-label={gt("Default project for Slack work")}>
+              <SelectValue>{selectedProject?.title ?? gt("Ask each time")}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
-              <SelectItem value={NO_PROJECT}>Ask each time</SelectItem>
+              <SelectItem value={NO_PROJECT}>{gt("Ask each time")}</SelectItem>
               {projects.map((project) => (
                 <SelectItem key={project.id} value={project.id}>
                   {project.title}
@@ -455,8 +472,8 @@ function SlackConnectionForm(props: {
         }
       />
       <SettingsRow
-        title="Save"
-        description={formError ?? "Leave a token empty to keep the saved one."}
+        title={gt("Save")}
+        description={formError ?? gt("Leave a token empty to keep the saved one.")}
         control={
           <div className="flex items-center gap-2">
             {connection === undefined ? null : (
@@ -467,7 +484,7 @@ function SlackConnectionForm(props: {
                   disabled={busy}
                   onClick={() => void removeTokens()}
                 >
-                  Delete tokens
+                  {gt("Delete tokens")}
                 </Button>
                 <Button
                   size="sm"
@@ -475,12 +492,12 @@ function SlackConnectionForm(props: {
                   disabled={busy || !connection.enabled}
                   onClick={() => void turnOff()}
                 >
-                  Disconnect
+                  {gt("Disconnect")}
                 </Button>
               </>
             )}
             <Button size="sm" disabled={busy} onClick={() => void save()}>
-              Save
+              {gt("Save")}
             </Button>
           </div>
         }
@@ -490,14 +507,16 @@ function SlackConnectionForm(props: {
 }
 
 const RUNTIME_MODE_LABELS: Record<RuntimeMode, string> = {
-  "approval-required": "Ask before changes",
-  "auto-accept-edits": "Accept edits",
-  auto: "Auto",
-  "full-access": "Full access",
+  "approval-required": msg("Ask before changes"),
+  "auto-accept-edits": msg("Accept edits"),
+  auto: msg("Auto"),
+  "full-access": msg("Full access"),
 };
 
 /** One-time codes that link a Slack user to this server's owner, and unlinking. */
 function SlackIdentityLinks(props: { environmentId: EnvironmentId; connectionId: string }) {
+  const gt = useGT();
+  const m = useMessages();
   const { environmentId, connectionId } = props;
   const createLink = useAtomCommand(channelEnvironment.createIdentityLink, {
     reportFailure: false,
@@ -519,7 +538,7 @@ function SlackIdentityLinks(props: { environmentId: EnvironmentId; connectionId:
       if (!isAtomCommandInterrupted(result)) {
         toastManager.add({
           type: "error",
-          title: "No link code",
+          title: gt("No link code"),
           description: failureMessage(result, "Could not create a link code."),
         });
       }
@@ -538,23 +557,25 @@ function SlackIdentityLinks(props: { environmentId: EnvironmentId; connectionId:
       if (!isAtomCommandInterrupted(result)) {
         toastManager.add({
           type: "error",
-          title: "Not unlinked",
+          title: gt("Not unlinked"),
           description: failureMessage(result, "Could not unlink that Slack user."),
         });
       }
       return;
     }
     setSlackUserId("");
-    toastManager.add({ type: "success", title: "Slack user unlinked" });
+    toastManager.add({ type: "success", title: gt("Slack user unlinked") });
   };
 
   return (
     <>
       <SettingsRow
-        title="Link your Slack account"
+        title={gt("Link your Slack account")}
         description={
           code === null
-            ? "Create a one-time code, then send it to the bot in a DM. Work you start from Slack is capped at this level."
+            ? gt(
+                "Create a one-time code, then send it to the bot in a DM. Work you start from Slack is capped at this level.",
+              )
             : `Send "link ${code.code}" to the bot in a DM before ${new Date(code.expiresAt).toLocaleTimeString()}.`
         }
         control={
@@ -565,31 +586,31 @@ function SlackIdentityLinks(props: { environmentId: EnvironmentId; connectionId:
                 if (value !== null) setCeiling(value as RuntimeMode);
               }}
             >
-              <SelectTrigger size="sm" aria-label="Access for linked Slack account">
-                <SelectValue>{RUNTIME_MODE_LABELS[ceiling]}</SelectValue>
+              <SelectTrigger size="sm" aria-label={gt("Access for linked Slack account")}>
+                <SelectValue>{m(RUNTIME_MODE_LABELS[ceiling])}</SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 {(Object.keys(RUNTIME_MODE_LABELS) as RuntimeMode[]).map((mode) => (
                   <SelectItem key={mode} value={mode}>
-                    {RUNTIME_MODE_LABELS[mode]}
+                    {m(RUNTIME_MODE_LABELS[mode])}
                   </SelectItem>
                 ))}
               </SelectPopup>
             </Select>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void create()}>
-              Create code
+              {gt("Create code")}
             </Button>
           </div>
         }
       />
       <SettingsRow
-        title="Unlink a Slack user"
-        description="Tasks already started keep the requester they were created with."
+        title={gt("Unlink a Slack user")}
+        description={gt("Tasks already started keep the requester they were created with.")}
         control={
           <div className="flex items-center gap-2">
             <Input
               size="sm"
-              aria-label="Slack user ID to unlink"
+              aria-label={gt("Slack user ID to unlink")}
               placeholder="U0123456789"
               value={slackUserId}
               disabled={busy}
@@ -601,7 +622,7 @@ function SlackIdentityLinks(props: { environmentId: EnvironmentId; connectionId:
               disabled={busy || slackUserId.trim().length === 0}
               onClick={() => void removeLink()}
             >
-              Unlink
+              {gt("Unlink")}
             </Button>
           </div>
         }

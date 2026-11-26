@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   type BotId,
   type BotProfile,
@@ -17,6 +18,7 @@ export function SlackBotBindingEditor(props: {
   readonly disabled: boolean;
   readonly onChange: (bindings: SlackBotBindings) => void;
 }) {
+  const gt = useGT();
   const { bindings, bots, disabled, onChange } = props;
   const [channel, setChannel] = useState("");
   const [target, setTarget] = useState<BotId | null>(null);
@@ -29,8 +31,8 @@ export function SlackBotBindingEditor(props: {
 
   return (
     <SettingsRow
-      title="Channel bindings"
-      description="Choose which bot answers new threads in a Slack channel."
+      title={gt("Channel bindings")}
+      description={gt("Choose which bot answers new threads in a Slack channel.")}
     >
       <div className="flex flex-col gap-2">
         {bindings.map((binding) => (
@@ -61,14 +63,14 @@ export function SlackBotBindingEditor(props: {
                 onChange(bindings.filter((row) => row.channelId !== binding.channelId))
               }
             >
-              Unbind
+              {gt("Unbind")}
             </Button>
           </div>
         ))}
         <div className="grid items-center gap-2 sm:grid-cols-[minmax(8rem,1fr)_minmax(9rem,12rem)_auto]">
           <Input
             size="sm"
-            aria-label="Slack channel ID to bind"
+            aria-label={gt("Slack channel ID to bind")}
             placeholder="C0123456789"
             value={channel}
             maxLength={32}
@@ -78,7 +80,7 @@ export function SlackBotBindingEditor(props: {
           <BotPicker
             bots={bots}
             value={target}
-            label="Bot for new Slack channel"
+            label={gt("Bot for new Slack channel")}
             disabled={disabled || atLimit}
             onChange={setTarget}
           />
@@ -93,14 +95,16 @@ export function SlackBotBindingEditor(props: {
               setTarget(null);
             }}
           >
-            Add binding
+            {gt("Add binding")}
           </Button>
         </div>
         {alreadyAssigned ? (
-          <p className="text-xs text-muted-foreground">This channel already has a binding.</p>
+          <p className="text-xs text-muted-foreground">
+            {gt("This channel already has a binding.")}
+          </p>
         ) : null}
         {atLimit ? (
-          <p className="text-xs text-muted-foreground">All 100 bindings are in use.</p>
+          <p className="text-xs text-muted-foreground">{gt("All 100 bindings are in use.")}</p>
         ) : null}
       </div>
     </SettingsRow>
@@ -114,6 +118,7 @@ function BotPicker(props: {
   readonly disabled: boolean;
   readonly onChange: (botId: BotId) => void;
 }) {
+  const gt = useGT();
   const { bots, value, label, disabled, onChange } = props;
   const selected = bots.find((bot) => bot.botId === value);
   return (
@@ -127,7 +132,7 @@ function BotPicker(props: {
     >
       <SelectTrigger size="sm" aria-label={label}>
         <SelectValue>
-          {selected?.name ?? (value === null ? "Choose bot" : "Unavailable bot")}
+          {selected?.name ?? (value === null ? gt("Choose bot") : gt("Unavailable bot"))}
         </SelectValue>
       </SelectTrigger>
       <SelectPopup>
