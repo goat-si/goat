@@ -231,36 +231,58 @@ export function canRevokeOtherClients(
 export function revokeOthersToast(
   { revokedCount, kept }: AuthOtherClientSessionsRevokeResult,
   { listShown }: { readonly listShown: boolean },
+  gt: (source: string, variables?: Record<string, string | number>) => string,
 ) {
-  const title = revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`;
-  const asker = "Ask someone who can see the authorized clients on this computer";
+  const title =
+    revokedCount === 1
+      ? gt("Revoked 1 other client")
+      : gt("Revoked {count} clients", { count: revokedCount });
   if (kept === undefined)
     return {
       type: "success" as const,
       title,
-      description: `Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. ${listShown ? "Check the list below for" : asker} what is still signed in.`,
+      description: listShown
+        ? gt(
+            "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Check the list below for what is still signed in.",
+          )
+        : gt(
+            "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Ask someone who can see the authorized clients on this computer what is still signed in.",
+          ),
     };
-  const parts = [
-    ...(kept.desktop === 0
-      ? []
-      : [
-          `${kept.desktop} ${kept.desktop === 1 ? "session" : "sessions"} signed in with the desktop app's built-in credential`,
-        ]),
-    ...(kept.pen === 0 ? [] : [`${kept.pen} Pen ${kept.pen === 1 ? "session" : "sessions"}`]),
-  ];
+  const desktop =
+    kept.desktop === 0
+      ? null
+      : kept.desktop === 1
+        ? gt("1 session signed in with the desktop app's built-in credential")
+        : gt("{count} sessions signed in with the desktop app's built-in credential", {
+            count: kept.desktop,
+          });
+  const pen =
+    kept.pen === 0
+      ? null
+      : kept.pen === 1
+        ? gt("1 Pen session")
+        : gt("{count} Pen sessions", { count: kept.pen });
   const one = kept.desktop + kept.pen === 1;
   const hint = listShown
     ? one
-      ? "Revoke it below if you do not recognise it."
-      : "Revoke them one by one below if you do not recognise them."
-    : `${asker} to revoke ${one ? "it" : "them"} if you do not recognise ${one ? "it" : "them"}.`;
+      ? gt("Revoke it below if you do not recognise it.")
+      : gt("Revoke them one by one below if you do not recognise them.")
+    : one
+      ? gt(
+          "Ask someone who can see the authorized clients on this computer to revoke it if you do not recognise it.",
+        )
+      : gt(
+          "Ask someone who can see the authorized clients on this computer to revoke them if you do not recognise them.",
+        );
+  const details = desktop && pen ? gt("{desktop} and {pen}", { desktop, pen }) : (desktop ?? pen);
   return {
     type: "success" as const,
     title,
     description:
-      parts.length === 0
-        ? "Other paired clients will need a new pairing link before reconnecting."
-        : `Kept ${parts.join(" and ")}. ${hint}`,
+      details === null
+        ? gt("Other paired clients will need a new pairing link before reconnecting.")
+        : gt("Kept {details}. {hint}", { details, hint }),
   };
 }
 
@@ -275,10 +297,11 @@ export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
  * means unchecked. */
 export function missingTailscaleEndpointDescription(
   state: Pick<DesktopServerExposureState, "mode" | "tailscaleServeEnabled"> | null,
+  gt: (source: string) => string,
 ): string {
   return state && state.mode !== "network-accessible" && !state.tailscaleServeEnabled
-    ? "Turn on Network access to detect Tailscale."
-    : "Start Tailscale to set up HTTPS access through MagicDNS.";
+    ? gt("Turn on Network access to detect Tailscale.")
+    : gt("Start Tailscale to set up HTTPS access through MagicDNS.");
 }
 
 export function resolveTailscaleServeBaseUrl(
@@ -309,12 +332,16 @@ export function isWslSettingsRowVisible(input: {
  * Once client/server versions match, this passive Version label follows the sidebar update action,
  * including retryable failures. Rechecks retain downloaded-update labels; `state` is null outside desktop.
  */
-export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null): string {
-  if (!state) return "Up to date";
+export function resolveLocalVersionStatusLabel(
+  state: DesktopUpdateState | null,
+  gt: (source: string, variables?: { version: string }) => string = (source, variables) =>
+    variables ? source.replace("{version}", () => variables.version) : source,
+): string {
+  if (!state) return gt("Up to date");
   if (state.status === "downloading") {
     return state.availableVersion
-      ? `Downloading update ${state.availableVersion}`
-      : "Downloading update";
+      ? gt("Downloading update {version}", { version: state.availableVersion })
+      : gt("Downloading update");
   }
   const action = resolveDesktopUpdateButtonAction(state);
   if (
@@ -323,14 +350,14 @@ export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null)
     (state.status === "checking" && state.downloadedVersion !== null)
   ) {
     const version = getDesktopUpdateDownloadedVersion(state);
-    return version ? `Update ${version} downloaded` : "Update downloaded";
+    return version ? gt("Update {version} downloaded", { version }) : gt("Update downloaded");
   }
   if (action === "download") {
     return state.availableVersion
-      ? `Update ${state.availableVersion} available`
-      : "Update available";
+      ? gt("Update {version} available", { version: state.availableVersion })
+      : gt("Update available");
   }
-  return "Up to date";
+  return gt("Up to date");
 }
 
 export type QrEndpointOption = {
@@ -508,19 +535,6 @@ export function sortDesktopPairingLinks(links: ReadonlyArray<ServerPairingLinkRe
   return [...links].toSorted(
     (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
   );
-}
-
-export function summarizeAuthorizedClients(
-  sessions: ReadonlyArray<ServerClientSessionRecord>,
-  links: ReadonlyArray<ServerPairingLinkRecord>,
-): string {
-  const parts = [
-    `${sessions.length} ${sessions.length === 1 ? "client" : "clients"}`,
-    links.length > 0
-      ? `${links.length} ${links.length === 1 ? "pairing link" : "pairing links"}`
-      : null,
-  ];
-  return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
 export function sortDesktopClientSessions(sessions: ReadonlyArray<ServerClientSessionRecord>) {

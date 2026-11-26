@@ -719,7 +719,11 @@ describe("revokeOthersToast reads what the server kept, never the list on screen
       description: `Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. ${asker} what is still signed in.`,
     },
   ])("$label", ({ result, listShown, title, description }) => {
-    expect(revokeOthersToast(result, { listShown })).toEqual({
+    expect(
+      revokeOthersToast(result, { listShown }, (source, variables) =>
+        source.replace(/\{(\w+)\}/g, (_, key: string) => String(variables?.[key])),
+      ),
+    ).toEqual({
       type: "success",
       title,
       description,
