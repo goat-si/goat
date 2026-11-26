@@ -8,7 +8,9 @@ import { ToolCallVisibilityRow } from "./ToolCallVisibilityRow";
 const update = vi.fn();
 vi.mock(import("./useScopedSettings"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useScopedSettings: () => ({ ...DEFAULT_UNIFIED_SETTINGS, toolCallVisibility: "showAll" }),
+  useScopedSettings: vi
+    .fn()
+    .mockReturnValue({ ...DEFAULT_UNIFIED_SETTINGS, toolCallVisibility: "showAll" }),
   useUpdateScopedSettings: () => update,
 }));
 
