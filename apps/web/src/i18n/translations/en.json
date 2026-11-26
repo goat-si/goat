@@ -573,6 +573,7 @@
   "260615f6694ecfd7": "Allow agents with settings access to publish environment themes.",
   "261682788ab9a3ac": "Environment: {environment}",
   "26181050022406d8": "Project import limit reached.",
+  "26184a346ce1c1dc": "{count, plural, one {day} other {days}}",
   "2630e7b58f5f271b": "Continue",
   "2632f324dc2d9c48": "Agents",
   "264d9bfa6806e746": "Browse a folder on disk",

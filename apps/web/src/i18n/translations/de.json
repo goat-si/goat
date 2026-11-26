@@ -573,6 +573,7 @@
   "260615f6694ecfd7": "Agenten mit Einstellungszugriff dürfen Designs für Umgebungen veröffentlichen.",
   "261682788ab9a3ac": "Umgebung: {environment}",
   "26181050022406d8": "Das Importlimit für Projekte wurde erreicht.",
+  "26184a346ce1c1dc": "{count, plural, one {Tag} other {Tage}}",
   "2630e7b58f5f271b": "Weiter",
   "2632f324dc2d9c48": "Agenten",
   "264d9bfa6806e746": "Ordner auf dem Datenträger auswählen",

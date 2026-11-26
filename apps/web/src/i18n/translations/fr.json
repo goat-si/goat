@@ -573,6 +573,7 @@
   "260615f6694ecfd7": "Autorise les agents ayant accès aux réglages à publier des thèmes d’environnement.",
   "261682788ab9a3ac": "Environnement : {environment}",
   "26181050022406d8": "Limite d'importation de projets atteinte.",
+  "26184a346ce1c1dc": "{count, plural, one {jour} other {jours}}",
   "2630e7b58f5f271b": "Continuer",
   "2632f324dc2d9c48": "Agents",
   "264d9bfa6806e746": "Parcourir les dossiers du disque",

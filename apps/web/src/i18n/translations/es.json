@@ -573,6 +573,7 @@
   "260615f6694ecfd7": "Permite que los agentes con acceso a los ajustes publiquen temas para el entorno.",
   "261682788ab9a3ac": "Entorno: {environment}",
   "26181050022406d8": "Se ha alcanzado el límite de importación de proyectos.",
+  "26184a346ce1c1dc": "{count, plural, one {día} other {días}}",
   "2630e7b58f5f271b": "Continuar",
   "2632f324dc2d9c48": "Agentes",
   "264d9bfa6806e746": "Buscar una carpeta en el disco",
