@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { isSecretReference, secretSettingsFields, type EnvironmentId } from "@goat/contracts";
 import type { SourceControlDefinition } from "@goat/client-runtime/source-control-clients";
 import { useState } from "react";
@@ -21,6 +22,7 @@ export function SourceControlHostSettings({
   };
   readonly onSaved: () => void;
 }) {
+  const gt = useGT();
   const saved = useEnvironmentSettings(
     environmentId,
     (settings) => settings.sourceControlHosts[definition.kind],
@@ -91,7 +93,7 @@ export function SourceControlHostSettings({
               void save(Object.fromEntries(Object.keys(saved ?? {}).map((key) => [key, ""])))
             }
           >
-            Remove
+            {gt("Remove")}
           </Button>
         </div>
       ) : null}

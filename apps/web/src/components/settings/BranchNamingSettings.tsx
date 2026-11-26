@@ -1,3 +1,5 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { msg, useGT, useMessages } from "gt-react";
 import { useCommitOnBlur } from "../../hooks/useCommitOnBlur";
 import { BranchNamingMode, DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
 
@@ -6,7 +8,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingResetButton } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { searchableSetting } from "./settingsSearch";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -14,9 +15,9 @@ import {
 } from "./useScopedSettings";
 
 const MODES = {
-  static: "Static prefix",
-  semantic: "Semantic prefix",
-  custom: "Custom instructions",
+  static: msg("Static prefix"),
+  semantic: msg("Semantic prefix"),
+  custom: msg("Custom instructions"),
 } satisfies Record<BranchNamingMode, string>;
 
 export function BranchNamingSettings() {
@@ -26,6 +27,9 @@ export function BranchNamingSettings() {
 }
 
 function BranchNamingFields() {
+  const m = useMessages();
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const modeMixed = useScopedSettingsMixed(["branchNamingMode"]);
@@ -48,17 +52,19 @@ function BranchNamingFields() {
       <SettingsRow
         serverScoped
         settingKeys={["branchNamingMode"]}
-        {...searchableSetting("worktree-branch-naming")}
-        description="Choose how new worktree branches are named from your first message."
+        {...localizedSetting("worktree-branch-naming")}
+        description={gt("Choose how new worktree branches are named from your first message.")}
         status={
           !modeMixed && settings.branchNamingMode === "semantic"
-            ? "The model chooses a prefix that describes the work, such as feat/add-search, fix/login-timeout, or refactor/auth."
+            ? gt(
+                "The model chooses a prefix that describes the work, such as feat/add-search, fix/login-timeout, or refactor/auth.",
+              )
             : undefined
         }
         resetAction={
           settings.branchNamingMode !== DEFAULT_SERVER_SETTINGS.branchNamingMode || modeMixed ? (
             <SettingResetButton
-              label="branch naming"
+              label={gt("branch naming")}
               onClick={() =>
                 updateSettings({ branchNamingMode: DEFAULT_SERVER_SETTINGS.branchNamingMode })
               }
@@ -74,15 +80,15 @@ function BranchNamingFields() {
               }
             }}
           >
-            <SelectTrigger size="sm" aria-label="Worktree branch naming">
+            <SelectTrigger size="sm" aria-label={gt("Worktree branch naming")}>
               <SelectValue>
-                {(value: BranchNamingMode | null) => (value === null ? "Mixed" : MODES[value])}
+                {(value: BranchNamingMode | null) => (value === null ? "Mixed" : m(MODES[value]))}
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
               {BranchNamingMode.literals.map((mode) => (
                 <SelectItem key={mode} value={mode}>
-                  {MODES[mode]}
+                  {m(MODES[mode])}
                 </SelectItem>
               ))}
             </SelectPopup>
@@ -93,13 +99,15 @@ function BranchNamingFields() {
         <SettingsRow
           serverScoped
           settingKeys={["branchNamePrefix"]}
-          title="Branch prefix"
-          description="For example, goat or goat/ produces goat/add-search. Leave empty for no prefix."
+          title={gt("Branch prefix")}
+          description={gt(
+            "For example, goat or goat/ produces goat/add-search. Leave empty for no prefix.",
+          )}
           resetAction={
             prefixMixed ||
             settings.branchNamePrefix !== DEFAULT_SERVER_SETTINGS.branchNamePrefix ? (
               <SettingResetButton
-                label="branch prefix"
+                label={gt("branch prefix")}
                 onClick={() =>
                   updateSettings({ branchNamePrefix: DEFAULT_SERVER_SETTINGS.branchNamePrefix })
                 }
@@ -109,10 +117,10 @@ function BranchNamingFields() {
           control={
             <Input
               {...prefixInput}
-              aria-label="Branch prefix"
+              aria-label={gt("Branch prefix")}
               autoCapitalize="none"
               spellCheck={false}
-              placeholder={prefixMixed ? "Mixed" : "No prefix"}
+              placeholder={prefixMixed ? gt("Mixed") : gt("No prefix")}
             />
           }
         />
@@ -121,12 +129,14 @@ function BranchNamingFields() {
         <SettingsRow
           serverScoped
           settingKeys={["branchNameInstructions"]}
-          title="Branch naming instructions"
-          description="Appended to the naming prompt. The model returns the complete branch name; no prefix or suffix is added."
+          title={gt("Branch naming instructions")}
+          description={gt(
+            "Appended to the naming prompt. The model returns the complete branch name; no prefix or suffix is added.",
+          )}
           resetAction={
             instructionsMixed || settings.branchNameInstructions !== "" ? (
               <SettingResetButton
-                label="branch naming instructions"
+                label={gt("branch naming instructions")}
                 onClick={() => updateSettings({ branchNameInstructions: "" })}
               />
             ) : null
@@ -135,12 +145,12 @@ function BranchNamingFields() {
           <div className="mt-3 max-w-2xl pb-3.5">
             <Textarea
               {...instructionsInput}
-              aria-label="Branch naming instructions"
+              aria-label={gt("Branch naming instructions")}
               rows={4}
               placeholder={
                 instructionsMixed
-                  ? "Mixed. Enter instructions to apply to all selected targets."
-                  : "Use feature/ followed by the issue ID and a short description."
+                  ? gt("Mixed. Enter instructions to apply to all selected targets.")
+                  : gt("Use feature/ followed by the issue ID and a short description.")
               }
             />
           </div>
