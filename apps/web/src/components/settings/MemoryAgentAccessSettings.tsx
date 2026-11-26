@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useRef, useState } from "react";
@@ -9,6 +10,7 @@ import { MemorySitesSettings } from "./MemorySitesSettings";
 import { Switch } from "../ui/switch";
 
 export function MemoryAgentAccessSettings({ environmentId }: { environmentId: EnvironmentId }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const enabled = useEnvironmentSettings(
     environmentId,
@@ -27,13 +29,15 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
   }, []);
   return (
     <>
-      <SettingsSection title="Agent access">
+      <SettingsSection title={gt("Agent access")}>
         <SettingsRow
-          title="Allow agent memory access"
-          description="Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices."
+          title={gt("Allow agent memory access")}
+          description={gt(
+            "Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices.",
+          )}
           control={
             <Switch
-              aria-label="Allow agent memory access"
+              aria-label={gt("Allow agent memory access")}
               checked={enabled}
               disabled={!canUpdate || busy}
               onCheckedChange={(value) => {
@@ -49,8 +53,8 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
                   setBusy(false);
                   setMessage(
                     result._tag === "Success"
-                      ? "Agent memory access updated."
-                      : "Could not update agent memory access.",
+                      ? gt("Agent memory access updated.")
+                      : gt("Could not update agent memory access."),
                   );
                 });
               }}

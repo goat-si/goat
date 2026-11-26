@@ -1,3 +1,4 @@
+import { useGT, useLocale } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   AuthMemoryWriteScope,
@@ -51,6 +52,8 @@ export function MemoryImportSettings({
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
 }) {
+  const gt = useGT();
+  const locale = useLocale();
   const registry = useContext(RegistryContext);
   const canImport = useAtomValue(memoryEnvironment.importProvider.permissionAtom(environmentId));
   const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
@@ -225,10 +228,26 @@ export function MemoryImportSettings({
       progress?.phase ?? "",
     );
   return (
-    <SettingsSection title="Import memories">
+    <SettingsSection title={gt("Import memories")}>
       <SettingsRow
-        title="Provider memories"
-        description={`Import supported ${new Intl.ListFormat("en", { type: "disjunction" }).format(formats.map((f) => memoryImportFormatLabels[f]))} memories from the selected device. Other providers are not supported. Memory write and file read permissions are required.${formats.includes("aside") ? " Aside imports only the Current section of each page; project pages need a project scope." : ""}`}
+        title={gt("Provider memories")}
+        description={[
+          gt(
+            "Import supported {providers} memories from the selected device. Other providers are not supported. Memory write and file read permissions are required.",
+            {
+              providers: new Intl.ListFormat(locale, { type: "disjunction" }).format(
+                formats.map((f) => memoryImportFormatLabels[f]),
+              ),
+            },
+          ),
+          ...(formats.includes("aside")
+            ? [
+                gt(
+                  "Aside imports only the Current section of each page; project pages need a project scope.",
+                ),
+              ]
+            : []),
+        ].join(" ")}
       >
         <div className="space-y-3">
           <Select
@@ -244,8 +263,8 @@ export function MemoryImportSettings({
               workflow?.invalidate();
             }}
           >
-            <SelectTrigger aria-label="Import provider">
-              <SelectValue placeholder="Choose a provider" />
+            <SelectTrigger aria-label={gt("Import provider")}>
+              <SelectValue placeholder={gt("Choose a provider")} />
             </SelectTrigger>
             <SelectPopup>
               {formats.map((value) => (
@@ -278,7 +297,7 @@ export function MemoryImportSettings({
                 }, format ?? undefined)
               }
             >
-              Discover profiles
+              {gt("Discover profiles")}
             </Button>
             {format === "codex" && canCheck ? (
               <Button
@@ -456,7 +475,7 @@ export function MemoryImportSettings({
                 }
               }}
             >
-              Confirm selection
+              {gt("Confirm selection")}
             </Button>
           </div>
           {progress?.phase === "previewed" ? (
@@ -500,7 +519,7 @@ export function MemoryImportSettings({
                 workflow?.stop();
               }}
             >
-              Stop import
+              {gt("Stop import")}
             </Button>
             {progress?.phase === "save_failed" ? (
               <Button
@@ -518,7 +537,7 @@ export function MemoryImportSettings({
               disabled={!workflow || !canImport || busy}
               onClick={() => void run(() => workflow!.recover())}
             >
-              Check import result
+              {gt("Check import result")}
             </Button>
           </div>
         </div>
@@ -547,11 +566,11 @@ export function MemoryImportSettings({
           progress.phase,
         )) ? (
         <SettingsRow
-          title="Import progress"
+          title={gt("Import progress")}
           description={
             <span role="status">
               {busy ? "Import request in progress. " : ""}
-              {progress.message}
+              {progress.message && gt(progress.message)}
               {progress.stopped ? " Future chunks stopped. Already sent work can finish." : ""}{" "}
               {progress.phase === "applying" || progress.receipt
                 ? `${progress.settledChunks} chunks completed.`
