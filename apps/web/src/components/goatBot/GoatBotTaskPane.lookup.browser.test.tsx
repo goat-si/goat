@@ -22,6 +22,8 @@ const state = vi.hoisted(() => ({
   listEstablished: true,
   canUpdate: true,
   lookupSupported: false,
+  snoozeSupported: false,
+  changes: "stream:1:0",
   lookup: vi.fn(),
   showMenu: vi.fn(),
   send: vi.fn(() => true),
@@ -68,7 +70,14 @@ vi.mock("~/state/entities", () => ({
     new Map([
       [
         "env",
-        { environment: { capabilities: { goatBotTaskLookupSearch: state.lookupSupported } } },
+        {
+          environment: {
+            capabilities: {
+              goatBotTaskLookupSearch: state.lookupSupported,
+              goatBotTaskSnooze: state.snoozeSupported,
+            },
+          },
+        },
       ],
     ]),
   useThreadShell: () => ({}),
@@ -108,6 +117,7 @@ vi.mock("./GoatBotTimeline", async () => {
   };
 });
 // Each bot's own task list: main's, or the member's when a member's pane is open.
+vi.mock("./useGoatBotTaskChanges", () => ({ useGoatBotTaskChanges: () => state.changes }));
 vi.mock("./useBotRoster", () => ({
   useBotThreads: (_environmentId: string, bot: { botId: string } | null) => {
     state.lists.push(bot?.botId ?? null);
@@ -187,6 +197,8 @@ function setup() {
   state.listFailed = false;
   state.canUpdate = true;
   state.lookupSupported = false;
+  state.snoozeSupported = false;
+  state.changes = "stream:1:0";
   state.lookup.mockReset();
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
@@ -245,6 +257,46 @@ it("shows one accepted result while the failed Linux check still needs work", as
   await expect.element(screen.getByText("Run Linux smoke tests")).toBeVisible();
   await expect.element(screen.getByText("Attempt 2")).toBeVisible();
   await expect.element(screen.getByText("Worker on linux-runner")).toBeVisible();
+});
+
+it("refreshes an open task's evidence after a silent task change", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.snoozeSupported = true;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Review",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  const result = (summary: string, state: "pending" | "accepted") => ({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row },
+      attemptEvidence: { summary },
+      requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1, state }],
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  state.lookup.mockResolvedValue(result("Before", "pending"));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Before")).toBeVisible();
+  state.lookup.mockResolvedValue(result("After", "accepted"));
+  state.changes = "stream:1:1";
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("After")).toBeVisible();
+  await expect.element(screen.getByText("1/1", { exact: true })).toBeVisible();
 });
 
 const decodeProfile = Schema.decodeSync(BotProfile);

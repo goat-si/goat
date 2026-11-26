@@ -42,6 +42,7 @@ import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { GOAT_BOT_TASK_PANE_WIDTH } from "./goatBotLayout";
 import { useGoatBotHiddenChatNotice } from "./GoatBotHiddenChatNotice";
 import { useBotTaskLookup } from "./useBotTaskLookup";
+import { useGoatBotTaskChanges } from "./useGoatBotTaskChanges";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { goatBotDraftDestination } from "./GoatBotRouteDrafts";
@@ -83,6 +84,8 @@ export function GoatBotTaskPane({
     useBotThreads(environmentId, memberThreadsKey(member));
   const listedTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const botId = member?.botId ?? BotId.make("main");
+  const changes = useGoatBotTaskChanges(environmentId);
+  const lookupRevision = [workRevision, changes];
   const lookup = useBotTaskLookup(
     environmentId,
     taskId,
@@ -91,7 +94,7 @@ export function GoatBotTaskPane({
       established,
       refreshing: pending,
       holdsTask: listedTask !== undefined,
-      revision: workRevision,
+      revision: lookupRevision,
     },
     member?.state !== "deleted",
   );

@@ -116,3 +116,49 @@ it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", asy
   expect(container.textContent).not.toContain("waiting");
   expect(container.querySelector('[aria-label="Open worker · Waiting worker"]')).toBeNull();
 });
+
+it("refreshes an open task's required results after a silent task change", async () => {
+  reset();
+  state.readApprovalAtoms = true;
+  state.lookupCapable = true;
+  state.snoozeCapable = true;
+  const taskId = ChannelTaskId.make("task");
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId, title: "Review", status: "running", updatedAt: at },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  const result = (summary: string, state: "pending" | "accepted") =>
+    AsyncResult.success({
+      task: { state: "known", row },
+      attemptEvidence: { summary },
+      requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1, state }],
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    });
+  state.lookup.mockResolvedValue(result("Before", "pending"));
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
+  appAtomRegistry.set(
+    taskChanges,
+    AsyncResult.success({ subscription: 1, value: { revision: 0 } }),
+  );
+  await renderWork(
+    <WorkWithChip visible taskId={taskId} onOpenTask={() => {}} onOpenThread={() => {}} />,
+  );
+  expect(container.textContent).toContain("Before");
+  state.lookup.mockResolvedValue(result("After", "accepted"));
+  await act(async () =>
+    appAtomRegistry.set(
+      taskChanges,
+      AsyncResult.success({ subscription: 1, value: { revision: 1 } }),
+    ),
+  );
+  expect(container.textContent).toContain("After");
+  expect(container.textContent).toContain("1/1");
+});

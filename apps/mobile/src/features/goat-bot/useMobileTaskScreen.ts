@@ -62,7 +62,7 @@ export function useMobileTaskScreen(input: {
   const { environmentId, capabilities } = input;
   const lookupSupported = capabilities?.goatBotTaskLookupSearch === true;
   const watchApprovals =
-    input.needsApprovalObservation &&
+    (input.needsApprovalObservation || input.supportsSnooze === true) &&
     input.enabled &&
     lookupSupported &&
     capabilities.goatBotTaskChanges === true &&
