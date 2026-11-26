@@ -1273,7 +1273,7 @@ export function GeneralSettingsPanel() {
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                   {...(textGenerationModelSelection === NO_PROVIDER_MODEL_SELECTION
-                    ? { triggerLabel: "Unavailable" }
+                    ? { triggerLabel: gt("Unavailable") }
                     : mixedTextGenerationModel
                       ? { triggerLabel: gt("Mixed") }
                       : {})}
