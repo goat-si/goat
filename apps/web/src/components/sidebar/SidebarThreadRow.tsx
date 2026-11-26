@@ -1148,7 +1148,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     >
                       <Undo2Icon className="mb-px size-3.5" />
                     </TooltipTrigger>
-                    <TooltipPopup side="top">Un-settle thread</TooltipPopup>
+                    <TooltipPopup side="right">Un-settle thread</TooltipPopup>
                   </Tooltip>
                 ) : (
                   <button
@@ -1409,7 +1409,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                               <CheckIcon className="size-3.5" />
                             )}
                           </TooltipTrigger>
-                          <TooltipPopup>
+                          <TooltipPopup side="right">
                             {variantAction === "unsettle" ? "Un-settle thread" : "Settle thread"}
                           </TooltipPopup>
                         </Tooltip>
