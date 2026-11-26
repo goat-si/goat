@@ -696,6 +696,19 @@ describe("findSearchTokenRanges", () => {
     ]);
   });
 
+  it("highlights dotted capital I without losing other marks", () => {
+    expect(findSearchTokenRanges("İ, then İstanbul guide", "İstanbul")).toEqual([
+      { start: 8, end: 16 },
+    ]);
+    expect(findSearchTokenRanges("दिल्ली में मौसम मेरा", "में")).toEqual([{ start: 7, end: 10 }]);
+    for (const query of ["ist İst", "İst ist"]) {
+      expect(findSearchTokenRanges("list and İst", query)).toEqual([
+        { start: 1, end: 4 },
+        { start: 9, end: 12 },
+      ]);
+    }
+  });
+
   it("highlights a three-letter token only where it starts a word", () => {
     expect(findSearchTokenRanges("drafts, enableFTS", "fts")).toEqual([{ start: 14, end: 17 }]);
     expect(findSearchTokenRanges("Open handlers.ts", ".ts")).toEqual([{ start: 13, end: 16 }]);
