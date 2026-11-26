@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { hasConversationMemoryPauses } from "./conversationMemoryPolicy.ts";
 
 /** Stream events one scan statement may visit; the scan yields to the event loop between pages. */
 export const MEMORY_SOURCE_SCAN_PAGE_EVENTS = 1000;
@@ -53,6 +54,24 @@ export const scanSourceStream = Effect.fn("MemoryWorker.scanSourceStream")(funct
     readonly observedSequence: number | null;
   },
 ) {
+  const history = yield* hasConversationMemoryPauses(sql);
+  const paused = history
+    ? sql`coalesce((SELECT enabled = 0 FROM conversation_memory_policy WHERE after_sequence < e.sequence ORDER BY after_sequence DESC, generation DESC LIMIT 1), 0)`
+    : sql`0`;
+  const runUserMessage = history
+    ? sql`CASE WHEN event_type != 'message.updated' THEN json_extract(payload_json,'$.userMessageId') END`
+    : sql`NULL`;
+  const assignedUser = history
+    ? sql`(json_extract(payload_json,'$.role')='user' AND json_extract(payload_json,'$.runId') IS NOT NULL)`
+    : sql`0`;
+  const excludedMessages = new Set<string>();
+  const inputRuns = new Map<string, Set<string>>();
+  const associate = (messageId: string, runId: string) => {
+    const runs = inputRuns.get(messageId);
+    if (runs) runs.add(runId);
+    else inputRuns.set(messageId, new Set([runId]));
+  };
+  const excludedRuns = new Set<string>();
   const messages: SourceMessageRow[] = [];
   const latest = new Map<string, number>();
   const runStatus = new Map<string, string | null>();
@@ -71,25 +90,43 @@ export const scanSourceStream = Effect.fn("MemoryWorker.scanSourceStream")(funct
       event_type: string;
       id: string | null;
       run_id: string | null;
+      user_message_id: string | null;
       role: string | null;
       usable: number | null;
+      paused: number;
       status: string | null;
-    }>`SELECT sequence,event_id,event_type,json_extract(payload_json,'$.id') AS id,
+    }>`SELECT sequence,event_id,event_type,${paused} AS paused,${runUserMessage} AS user_message_id,json_extract(payload_json,'$.id') AS id,
       CASE WHEN event_type='message.updated' THEN json_extract(payload_json,'$.runId') END AS run_id,
       CASE WHEN event_type='message.updated' THEN json_extract(payload_json,'$.role') END AS role,
       CASE WHEN event_type='message.updated' THEN coalesce(json_extract(payload_json,'$.streaming'),0)=0 AND trim(json_extract(payload_json,'$.text'))!='' AND json_extract(payload_json,'$.role') IN ('user','assistant') END AS usable,
       CASE WHEN event_type!='message.updated' THEN json_extract(payload_json,'$.status') END AS status
-      FROM orchestration_events
+      FROM orchestration_events AS e
       WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${input.threadId} AND sequence>${cursor} AND sequence<=${end}
-      AND ((event_type IN ('run.created','run.updated') AND sequence<=${observed}) OR (event_type='message.updated' AND sequence>${input.afterSequence}))
+      AND ((event_type IN ('run.created','run.updated') AND sequence<=${observed}) OR (event_type='message.updated' AND (sequence>${input.afterSequence} OR paused=1 OR ${assignedUser})))
       ORDER BY sequence`;
     for (const row of rows) {
+      // A resumed edit or a late assistant response can carry the same paused input.
+      if (row.paused === 1) {
+        if (row.event_type === "message.updated") {
+          if (row.id !== null) excludedMessages.add(row.id);
+          if (row.run_id !== null) excludedRuns.add(row.run_id);
+        } else if (row.event_type === "run.created" && row.id !== null) excludedRuns.add(row.id);
+      }
       if (row.event_type !== "message.updated") {
-        if (row.id !== null) runStatus.set(row.id, row.status);
+        if (row.id !== null) {
+          runStatus.set(row.id, row.status);
+          if (row.user_message_id !== null) associate(row.user_message_id, row.id);
+        }
         continue;
       }
+      if (history && row.role === "user" && row.id !== null && row.run_id !== null)
+        associate(row.id, row.run_id);
       if (row.id !== null && row.sequence <= observed) latest.set(row.id, row.sequence);
-      if (row.sequence <= input.throughSequence)
+      if (
+        row.sequence > input.afterSequence &&
+        row.sequence <= input.throughSequence &&
+        row.paused !== 1
+      )
         messages.push({
           sequence: row.sequence,
           eventId: row.event_id,
@@ -103,7 +140,20 @@ export const scanSourceStream = Effect.fn("MemoryWorker.scanSourceStream")(funct
     cursor = end;
     yield* Effect.yieldNow;
   }
-  return { messages, latest, runStatus } satisfies SourceScan;
+  // Queued inputs can start a run or be steered into an already running one after resume.
+  for (const id of excludedMessages)
+    for (const run of inputRuns.get(id) ?? []) excludedRuns.add(run);
+  return {
+    messages: history
+      ? messages.filter(
+          (m) =>
+            !(m.id !== null && excludedMessages.has(m.id)) &&
+            !(m.runId !== null && excludedRuns.has(m.runId)),
+        )
+      : messages,
+    latest,
+    runStatus,
+  } satisfies SourceScan;
 });
 
 /**

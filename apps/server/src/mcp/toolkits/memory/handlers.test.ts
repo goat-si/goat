@@ -861,11 +861,18 @@ it.effect("remember saves text and a scope as a fact this conversation backs, on
     expect(again.memoryId).toBe(first.memoryId);
     expect(yield* sql`SELECT DISTINCT memory_id FROM memory_revisions`).toHaveLength(1);
 
+    // A later edit can cite only the part of the conversation since the person resumed memory.
+    yield* sql`INSERT INTO conversation_memory_policy (after_sequence, enabled) VALUES (9, 0), (12, 1)`;
+    yield* sql`INSERT INTO orchestration_events VALUES
+      (12, 'private', 2, 'thread', ${threadId}, 'message.updated', '{"id":"private","role":"user"}'),
+      (15, 'resumed-message', 2, 'thread', ${threadId}, 'message.updated', '{"id":"resumed-prompt","role":"user","runId":"resumed-run"}'),
+      (16, 'resumed-run', 2, 'thread', ${threadId}, 'run.created', '{"id":"resumed-run","userMessageId":"resumed-prompt"}')`;
+    const resumed = { ...caller, thread: { ...caller.thread, runId: M.RunId.make("resumed-run") } };
     const replaced = yield* decodeReceipt(
       (yield* Fixture.call(
         "goat_memory_remember",
         { text: "Jun reviews English summaries first.", memoryId: first.memoryId },
-        caller,
+        resumed,
       )).body,
     );
     expect(replaced.memoryId).toBe(first.memoryId);
@@ -874,11 +881,16 @@ it.effect("remember saves text and a scope as a fact this conversation backs, on
     expect(current.heads).toHaveLength(1);
     expect(current.item.scope).toEqual({ kind: "user" });
     expect(current.item.payload.text).toBe("Jun reviews English summaries first.");
+    expect(current.item.payload.evidence[0]?.watermark).toEqual({
+      fromEventId: "resumed-message",
+      toEventId: "resumed-run",
+      throughSequence: 16,
+    });
 
     const noProject = yield* Fixture.call(
       "goat_memory_remember",
       { text: "This repository ships nightly.", scope: "project" },
-      caller,
+      resumed,
     );
     expect(noProject.result.isError).toBe(true);
     expect((yield* decodeRefusal(noProject.body)).message).toContain("no project memory");

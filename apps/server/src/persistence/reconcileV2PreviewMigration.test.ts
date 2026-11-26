@@ -196,6 +196,7 @@ describe("V2 preview upgrade", () => {
         [183, "ChannelInputSessionAuthority"],
         [184, "RemoteDispatchEnvironment"],
         [185, "TurnMemoryReceipts"],
+        [186, "ConversationMemoryPolicy"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -402,6 +403,7 @@ describe("V2 preview upgrade", () => {
         [183, "ChannelInputSessionAuthority"],
         [184, "RemoteDispatchEnvironment"],
         [185, "TurnMemoryReceipts"],
+        [186, "ConversationMemoryPolicy"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

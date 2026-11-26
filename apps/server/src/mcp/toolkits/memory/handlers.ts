@@ -98,7 +98,7 @@ export const invocationPermit = (requirement: MemoryAccess.MemoryAccessRequireme
           return Effect.fail(deny());
         return scope.reauthorize(["settings:write"]).pipe(Effect.mapError(deny));
       });
-    return MemoryAccess.memoryAccessPermit(
+    const credential = MemoryAccess.memoryAccessPermit(
       {
         ...(scope.grantedScopes === undefined ? {} : { grantedScopes: scope.grantedScopes }),
         ...(scope.reauthorize === undefined
@@ -111,6 +111,12 @@ export const invocationPermit = (requirement: MemoryAccess.MemoryAccessRequireme
       },
       requirement,
     );
+    if (!scope.thread) return credential;
+    yield* credential;
+    const source = yield* (yield* MemoryService.MemoryService).issueConversationRunPermit(
+      scope.thread,
+    );
+    return source.pipe(Effect.andThen(credential));
   });
 
 const isRefusal = Schema.is(M.OrchestratorMcpFailure);

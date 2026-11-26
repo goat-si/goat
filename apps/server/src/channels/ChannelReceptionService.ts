@@ -1028,7 +1028,9 @@ const make = Effect.gen(function* () {
                   input: ChannelReceptionInput,
                   batch?: ReturnType<typeof channelMemoryReadBatch>,
                 ) => generateOutcome(input, { connectionId: message.connectionId, inputId }, batch);
-                const batch = channelMemoryReadBatch(yield* conversationMemory.admit);
+                const batch = channelMemoryReadBatch(
+                  stored.conversationMemoryPaused ? undefined : yield* conversationMemory.admit,
+                );
                 const first = yield* generateForInput({
                   ...base,
                   readsAllowed: workProject === undefined,

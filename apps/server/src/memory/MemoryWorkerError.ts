@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as M from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
@@ -36,3 +37,11 @@ export const safeCode = (error: unknown): M.MemoryFailureCode => {
   }
   return "storage_failed";
 };
+
+export const sweepStage = <A, E>(
+  stage: NonNullable<MemoryWorkerError["stage"]>,
+  effect: Effect.Effect<A, E>,
+) =>
+  effect.pipe(
+    Effect.mapError((cause) => new MemoryWorkerError({ code: safeCode(cause), stage, cause })),
+  );

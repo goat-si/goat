@@ -29,6 +29,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
     failureMode: "return",
   })
     .addDependency(McpInvocationContext.McpInvocationContext)
+    .addDependency(MemoryService.MemoryService)
     .addDependency(MemorySyncService.MemorySyncService)
     .addDependency(ThreadManagementService.ThreadManagementService)
     .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.hub_diagnostics"])),
@@ -40,6 +41,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
     failureMode: "return",
   })
     .addDependency(McpInvocationContext.McpInvocationContext)
+    .addDependency(MemoryService.MemoryService)
     .addDependency(MemorySyncService.MemorySyncService)
     .addDependency(ThreadManagementService.ThreadManagementService)
     .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.hub_reconcile"])),
@@ -62,6 +64,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
     failureMode: "return",
   })
     .addDependency(McpInvocationContext.McpInvocationContext)
+    .addDependency(MemoryService.MemoryService)
     .addDependency(MemorySettingsService.MemorySettingsService)
     .addDependency(ThreadManagementService.ThreadManagementService)
     .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.settings_read"])),
@@ -73,6 +76,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
     failureMode: "return",
   })
     .addDependency(McpInvocationContext.McpInvocationContext)
+    .addDependency(MemoryService.MemoryService)
     .addDependency(MemorySettingsService.MemorySettingsService)
     .addDependency(ThreadManagementService.ThreadManagementService)
     .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.settings_update"])),
@@ -84,6 +88,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
     failureMode: "return",
   })
     .addDependency(McpInvocationContext.McpInvocationContext)
+    .addDependency(MemoryService.MemoryService)
     .addDependency(MemorySyncService.MemorySyncService)
     .addDependency(ThreadManagementService.ThreadManagementService)
     .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.hub_disable"])),
