@@ -1177,6 +1177,7 @@ export const ServerSettings = Schema.Struct({
   memoryOwnerSourceReadPolicy: MemoryOwnerSourceReadPolicy.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY)),
   ),
+  conversationMemoryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   enableAgentMemoryAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /** Off stops new memory generation; queued work and stored memories are kept. */
   memoryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1667,6 +1668,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   worktreeCleanup: Schema.optionalKey(WorktreeCleanupPatch),
   storageCleanup: Schema.optionalKey(StorageCleanupSettingsPatch),
   worktreesDirectory: Schema.optionalKey(TrimmedString),
+  conversationMemoryEnabled: Schema.optionalKey(Schema.Boolean),
   enableAgentMemoryAccess: Schema.optionalKey(Schema.Boolean),
   memoryEnabled: Schema.optionalKey(Schema.Boolean),
   memoryModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),

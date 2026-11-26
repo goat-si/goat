@@ -3,7 +3,7 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 import { resolveMemoryModelSelection, supportsMemoryGeneration } from "@goat/shared/serverSettings";
-import { useContext, useState } from "react";
+import { useContext, useId, useState } from "react";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance, selectsPlanAgent } from "../../modelSelection";
@@ -12,7 +12,7 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { useEnvironmentProviders } from "../../state/environments";
+import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
@@ -28,8 +28,12 @@ export function MemoryGenerationSettings({
   hideModelWhenDisabled?: boolean;
 }) {
   const gt = useGT();
+  const pauseDescriptionId = useId();
   const registry = useContext(RegistryContext);
   const settings = useEnvironmentSettings(environmentId);
+  const supportsPause =
+    useEnvironment(environmentId)?.serverConfig?.environment.capabilities.memory
+      ?.conversationMemoryControl === true;
   const providers = useEnvironmentProviders().get(environmentId) ?? [];
   const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -65,12 +69,33 @@ export function MemoryGenerationSettings({
     setBusy(true);
     setMessage(null);
     void update({ environmentId, input: { patch } }).then((result) => {
-      setMessage(result._tag === "Success" ? null : "Could not update memory settings.");
+      setMessage(result._tag === "Success" ? null : gt("Could not update memory settings."));
       setBusy(false);
     });
   }
   return (
     <SettingsSection title={gt("Memory")}>
+      {supportsPause && (
+        <SettingsRow
+          title={gt("Use GOAT memory in conversations")}
+          description={
+            <span id={pauseDescriptionId}>
+              {gt(
+                "While paused, agents cannot read or save GOAT memories in this environment. Messages from this period are excluded from future summaries.",
+              )}
+            </span>
+          }
+          control={
+            <Switch
+              aria-label={gt("Use GOAT memory in conversations")}
+              aria-describedby={pauseDescriptionId}
+              checked={settings.conversationMemoryEnabled}
+              disabled={!allowed}
+              onCheckedChange={(checked) => save({ conversationMemoryEnabled: checked })}
+            />
+          }
+        />
+      )}
       <SettingsRow
         title={gt("Remember conversations")}
         description={gt(
@@ -80,7 +105,7 @@ export function MemoryGenerationSettings({
           <Switch
             aria-label={gt("Remember conversations")}
             checked={settings.memoryEnabled}
-            disabled={!allowed}
+            disabled={!allowed || settings.conversationMemoryEnabled === false}
             onCheckedChange={(checked) => save({ memoryEnabled: checked })}
           />
         }
@@ -156,9 +181,9 @@ export function MemoryGenerationSettings({
               />
             </div>
           }
-          status={message ? <span role="alert">{message}</span> : undefined}
         />
       )}
+      {message && <p role="alert">{message}</p>}
     </SettingsSection>
   );
 }
