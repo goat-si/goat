@@ -76,7 +76,7 @@ export function PullRequestListEmptyState({
     query.charCodeAt(48) <= 0xdfff
       ? 47
       : 48;
-  const shownQuery = query.length > 48 ? `${query.slice(0, end)}…` : query;
+  const shownQuery = query.length > 48 ? `${query.slice(0, end).trimEnd()}…` : query;
 
   if (!hasProjects) {
     return (
