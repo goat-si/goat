@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { EnvironmentId, PullRequestContextMetadata } from "@goat/contracts";
 import { CircleDashedIcon, FilmIcon, ImageIcon } from "~/components/solar";
 import {
@@ -69,6 +70,7 @@ export function ContextChipPopover(props: {
   accessibleLabel: string;
   children: ReactNode;
 }) {
+  const gt = useGT();
   return (
     <Popover>
       <PopoverTrigger
@@ -76,7 +78,7 @@ export function ContextChipPopover(props: {
           <ContextChip
             kind={props.kind}
             render={<button type="button" />}
-            aria-label={`${props.accessibleLabel}. Show details`}
+            aria-label={gt("{label}. Show details", { label: props.accessibleLabel })}
             data-markdown-copy={props.copyMarkdown}
           />
         }

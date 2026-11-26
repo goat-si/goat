@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import zh from "../../i18n/translations/zh.json";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -39,5 +41,16 @@ describe("TypographySection", () => {
 
     await expect.element(screen.getByRole("heading", { name: "Terminal font" })).toBeVisible();
     expect(getLocalStorageItem(TYPOGRAPHY_ADVANCED_STORAGE_KEY, Schema.Boolean)).toBe(true);
+  });
+  it("localizes simple and advanced typography controls", async () => {
+    using _storage = setup(null);
+    await using screen = await render(
+      <GTProvider locale="zh" translations={{ zh }}>
+        <TypographySection />
+      </GTProvider>,
+    );
+    await expect.element(screen.getByRole("heading", { name: "等宽字体" })).toBeVisible();
+    await screen.getByRole("switch", { name: "显示高级字体设置" }).click();
+    await expect.element(screen.getByRole("combobox", { name: "终端字号" })).toBeVisible();
   });
 });

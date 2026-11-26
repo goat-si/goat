@@ -122,7 +122,6 @@ const GRANT_STEP_COPY: Record<CuaPermission, { title: string; description: strin
 };
 
 /** The grant's name as System Settings lists it. */
-export const cuaGrantTitle = (permission: CuaPermission) => GRANT_STEP_COPY[permission].title;
 
 /** One step per grant, in the order macOS is asked; only the first missing one is actionable. */
 export function cuaGrantSteps(
