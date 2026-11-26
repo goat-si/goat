@@ -79,3 +79,46 @@ it.effect("a failed settings rename rolls back the conversation memory transitio
     );
   }).pipe(Effect.provide(dependencies)),
 );
+
+it.effect.each(["missing hub version", "invalid hub mode"] as const)(
+  "an external memory pause takes effect with %s, but resuming requires valid settings",
+  (damage) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const config = yield* Config.ServerConfig;
+      const hub = { mode: "hub", memorySpaceId: "00000000-0000-4000-8000-000000000091" };
+      const valid = { memoryHub: hub, memoryHubVersion: 7, enableAgentMemoryAccess: true };
+      const damaged =
+        damage === "missing hub version"
+          ? { memoryHub: hub }
+          : { memoryHub: { mode: "invalid" }, memoryHubVersion: 8 };
+      yield* fs.writeFileString(config.settingsPath, JSON.stringify(valid));
+      yield* Effect.gen(function* () {
+        const settings = yield* Settings.ServerSettingsService;
+        const policy = yield* Settings.MemoryProviderCommittedPolicy;
+        const refresh = settings.withSettingsSnapshot(Effect.succeed, { refreshFromDisk: true });
+        expect((yield* refresh).conversationMemoryEnabled).toBe(true);
+        for (const requested of [false, true]) {
+          yield* fs.writeFileString(
+            config.settingsPath,
+            JSON.stringify({ ...damaged, conversationMemoryEnabled: requested }),
+          );
+          const actual = yield* refresh;
+          expect(actual.conversationMemoryEnabled).toBe(false);
+          expect(actual.enableAgentMemoryAccess).toBe(true);
+          expect(actual.memoryHubVersion).toBe(7);
+          expect(actual.memoryHub).toMatchObject(hub);
+          expect(yield* readConversationMemoryEnabled(sql)).toBe(false);
+          expect((yield* policy.read).enableAgentMemoryAccess).toBe(false);
+        }
+        yield* fs.writeFileString(
+          config.settingsPath,
+          JSON.stringify({ ...valid, conversationMemoryEnabled: true }),
+        );
+        expect((yield* refresh).conversationMemoryEnabled).toBe(true);
+        expect(yield* readConversationMemoryEnabled(sql)).toBe(true);
+        expect((yield* policy.read).enableAgentMemoryAccess).toBe(true);
+      }).pipe(Effect.provide(settingsLayer));
+    }).pipe(Effect.provide(dependencies)),
+);
