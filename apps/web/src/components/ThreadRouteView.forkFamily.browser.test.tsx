@@ -48,6 +48,7 @@ vi.mock("./goatBot/goatBotMemberThread", () => ({
 }));
 vi.mock("./ui/sidebar", () => ({
   SidebarInset: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  useMobileSidebarSheetMounted: () => false,
 }));
 
 import { ThreadRouteView } from "./ThreadRouteView";
