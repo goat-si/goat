@@ -272,6 +272,7 @@ export const make = Effect.gen(function* () {
         provenanceProjection: true,
         derivedCap: 1000,
         turnMemory: true,
+        savedThreadPreference: true,
         scopeMoves: true,
         scopeMoveReceipts: true,
         originFilter: true,
