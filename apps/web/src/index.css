@@ -2547,6 +2547,20 @@ code {
   background: transparent !important;
 }
 
+/* Markdown fences hold sentences, not code: each line takes the direction of its
+   own words. Coding-font ligatures assume left-to-right and would overprint RTL letters.
+   Text and unlabeled fences stay LTR: they often hold trees and tables, whose lines must align. */
+.chat-markdown
+  .chat-markdown-codeblock:is(
+    [data-language="md" i],
+    [data-language="markdown" i],
+    [data-language="mdx" i]
+  )
+  pre {
+  unicode-bidi: plaintext;
+  font-variant-ligatures: none;
+}
+
 /* Paragraphs and code blocks arrive in chunks while a response streams. Fade
    each new block in so the chunk does not pop. @starting-style only applies
    when an element is first inserted, and the rule is gated on data-streaming,
