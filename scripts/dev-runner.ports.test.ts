@@ -1,3 +1,7 @@
+import * as NodeNet from "node:net";
+import * as NetService from "@goat/shared/Net";
+import * as Cause from "effect/Cause";
+import { vi } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -10,6 +14,34 @@ import {
 
 it.layer(NodeServices.layer)("dev-runner", (it) => {
   describe("findFirstAvailableOffset", () => {
+    it.effect.each(["EPERM", "EACCES"])(
+      "stops at the first port when binding is denied with %s",
+      (code) =>
+        Effect.gen(function* () {
+          let listenCalls = 0;
+          const spy = vi.spyOn(NodeNet.Server.prototype, "listen").mockImplementation(function (
+            this: NodeNet.Server,
+          ) {
+            listenCalls += 1;
+            process.nextTick(() => this.emit("error", Object.assign(new Error(code), { code })));
+            return this;
+          });
+          const exit = yield* findFirstAvailableOffset({
+            startOffset: 0,
+            requireServerPort: true,
+            requireWebPort: true,
+          }).pipe(Effect.provide(NetService.layer), Effect.exit);
+          spy.mockRestore();
+
+          assert.isTrue(exit._tag === "Failure");
+          const cause = exit._tag === "Failure" ? Cause.pretty(exit.cause) : "";
+          assert.notInclude(cause, "DevRunnerPortExhaustedError");
+          assert.include(cause, code);
+          assert.include(cause, "13773");
+          assert.isBelow(listenCalls, 10);
+        }),
+    );
+
     it.effect("advances until all required ports are available", () =>
       Effect.gen(function* () {
         const taken = new Set([13773, 5733, 13774, 5734]);
