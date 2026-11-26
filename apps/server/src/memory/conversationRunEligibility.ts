@@ -17,8 +17,9 @@ export const issueConversationRunCheck = Effect.fn("ConversationMemoryPolicy.iss
     let runId = thread.runId;
     if (!runId) {
       const active = yield* activeRuns;
-      if (active.length !== 1) return Effect.succeed(false);
-      runId = active[0]!.run_id;
+      const [first, second] = active;
+      if (!first || second) return Effect.succeed(false);
+      runId = first.run_id;
     }
     // Run creation and assigned user inputs share conversation_memory_run_inputs. The user
     // history lookup uses computer_use_first_message_event, including older unassigned versions.
