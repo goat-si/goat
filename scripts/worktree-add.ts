@@ -120,11 +120,13 @@ function run(cwd: string, args: ReadonlyArray<string>): void {
     if (root.pin) pinWorktreeRoot(worktree);
     return;
   }
-  // -h prints usage and exits 129 where `git hook run` exists (Git 2.36+).
-  if (
-    NodeChildProcess.spawnSync("git", ["hook", "run", "-h"], { cwd, env: gitEnv, stdio: "ignore" })
-      .status !== 129
-  ) {
+  // `git hook run -h` prints usage where it exists (Git 2.36+): exit 129 before Git 2.56, 0 since.
+  const hookRun = NodeChildProcess.spawnSync("git", ["hook", "run", "-h"], {
+    cwd,
+    env: gitEnv,
+    stdio: "ignore",
+  }).status;
+  if (hookRun !== 0 && hookRun !== 129) {
     throw new WorktreeAddError("Creating a worktree from this checkout needs Git 2.36 or later.");
   }
   if (rest.some((arg) => arg.startsWith("--o"))) {
