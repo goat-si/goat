@@ -17,6 +17,8 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as SqlClient from "effect/sql/SqlClient";
+import { setConversationMemoryEnabled } from "../memory/conversationMemoryPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySyncService from "../memory/MemorySyncService.ts";
@@ -635,40 +637,47 @@ describe("GOAT Bot reads GOAT memory under the asker's current link", () => {
       assert.strictEqual(results.at(-1)?.[0]?.text, "Nothing in memory matches.");
     }).pipe(Effect.provide(harness.layer));
   });
-  it.effect("a first pass cannot acquire memory after the person resumes it", () => {
-    searched.length = 0;
-    const harness = makeHarness({ memoryLayer });
-    return Effect.gen(function* () {
-      yield* setupBot;
-      const settings = yield* ServerSettings.ServerSettingsService;
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const results: string[] = [];
-      yield* linkWith("U1", ["orchestration:read", "orchestration:operate", "memory:read"]);
-      yield* settings.updateSettings({ conversationMemoryEnabled: false });
-      harness.script.current = (input) => {
-        if (input.readsAllowed)
-          return settings
-            .updateSettings({ conversationMemoryEnabled: true })
-            .pipe(
+  it.effect.each([false, true])(
+    "a paused channel input cannot acquire memory after resuming (queued=%s)",
+    (queued) => {
+      searched.length = 0;
+      const harness = makeHarness({ memoryLayer });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const results: string[] = [];
+        yield* linkWith("U1", ["orchestration:read", "orchestration:operate", "memory:read"]);
+        yield* settings.updateSettings({ conversationMemoryEnabled: false });
+        const sql = yield* SqlClient.SqlClient;
+        yield* setConversationMemoryEnabled(sql, false);
+        harness.script.current = (input) => {
+          if (input.readsAllowed)
+            return settings.updateSettings({ conversationMemoryEnabled: true }).pipe(
               Effect.orDie,
               Effect.as({
                 replyText: "",
                 action: { type: "read", reads: [{ kind: "memory", query: "language" }] },
               }),
             );
-        results.push(...(input.readResults ?? []).map((row) => row.text));
-        return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
-      };
-      yield* gateway.ingest(
-        slackInput("recall language", "Ev-resume", "1760000000.000501", "U1"),
-        memoryContext,
-      );
-      yield* runtime.drain;
-      assert.deepEqual(searched, []);
-      assert.deepEqual(results, ["Nothing in memory matches."]);
-    }).pipe(Effect.provide(harness.layer));
-  });
+          results.push(...(input.readResults ?? []).map((row) => row.text));
+          return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+        };
+        yield* gateway.ingest(
+          slackInput("recall language", "Ev-resume", "1760000000.000501", "U1"),
+          memoryContext,
+        );
+        if (queued) {
+          yield* settings.updateSettings({ conversationMemoryEnabled: true });
+          yield* setConversationMemoryEnabled(sql, true);
+        }
+        yield* runtime.drain;
+        assert.deepEqual(searched, []);
+        assert.deepEqual(results, ["Nothing in memory matches."]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect.each([false, true])(
     "drops a completed memory read while a companion is waiting (resume=%s)",

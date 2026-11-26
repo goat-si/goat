@@ -29,8 +29,9 @@ import * as AutomationHold from "../automationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
+import * as ConversationMemory from "./conversationMemoryPolicy.ts";
 import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
-import { MemoryWorkerError, safeCode } from "./MemoryWorkerError.ts";
+import { MemoryWorkerError, safeCode, sweepStage } from "./MemoryWorkerError.ts";
 import { generateSummaryChunks, type SummaryPromotions } from "./memorySummaryChunks.ts";
 import { resolveThreadProject } from "./MemorySummaryCommit.ts";
 export { MemoryWorkerError };
@@ -78,13 +79,6 @@ const isWorkerError = Schema.is(MemoryWorkerError);
 const isHeld = Schema.is(Hold.MemoryGenerationHeld);
 const workerError = (cause: unknown) =>
   isWorkerError(cause) ? cause : new MemoryWorkerError({ code: safeCode(cause), cause });
-const sweepStage = <A, E>(
-  stage: NonNullable<MemoryWorkerError["stage"]>,
-  effect: Effect.Effect<A, E>,
-) =>
-  effect.pipe(
-    Effect.mapError((cause) => new MemoryWorkerError({ code: safeCode(cause), stage, cause })),
-  );
 const make = Effect.gen(function* () {
   const store = yield* Store.MemoryStore;
   const service = yield* Service.MemoryService;
@@ -112,7 +106,7 @@ const make = Effect.gen(function* () {
   const query = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapError(workerError));
   // Memory runs on its own cheap model; the new-thread default may be unsupported here.
   const memoryModel = (snapshot: M.ServerSettings) =>
-    snapshot.memoryEnabled
+    snapshot.memoryEnabled && snapshot.conversationMemoryEnabled
       ? query(
           hold
             .resolveModel(snapshot)
@@ -538,6 +532,7 @@ const make = Effect.gen(function* () {
       if (work.metadata.kind !== "summary" || !work.memoryId)
         return yield* new MemoryWorkerError({ code: "unsupported_operation" });
       const meta = work.metadata;
+      const checkPolicy = yield* query(ConversationMemory.admitConversationSummary(sql));
       let source = yield* readSource(work);
       const existingReceipt = work.space.startsWith("_local:")
         ? undefined
@@ -605,6 +600,7 @@ const make = Effect.gen(function* () {
       });
       const dependencies = yield* readDependencies;
       const recheckSource = Effect.gen(function* () {
+        yield* query(checkPolicy);
         yield* requireVerifiedPrevious;
         yield* readSource(work);
         const latest = yield* readDependencies;
@@ -647,7 +643,7 @@ const make = Effect.gen(function* () {
               ),
             readFrom: (fromSequence) =>
               readSource({ ...work, metadata: { ...meta, fromSequence } }),
-            renewClaim,
+            renewClaim: renewClaim.pipe(Effect.andThen(query(checkPolicy))),
             generate: (input) =>
               hold
                 .guard(holdKey, redacted(generation.generateMemorySummary(input)))
