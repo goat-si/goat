@@ -1,3 +1,4 @@
+import { wp4Memory } from "./CodexQueuedMemory.testkit.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -130,12 +131,13 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
     ? opened
     : opened.pipe(Effect.provideService(Scope.Scope, input.sessionScope));
   const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
-  const startTurn = (ordinal: number) =>
+  const startTurn = (ordinal: number, memory?: ProviderAdapter.TurnMemoryHooks) =>
     DateTime.now.pipe(
       Effect.flatMap((now) =>
-        runtime.startTurn(
-          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal }),
-        ),
+        runtime.startTurn({
+          ...makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal }),
+          ...memory,
+        }),
       ),
     );
   return {
@@ -657,15 +659,24 @@ describe("ACP prompt inactivity", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("delivers a follow-up the agent rejects while it is still processing", () =>
+  it.effect("excludes paused memory when retrying a busy ACP prompt", () =>
     Effect.gen(function* () {
       let promptCalls = 0;
+      const carriedMemory: boolean[] = [];
+      const snapshot = wp4Memory();
+      let paused = false;
+      let receipts = 0;
       const rejected = yield* Deferred.make<void>();
       const harness = yield* makePromptInactivityHarness({
         environment: () => ({}),
         // pi-agent-core based agents (oh-my-pi) end a turn but keep background work running.
         wrapPrompt: (prompt) => (payload, options) => {
           promptCalls += 1;
+          carriedMemory.push(
+            payload.prompt.some(
+              (part) => part.type === "text" && part.text.includes(snapshot.renderedText),
+            ),
+          );
           return promptCalls === 2
             ? Deferred.succeed(rejected, undefined).pipe(
                 Effect.andThen(
@@ -684,12 +695,20 @@ describe("ACP prompt inactivity", () => {
       assert.equal(first?.status, "completed");
 
       const followUp = yield* harness.terminals(1).pipe(Effect.forkScoped);
-      yield* harness.startTurn(2);
+      yield* harness.startTurn(2, {
+        refreshMemoryContext: () => Effect.succeed(paused ? undefined : snapshot),
+        onMemoryDelivered: () =>
+          Effect.sync(() => {
+            receipts++;
+          }),
+      });
       yield* Deferred.await(rejected);
+      paused = true;
       yield* TestClock.adjust("1 minute");
       const [delivered] = yield* Fiber.join(followUp);
       assert.equal(delivered?.status, "completed");
-      assert.equal(promptCalls, 3);
+      assert.deepEqual(carriedMemory, [false, true, false]);
+      assert.equal(receipts, 0);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

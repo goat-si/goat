@@ -96,6 +96,7 @@ const RecallTool = Tool.dynamic(agentSurfaceRegistry["memory.recall"].name, {
   failureMode: "return",
 })
   .addDependency(McpInvocationContext.McpInvocationContext)
+  .addDependency(MemoryService.MemoryService)
   .addDependency(MemoryRecall.MemoryRecall)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.recall"]));
 

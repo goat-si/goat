@@ -1,9 +1,25 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Service from "./MemoryService.ts";
+import type { MemoryProviderPolicy } from "./MemoryProviderPolicy.ts";
 
 export type MemoryPermit = Effect.Effect<void, Service.MemoryAccessError>;
 export type MemoryAccessRequirement = "read" | "write" | "source" | "binding-read";
+
+/** Fence a conversation read through delivery, including a pause followed by a resume. */
+export const issueConversationMemoryPermit = Effect.fnUntraced(function* (
+  read: Effect.Effect<MemoryProviderPolicy>,
+) {
+  const issued = yield* read;
+  if (!issued.policyReady || !issued.enableAgentMemoryAccess) return undefined;
+  return read.pipe(
+    Effect.flatMap((current) =>
+      current.epoch === issued.epoch
+        ? Effect.void
+        : Effect.fail(new Service.MemoryAccessError({ code: "unavailable" })),
+    ),
+  );
+});
 
 /** All callbacks must read live, committed SQL-free authority; the Effect is repeatable. */
 export function memoryAccessPermit(

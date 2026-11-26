@@ -1,4 +1,5 @@
 import { MemoryContextSnapshot, type RunId, type ThreadId } from "@goat/contracts";
+import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -77,5 +78,33 @@ export const makeCodexMemoryDelivery = (deps: {
       })
       .pipe(Effect.provideService(Scope.Scope, deps.scope));
   });
-  return { byThread, generation: () => generation, clear, retain };
+  const prepare = Effect.fnUntraced(function* (
+    nativeId: string,
+    turn: ProviderAdapter.ProviderAdapterV2TurnInput,
+    context: Record<string, CodexSchema.V2TurnStartParams__AdditionalContextEntry> | undefined,
+  ) {
+    const wasSent =
+      byThread.has(nativeId) ||
+      (yield* Ref.get(deps.additionalContextByThread)).get(nativeId)?.goat_memory !== undefined;
+    yield* clear(nativeId);
+    const selected = yield* MemoryContext.selectSnapshot(turn, turn.providerThread.driver);
+    if (selected) yield* retain(nativeId, selected, turn);
+    const snapshot = yield* MemoryContext.admitSelected(turn, selected);
+    if (!snapshot && byThread.has(nativeId)) yield* clear(nativeId);
+    const additionalContext =
+      snapshot || wasSent
+        ? {
+            ...context,
+            goat_memory: { kind: "untrusted" as const, value: snapshot?.renderedText ?? "" },
+          }
+        : context;
+    yield* Ref.update(deps.additionalContextByThread, (current) => {
+      const next = new Map(current);
+      if (additionalContext) next.set(nativeId, additionalContext);
+      else next.delete(nativeId);
+      return next;
+    });
+    return { additionalContext, receipt: MemoryContext.deliveryReceipt(turn, snapshot) };
+  });
+  return { byThread, generation: () => generation, clear, retain, prepare };
 };

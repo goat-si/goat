@@ -110,7 +110,10 @@ import {
 
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
   it.effect("marks command memory uncertain (#3836)", testCommandMemoryDelivery);
-  it.effect("records delivered inbox memory (#3836)", testInboxMemoryDelivery);
+  it.effect("records delivered inbox memory (#3836)", () => testInboxMemoryDelivery());
+  it.effect("clears memory paused during the instructions write before sending a prompt", () =>
+    testInboxMemoryDelivery(true),
+  );
   it.effect.each([false, true])(
     "WP4 OpenCode v2 framed instruction refresh and clear external=%s",
     (external) =>

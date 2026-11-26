@@ -19,6 +19,7 @@ import {
   makeResultFrame,
   WAKE_NATIVE_SESSION,
 } from "./ClaudeWakeFrames.testkit.ts";
+import { memoryFixture } from "./memoryDelivery.testkit.ts";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
 
 // Only collectors opt into queue capture. A FIFO marker then acknowledges all
@@ -413,5 +414,55 @@ it.effect("refuses a steer whose turn stops while its memory refresh is pending"
       ),
       [],
     );
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect("omits memory revoked while recording a steer's delivery attempt", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeWakeHarnessWithOptions();
+    const ids = yield* IdAllocator.IdAllocatorV2;
+    const attemptId = RunAttemptId.make("attempt-steer-pause");
+    const input = makeClaudeTestTurnInput({
+      threadId: harness.threadId,
+      providerThread: harness.providerThread,
+      now: yield* DateTime.now,
+      attemptId,
+      text: "Start",
+      attachments: [],
+    });
+    const snapshot = memoryFixture();
+    let allowed = false;
+    let offers = 0;
+    yield* harness.runtime.startTurn({
+      ...input,
+      refreshMemoryContext: () => Effect.sync(() => (allowed ? snapshot : undefined)),
+      onMemoryDeliveryUncertain: () =>
+        Effect.sync(() => {
+          allowed = false;
+          offers++;
+        }),
+      canDeliverMemory: () => Effect.sync(() => allowed),
+    });
+    allowed = true;
+    yield* harness.runtime.steerTurn({
+      threadId: harness.threadId,
+      runId: input.runId,
+      providerThread: harness.providerThread,
+      providerTurnId: ids.derive.providerTurn({
+        driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+        nativeTurnId: `turn:${attemptId}`,
+      }),
+      message: {
+        createdBy: "user",
+        creationSource: "web",
+        messageId: MessageId.make("steer-after-pause"),
+        text: "Keep going",
+        attachments: [],
+      },
+    });
+    assert.equal(offers, 1);
+    const last = JSON.stringify(harness.offeredMessages.at(-1));
+    assert.include(last, "Keep going");
+    assert.notInclude(last, "external_goat_memory");
   }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );

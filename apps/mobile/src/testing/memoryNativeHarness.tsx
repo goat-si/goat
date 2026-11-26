@@ -61,6 +61,10 @@ const bridge = vi.hoisted(() => ({
     repositoryIdentity?: null;
   }>,
 }));
+vi.mock("../i18n/I18nProvider", () => ({
+  I18nProvider: ({ children }: { children: ReactNode }) => children,
+  useGT: () => (source: string) => source,
+}));
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
   const View = ({ children }: { children?: ReactNode }) => createElement("div", null, children);

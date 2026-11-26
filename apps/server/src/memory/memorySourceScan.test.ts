@@ -3,6 +3,8 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
+import { conversationMemoryPolicySchema as policyMigration } from "../persistence/Migrations/186_ConversationMemoryPolicy.ts";
+import { conversationMemoryExcludedMessagesSchema } from "../persistence/Migrations/187_ConversationMemoryExcludedMessages.ts";
 
 import {
   eligibleSourceMessages,
@@ -19,6 +21,8 @@ const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const seedStream = (messages: number, fillerPerMessage: number) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    yield* policyMigration;
+    yield* conversationMemoryExcludedMessagesSchema;
     yield* sql`CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY,event_id TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT,occurred_at TEXT,application_event_version INTEGER,aggregate_kind TEXT)`;
     yield* sql`CREATE INDEX idx_orch_events_stream_sequence ON orchestration_events(aggregate_kind, stream_id, sequence)`;
     const statuses = ["running", "completed", "rolled_back", "failed", "completed", null];
@@ -185,12 +189,15 @@ describe("memory source scan", () => {
           yield* scanned({ after: 0, through: last, observed: last }).pipe(
             Effect.provideService(Statement.CurrentTransformer, observe),
           );
-          // Each page is one index-only boundary read plus one read of at most a page of events.
+          // One policy lookup precedes an index-only boundary read and a bounded source read per page.
           const events = (yield* (yield* SqlClient.SqlClient)<{
             count: number;
           }>`SELECT count(*) AS count FROM orchestration_events WHERE stream_id=${thread}`)[0]!
             .count;
-          assert.strictEqual(count, 2 * (Math.floor(events / MEMORY_SOURCE_SCAN_PAGE_EVENTS) + 1));
+          assert.strictEqual(
+            count,
+            1 + 2 * (Math.floor(events / MEMORY_SOURCE_SCAN_PAGE_EVENTS) + 1),
+          );
           return count;
         }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" })));
         counts.push(statements);

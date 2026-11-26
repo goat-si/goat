@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import { setConversationMemoryEnabled } from "../memory/conversationMemoryPolicy.ts";
 import { appendChannelBotNote, channelBotFilesFor } from "./channelBotNotes.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -118,6 +119,29 @@ describe("remote answers and the requester's current ceiling", () => {
     ["pinned", pinnedHarness, "do@mac-studio: ask me"],
     ["automatic", automaticHarness, "do: ask me"],
   ] as const;
+
+  it.effect("queues a paused answer on a memory-enabled remote worker with no memory grant", () => {
+    const { machine, harness } = automaticHarness();
+    return Effect.gen(function* () {
+      const { writes } = yield* askedOnRemote(machine, "do: ask me", "memory-answer", true);
+      assert.strictEqual(machine.launches[0]?.memoryGrantCeiling, "read_write");
+      const sent: Array<string | undefined> = [];
+      machine.beforeHostCall = (call) =>
+        Effect.sync(() => {
+          if (call.tool === "goat_thread_send") sent.push(call.memoryGrantCeiling);
+        });
+      const sql = yield* SqlClient.SqlClient;
+      yield* setConversationMemoryEnabled(sql, false);
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput("answer: the first", "paused-memory-answer"),
+        memorySlackContext,
+      );
+      yield* setConversationMemoryEnabled(sql, true);
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      yield* writes.waitFor(answerSent);
+      assert.deepStrictEqual(sent, ["none"]);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect.each(placements)(
     "authority: a %s remote answer goes out under the ceiling the requester still holds",

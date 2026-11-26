@@ -97,9 +97,14 @@ export type CursorAgentSdkOpenInput = CursorAgentOpenTarget & {
 
 export interface CursorAgentSdkSendInput<Error> {
   readonly message: string | SDKUserMessage;
+  readonly beforeDispatch?: Effect.Effect<string | SDKUserMessage> | undefined;
   /** Process-local admission for recovery sends; message is the prepared first admission. */
   readonly prepareMessage?: () => Effect.Effect<
-    { readonly message: string | SDKUserMessage; readonly mcpServers: SendOptions["mcpServers"] },
+    {
+      readonly message: string | SDKUserMessage;
+      readonly mcpServers: SendOptions["mcpServers"];
+      readonly beforeDispatch?: Effect.Effect<string | SDKUserMessage> | undefined;
+    },
     CursorAgentSdkRunnerError
   >;
   readonly options?: Omit<SendOptions, "onDelta">;
@@ -606,11 +611,13 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
                   options: loggedCursorSendOptions(options),
                 },
               });
+              const beforeDispatch = prepared ? prepared.beforeDispatch : sendInput.beforeDispatch;
+              const admitted = beforeDispatch ? yield* beforeDispatch : message;
               return yield* Effect.tryPromise({
                 try: () =>
                   sendInput.summarize === true
                     ? agent.summarize()
-                    : agent.send(message, {
+                    : agent.send(admitted, {
                         ...options,
                         onDelta: async ({ update }) => {
                           if (!callbacksReady) {

@@ -1186,7 +1186,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               message: "/compress",
               prompt: undefined,
               receipt: Effect.void,
-              uncertain: Effect.void,
+              beforeDispatch: undefined,
             };
           }
           const newText = yield* providerMessageTextWithAttachmentPaths({
@@ -1243,11 +1243,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               detail: "Cursor turn requires non-empty text or attachments.",
             });
           }
-          const {
-            text: memory,
-            receipt,
-            uncertain,
-          } = yield* MemoryContext.promptMemory(turnInput, CursorAgentSdk.CURSOR_PROVIDER);
           const agent = yield* Ref.get(liveAgent);
           const availability = McpProviderSession.memoryToolAvailability(config);
           const hasMemoryTools = availability.read || availability.write || availability.source;
@@ -1271,20 +1266,35 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             deliveredRuntime.instructions === runtimeInstructions
               ? undefined
               : runtimeInstructions;
-          const text = [
+          const base = [
             userText,
             runtimeDelivery.value,
             announceMemoryTools
               ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
               : undefined,
-            memory,
           ]
             .filter((part) => part !== undefined)
             .join("\n\n");
+          let snapshot = yield* MemoryContext.admitSnapshot(
+            turnInput,
+            CursorAgentSdk.CURSOR_PROVIDER,
+          );
+          const message = () => {
+            const text = snapshot
+              ? `${base}\n\n${MemoryContext.memoryContextText(snapshot)}`
+              : base;
+            return images.length === 0 ? text : ({ text, images } satisfies SDKUserMessage);
+          };
           return {
-            receipt,
-            uncertain,
-            message: images.length === 0 ? text : ({ text, images } satisfies SDKUserMessage),
+            receipt: Effect.suspend(() => MemoryContext.deliveryReceipt(turnInput, snapshot)),
+            beforeDispatch:
+              snapshot && turnInput.canDeliverMemory
+                ? Effect.gen(function* () {
+                    snapshot = yield* MemoryContext.recheckSnapshot(turnInput, snapshot);
+                    return message();
+                  })
+                : undefined,
+            message: message(),
             prompt,
           };
         });
@@ -1321,7 +1331,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const previous =
               interrupted?.agent === agent.nativeThreadId ? interrupted.prompt : undefined;
             const runtimeDelivery: { value: string | undefined } = { value: undefined };
-            const { message, prompt, receipt, uncertain } = yield* resolveUserMessage(
+            const { message, prompt, receipt, beforeDispatch } = yield* resolveUserMessage(
               turnInput,
               mcpSession,
               memoryClaim,
@@ -1329,8 +1339,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               runtimeDelivery,
             );
             let delivery = receipt;
-            let unknownDelivery = uncertain;
-            yield* unknownDelivery;
             let memorySettled = false;
             const settleMemory = (accepted: boolean) =>
               Effect.suspend(() => {
@@ -1343,6 +1351,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const sdkRun = yield* agent.session
               .send({
                 message,
+                beforeDispatch,
                 summarize: prompt === undefined,
                 prepareMessage: () =>
                   Effect.gen(function* () {
@@ -1355,10 +1364,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                       runtimeDelivery,
                     );
                     delivery = prepared.receipt;
-                    unknownDelivery = prepared.uncertain;
-                    yield* unknownDelivery;
                     return {
                       message: prepared.message,
+                      beforeDispatch: prepared.beforeDispatch,
                       mcpServers: { ...workspaceMcpServers, ...cursorMcpServers(config) },
                     };
                   }).pipe(
