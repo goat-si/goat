@@ -57,6 +57,25 @@ GOAT builds released before this change shared usage data by default. Builds rel
 GOAT's own endpoint existed send these events to the endpoint of the project GOAT was forked from,
 at `ingest.t3.codes`, which forwards them to PostHog, until you update.
 
+## Network use that is not telemetry
+
+GOAT also goes online to do what you ask and to stay current. These requests carry no usage events
+and do not depend on **Share usage data**:
+
+- **Update checks.** The desktop app checks GOAT's release feed for a new version, and the mobile
+  app checks for an app update when it opens. The server checks installed provider CLIs for newer
+  versions and fetches model list updates; turn that off with **Provider update checks** in
+  Settings.
+- **Downloads.** Installing or updating a provider CLI or Cua Driver downloads it from its
+  publisher. GOAT starts Cua Driver with its own telemetry turned off.
+- **Provider accounts.** Signing in to a provider, listing its models, and showing usage limits
+  talk to that provider with your account.
+- **Things you start**, such as voice input, cloud machines, mobile device builds, webhooks, or
+  starring GOAT on GitHub, talk to the service involved.
+
+Codex, Claude Code, and the other agents GOAT runs follow their own telemetry settings; GOAT does
+not change them.
+
 ## Mobile diagnostics
 
 In the mobile app, **Settings > Diagnostics** lets you copy a startup crash report or a thread

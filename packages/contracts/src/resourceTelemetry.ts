@@ -335,6 +335,8 @@ export const ShellEnvironmentPatch = Schema.Struct({
   GOAT_RELEASE_BASE_URL: Schema.optionalKey(Schema.NullOr(Schema.String)),
   GOAT_TELEMETRY_ENABLED: Schema.optionalKey(Schema.NullOr(Schema.String)),
   T3CODE_TELEMETRY_ENABLED: Schema.optionalKey(Schema.NullOr(Schema.String)), // goat-rename: legacy
+  GOAT_OTEL_SDK_DISABLED: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  OTEL_SDK_DISABLED: Schema.optionalKey(Schema.NullOr(Schema.String)),
   GOAT_GITHUB_APP_CLIENT_ID: Schema.optionalKey(Schema.NullOr(Schema.String)),
   __MISE_DIFF: Schema.optionalKey(Schema.NullOr(Schema.String)),
   JAVA_HOME: Schema.optionalKey(Schema.NullOr(Schema.String)),

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { hasCloudPublicConfig } from "./publicConfig.ts";
+import { hasCloudPublicConfig, resolveRelayTracingConfig } from "./publicConfig.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -74,6 +74,38 @@ describe("hasCloudPublicConfig", () => {
 
       expect(hasCloudPublicConfig()).toBe(true);
     });
+  });
+});
+
+describe("resolveRelayTracingConfig", () => {
+  const tracing = {
+    tracesUrl: "https://traces.example.test/v1/traces",
+    tracesDataset: "relay",
+    tracesToken: "public-ingest-token",
+  };
+  beforeEach(() => {
+    vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", tracing.tracesUrl);
+    vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", tracing.tracesDataset);
+    vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", tracing.tracesToken);
+  });
+
+  it("exports no relay spans from a browser, which has no way to opt in", () => {
+    vi.stubGlobal("window", { location: new URL("https://example.com") });
+
+    expect(resolveRelayTracingConfig()).toBeNull();
+  });
+
+  it.each([
+    [undefined, null],
+    [false, null],
+    [true, tracing],
+  ])("exports from a desktop only when its environment opted in: %s", (optedIn, expected) => {
+    vi.stubGlobal("window", {
+      location: new URL("file:///app/index.html"),
+      desktopBridge: optedIn === undefined ? {} : { getRelayTelemetryEnabled: () => optedIn },
+    });
+
+    expect(resolveRelayTracingConfig()).toEqual(expected);
   });
 });
 
