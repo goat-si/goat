@@ -82,6 +82,7 @@ function layerCloudClient() {
         saveConnection: () => Effect.void,
         clearSavedConnection: () => Effect.void,
         loadOrCreateAgentAwarenessDeviceId: Effect.succeed("device-1"),
+        loadOrCreateAnalyticsDeviceId: Effect.succeed("analytics-device-1"),
         loadAgentAwarenessDeviceId: Effect.succeed("device-1"),
         loadAgentAwarenessRegistrationRecord: Effect.succeed(null),
         saveAgentAwarenessRegistrationRecord: () => Effect.void,

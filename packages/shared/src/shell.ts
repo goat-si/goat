@@ -20,9 +20,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
-
 import type { ShellEnvironmentPatch } from "@goat/contracts";
 import * as HostProcess from "./HostProcess.ts";
+import { windowsTelemetryValueSelectionCommand } from "./windowsTelemetryValueSelection.ts";
 import { locateXcodeGitWithXcrun } from "./macosGit.ts";
 import * as Context from "effect/Context";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
@@ -268,6 +268,27 @@ export function buildEnvironmentCaptureCommand(
     : command;
 }
 
+// A variable saved after this process started is only in the User or Machine registry scope.
+export function windowsEnvironmentValueCommand(name: string): string {
+  if (name === "PATH") return "$value = [Environment]::GetEnvironmentVariable('PATH')";
+  const values =
+    "@(" +
+    `[Environment]::GetEnvironmentVariable('${name}','Process'),` +
+    `[Environment]::GetEnvironmentVariable('${name}','User'),` +
+    `[Environment]::GetEnvironmentVariable('${name}','Machine')` +
+    ") | Where-Object { $_ }";
+  if (
+    [
+      "GOAT_TELEMETRY_ENABLED",
+      "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
+    ].includes(name)
+  ) {
+    // Any explicit opt-out must win over an inherited opt-in.
+    return windowsTelemetryValueSelectionCommand(values);
+  }
+  return `$value = ${values} | Select-Object -First 1`;
+}
+
 function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -278,7 +299,7 @@ function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): st
 
       return [
         `Write-Output '${envCaptureStart(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        windowsEnvironmentValueCommand(name),
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${envCaptureEnd(name)}'`,
       ];

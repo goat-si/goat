@@ -7,6 +7,7 @@ import {
   listLoginShellCandidates,
   mergePathValues,
   setWindowsPath,
+  windowsEnvironmentValueCommand,
 } from "@goat/shared/shell";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -122,6 +123,8 @@ const WINDOWS_PROFILE_ENV_NAMES = [
   "FNM_DIR",
   "FNM_MULTISHELL_PATH",
   "GOAT_RELEASE_BASE_URL",
+  "GOAT_TELEMETRY_ENABLED",
+  "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
 ] as const;
 const ANDROID_SDK_ENV_NAMES = ["ANDROID_HOME", "ANDROID_SDK_ROOT"] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
@@ -214,7 +217,9 @@ const captureWindowsEnvironmentCommand = (names: ReadonlyArray<string>) =>
     ...names.flatMap((name) => {
       return [
         `Write-Output '${startMarker(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        name === "GOAT_TELEMETRY_ENABLED" || name === "T3CODE_TELEMETRY_ENABLED" // goat-rename: legacy
+          ? windowsEnvironmentValueCommand(name)
+          : `$value = [Environment]::GetEnvironmentVariable('${name}')`,
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${endMarker(name)}'`,
       ];
@@ -408,6 +413,19 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     }
     if (!config.env.FNM_MULTISHELL_PATH && profile.FNM_MULTISHELL_PATH) {
       config.env.FNM_MULTISHELL_PATH = profile.FNM_MULTISHELL_PATH;
+    }
+    // An opt-out discovered after launch overrides an inherited opt-in.
+    for (const name of [
+      "GOAT_TELEMETRY_ENABLED",
+      "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
+    ] as const) {
+      const value = profile[name];
+      if (
+        value &&
+        (!config.env[name] || !["true", "1", "yes", "on"].includes(value.trim().toLowerCase()))
+      ) {
+        config.env[name] = value;
+      }
     }
     return Boolean(noProfile.PATH && profile.PATH);
   },

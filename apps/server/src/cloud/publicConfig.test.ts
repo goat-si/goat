@@ -57,6 +57,24 @@ it.effect("derives direct Clerk OAuth endpoints from statically injected public 
   }),
 );
 
+it("relay tracing waits for the desktop login shell even when a cached environment opted in", () => {
+  const fallback = {
+    tracesUrl: "https://embedded.example.test/v1/traces",
+    tracesDataset: "embedded-dataset",
+    tracesToken: "embedded-token",
+  };
+  const optedIn = { GOAT_TELEMETRY_ENABLED: "true" };
+
+  assert.isNotNull(resolveRelayClientTracingConfig(optedIn, fallback));
+  assert.equal(
+    resolveRelayClientTracingConfig(
+      { ...optedIn, GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" },
+      fallback,
+    ),
+    null,
+  );
+});
+
 it("product opt-out disables relay tracing with either built-in or runtime credentials", () => {
   const fallback = {
     tracesUrl: "https://embedded.example.test/v1/traces",
