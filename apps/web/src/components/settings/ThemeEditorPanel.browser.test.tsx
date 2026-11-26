@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import zh from "../../i18n/translations/zh.json";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -295,4 +297,26 @@ describe("ThemeEditorPanel", () => {
     expect(view.onEditorOpenChange).not.toHaveBeenCalled();
     expect(view.router.state.location.pathname).toBe("/settings/appearance");
   });
+});
+
+it("filters advanced color families by their translated names", async () => {
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh }}>
+      <ThemeEditorPanel
+        open
+        onOpenChange={() => {}}
+        onSaved={() => true}
+        editingTheme={null}
+        initialAppearance="light"
+        restoreTheme={() => {}}
+      />
+    </GTProvider>,
+  );
+  const advanced = screen.getByRole("switch", { name: "启用高级主题配色" });
+  (advanced.element() as HTMLElement).focus();
+  await userEvent.keyboard(" ");
+  await expect.element(advanced).toBeChecked();
+  await screen.getByPlaceholder("筛选颜色").fill("终端背景");
+  await expect.element(screen.getByText("终端背景", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("侧边栏背景", { exact: true })).not.toBeInTheDocument();
 });
