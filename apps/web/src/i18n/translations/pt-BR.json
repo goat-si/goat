@@ -3477,9 +3477,9 @@
   "cd9e0573b4527cba": "Não iniciado",
   "b185ea720a85e9c2": "Aguardando aceite",
   "c996d7846e4250ef": "Tentativa {attempt}",
-  "61ee56caa5880fae": "Máquina do worker",
+  "61ee56caa5880fae": "Máquina do agente executor",
   "0158b772ab348c18": "Última atualização",
-  "b949b3f1ed6bb373": "Relatório do worker recebido",
-  "a7a2c522026264c0": "Relatório do worker ausente",
+  "b949b3f1ed6bb373": "Relatório do agente recebido",
+  "a7a2c522026264c0": "Relatório do agente ausente",
   "07246e498374788d": "E mais {count}"
 }

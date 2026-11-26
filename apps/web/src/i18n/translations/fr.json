@@ -3477,9 +3477,9 @@
   "cd9e0573b4527cba": "Non démarré",
   "b185ea720a85e9c2": "En attente de validation",
   "c996d7846e4250ef": "Tentative {attempt}",
-  "61ee56caa5880fae": "Machine du worker",
+  "61ee56caa5880fae": "Machine de l’agent exécutant",
   "0158b772ab348c18": "Dernière mise à jour",
-  "b949b3f1ed6bb373": "Rapport du worker reçu",
-  "a7a2c522026264c0": "Rapport du worker manquant",
+  "b949b3f1ed6bb373": "Rapport de l’agent reçu",
+  "a7a2c522026264c0": "Rapport de l’agent manquant",
   "07246e498374788d": "Et {count} de plus"
 }

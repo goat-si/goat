@@ -3477,9 +3477,9 @@
   "cd9e0573b4527cba": "Sin iniciar",
   "b185ea720a85e9c2": "Pendiente de aceptación",
   "c996d7846e4250ef": "Intento {attempt}",
-  "61ee56caa5880fae": "Equipo del worker",
+  "61ee56caa5880fae": "Equipo del agente de trabajo",
   "0158b772ab348c18": "Última actualización",
-  "b949b3f1ed6bb373": "Informe del worker recibido",
-  "a7a2c522026264c0": "Falta el informe del worker",
+  "b949b3f1ed6bb373": "Informe del agente recibido",
+  "a7a2c522026264c0": "Falta el informe del agente",
   "07246e498374788d": "Y {count} más"
 }

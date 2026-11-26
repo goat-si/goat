@@ -3477,9 +3477,9 @@
   "cd9e0573b4527cba": "Nicht gestartet",
   "b185ea720a85e9c2": "Wartet auf Abnahme",
   "c996d7846e4250ef": "Versuch {attempt}",
-  "61ee56caa5880fae": "Rechner des Workers",
+  "61ee56caa5880fae": "Rechner des Ausführenden",
   "0158b772ab348c18": "Letzte Aktualisierung",
-  "b949b3f1ed6bb373": "Worker-Bericht erhalten",
-  "a7a2c522026264c0": "Worker-Bericht fehlt",
+  "b949b3f1ed6bb373": "Bericht des Ausführenden erhalten",
+  "a7a2c522026264c0": "Bericht des Ausführenden fehlt",
   "07246e498374788d": "Und {count} weitere"
 }
