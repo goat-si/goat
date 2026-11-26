@@ -324,9 +324,19 @@ function HubDeviceListRow({
       ) : null}
       {row.missingClis === null ? null : (
         <p className="text-xs text-warning-foreground">
-          {gt("{missing}. Install from Settings → Connections → Providers on your machines.", {
-            missing: row.missingClis,
-          })}
+          {row.missingClis.length === 1
+            ? gt(
+                "{provider} CLI missing. Install from Settings → Connections → Providers on your machines.",
+                { provider: row.missingClis[0] },
+              )
+            : gt(
+                "{providers} CLIs missing. Install from Settings → Connections → Providers on your machines.",
+                {
+                  providers: new Intl.ListFormat(locale, { type: "conjunction" }).format(
+                    row.missingClis,
+                  ),
+                },
+              )}
         </p>
       )}
       {row.childSetup === null ? null : (
