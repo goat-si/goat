@@ -142,7 +142,9 @@ export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(fu
 export const workerMemoryCeiling = Effect.fn("channel.workerMemoryCeiling")(function* (
   task: ChannelTask,
 ) {
-  if (task.routineWork === true) return "none" as const;
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  if (task.routineWork === true || (yield* ledger.inputMemoryPaused(task.originInputId)))
+    return "none" as const;
   const requester = yield* currentRequester(
     task.requester,
     task.originAddress.kind === "slack" || task.originAddress.kind === "imessage"

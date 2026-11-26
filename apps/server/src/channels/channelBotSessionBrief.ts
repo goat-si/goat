@@ -102,6 +102,8 @@ export const freezeSessionPrefix = Effect.fn("ChannelBotSession.freezePrefix")(f
   requester: ChannelRequester,
   message: string,
   notes: string,
+  open: ReadonlyArray<ChannelTask>,
+  includePaused: boolean,
 ) {
   const visible = yield* ledger
     .listTasks({ ownerId: task.requester.ownerId, botId, limit: RECALL_TASK_SCAN })
@@ -114,16 +116,12 @@ export const freezeSessionPrefix = Effect.fn("ChannelBotSession.freezePrefix")(f
   const tail = yield* ledger.readConversationTail(
     task.conversationId,
     CHANNEL_RECEPTION_TAIL_LIMITS.messages,
-  );
-  const open = visibleOpenWork(
-    yield* ledger.listConversationTasks(task.conversationId),
-    task,
-    requester,
+    { omitMemoryPaused: !includePaused },
   );
   return frozenSessionPrefix({
     standing,
     notes,
-    journal: journalFor(visible),
+    journal: journalFor(yield* ledger.tasksForSessionHistory(visible, includePaused)),
     tail: tail.flatMap((entry) =>
       entry.inputId === task.originInputId
         ? []

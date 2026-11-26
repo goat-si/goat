@@ -3,6 +3,7 @@
  * send, or for a delegated completion or restart continuation, the task of the run it continues.
  */
 import {
+  type ChannelInputId,
   type ChannelTask,
   type ChannelTaskId,
   type MessageId,
@@ -17,6 +18,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { MEMORY_GRANT_RANK } from "../memory/MemoryAccess.ts";
 import { parseLaunchWake } from "./channelLaunchWake.ts";
+import { channelMessageMemory } from "./channelMessageMemory.ts";
 import { recordSessionForwardEvent } from "./channelSessionForwardEvent.ts";
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
@@ -195,30 +197,27 @@ export const sessionStore = (sql: SqlClient.SqlClient) => {
       ),
     );
 
+  const { preserveInputMemoryPause } = channelMessageMemory(sql);
   const writeIntent = (
     threadId: ThreadId,
     messageId: MessageId,
     task: ChannelTask,
     kind: SessionIntent["kind"],
     forwardSequence?: number,
+    senderInput?: ChannelInputId,
   ) =>
-    nowIso.pipe(
-      Effect.flatMap((now) => {
-        const write = sql`
-          INSERT INTO channel_bot_session_runs
-            (thread_id, message_id, task_id, task_generation, kind, created_at)
-          VALUES (${threadId}, ${messageId}, ${task.taskId}, ${task.generation}, ${kind}, ${now})
-          ON CONFLICT (thread_id, message_id) DO NOTHING
-        `;
-        return forwardSequence === undefined
-          ? write
-          : sql.withTransaction(
-              write.pipe(
-                Effect.andThen(
-                  recordSessionForwardEvent(sql, threadId, messageId, forwardSequence, now),
-                ),
-              ),
-            );
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const now = yield* nowIso;
+        yield* preserveInputMemoryPause(threadId, messageId, task.originInputId, senderInput);
+        yield* sql`
+        INSERT INTO channel_bot_session_runs
+          (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${threadId}, ${messageId}, ${task.taskId}, ${task.generation}, ${kind}, ${now})
+        ON CONFLICT (thread_id, message_id) DO NOTHING
+      `;
+        if (forwardSequence !== undefined)
+          yield* recordSessionForwardEvent(sql, threadId, messageId, forwardSequence, now);
       }),
     );
 
