@@ -316,6 +316,10 @@ const make = Effect.gen(function* () {
       threadTask = undefined;
     }
     const now = DateTime.formatIso(yield* DateTime.now);
+    const context = threadTask?.task;
+    const displayContext =
+      context !== undefined &&
+      (yield* ledger.tasksForSessionHistory([context], stored.conversationMemoryPaused)).length > 0;
     const [createdTask] = makeCreatedTasks({
       action: {
         type: "run_turn",
@@ -323,9 +327,11 @@ const make = Effect.gen(function* () {
           stored.message.text.trim().split(/\s+/u).slice(0, 12).join(" ").slice(0, 120) ||
           "Request",
         instruction:
-          (threadTask === undefined
+          (context === undefined
             ? ""
-            : `Task context: ${threadTask.task.taskId}; ${threadTask.task.title}; ${threadTask.task.status}; last summary: ${threadTask.task.resultSummary ?? "none"}.\n\n`) +
+            : displayContext
+              ? `Task context: ${context.taskId}; ${context.title}; ${context.status}; last summary: ${context.resultSummary ?? "none"}.\n\n`
+              : `Task context: ${context.taskId}; ${context.status}.\n\n`) +
           inboundTextWithFiles(stored.message),
       },
       inputId,

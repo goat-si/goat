@@ -67,6 +67,13 @@ it.effect("recovers dispatched channel input and follow-up origins from a 186 da
       yield* sql`INSERT INTO channel_tasks(task_id,owner_id,conversation_id,status,version,generation,task_json,created_at,updated_at)
         VALUES (${inputId},'owner','c','running',1,1,json_object('originInputId',${inputId}),'now','now')`;
     }
+    for (const input of ["0", "1"]) {
+      const task = "pending-" + input;
+      yield* sql`INSERT INTO channel_tasks(task_id,owner_id,conversation_id,status,version,generation,task_json,created_at,updated_at)
+        VALUES (${task},'owner','c','dispatching',1,1,json_object('originInputId',${input},'target',json_object('memoryGrantCeiling','read_write')),'now','now')`;
+      yield* sql`INSERT INTO channel_runtime_state(key,value_json,updated_at)
+        VALUES (${"remote-worker:" + task},'{"generation":1,"connection":{"memoryGrantCeiling":"read_write"}}','now')`;
+    }
     yield* sql`INSERT INTO channel_bot_session_runs(thread_id,message_id,task_id,task_generation,kind,created_at)
       VALUES ('session','initial','0',1,'input','now')`;
     const launch = workerLaunchIdsFor(ChannelTaskId.make("0"), 1);
@@ -83,6 +90,17 @@ it.effect("recovers dispatched channel input and follow-up origins from a 186 da
     yield* msg("session", forwarded);
     yield* msg("session", "ordinary");
     yield* runMigrations({ toMigrationInclusive: 187 });
+    assert.deepEqual(
+      yield* sql`SELECT
+      json_extract(t.task_json,'$.target.memoryGrantCeiling') AS target,
+      json_extract(r.value_json,'$.connection.memoryGrantCeiling') AS connection
+      FROM channel_tasks t JOIN channel_runtime_state r ON r.key='remote-worker:'||t.task_id
+      WHERE t.status='dispatching' ORDER BY t.task_id`,
+      [
+        { target: "none", connection: "none" },
+        { target: "read_write", connection: "read_write" },
+      ],
+    );
     assert.deepEqual(
       yield* sql`SELECT message_id FROM conversation_memory_excluded_messages ORDER BY message_id`,
       [forwarded, "initial", launch.messageId].sort().map((message_id) => ({ message_id })),

@@ -442,14 +442,19 @@ const make = Effect.gen(function* () {
     botId: BotId,
     index: number,
     batch: ReturnType<typeof channelMemoryReadBatch>,
+    includePaused: boolean,
   ) =>
     Effect.gen(function* () {
+      const history = (bot?: BotId) =>
+        visibleTasks(viewer, conversationId, bot).pipe(
+          Effect.flatMap((tasks) => ledger.tasksForSessionHistory(tasks, includePaused)),
+        );
       switch (read.kind) {
         case "memory": {
           const notes = yield* notesFor(botId, viewer, read.query);
           // The whole visible journal is searched; only the prompt's copy is cut to size.
           const journal = journalFor(
-            yield* visibleTasks(viewer, conversationId, botId),
+            yield* history(botId),
             RECALL_TASK_SCAN,
             Number.POSITIVE_INFINITY,
           );
@@ -474,18 +479,23 @@ const make = Effect.gen(function* () {
           );
         }
         case "work": {
-          const matched = matchTasks(yield* visibleTasks(viewer, conversationId), read.query);
+          const matched = matchTasks(yield* history(), read.query);
           return matched.length === 0
             ? "No work this person may see matches."
             : matched.map(taskDigest).join("\n\n");
         }
         case "thread": {
-          const task = matchTasks(yield* visibleTasks(viewer, conversationId), read.query, 1)[0];
+          const task = matchTasks(yield* history(), read.query, 1)[0];
           if (task === undefined) return "No work this person may see matches.";
           const worker = task.worker;
           if (worker === undefined) {
             return taskDigest(task) + "\nIts coding thread has not started.";
           }
+          if (
+            (yield* ledger.threadsForSessionHistory([{ id: worker.threadId }], includePaused))
+              .length === 0
+          )
+            return taskDigest(task);
           if (worker.host !== undefined) {
             return yield* remoteThreadRecall(task, { ...worker, host: worker.host }, viewer);
           }
@@ -511,7 +521,10 @@ const make = Effect.gen(function* () {
           );
         }
         case "pending": {
-          const visible = yield* openAndRecentTasks(viewer, conversationId);
+          const visible = yield* ledger.tasksForSessionHistory(
+            yield* openAndRecentTasks(viewer, conversationId),
+            includePaused,
+          );
           const deliveries = yield* ledger.outcomeDeliveries(visible.map((task) => task.taskId));
           const items = visible.map((task) => ({
             task,
@@ -579,13 +592,24 @@ const make = Effect.gen(function* () {
     inputId: ChannelInputId,
     botId: BotId,
     batch: ReturnType<typeof channelMemoryReadBatch>,
+    includePaused: boolean,
   ): Effect.Effect<
     ReadonlyArray<ChannelReceptionReadResult & { readonly fallbacks: ReadonlyArray<string> }>
   > =>
     Effect.forEach(
       reads,
       (read, index) =>
-        runRead(read, viewer, conversationId, connectionId, inputId, botId, index, batch).pipe(
+        runRead(
+          read,
+          viewer,
+          conversationId,
+          connectionId,
+          inputId,
+          botId,
+          index,
+          batch,
+          includePaused,
+        ).pipe(
           Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
           Effect.map((value) =>
             ChannelRemoteRecall.presentRead(read, Option.getOrUndefined(value)),
@@ -795,6 +819,7 @@ const make = Effect.gen(function* () {
         return;
       }
       const message = tt.mainThreadInput(stored).message;
+      const includePaused = stored.conversationMemoryPaused === true;
       const requester = stored.requester;
       const conversationId = stored.snapshot.conversationId;
       const origin = message.replyAddress;
@@ -950,19 +975,24 @@ const make = Effect.gen(function* () {
                 const tail = yield* ledger.readConversationTail(
                   conversationId,
                   CHANNEL_RECEPTION_TAIL_LIMITS.messages,
+                  { omitMemoryPaused: !includePaused },
                 );
                 const shells = yield* listThreads;
+                const historyShells = yield* ledger.threadsForSessionHistory(shells, includePaused);
                 const facts = yield* hostFacts(shells);
                 const viewer = yield* viewerNow(requester, message.connectionId, inputId);
                 const notes = yield* notesFor(stored.botId, viewer, message.text);
                 const recent = viewer.grantedScopes.includes("orchestration:read")
-                  ? recentThreads(shells, targets, bot?.threadId)
+                  ? recentThreads(historyShells, targets, bot?.threadId)
                   : [];
-                const journal = journalFor(
-                  yield* visibleTasks(viewer, conversationId, stored.botId).pipe(
-                    Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
-                  ),
-                );
+                const taskHistory = yield* ledger.tasksForSessionHistory(tasks, includePaused);
+                const journalForViewer = (who: ChannelRequester) =>
+                  visibleTasks(who, conversationId, stored.botId).pipe(
+                    Effect.flatMap((found) => ledger.tasksForSessionHistory(found, includePaused)),
+                    Effect.map((found) => journalFor(found)),
+                    Effect.orElseSucceed(() => ""),
+                  );
+                const journal = yield* journalForViewer(viewer);
                 const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
                 const identity = yield* Effect.option(
                   profiles.identity(requester.ownerId, stored.botId),
@@ -991,7 +1021,7 @@ const make = Effect.gen(function* () {
                           ],
                     ),
                   ),
-                  tasks: tasks.map((task) => ({
+                  tasks: taskHistory.map((task) => ({
                     taskId: task.taskId,
                     ...(task.kind === undefined ? {} : { kind: task.kind }),
                     title: task.title,
@@ -1049,6 +1079,7 @@ const make = Effect.gen(function* () {
                   inputId,
                   stored.botId,
                   batch,
+                  includePaused,
                 );
                 // Reads take time too: results read under a link that narrowed meanwhile are dropped,
                 // and everything else in the answer is judged by who the person is now.
@@ -1067,11 +1098,7 @@ const make = Effect.gen(function* () {
                     ? results.map((result) => ({ ...result, query: "(withheld)" }))
                     : results;
                 recallFallbacks.push(...ChannelRemoteRecall.fallbackReasons(readResults));
-                const journalNow = journalFor(
-                  yield* visibleTasks(current, conversationId, stored.botId).pipe(
-                    Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
-                  ),
-                );
+                const journalNow = yield* journalForViewer(current);
                 const {
                   journal: _journal,
                   recentThreads: _recent,
@@ -1079,7 +1106,7 @@ const make = Effect.gen(function* () {
                   ...rest
                 } = base;
                 const recentNow = current.grantedScopes.includes("orchestration:read")
-                  ? recentThreads(shells, targets, bot?.threadId)
+                  ? recentThreads(historyShells, targets, bot?.threadId)
                   : [];
                 const second = yield* generateForInput(
                   {

@@ -298,6 +298,56 @@ const mergedLink: ThreadPullRequestLink = {
 };
 
 describe("GOAT Bot reads its memory and work before answering", () => {
+  it.effect("keeps paused history out of both reception passes when memory resumes", () => {
+    const harness = makeHarness();
+    const passes: Array<ChannelReceptionInput> = [];
+    harness.script.current = (input) => {
+      if (input.inputText !== "inspect previous work") return defaultScript(input);
+      passes.push(input);
+      if (input.readsAllowed)
+        return Effect.succeed({
+          replyText: "",
+          action: {
+            type: "read",
+            reads: [
+              { kind: "memory", query: "blueprint" },
+              { kind: "work", query: "blueprint" },
+              { kind: "conversation", query: "blueprint" },
+            ],
+          },
+        });
+      return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const sql = yield* SqlClient.SqlClient;
+      yield* gateway.ingest(goatInput("do: public blueprint", "before-pause"), rpcContext);
+      yield* runtime.drain;
+      yield* setConversationMemoryEnabled(sql, false);
+      const paused = yield* gateway.ingest(
+        goatInput("do: private blueprint", "during-pause"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      yield* setConversationMemoryEnabled(sql, true);
+      yield* gateway.ingest(goatInput("inspect previous work", "after-pause"), rpcContext);
+      yield* runtime.drain;
+      assert.lengthOf(passes, 2);
+      for (const pass of passes) {
+        assert.notInclude(JSON.stringify(pass), "private blueprint");
+        assert.include(JSON.stringify(pass.tail), "public blueprint");
+      }
+      assert.lengthOf(passes[1]!.readResults!, 3);
+      for (const result of passes[1]!.readResults!) assert.include(result.text, "public blueprint");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const stored = yield* ledger.getInput(paused.inputId);
+      const history = yield* ledger.readConversationTail(stored!.snapshot.conversationId, 20);
+      assert.isTrue(history.some((entry) => entry.text === "do: private blueprint"));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("carries notes and the journal into every pass, and journals how work ended", () => {
     const harness = makeHarness();
     const seen: Array<ChannelReceptionInput> = [];

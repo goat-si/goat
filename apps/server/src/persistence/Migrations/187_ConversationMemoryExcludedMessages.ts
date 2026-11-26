@@ -44,6 +44,17 @@ export default Effect.gen(function* () {
     WHERE i.enabled=0 AND e.sequence>i.after_sequence AND e.sequence<=coalesce(i.until_sequence,9223372036854775807)
       AND e.application_event_version=2 AND e.aggregate_kind='thread' AND e.event_type='message.updated'
       AND json_extract(e.payload_json,'$.id') IS NOT NULL`;
+  // A worker can crash after claiming the destination but before launching on it. Carry the
+  // input's pause into both copies of the grant that a retry reads, including automatic SSH.
+  const pausedClaims = sql`SELECT t.task_id, t.generation FROM channel_tasks t
+    JOIN channel_inbox i ON i.input_id=json_extract(t.task_json,'$.originInputId')
+    WHERE t.status='dispatching' AND i.conversation_memory_enabled=0`;
+  yield* sql`UPDATE channel_runtime_state AS r SET value_json=json_set(value_json,'$.connection.memoryGrantCeiling','none')
+    FROM (${pausedClaims}) AS claim WHERE r.key='remote-worker:'||claim.task_id
+      AND CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.generation')=claim.generation
+        AND json_extract(r.value_json,'$.connection.memoryGrantCeiling') IN ('read','read_write') END`;
+  yield* sql`UPDATE channel_tasks SET task_json=json_set(task_json,'$.target.memoryGrantCeiling','none')
+    WHERE task_id IN (SELECT task_id FROM (${pausedClaims})) AND json_extract(task_json,'$.target.memoryGrantCeiling') IN ('read','read_write')`;
   // A channel input can precede its orchestration message by a pause and resume.
   yield* sql`INSERT OR IGNORE INTO conversation_memory_excluded_messages(thread_id, message_id)
     SELECT r.thread_id,r.message_id FROM channel_bot_session_runs r JOIN channel_tasks t ON t.task_id=r.task_id

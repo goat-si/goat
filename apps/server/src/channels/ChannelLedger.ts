@@ -9,6 +9,7 @@ import * as ChannelWake from "./ChannelWake.ts";
 import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
+import { channelMessageMemory } from "./channelMessageMemory.ts";
 import { bindWorkerFollowUpSender, bindWorkerProviderBrief } from "./channelProviderBrief.ts";
 import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
 import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
@@ -148,7 +149,9 @@ export interface ChannelTailEntry {
 }
 export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
-type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
+type ChannelLedgerOps = ChannelBotLedgerOps &
+  ChannelDeliveryLedgerOps &
+  ReturnType<typeof channelMessageMemory>;
 
 type ChannelLedgerOperations = ChannelLedgerOps & ReturnType<typeof makeTaskHistoryReads>;
 
@@ -257,6 +260,7 @@ export class ChannelLedger extends Context.Service<
     readonly readConversationTail: (
       conversationId: ChannelConversationId,
       limit: number,
+      options?: { readonly omitMemoryPaused: boolean },
     ) => Effect.Effect<ReadonlyArray<ChannelTailEntry>, ChannelLedgerError>;
     /**
      * Inputs in one conversation, accepted before `beforeInputId`, whose text or reply contains
@@ -842,6 +846,7 @@ const make = Effect.gen(function* () {
   const bots = botLedger(sql, changes);
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
+    ...channelMessageMemory(sql),
     acceptInput: (input) =>
       acceptChannelInput(sql, readInbox, input).pipe(Effect.mapError(toLedgerError("acceptInput"))),
     inputSessionScopes: (id) =>
@@ -882,7 +887,7 @@ const make = Effect.gen(function* () {
       ),
     ...receptionLedger(sql, reception),
     ...bots,
-    readConversationTail: (conversationId, limit) =>
+    readConversationTail: (conversationId, limit, options) =>
       sql<{
         readonly input_id: ChannelInputId;
         readonly message_json: string;
@@ -891,6 +896,7 @@ const make = Effect.gen(function* () {
       }>`
         SELECT input_id, message_json, accepted_at, reply_json FROM channel_inbox
         WHERE conversation_id = ${conversationId} AND state != 'rejected'
+        ${options?.omitMemoryPaused ? sql`AND conversation_memory_enabled <> 0` : sql``}
         ORDER BY accepted_at DESC, input_id DESC LIMIT ${limit}
       `.pipe(
         Effect.map((rows) =>
@@ -919,6 +925,7 @@ const make = Effect.gen(function* () {
           AND EXISTS (
             SELECT 1 FROM channel_inbox AS asking WHERE asking.input_id = ${beforeInputId}
               AND channel_inbox.rowid < asking.rowid
+              AND (asking.conversation_memory_enabled = 0 OR channel_inbox.conversation_memory_enabled <> 0)
           )
           AND (json_extract(message_json, '$.text') LIKE ${pattern} ESCAPE '\\'
             OR json_extract(reply_json, '$.text') LIKE ${pattern} ESCAPE '\\')

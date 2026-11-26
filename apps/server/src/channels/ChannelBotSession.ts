@@ -494,10 +494,14 @@ const make = Effect.gen(function* () {
       row = yield* currentRow(key);
     }
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-    const openWork = visibleOpenWork(
-      yield* ledger.listConversationTasks(initial.task.conversationId),
-      initial.task,
-      requester,
+    const includePaused = yield* ledger.inputMemoryPaused(initial.task.originInputId);
+    const openWork = yield* ledger.tasksForSessionHistory(
+      visibleOpenWork(
+        yield* ledger.listConversationTasks(initial.task.conversationId),
+        initial.task,
+        requester,
+      ),
+      includePaused,
     );
     const botFiles = channelBotFilesFor(path, stateDir, initial.botId);
     const { notes, instruction, context } = yield* sessionTurnBrief(
@@ -566,6 +570,8 @@ const make = Effect.gen(function* () {
         requester,
         message,
         notes?.standing ?? "",
+        openWork,
+        includePaused,
       );
       const prefix = Rotation.withIdentity(identity.value, frozen);
       row = yield* allocate(initial.task, requester, key, sharing, driver, prefix);
@@ -647,20 +653,22 @@ const make = Effect.gen(function* () {
         senderName: authority._tag === "sender_changed" ? authority.name : undefined,
       } as const;
     const requester = authority.requester;
-    const memoryGrantCeiling = sessionMemoryCeiling(requester, task.target);
+    const senderInput = sender?.inputId ?? inputId;
+    const paused = yield* ledger.inputMemoryPaused(task.originInputId, senderInput);
+    const memoryGrantCeiling = paused ? "none" : sessionMemoryCeiling(requester, task.target);
     const confirmation = yield* makeDispatchConfirmation(
       carriesNotes,
       live.pipe(
         Effect.map(
           (current) =>
             current._tag === "allowed" &&
-            sessionMemoryCeiling(current.requester, task.target) === memoryGrantCeiling,
+            (paused || sessionMemoryCeiling(current.requester, task.target) === memoryGrantCeiling),
         ),
       ),
     );
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
-      writeIntent(threadId, which.messageId, task, "followup", forward.sequence).pipe(
+      writeIntent(threadId, which.messageId, task, "followup", forward.sequence, senderInput).pipe(
         Effect.andThen(
           threads
             .sendToThread({
