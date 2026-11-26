@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import { Socket } from "effect/socket";
 import { RpcClient, RpcSerialization } from "effect/rpc";
+import { evalServerEnv } from "../evalServerEnv.ts";
 
 const decodeToken = Schema.decodeUnknownSync(Schema.Struct({ access_token: Schema.String }));
 const decodeTicket = Schema.decodeUnknownSync(Schema.Struct({ ticket: Schema.String }));
@@ -45,7 +46,7 @@ export async function withEvalServer<T>(
     {
       cwd: root,
       stdio: ["ignore", "ignore", "ignore", "pipe"],
-      env: { ...process.env, GOAT_TELEMETRY_ENABLED: "false" },
+      env: evalServerEnv(process.env, NodePath.join(root, "goat")),
     },
   );
   let spawnError: Error | undefined;

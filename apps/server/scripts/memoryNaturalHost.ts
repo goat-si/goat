@@ -15,6 +15,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Socket } from "effect/socket";
+import { evalServerEnv } from "./evalServerEnv.ts";
 
 const decodeToken = Schema.decodeUnknownSync(C.AuthAccessTokenResult);
 const decodeTicket = Schema.decodeUnknownSync(C.AuthWebSocketTicketResultJson);
@@ -40,7 +41,7 @@ export async function withNaturalHost<A>(
     ],
     {
       cwd: workspace,
-      env: { ...isolatedGitEnv(), GOAT_TELEMETRY_ENABLED: "false" },
+      env: evalServerEnv(isolatedGitEnv(), NodePath.join(root.path, "goat")),
       stdio: ["ignore", "ignore", "ignore", "pipe"],
     },
   );
