@@ -64,6 +64,7 @@ import { useRightPanelActions } from "../chat/useRightPanelActions";
 import { PersistentThreadTerminalPanel } from "../PersistentThreadTerminals";
 import { PreviewSessionSync } from "../preview/PreviewSessionSync";
 import { ThreadPreviewMiniPlayer } from "../preview/ThreadPreviewMiniPlayer";
+import { GoatBotHomeSheetRegistry } from "./goatBotLayout";
 import type { RightPanelLauncherSurface } from "../rightPanelSurfaceAvailability";
 import { useThreadTerminalActions } from "../terminal/useThreadTerminalActions";
 
@@ -139,6 +140,7 @@ export function GoatBotRightPanelFrame({
   const presence = usePanelPresence(open, presenceValue, animationsActive, threadKey, durationMs);
   const renderedSurface = presence.value?.activeSurface ?? null;
   const [layoutElement, setLayoutElement] = useState<HTMLElement | null>(null);
+  const [homeSheet, setHomeSheet] = useState<HTMLElement | null>(null);
 
   const surfaceClose = useRightPanelSurfaceClose({ threadRef, terminalLabelsById });
   const terminalActions = useThreadTerminalActions(threadRef);
@@ -266,6 +268,8 @@ export function GoatBotRightPanelFrame({
   // As in a thread: beside an inline panel the controls float over it; otherwise the header
   // holds them, since a no-drag descendant is the only way past its desktop drag region.
   const controlsAtRoot = presence.present && !sheet;
+  // Home's sheet covers the window's right edge, where these controls float above sheets.
+  const controlsCovered = homeSheet !== null;
   const controlsInPanel = sheet && presence.present && open;
   const headerControls = (
     <>
@@ -275,7 +279,7 @@ export function GoatBotRightPanelFrame({
           className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
         />
       ) : null}
-      {controlsAtRoot || controlsInPanel ? null : titlebarControls}
+      {controlsAtRoot || controlsInPanel || controlsCovered ? null : titlebarControls}
     </>
   );
 
@@ -283,14 +287,19 @@ export function GoatBotRightPanelFrame({
     <div ref={setLayoutElement} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
       <DeviceSetupDialogHost threadKey={threadKey} threadRef={threadRef} state={deviceState} />
       {canOperatePreview && serverBrowser ? <PreviewSessionSync threadRef={threadRef} /> : null}
-      {controlsAtRoot ? titlebarControls : null}
+      {controlsAtRoot && !controlsCovered ? titlebarControls : null}
       <div
-        className={cn("relative flex min-h-0 min-w-0", maximized ? "w-0 flex-none" : "flex-1")}
+        className={cn(
+          "relative flex min-h-0 min-w-0 overflow-x-hidden",
+          maximized ? "w-0 flex-none" : "flex-1",
+        )}
         inert={maximized}
       >
         {/* The floated browser's frame; the bot's centered chat does not move aside for it. */}
         <ChatCanvas composerOverlayElement={null}>
-          {children(headerControls)}
+          <GoatBotHomeSheetRegistry value={setHomeSheet}>
+            {children(headerControls)}
+          </GoatBotHomeSheetRegistry>
           {miniPlayer &&
           shouldRenderPreviewMiniPlayer(miniPlayer.source, renderedSurface) &&
           (miniPlayer.source.kind === "device" || canOperatePreview) ? (

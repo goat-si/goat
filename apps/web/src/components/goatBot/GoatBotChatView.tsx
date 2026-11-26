@@ -15,6 +15,7 @@ import { goatBotHomeKey } from "./goatBotHomeRequest";
 import {
   GOAT_BOT_HOME_DOCKED_WIDTH,
   GoatBotHomeDockedRegistry,
+  GoatBotHomeSheetRegistry,
   useGoatBotHomePresentation,
 } from "./goatBotLayout";
 
@@ -222,6 +223,7 @@ function GoatBotChatViewContent({
   const picture = useGoatBotPicture();
   const { viewRef, presentation, hidden } = useGoatBotHomePresentation(panelOpen);
   const registerHomeDocked = useContext(GoatBotHomeDockedRegistry);
+  const registerHomeSheet = useContext(GoatBotHomeSheetRegistry);
   const narrow = presentation === "sheet";
   const bot = availability.kind === "ready" ? availability.bot : null;
   const destination = member
@@ -760,6 +762,7 @@ function GoatBotChatViewContent({
         >
           {/* A phone-width window gives the home the whole screen; wider, the chat stays beside it. */}
           <SheetPopup
+            ref={registerHomeSheet}
             finalFocus={sheetFinalFocus}
             showCloseButton={false}
             className="max-sm:w-full max-sm:max-w-none"

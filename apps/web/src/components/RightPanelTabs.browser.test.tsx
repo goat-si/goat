@@ -28,6 +28,7 @@ function Fixture(props: {
   open?: boolean;
   close?: (surface: RightPanelSurface, finish: () => void) => void;
   rename?: (surfaceId: string, title: string) => void;
+  offered?: RightPanelTabsProps["offeredSurfaces"];
 }) {
   const [surfaces, setSurfaces] = useState(props.initial);
   const [active, setActive] = useState(props.initial[0]?.id ?? null);
@@ -119,6 +120,7 @@ function Fixture(props: {
         pullRequestAvailable={false}
         pullRequestsAvailable={false}
         deviceAvailable={false}
+        offeredSurfaces={props.offered}
       >
         <button type="button">Outside the tab strip</button>
       </RightPanelTabs>
@@ -135,6 +137,29 @@ function viewport(container: HTMLElement) {
     '[data-right-panel-tab-list] [data-slot="scroll-area-viewport"]',
   )!;
 }
+
+it("a page that offers some surfaces lists only those, in the empty panel and the add menu", async () => {
+  const offered = new Set(["browser", "terminal", "device"] as const);
+  const listed = (root: Element | null) =>
+    ["Browser", "Terminal", "Files", "Diff", "Pull request", "Device"].filter((label) =>
+      root?.textContent?.includes(label),
+    );
+
+  {
+    await using screen = await render(<Fixture initial={[]} offered={offered} />);
+    const launcher = screen.container.querySelector('[aria-label="Open a surface"]');
+    expect(listed(launcher)).toEqual(["Browser", "Terminal", "Device"]);
+  }
+
+  await using screen = await render(<Fixture initial={files(1)} offered={offered} />);
+  await userEvent.click(screen.getByRole("button", { name: "Add panel surface" }));
+  const menu = await vi.waitFor(() => {
+    const popup = document.querySelector('[role="menu"]');
+    if (!popup) throw new Error("menu not open");
+    return popup;
+  });
+  expect(listed(menu)).toEqual(["Browser", "Terminal", "Device"]);
+});
 
 it("reserves the replacement add button when a mounted panel closes and reopens", async () => {
   const initial = files(4);
