@@ -1,3 +1,4 @@
+import { mediaReferenceFileName } from "@goat/client-runtime/media-reference";
 import { splitPullRequestBody } from "@goat/client-runtime/pull-request-markdown";
 import {
   PullRequestImageAttachment,
@@ -48,7 +49,7 @@ export function PullRequestDescription(props: {
         .map((attachment) => {
           return {
             ...pullRequestImageSource(attachment.uri, mediaContext),
-            name: new URL(attachment.uri).pathname.split("/").pop() || "Image",
+            name: mediaReferenceFileName({ kind: "url", url: attachment.uri }) || "Image",
           };
         }),
     [content, mediaContext],

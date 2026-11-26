@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@goat/contracts";
+import { safeDecodeURIComponent } from "@goat/shared/markdownLinks";
 import type { MediaActionsSource } from "./mediaActionsSource";
 import type { FilePreviewItem, FilePreviewSource } from "../components/FilePreviewModal.types";
 
@@ -59,7 +60,10 @@ export function filePreviewGallery(source: FilePreviewSource, group: readonly Fi
 
 export function filePreviewName(source: FilePreviewItem): string {
   const uri = "uri" in source ? source.uri : undefined;
-  const uriName = uri && !/^data:/i.test(uri) ? uri.split(/[?#]/)[0]?.split("/").pop() : undefined;
+  const uriName =
+    uri && !/^data:/i.test(uri)
+      ? safeDecodeURIComponent(uri.split(/[?#]/)[0]?.split("/").pop() ?? "")
+      : undefined;
   const name =
     source.name ?? ("attachment" in source ? source.attachment.name : uriName) ?? "Preview";
   const extension = /\.(png|jpe?g|gif|webp|heic|heif|avif|svg|pdf|docx?|xlsx?|pptx?|txt|rtf)$/i;
