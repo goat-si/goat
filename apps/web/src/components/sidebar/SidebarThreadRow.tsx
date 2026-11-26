@@ -949,6 +949,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         status={prStatus}
         onOpenList={handlePrListClick}
         onOpenPullRequest={handlePrClick}
+        side="right"
       />
     ) : null;
   const terminalStatusIcon = (

@@ -17,15 +17,13 @@ import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
 import {
-  pullRequestListLines,
   resolveThreadCurrentPullRequestLink,
   resolveThreadPullRequestBadge,
-  resolveThreadPullRequestChains,
   type ThreadPullRequestBadge,
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
 import { useRender } from "@base-ui/react/use-render";
-import { type ReactNode, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
+import { type AnimationEvent, type MouseEvent, type ReactElement } from "react";
 import { cn } from "../lib/utils";
 import { revealThreadTerminal } from "../lib/revealThreadTerminal";
 
@@ -53,6 +51,12 @@ import {
   type PullRequestGlyphIcon,
 } from "./pullRequest/pullRequestIcons";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
+import {
+  ThreadPullRequestMiniListItem,
+  ThreadPullRequestsMiniList,
+} from "./ThreadPullRequestsMiniList";
+
+export { ThreadPullRequestsMiniList };
 
 export interface PrStatusIndicator {
   label: string;
@@ -198,6 +202,8 @@ function resolveThreadPullRequestBadgePresentation({
   };
 }
 
+type ThreadLinkBadgeSide = "top" | "right";
+
 export function ThreadPullRequestBadgeControl({
   render,
   badge,
@@ -207,6 +213,7 @@ export function ThreadPullRequestBadgeControl({
   status,
   onOpenList,
   onOpenPullRequest,
+  side,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   badge: ThreadPullRequestBadge | null;
@@ -216,6 +223,7 @@ export function ThreadPullRequestBadgeControl({
   status: PrStatusIndicator | null;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  side?: ThreadLinkBadgeSide | undefined;
 }) {
   const presentation = resolveThreadPullRequestBadgePresentation({ badge, number, url, status });
   if (presentation === null) return null;
@@ -230,6 +238,7 @@ export function ThreadPullRequestBadgeControl({
       pullRequests={pullRequests}
       onOpenList={onOpenList}
       onOpenPullRequest={onOpenPullRequest}
+      side={side}
     />
   );
 }
@@ -244,6 +253,7 @@ function PullRequestBadge({
   pullRequests,
   onOpenList,
   onOpenPullRequest,
+  side = "top",
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   presentation: NonNullable<ReturnType<typeof resolveThreadPullRequestBadgePresentation>>;
@@ -254,6 +264,7 @@ function PullRequestBadge({
   pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  side?: ThreadLinkBadgeSide | undefined;
 }) {
   const onClick = opensList
     ? (event: MouseEvent<HTMLElement>) => {
@@ -287,7 +298,8 @@ function PullRequestBadge({
         </span>
       </TooltipTrigger>
       <TooltipPopup
-        side="top"
+        side={side}
+        {...(side === "right" ? { align: "start" as const } : {})}
         sideOffset={0}
         variant="glass"
         className="pointer-events-auto w-80 max-w-[calc(100vw-2rem)] text-left whitespace-normal"
@@ -297,6 +309,7 @@ function PullRequestBadge({
             <ThreadPullRequestsMiniList
               pullRequests={pullRequests}
               onOpenPullRequest={onOpenPullRequest}
+              onShowAll={onOpenList}
             />
           ) : number !== undefined && url !== undefined ? (
             <ul className="flex flex-col gap-1">
@@ -312,96 +325,6 @@ function PullRequestBadge({
         </div>
       </TooltipPopup>
     </Tooltip>
-  );
-}
-
-export function ThreadPullRequestsMiniList({
-  pullRequests,
-  onOpenPullRequest,
-}: {
-  pullRequests: ReadonlyArray<ThreadPullRequestLink>;
-  onOpenPullRequest?: (event: MouseEvent<HTMLAnchorElement>, url: string) => void;
-}) {
-  const lines = pullRequestListLines(
-    resolveThreadPullRequestChains(visibleThreadPullRequests(pullRequests)),
-  );
-  if (lines.length === 0) return null;
-  return (
-    <ul className="flex flex-col gap-1">
-      {lines.map((line) => {
-        const snapshot = line.link.snapshot;
-        const presentation =
-          snapshot === null
-            ? null
-            : resolvePullRequestState({ state: snapshot.state, isDraft: snapshot.isDraft });
-        return (
-          <ThreadPullRequestMiniListItem
-            key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
-            number={line.link.number}
-            url={line.link.url}
-            title={snapshot?.title ?? line.link.repository}
-            presentation={presentation}
-            depth={line.depth}
-            onOpenPullRequest={onOpenPullRequest}
-          >
-            {line.stack ? (
-              <span className="ml-auto shrink-0 pl-1 text-3xs">
-                {line.stack.kind === "native" ? "stack" : "chain"} · {line.stack.size}
-              </span>
-            ) : null}
-          </ThreadPullRequestMiniListItem>
-        );
-      })}
-    </ul>
-  );
-}
-
-function ThreadPullRequestMiniListItem({
-  number,
-  url,
-  title,
-  presentation,
-  depth = 0,
-  onOpenPullRequest,
-  children,
-}: {
-  number: number;
-  url: string;
-  title: string;
-  presentation: Pick<ThreadPullRequestBadgePresentation, "Icon" | "toneClassName"> | null;
-  depth?: number;
-  onOpenPullRequest?: ((event: MouseEvent<HTMLAnchorElement>, url: string) => void) | undefined;
-  children?: ReactNode;
-}) {
-  const Icon = presentation?.Icon ?? PullRequestGlyph.pullRequest;
-  const content = (
-    <>
-      <Icon
-        aria-hidden
-        className={cn("size-3 shrink-0", presentation?.toneClassName ?? "stroke-muted-foreground")}
-      />
-      <span className="shrink-0 font-mono tabular-nums">#{number}</span>
-      <span className="min-w-0 truncate text-foreground/75">{title}</span>
-      {children}
-    </>
-  );
-  return (
-    <li style={{ paddingLeft: `${Math.min(depth, 3) * 0.75}rem` }}>
-      {onOpenPullRequest ? (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex min-w-0 items-center gap-2 rounded-sm px-1 py-1 hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => onOpenPullRequest(event, url)}
-        >
-          {content}
-        </a>
-      ) : (
-        <div className="flex min-w-0 items-center gap-2">{content}</div>
-      )}
-    </li>
   );
 }
 
