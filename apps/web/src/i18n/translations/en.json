@@ -385,7 +385,6 @@
   "00b8ffd8ea6e6a93": "Use these rules for this project.",
   "72c279824d15a999": "Use each machine's worktree cleanup settings.",
   "596ebbf3817af29a": "Inherit",
-  "b5702d0b64866b08": "Custom",
   "c009c901f3eefe78": "Delete worktrees with deleted threads",
   "dd6c7a1746860a39": "Remove unused worktrees when active or archived threads are deleted.",
   "61c4e3d81b821683": "Clean up worktrees unused for",
