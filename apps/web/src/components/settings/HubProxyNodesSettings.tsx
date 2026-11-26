@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { createHubProxyEnvironmentAtoms } from "@goat/client-runtime/state/hubProxy";
 import {
@@ -48,6 +49,7 @@ function HubProxyNodeRow({
   readonly environmentId: EnvironmentId;
   readonly node: HubNode;
 }) {
+  const gt = useGT();
   const prepare = useAtomCommand(hubProxyEnvironment.prepareNode, { reportFailure: false });
   const enroll = useAtomCommand(hubProxyEnvironment.enrollNode, { reportFailure: false });
   const unenroll = useAtomCommand(hubProxyEnvironment.unenrollNode, { reportFailure: false });
@@ -69,7 +71,10 @@ function HubProxyNodeRow({
     setBusy(null);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
       setError(
-        hubProxyFailureMessage(squashAtomCommandFailure(result), "Could not set up this machine."),
+        hubProxyFailureMessage(
+          squashAtomCommandFailure(result),
+          gt("Could not set up this machine."),
+        ),
       );
   };
   const allow = async () => {
@@ -84,7 +89,10 @@ function HubProxyNodeRow({
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result))
         setError(
-          hubProxyFailureMessage(squashAtomCommandFailure(result), "Could not allow phone access."),
+          hubProxyFailureMessage(
+            squashAtomCommandFailure(result),
+            gt("Could not allow phone access."),
+          ),
         );
       return;
     }
@@ -102,7 +110,7 @@ function HubProxyNodeRow({
         setError(
           hubProxyFailureMessage(
             squashAtomCommandFailure(result),
-            "Could not remove phone access.",
+            gt("Could not remove phone access."),
           ),
         );
       return;
@@ -115,7 +123,7 @@ function HubProxyNodeRow({
       {actions.setup ? (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
-            Set up installs GOAT on this machine if needed.
+            {gt("Set up installs GOAT on this machine if needed.")}
           </p>
           <Button
             size="sm"
@@ -123,22 +131,28 @@ function HubProxyNodeRow({
             disabled={!canPrepare || busy !== null}
             onClick={() => void setup()}
           >
-            {busy === "prepare" ? "Setting up…" : "Set up"}
+            {busy === "prepare" ? gt("Setting up…") : gt("Set up")}
           </Button>
         </div>
       ) : null}
       {actions.reachable ? (
-        <p className="text-xs text-muted-foreground">Reachable from paired phones</p>
+        <p className="text-xs text-muted-foreground">{gt("Reachable from paired phones")}</p>
       ) : null}
-      {penNotice !== null ? <p className="text-xs text-muted-foreground">{penNotice}</p> : null}
+      {penNotice !== null ? (
+        <p className="text-xs text-muted-foreground">
+          {gt(
+            "Pen member, GOAT not set up. Install GOAT on it, or add it here as an SSH host to set it up.",
+          )}
+        </p>
+      ) : null}
       {actions.linked ? (
         <div className="space-y-2">
           <Input
             size="sm"
             type="password"
             autoComplete="off"
-            aria-label={`Pairing link from ${node.label}`}
-            placeholder="Pairing link from this machine"
+            aria-label={gt("Pairing link from {name}", { name: node.label })}
+            placeholder={gt("Pairing link from this machine")}
             value={pairingUrl}
             disabled={!canEnroll || busy !== null}
             onChange={(event) => setPairingUrl(event.target.value)}
@@ -150,7 +164,7 @@ function HubProxyNodeRow({
               disabled={!canEnroll || busy !== null || pairingUrl.trim().length === 0}
               onClick={() => void allow()}
             >
-              {busy === "enroll" ? "Allowing…" : "Allow phone access"}
+              {busy === "enroll" ? gt("Allowing…") : gt("Allow phone access")}
             </Button>
             <Button
               size="sm"
@@ -158,17 +172,18 @@ function HubProxyNodeRow({
               disabled={!canUnenroll || busy !== null}
               onClick={() => void remove()}
             >
-              {busy === "unenroll" ? "Removing…" : "Remove phone access"}
+              {busy === "unenroll" ? gt("Removing…") : gt("Remove phone access")}
             </Button>
           </div>
           {scopes !== null ? (
             <p role="status" className="text-xs text-muted-foreground">
-              Granted scopes: {scopes.length > 0 ? scopes.join(", ") : "None"}
+              {gt("Granted scopes:")}
+              {scopes.length > 0 ? scopes.join(", ") : gt("None")}
             </p>
           ) : null}
           {removed ? (
             <p role="status" className="text-xs text-muted-foreground">
-              Linked phone access removed.
+              {gt("Linked phone access removed.")}
             </p>
           ) : null}
         </div>

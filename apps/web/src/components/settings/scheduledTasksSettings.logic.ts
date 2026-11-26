@@ -102,31 +102,37 @@ const WEBHOOK_SIGNATURE_DEFAULTS = {
   signaturePrefix: "sha256=",
 } as const;
 
-export function webhookDraftErrors(draft: DraftState) {
+type Translate = (source: string, values?: Record<string, string | number>) => string;
+const sourceText: Translate = (source, values) =>
+  source.replace(/\{(\w+)\}/gu, (match, key: string) => String(values?.[key] ?? match));
+
+export function webhookDraftErrors(draft: DraftState, gt: Translate = sourceText) {
   if (draft.scheduleMode !== "webhook") return [];
   if (parseMaxDeliveryAge(draft.maxDeliveryAgeMinutes) === undefined)
     return [
       {
-        title: "Invalid age limit",
-        description: `Enter whole minutes from 1 to ${MAX_WEBHOOK_DELIVERY_AGE_MINUTES}, or leave it blank.`,
+        title: gt("Invalid age limit"),
+        description: gt("Enter whole minutes from 1 to {max}, or leave it blank.", {
+          max: MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
+        }),
       },
     ];
   const errors: Array<{ title: string; description: string }> = [];
   for (const [label, value] of [
-    ["Duplicate request key", draft.replayKey],
-    ["Coalesce key", draft.coalesceKey],
+    [gt("Duplicate request key"), draft.replayKey],
+    [gt("Coalesce key"), draft.coalesceKey],
   ] as const) {
     if (value.trim() && !isWebhookDedupeTemplate(value.trim()))
       errors.push({
-        title: "Invalid webhook settings",
-        description: `${label} must contain a valid request placeholder.`,
+        title: gt("Invalid webhook settings"),
+        description: gt("{label} must contain a valid request placeholder.", { label }),
       });
   }
   const window = draft.coalesceWindowSeconds.trim();
   if (window && (!Number.isInteger(Number(window)) || Number(window) < 10 || Number(window) > 3600))
     errors.push({
-      title: "Invalid webhook settings",
-      description: "Coalesce window must be whole seconds from 10 to 3600.",
+      title: gt("Invalid webhook settings"),
+      description: gt("Coalesce window must be whole seconds from 10 to 3600."),
     });
   return errors;
 }
@@ -138,20 +144,21 @@ export function webhookDeliveryLabel(
     readonly firingAccepted?: boolean | undefined;
   },
   routineMode?: ScheduledTask["routineMode"],
+  gt: Translate = sourceText,
 ) {
   if (delivery.outcome === "accepted") {
-    if (delivery.pendingWindow) return "Opened window";
-    return routineMode === "work" && delivery.firingAccepted !== true ? "Accepted" : "Ran";
+    if (delivery.pendingWindow) return gt("Opened window");
+    return routineMode === "work" && delivery.firingAccepted !== true ? gt("Accepted") : gt("Ran");
   }
   const labels: Record<string, string> = {
-    dispatch_failed: "Run failed",
-    duplicate: "Duplicate",
-    coalesced: "Coalesced",
-    filtered: "Filtered",
-    rejected_signature: "Bad signature",
-    disabled: "Task paused",
-    rate_limited: "Rate limited",
-    expired: "Too old",
+    dispatch_failed: gt("Run failed"),
+    duplicate: gt("Duplicate"),
+    coalesced: gt("Coalesced"),
+    filtered: gt("Filtered"),
+    rejected_signature: gt("Bad signature"),
+    disabled: gt("Task paused"),
+    rate_limited: gt("Rate limited"),
+    expired: gt("Too old"),
   };
   return labels[delivery.outcome] ?? delivery.outcome.replaceAll("_", " ");
 }
@@ -424,3 +431,15 @@ export const isBotRoutineDraft = (
   liveTask?.goatBotRoutine === true &&
   draft.threadId !== "" &&
   draft.threadId === liveTask.threadId;
+
+/** A run time as "in 5 min", "in 23 hours" or "in 2 days". Days stay numeric: a run later today is never "tomorrow". */
+export function formatScheduledRelativeTime(diffMs: number, locale: string): string {
+  const auto = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+  const minutes = Math.ceil(diffMs / 60_000);
+  if (minutes === 0) return auto.format(0, "second");
+  if (Math.abs(minutes) < 60) return auto.format(minutes, "minute");
+  const always = new Intl.RelativeTimeFormat(locale, { numeric: "always", style: "short" });
+  const round = (value: number) => (diffMs > 0 ? Math.round(value) : Math.ceil(value));
+  if (Math.abs(diffMs) < 86_400_000) return always.format(round(diffMs / 3_600_000), "hour");
+  return always.format(round(diffMs / 86_400_000), "day");
+}

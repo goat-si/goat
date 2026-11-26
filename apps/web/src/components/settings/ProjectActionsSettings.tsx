@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { EnvironmentId } from "@goat/contracts";
@@ -24,6 +25,7 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 export function ProjectActionsSettings() {
+  const gt = useGT();
   const { scope, targets, target, search, selectScope } = useSettingsScope();
   const { environments } = useEnvironments();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
@@ -96,13 +98,15 @@ export function ProjectActionsSettings() {
     targets.length === 0;
 
   return (
-    <SettingsSection id="project-actions" title="Actions">
+    <SettingsSection id="project-actions" title={gt("Actions")}>
       <SettingsRow
         serverScoped
         settingKeys={["defaultProjectScripts"]}
         mixed={mixed}
-        title="Actions"
-        description="Commands that run in this project's checkout or its worktree, with optional shortcuts."
+        title={gt("Actions")}
+        description={gt(
+          "Commands that run in this project's checkout or its worktree, with optional shortcuts.",
+        )}
         onResetOverride={() => void persist(() => null)}
         control={
           <Button
@@ -112,13 +116,13 @@ export function ProjectActionsSettings() {
             onClick={() => setRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT })}
           >
             <PlusIcon className="size-3.5" />
-            Add action
+            {gt("Add action")}
           </Button>
         }
       />
       {isProjectScope && !singleCheckout ? (
         <SettingsRow
-          title="Choose one checkout to inspect repository actions."
+          title={gt("Choose one checkout to inspect repository actions.")}
           control={
             <div className="flex flex-wrap gap-2">
               {scope.members.map((member) => (
@@ -140,8 +144,10 @@ export function ProjectActionsSettings() {
       ) : null}
       {mixed ? (
         <SettingsRow
-          title="Different actions across checkouts"
-          description="Narrow the selection above to one checkout to edit its list. Adding an action here adds it to every selected checkout."
+          title={gt("Different actions across checkouts")}
+          description={gt(
+            "Narrow the selection above to one checkout to edit its list. Adding an action here adds it to every selected checkout.",
+          )}
         />
       ) : showRepository ? (
         <ProjectFileActions
@@ -162,8 +168,11 @@ export function ProjectActionsSettings() {
       )}
       {!showRepository && singleCheckout && goatFile.status === "invalid" ? (
         <SettingsRow
-          title={`${goatFile.relativePath} is invalid`}
-          description={`A ${goatFile.relativePath} exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values.`}
+          title={gt("{file} is invalid", { file: goatFile.relativePath })}
+          description={gt(
+            "A {file} exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values.",
+            { file: goatFile.relativePath },
+          )}
           className="text-warning"
         />
       ) : null}

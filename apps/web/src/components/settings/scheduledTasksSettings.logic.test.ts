@@ -24,6 +24,7 @@ import {
   scheduleFromDraft,
   taskToDraft,
   webhookDeliveryLabel,
+  formatScheduledRelativeTime,
 } from "./scheduledTasksSettings.logic";
 
 it("labels a work delivery Accepted until a firing is recorded", () => {
@@ -382,4 +383,41 @@ it("appends the server zone only to fixed-time schedule labels", () => {
   expect(scheduleLabel({ type: "fixed_time", timeOfDay: "09:00" })).toBe("Daily at 09:00");
   expect(scheduleLabel({ type: "interval", everyMs: 60_000 }, "Etc/UTC")).toBe("Every 1 min");
   expect(scheduleLabel({ type: "webhook", signature: null }, "Etc/UTC")).toBe("On webhook");
+});
+
+it("formats selected weekdays in the UI locale and allows the time to come first", () => {
+  const labels = {
+    locale: "ja",
+    webhook: "Webhook 呼び出し時",
+    minutes: (count: number) => `${count} 分ごと`,
+    seconds: (count: number) => `${count} 秒ごと`,
+    daily: "毎日",
+    weekdays: "平日",
+    at: (days: string, time: string) => `${time}（${days}）`,
+  };
+  expect(
+    scheduleLabel(
+      { type: "fixed_time", timeOfDay: "09:00", weekdays: [0, 2] },
+      undefined,
+      undefined,
+      undefined,
+      labels,
+    ),
+  ).toMatch(/^09:00（日.*火）$/u);
+  expect(
+    scheduleLabel({ type: "interval", everyMs: 90_000 }, undefined, undefined, undefined, labels),
+  ).toBe("90 秒ごと");
+});
+
+describe("formatScheduledRelativeTime", () => {
+  const minute = 60_000;
+  it("keeps a run later today in hours instead of calling it tomorrow", () => {
+    expect(formatScheduledRelativeTime(23 * 60 * minute + 31 * minute, "en")).toBe("in 24 hr.");
+    expect(formatScheduledRelativeTime(23 * 60 * minute, "en")).toBe("in 23 hr.");
+  });
+  it("switches to numeric days from one day out and labels the past", () => {
+    expect(formatScheduledRelativeTime(36 * 60 * minute, "en")).toBe("in 2 days");
+    expect(formatScheduledRelativeTime(-90 * minute, "en")).toBe("1 hr. ago");
+    expect(formatScheduledRelativeTime(5 * minute, "en")).toBe("in 5 min.");
+  });
 });

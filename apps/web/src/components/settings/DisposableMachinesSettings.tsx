@@ -1,3 +1,4 @@
+import { msg, useGT, useLocale, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   disposableConsentEnded,
@@ -35,7 +36,7 @@ import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 
 const isMachinesError = Schema.is(HubMachinesError);
 // One line of pen identity --json: {"nodeId","signPub","noisePub"}.
@@ -53,6 +54,10 @@ export function DisposableMachinesSettings({
 }: {
   readonly environmentId: EnvironmentId;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useLocale();
+  const setting = useTranslatedSearchableSetting();
   const hub = useEnvironmentSettings(environmentId, (settings) => settings.hub);
   const settings = hub.attachDisposableMachines;
   const canSave = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
@@ -80,7 +85,7 @@ export function DisposableMachinesSettings({
   const [error, setError] = useState<string | null>(null);
   const [keyCopiedFor, setKeyCopiedFor] = useState<string | null>(null);
   const rowKey = useCopyToClipboard({
-    onError: () => setError("Could not copy. Select the machine key and copy it yourself."),
+    onError: () => setError(gt("Could not copy. Select the machine key and copy it yourself.")),
   });
   const [thread, setThread] = useState("");
   const [cap, setCap] = useState(String(settings.cap));
@@ -100,7 +105,7 @@ export function DisposableMachinesSettings({
     setNow(Date.now());
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(failureText(failure, "Could not save disposable machine settings."));
+      setError(failureText(failure, gt("Could not save disposable machine settings.")));
     } else if (patch.enabled !== undefined)
       setError(
         disposableSwitchSaveError(patch.enabled, result.value.hub.attachDisposableMachines.enabled),
@@ -116,12 +121,12 @@ export function DisposableMachinesSettings({
     setBusy(false);
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(failureText(failure, "Could not reissue the invite."));
+      setError(failureText(failure, gt("Could not reissue the invite.")));
     } else {
       list.refresh();
       const minted = inviteOf(result.value);
       if (minted) setDialog({ kind: "invite", invite: minted });
-      else setError(`No new invite was made: ${result.value.message}`);
+      else setError(gt("No new invite was made: {reason}", { reason: result.value.message }));
     }
   }
   async function endMachine(action: MachineAction, attachId: string) {
@@ -142,8 +147,8 @@ export function DisposableMachinesSettings({
       const failure = squashAtomCommandFailure(result);
       setError(
         isHubMachinesUnsupportedError(failure)
-          ? "Update GOAT on this hub to detach or release machines."
-          : failureText(failure, ACTION_FAILED[action]),
+          ? gt("Update GOAT on this hub to detach or release machines.")
+          : failureText(failure, m(ACTION_FAILED[action])),
       );
     }
   }
@@ -152,24 +157,34 @@ export function DisposableMachinesSettings({
   const expires = !settings.enabled
     ? ""
     : settings.expiresAt === null
-      ? " Consent has ended."
-      : ` Consent ${expired ? "ended" : "ends"} ${new Date(settings.expiresAt).toLocaleString()}.`;
+      ? gt("Consent has ended.")
+      : expired
+        ? gt("Consent ended {time}.", { time: new Date(settings.expiresAt).toLocaleString(locale) })
+        : gt("Consent ends {time}.", { time: new Date(settings.expiresAt).toLocaleString(locale) });
   if (list.failure !== null && isHubMachinesUnsupportedError(list.failure))
     return (
-      <SettingsSection title="Disposable machines">
+      <SettingsSection title={gt("Disposable machines")}>
         <SettingsRow
-          {...searchableSetting("hub-disposable-machines")}
-          description="Update GOAT on this hub to attach disposable machines."
+          {...setting("hub-disposable-machines")}
+          description={gt("Update GOAT on this hub to attach disposable machines.")}
         />
       </SettingsSection>
     );
   return (
-    <SettingsSection title="Disposable machines">
+    <SettingsSection title={gt("Disposable machines")}>
       <SettingsRow
         serverScoped
         settingKeys={["hub"]}
-        {...searchableSetting("hub-disposable-machines")}
-        description={`The threads you name here, and you in Settings, may admit up to ${settings.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${expires}`}
+        {...setting("hub-disposable-machines")}
+        description={[
+          gt(
+            "The threads you name here, and you in Settings, may admit up to {cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.",
+            { cap: settings.cap },
+          ),
+          expires,
+        ]
+          .filter(Boolean)
+          .join(" ")}
         control={
           <div className="flex items-center gap-2">
             {expired && (
@@ -183,11 +198,11 @@ export function DisposableMachinesSettings({
                   void update({ expiresAt: RENEW_AT })
                 }
               >
-                Renew for 30 days
+                {gt("Renew for 30 days")}
               </Button>
             )}
             <Switch
-              aria-label="Attach disposable machines"
+              aria-label={gt("Attach disposable machines")}
               checked={settings.enabled}
               disabled={!available}
               onCheckedChange={(enabled) => void update({ enabled })}
@@ -198,12 +213,14 @@ export function DisposableMachinesSettings({
       <SettingsRow
         serverScoped
         settingKeys={["hub"]}
-        title="Provisioner threads"
-        description="Threads that may attach machines, by thread ID (Copy → Thread ID in a thread's menu). Changing the threads, cap or name rule cancels invites not yet used."
+        title={gt("Provisioner threads")}
+        description={gt(
+          "Threads that may attach machines, by thread ID (Copy → Thread ID in a thread's menu). Changing the threads, cap or name rule cancels invites not yet used.",
+        )}
         control={
           <div className="flex items-center gap-2">
             <Input
-              aria-label="Thread ID"
+              aria-label={gt("Thread ID")}
               size="sm"
               className="w-56"
               value={thread}
@@ -224,7 +241,7 @@ export function DisposableMachinesSettings({
                 setThread("");
               }}
             >
-              Add thread
+              {gt("Add thread")}
             </Button>
           </div>
         }
@@ -237,7 +254,7 @@ export function DisposableMachinesSettings({
                 <Button
                   size="xs"
                   variant="ghost"
-                  aria-label={`Remove ${id}`}
+                  aria-label={gt("Remove {name}", { name: id })}
                   disabled={!available}
                   onClick={() =>
                     void update({
@@ -245,7 +262,7 @@ export function DisposableMachinesSettings({
                     })
                   }
                 >
-                  Remove
+                  {gt("Remove")}
                 </Button>
               </li>
             ))}
@@ -255,12 +272,12 @@ export function DisposableMachinesSettings({
       <SettingsRow
         serverScoped
         settingKeys={["hub"]}
-        title="Machine cap"
-        description="How many disposable machines may hold a place in Pen at once."
+        title={gt("Machine cap")}
+        description={gt("How many disposable machines may hold a place in Pen at once.")}
         control={
           <div className="flex items-center gap-2">
             <Input
-              aria-label="Machine cap"
+              aria-label={gt("Machine cap")}
               size="sm"
               className="w-20"
               type="number"
@@ -281,7 +298,7 @@ export function DisposableMachinesSettings({
               }
               onClick={() => void update({ cap: Number(cap) })}
             >
-              Save cap
+              {gt("Save cap")}
             </Button>
           </div>
         }
@@ -289,12 +306,15 @@ export function DisposableMachinesSettings({
       <SettingsRow
         serverScoped
         settingKeys={["hub"]}
-        title="Name rule"
-        description="Names machines may take: letters, digits, - _ ., classes such as [a-z0-9-] and counts such as {0,30}."
+        title={gt("Name rule")}
+        description={gt(
+          "Names machines may take: letters, digits, - _ ., classes such as {characters} and counts such as {range}.",
+          { characters: "[a-z0-9-]", range: "{0,30}" },
+        )}
         control={
           <div className="flex items-center gap-2">
             <Input
-              aria-label="Name rule"
+              aria-label={gt("Name rule")}
               size="sm"
               className="w-56"
               value={rule}
@@ -306,14 +326,16 @@ export function DisposableMachinesSettings({
               disabled={!available || rule === settings.nameRule}
               onClick={() => void update({ nameRule: rule })}
             >
-              Save rule
+              {gt("Save rule")}
             </Button>
           </div>
         }
       />
       <SettingsRow
-        title="Machines"
-        description="Every machine attached this way, with who vouched for it and whether its key is still in Pen."
+        title={gt("Machines")}
+        description={gt(
+          "Every machine attached this way, with who vouched for it and whether its key is still in Pen.",
+        )}
         control={
           <div className="flex items-center gap-2">
             <Button
@@ -324,7 +346,7 @@ export function DisposableMachinesSettings({
                 list.refresh();
               }}
             >
-              Refresh machines
+              {gt("Refresh machines")}
             </Button>
             <Button
               size="xs"
@@ -335,7 +357,7 @@ export function DisposableMachinesSettings({
                 if (!disposableConsentEnded(settings, at)) setDialog({ kind: "attach" });
               }}
             >
-              Attach a machine
+              {gt("Attach a machine")}
             </Button>
           </div>
         }
@@ -346,16 +368,16 @@ export function DisposableMachinesSettings({
           </p>
         )}
         {(list.data?.machines.length ?? 0) > 0 && (
-          <ul aria-label="Disposable machines" className="space-y-1 pb-2 text-xs">
+          <ul aria-label={gt("Disposable machines")} className="space-y-1 pb-2 text-xs">
             {list.data?.machines.map((machine) => (
               <li key={machine.attachId} className="flex items-center gap-2">
                 <span className="shrink-0 font-medium">{machine.name}</span>
                 <span className="flex-1 text-muted-foreground">
                   {machine.message} ·{" "}
                   {machine.provisioner.kind === "person"
-                    ? "a person"
-                    : `thread ${machine.provisioner.threadId}`}
-                  {machine.penMember ? " · Still in Pen" : ""}
+                    ? gt("a person")
+                    : gt("thread {id}", { id: machine.provisioner.threadId })}
+                  {machine.penMember && <> · {gt("Still in Pen")}</>}
                 </span>
                 {waitsForKey(machine) && machine.machineKey && (
                   <>
@@ -365,7 +387,7 @@ export function DisposableMachinesSettings({
                     <Button
                       size="xs"
                       variant="ghost"
-                      aria-label={`Copy the machine key for ${machine.name}`}
+                      aria-label={gt("Copy the machine key for {name}", { name: machine.name })}
                       onClick={() => {
                         setError(null);
                         setKeyCopiedFor(machine.attachId);
@@ -373,25 +395,32 @@ export function DisposableMachinesSettings({
                       }}
                     >
                       {rowKey.isCopied && keyCopiedFor === machine.attachId
-                        ? "Copied"
-                        : "Copy machine key"}
+                        ? gt("Copied")
+                        : gt("Copy machine key")}
                     </Button>
                   </>
                 )}
                 {actionsOf(machine).map((action) => {
                   const key = machine.attachId + ":" + action;
-                  const label = ACTION_LABEL[action];
+                  const label = m(ACTION_LABEL[action]);
                   return (
                     <span key={action} className="flex items-center gap-1">
                       {confirming === key && (
                         <span className="max-w-80 text-muted-foreground">
-                          {effectOf(action, machine.penMember)}
+                          {m(effectOf(action, machine.penMember))}
                         </span>
                       )}
                       <Button
                         size="xs"
                         variant={confirming === key ? "destructive" : "ghost"}
-                        aria-label={`${confirming === key ? "Confirm " + label.toLowerCase() : label} ${machine.name}`}
+                        aria-label={
+                          confirming === key
+                            ? gt("Confirm {action} {machine}", {
+                                action: label.toLocaleLowerCase(locale),
+                                machine: machine.name,
+                              })
+                            : gt("{action} {machine}", { action: label, machine: machine.name })
+                        }
                         disabled={(action === "release" ? !canRelease : !canDetach) || busy}
                         onClick={() =>
                           confirming === key
@@ -399,7 +428,7 @@ export function DisposableMachinesSettings({
                             : setConfirming(key)
                         }
                       >
-                        {confirming === key ? "Confirm" : label}
+                        {confirming === key ? gt("Confirm") : label}
                       </Button>
                     </span>
                   );
@@ -408,11 +437,11 @@ export function DisposableMachinesSettings({
                   <Button
                     size="xs"
                     variant="ghost"
-                    aria-label={`Reissue ${machine.name}`}
+                    aria-label={gt("Reissue {name}", { name: machine.name })}
                     disabled={!canReissue || busy || !hub.enabled}
                     onClick={() => void reissueInvite(machine.attachId)}
                   >
-                    Reissue
+                    {gt("Reissue")}
                   </Button>
                 )}
               </li>
@@ -434,26 +463,34 @@ export function DisposableMachinesSettings({
 
 type MachineAction = "detach" | "force" | "release";
 const ACTION_LABEL: Record<MachineAction, string> = {
-  detach: "Detach",
-  force: "Force detach",
-  release: "Release",
+  detach: msg("Detach"),
+  force: msg("Force detach"),
+  release: msg("Release"),
 };
 const ACTION_FAILED: Record<MachineAction, string> = {
-  detach: "Could not detach the machine.",
-  force: "Could not force the detach.",
-  release: "Could not release the attach.",
+  detach: msg("Could not detach the machine."),
+  force: msg("Could not force the detach."),
+  release: msg("Could not release the attach."),
 };
 /** What confirming does; out of Pen, the open record holds the slot until the detach ends. */
 const effectOf = (action: MachineAction, penMember: boolean) => {
   if (action === "release")
-    return "Frees the slot once Pen's member list shows the machine did not join.";
+    return msg("Frees the slot once Pen's member list shows the machine did not join.");
   if (action === "detach")
     return penMember
-      ? "GOAT removes its OpenCodex link and the lightweight Child; it stays in Pen and keeps its slot until pen revoke."
-      : "GOAT removes its OpenCodex link and the lightweight Child; it has left Pen; its slot is free once the detach ends.";
+      ? msg(
+          "GOAT removes its OpenCodex link and the lightweight Child; it stays in Pen and keeps its slot until pen revoke.",
+        )
+      : msg(
+          "GOAT removes its OpenCodex link and the lightweight Child; it has left Pen; its slot is free once the detach ends.",
+        );
   return penMember
-    ? "GOAT removes the link without the machine and cleans the machine once it answers; it stays in Pen and keeps its slot until pen revoke."
-    : "GOAT removes the link without the machine; it has left Pen, so its slot is free once the detach ends, which after a forced removal waits for a person to forget its cleanup on the hub.";
+    ? msg(
+        "GOAT removes the link without the machine and cleans the machine once it answers; it stays in Pen and keeps its slot until pen revoke.",
+      )
+    : msg(
+        "GOAT removes the link without the machine; it has left Pen, so its slot is free once the detach ends, which after a forced removal waits for a person to forget its cleanup on the hub.",
+      );
 };
 const REMOVABLE = new Set(["linked", "detaching", "retired"]);
 const DETACHABLE = new Set([
@@ -504,6 +541,8 @@ function AttachDialog({
   readonly onClose: () => void;
   readonly onAttached: () => void;
 }) {
+  const gt = useGT();
+  const locale = useLocale();
   const attach = useAtomCommand(serverEnvironment.hubMachinesAttach, { reportFailure: false });
   const canAttach = useAtomValue(serverEnvironment.hubMachinesAttach.permissionAtom(environmentId));
   const [invite, setInvite] = useState(initialInvite);
@@ -525,14 +564,16 @@ function AttachDialog({
     setBusy(false);
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(failureText(failure, "Could not attach the machine."));
+      setError(failureText(failure, gt("Could not attach the machine.")));
     } else {
       onAttached();
       const minted = inviteOf(result.value);
       if (minted) setInvite(minted);
       else
         setError(
-          `No usable invite was returned: ${result.value.message} Create a new invite to try again.`,
+          gt("No usable invite was returned: {reason} Create a new invite to try again.", {
+            reason: result.value.message,
+          }),
         );
     }
   }
@@ -545,11 +586,11 @@ function AttachDialog({
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Attach a machine</DialogTitle>
+          <DialogTitle>{gt("Attach a machine")}</DialogTitle>
           <DialogDescription>
             {invite
-              ? "This invite token is a secret. Copy it now; GOAT shows it only once."
-              : "Use the keys pen identity --json prints on the machine."}
+              ? gt("This invite token is a secret. Copy it now; GOAT shows it only once.")
+              : gt("Use the keys pen identity --json prints on the machine.")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -557,17 +598,17 @@ function AttachDialog({
             <div className="space-y-2">
               <Textarea
                 readOnly
-                aria-label="Invite token"
+                aria-label={gt("Invite token")}
                 value={invite.token}
                 rows={3}
                 onFocus={(event) => event.currentTarget.select()}
               />
               <p className="text-muted-foreground text-xs">
-                Expires {new Date(invite.expiresAt).toLocaleString()}.
+                {gt("Expires {time}.", { time: new Date(invite.expiresAt).toLocaleString(locale) })}
               </p>
               {invite.machineKey && (
                 <div className="space-y-1">
-                  <Label htmlFor="disposable-machine-key">Machine key</Label>
+                  <Label htmlFor="disposable-machine-key">{gt("Machine key")}</Label>
                   <Textarea
                     id="disposable-machine-key"
                     readOnly
@@ -576,22 +617,22 @@ function AttachDialog({
                     onFocus={(event) => event.currentTarget.select()}
                   />
                   <p className="text-muted-foreground text-xs">
-                    Add this line to authorized_keys of the machine's SSH user. After the machine
-                    joins Pen, this hub reaches it with this key alone, and links it to OpenCodex
-                    once this hub's OpenCodex can use the key.
+                    {gt(
+                      "Add this line to authorized_keys of the machine's SSH user. After the machine joins Pen, this hub reaches it with this key alone, and links it to OpenCodex once this hub's OpenCodex can use the key.",
+                    )}
                   </p>
                 </div>
               )}
               {copyError && (
                 <p role="alert" className="text-destructive text-xs">
-                  Could not copy. Select the text and copy it yourself.
+                  {gt("Could not copy. Select the text and copy it yourself.")}
                 </p>
               )}
             </div>
           ) : (
             <div className="space-y-3">
               <div className="space-y-1">
-                <Label htmlFor="disposable-identity">Output of pen identity --json</Label>
+                <Label htmlFor="disposable-identity">{gt("Output of pen identity --json")}</Label>
                 <Textarea
                   id="disposable-identity"
                   rows={2}
@@ -605,11 +646,11 @@ function AttachDialog({
                   }}
                 />
                 <p className="text-muted-foreground text-xs">
-                  Paste the line it prints on the machine to fill both keys.
+                  {gt("Paste the line it prints on the machine to fill both keys.")}
                 </p>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="disposable-name">Machine name</Label>
+                <Label htmlFor="disposable-name">{gt("Machine name")}</Label>
                 <Input
                   id="disposable-name"
                   placeholder="cc-1"
@@ -618,7 +659,7 @@ function AttachDialog({
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="disposable-sign">Signing public key</Label>
+                <Label htmlFor="disposable-sign">{gt("Signing public key")}</Label>
                 <Input
                   id="disposable-sign"
                   placeholder="signPub"
@@ -627,7 +668,7 @@ function AttachDialog({
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="disposable-noise">Noise public key</Label>
+                <Label htmlFor="disposable-noise">{gt("Noise public key")}</Label>
                 <Input
                   id="disposable-noise"
                   placeholder="noisePub"
@@ -645,7 +686,7 @@ function AttachDialog({
         </DialogPanel>
         <DialogFooter variant="bare">
           <Button variant="outline" onClick={onClose}>
-            Close
+            {gt("Close")}
           </Button>
           {invite?.machineKey && (
             <Button
@@ -655,7 +696,7 @@ function AttachDialog({
                 if (invite.machineKey) copyKey.copyToClipboard(invite.machineKey);
               }}
             >
-              {copyKey.isCopied ? "Copied" : "Copy machine key"}
+              {copyKey.isCopied ? gt("Copied") : gt("Copy machine key")}
             </Button>
           )}
           {invite ? (
@@ -665,14 +706,14 @@ function AttachDialog({
                 copyToClipboard(invite.token);
               }}
             >
-              {isCopied ? "Copied" : "Copy token"}
+              {isCopied ? gt("Copied") : gt("Copy token")}
             </Button>
           ) : (
             <Button
               disabled={!canAttach || busy || !name || !signPub || !noisePub}
               onClick={() => void submit()}
             >
-              Create invite
+              {gt("Create invite")}
             </Button>
           )}
         </DialogFooter>

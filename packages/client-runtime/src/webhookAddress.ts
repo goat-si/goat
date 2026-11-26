@@ -11,19 +11,27 @@ export interface WebhookAddress {
 export function webhookAddress(
   endpoint: ScheduledTaskWebhookEndpoint,
   httpBaseUrl: string | null,
+  messages?: {
+    readonly connect: string;
+    readonly linkEnvironment: string;
+    readonly comingSoon: (name: string) => string;
+    readonly local: (hint: string) => string;
+    readonly reachable: (hint: string) => string;
+  },
 ): WebhookAddress {
   if (endpoint.url !== null) {
     return { address: endpoint.url, copyable: true, note: null };
   }
   const publicUrlHint = isGoatConnectEnabled()
-    ? "Link GOAT Connect for a public URL."
-    : `Public URLs arrive with ${GOAT_CONNECT_COMING_SOON.title} (${GOAT_CONNECT_COMING_SOON.status.toLowerCase()}).`;
+    ? (messages?.connect ?? "Link GOAT Connect for a public URL.")
+    : (messages?.comingSoon(GOAT_CONNECT_COMING_SOON.title) ??
+      `Public URLs arrive with ${GOAT_CONNECT_COMING_SOON.title} (${GOAT_CONNECT_COMING_SOON.status.toLowerCase()}).`);
   if (httpBaseUrl === null) {
     return {
       address: endpoint.path,
       copyable: false,
       note: isGoatConnectEnabled()
-        ? "Link this environment to GOAT Connect for a public URL."
+        ? (messages?.linkEnvironment ?? "Link this environment to GOAT Connect for a public URL.")
         : publicUrlHint,
     };
   }
@@ -32,7 +40,9 @@ export function webhookAddress(
     address: url.href,
     copyable: true,
     note: isLocalLoopbackHost(url.hostname)
-      ? `Only this computer can call this address. ${publicUrlHint}`
-      : `Works wherever this environment's address is reachable, for example over Tailscale or your own proxy. ${publicUrlHint}`,
+      ? (messages?.local(publicUrlHint) ??
+        `Only this computer can call this address. ${publicUrlHint}`)
+      : (messages?.reachable(publicUrlHint) ??
+        `Works wherever this environment's address is reachable, for example over Tailscale or your own proxy. ${publicUrlHint}`),
   };
 }

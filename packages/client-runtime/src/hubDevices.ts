@@ -98,6 +98,30 @@ export const CHILD_SETUP_QUOTA_NOTE =
 export const CHILD_SETUP_PERMISSION_NOTE =
   "Managing this device needs permission on the selected Home.";
 
+export interface ChildSetupText {
+  readonly reasons: Readonly<Record<ChildSetupReason, string>>;
+  readonly states: Readonly<Record<ChildSetup["state"], string>>;
+  readonly steps: Readonly<Record<ChildReadyStep, string>>;
+  readonly actions: Readonly<Record<ChildReadyNextAction, string | null>>;
+  readonly ready: string;
+  readonly unavailable: string;
+  readonly withReason: (state: string, reason: string) => string;
+}
+const DEFAULT_CHILD_TEXT: ChildSetupText = {
+  reasons: CHILD_REASON_LABEL,
+  states: {
+    running: CHILD_STATE.running.label,
+    child: CHILD_STATE.child.label,
+    degraded: CHILD_STATE.degraded.label,
+    blocked: CHILD_STATE.blocked.label,
+  },
+  actions: CHILD_NEXT_STEP_LABEL,
+  steps: CHILD_STEP_LABEL,
+  ready: "Ready",
+  unavailable: "Setup status unavailable. Refresh status.",
+  withReason: (state, reason) => `${state}: ${reason}`,
+};
+
 const SENDABLE_ACTIONS: ReadonlySet<ChildReadyNextAction> = new Set([
   "continue_setup",
   "retry",
@@ -125,6 +149,7 @@ function presentChildReadiness(
   status: OpenCodexChildBootstrapStatus | undefined,
   host: string | null = null,
   current = true,
+  text: ChildSetupText = DEFAULT_CHILD_TEXT,
 ): ChildSetup | null {
   if (status === undefined) return null;
   const setup = status.setup === undefined ? undefined : withoutUnprovenReady(status.setup);
@@ -158,7 +183,7 @@ function presentChildReadiness(
   const moving =
     status.state === "running" || running !== undefined || setup?.readiness === "verifying";
   const base = CHILD_STATE[status.state];
-  const reason = status.reason === undefined ? null : CHILD_REASON_LABEL[status.reason];
+  const reason = status.reason === undefined ? null : text.reasons[status.reason];
   return {
     state: status.state,
     tone: !current
@@ -171,22 +196,22 @@ function presentChildReadiness(
             ? "progress"
             : base.tone,
     label: !current
-      ? "Setup status unavailable. Refresh status."
+      ? text.unavailable
       : proof !== null
-        ? "Ready"
+        ? text.ready
         : running !== undefined
-          ? `${CHILD_STEP_LABEL[running.step]}…`
+          ? `${text.steps[running.step]}…`
           : reason === null
-            ? base.label
-            : `${base.label}: ${reason}`,
+            ? text.states[status.state]
+            : text.withReason(text.states[status.state], reason),
     detail: failure?.message.trim() || status.message?.trim() || null,
     checkedAt: status.checkedAt,
     host,
-    steps: steps.map((step) => ({ label: CHILD_STEP_LABEL[step.step], outcome: step.state })),
+    steps: steps.map((step) => ({ label: text.steps[step.step], outcome: step.state })),
     nextAction,
     actionable,
-    actionLabel: actionable ? CHILD_NEXT_STEP_LABEL[nextAction] : null,
-    guidance: SENDABLE_ACTIONS.has(nextAction) ? null : CHILD_NEXT_STEP_LABEL[nextAction],
+    actionLabel: actionable ? text.actions[nextAction] : null,
+    guidance: SENDABLE_ACTIONS.has(nextAction) ? null : text.actions[nextAction],
     proof,
   };
 }
@@ -217,20 +242,24 @@ export interface HubDeviceRow {
    * hub does not offer it for the host: a cloud machine, a host GOAT did not set up, or an older hub.
    */
   readonly childOptIn: ChildOptIn | null;
-  /** "Codex CLI missing": the provider CLIs that machine's GOAT found missing; null when none. */
-  readonly missingClis: string | null;
+  /** The provider CLIs that machine's GOAT found missing, by display name; null when none. */
+  readonly missingClis: ReadonlyArray<string> | null;
 }
 
-/** The CLIs a machine's own provider probes found missing, as one line; null when none or stale. */
-function missingCliLabel(entry: HostStatusEntry, current: boolean): string | null {
+/** "Codex CLI missing" or "Codex and Claude CLIs missing", for clients that show English. */
+export function missingCliLabel(names: ReadonlyArray<string>): string {
+  if (names.length === 1) return names[0] + " CLI missing";
+  return names.slice(0, -1).join(", ") + " and " + names.at(-1) + " CLIs missing";
+}
+
+/** The CLIs a machine's own provider probes found missing; null when none or stale. */
+function missingCliNames(entry: HostStatusEntry, current: boolean): ReadonlyArray<string> | null {
   if (!current || entry.reachability !== "ok" || entry.lastKnown === true) return null;
   const names = (entry.metrics?.providers ?? [])
     .filter((provider) => provider.enabled && provider.cli === "missing")
     .map((provider) => provider.displayName ?? provider.driver);
   const unique = [...new Set(names)];
-  if (unique.length === 0) return null;
-  if (unique.length === 1) return unique[0] + " CLI missing";
-  return unique.slice(0, -1).join(", ") + " and " + unique.at(-1) + " CLIs missing";
+  return unique.length === 0 ? null : unique;
 }
 
 function routeNames(node: HubNode): ReadonlyArray<string> {
@@ -251,6 +280,7 @@ export function hubDeviceList(input: {
   readonly hosts: ReadonlyArray<HostStatusEntry>;
   /** False after a failed status read, so an older Ready is not shown as current. */
   readonly statusCurrent?: boolean;
+  readonly childText?: ChildSetupText;
 }): ReadonlyArray<HubDeviceRow> {
   const nodes = input.nodes ?? [];
   const byRoute = new Map<string, HubNode>();
@@ -313,12 +343,13 @@ export function hubDeviceList(input: {
       entry.opencodexChild,
       entry.host,
       input.statusCurrent ?? true,
+      input.childText,
     );
     const childOptIn =
       entry.opencodexChildOptIn === undefined
         ? null
         : { host: entry.host, enabled: entry.opencodexChildOptIn };
-    const missingClis = missingCliLabel(entry, input.statusCurrent ?? true);
+    const missingClis = missingCliNames(entry, input.statusCurrent ?? true);
     if (childSetup === null && childOptIn === null && missingClis === null) continue;
     const index = rowOf(entry.host);
     const row = rows[index];

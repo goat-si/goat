@@ -17,6 +17,7 @@ import {
   disposableSwitchSaveError,
   hubDeviceList,
   presentChildSetup,
+  missingCliLabel,
 } from "./hubDevices.ts";
 import type { HubDevice, HubSnapshot } from "./state/hubFleet.ts";
 
@@ -225,9 +226,12 @@ describe("hubDeviceList", () => {
       ],
     });
     expect(rows.map((row) => [row.key, row.missingClis])).toEqual([
-      ["node:n1", "Codex and Claude CLIs missing"],
+      ["node:n1", ["Codex", "Claude"]],
       ["node:n2", null],
     ]);
+    // Mobile shows this English sentence; the web builds a translated one from the names.
+    expect(missingCliLabel(["Codex", "Claude"])).toBe("Codex and Claude CLIs missing");
+    expect(missingCliLabel(["Codex"])).toBe("Codex CLI missing");
   });
 
   it("names no missing CLI from a status it could not read now", () => {
@@ -252,9 +256,9 @@ describe("hubDeviceList", () => {
       hubDeviceList({ nodes, snapshot: null, hosts: [missing], statusCurrent: false })[0]
         ?.missingClis,
     ).toBeNull();
-    expect(hubDeviceList({ nodes, snapshot: null, hosts: [missing] })[0]?.missingClis).toBe(
-      "Codex CLI missing",
-    );
+    expect(hubDeviceList({ nodes, snapshot: null, hosts: [missing] })[0]?.missingClis).toEqual([
+      "Codex",
+    ]);
   });
 
   it("puts each machine's setup on one row only, the one whose route names it", () => {

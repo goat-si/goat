@@ -1,3 +1,4 @@
+import { captureSetupDesktopName } from "./SnapShotSetupDialog.logic";
 import { useGT, useMessages } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
@@ -29,7 +30,7 @@ import {
 } from "../../state/desktopSnapShot";
 import { toastManager } from "../ui/toast";
 import { primaryServerKeybindingsAtom } from "../../state/server";
-import { commandLabel } from "./KeybindingsSettings.logic";
+import { useKeybindingDisplayLabel } from "./useKeybindingDisplayLabel";
 import {
   snapShotStatus,
   snapShotShortcutStatus,
@@ -81,6 +82,7 @@ type ShortcutCheck =
 
 export function SnapShotSettings() {
   const gt = useGT();
+  const keybindingLabel = useKeybindingDisplayLabel();
   const m = useMessages();
   const setting = useTranslatedSearchableSetting();
   const settings = useClientSettings((current) => ({
@@ -120,7 +122,7 @@ export function SnapShotSettings() {
   };
   const refreshState = () =>
     refreshDesktopSnapShotState(registry, (error) =>
-      reportSetupError("Couldn't check capture setup", error),
+      reportSetupError(gt("Couldn't check capture setup"), error),
     );
   const [candidate, setCandidate] = useState<SnapShotShortcut>(settings.snapShotShortcut);
   const [latestShortcutCheck, setShortcutCheck] = useState<ShortcutCheck>({
@@ -177,8 +179,8 @@ export function SnapShotSettings() {
     if (result._tag === "Failure") {
       reportSetupError(
         action === "retry-shortcut"
-          ? "Couldn't open shortcut permissions"
-          : "Couldn't complete capture setup",
+          ? gt("Couldn't open shortcut permissions")
+          : gt("Couldn't complete capture setup"),
         Cause.squash(result.cause),
       );
     }
@@ -200,7 +202,7 @@ export function SnapShotSettings() {
       if (!(await updateClientSettings(patch))) return undefined;
       return await refreshState();
     } catch (error) {
-      reportSetupError("Couldn't save capture settings", error);
+      reportSetupError(gt("Couldn't save capture settings"), error);
     }
   };
 
@@ -210,7 +212,7 @@ export function SnapShotSettings() {
         await bridge?.requestSnapShotPermissions(true);
       await save({ snapShotIncludeAccessibility: includeAccessibility });
     } catch (error) {
-      reportSetupError("Couldn't allow app text capture", error);
+      reportSetupError(gt("Couldn't allow app text capture"), error);
     }
   };
 
@@ -263,20 +265,24 @@ export function SnapShotSettings() {
   });
 
   const shortcutStatus = recording
-    ? "Press your shortcut. Esc cancels."
+    ? gt("Press your shortcut. Esc cancels.")
     : candidateConflict
-      ? `GOAT already uses this for "${commandLabel(candidateConflict)}".`
+      ? gt('GOAT already uses this for "{command}".', {
+          command: keybindingLabel(candidateConflict),
+        })
       : shortcutCheck.status === "checking"
-        ? "Checking shortcut…"
+        ? gt("Checking shortcut…")
         : shortcutCheck.availability
           ? shortcutCheck.availability.available
-            ? "Ready to save."
+            ? gt("Ready to save.")
             : shortcutCheck.availability.message
           : state?.mode === "portal" &&
               !state.shortcutLabel &&
               isModifierPairShortcut(displayShortcut)
-            ? "Try a shortcut such as Ctrl+Shift+2."
-            : snapShotShortcutStatus(state);
+            ? gt("Try a shortcut such as Ctrl+Shift+2.")
+            : state?.shortcutMessage && snapShotShortcutStatus(state) === state.shortcutMessage
+              ? state.shortcutMessage
+              : m(snapShotShortcutStatus(state) ?? "");
 
   const openSetup = async (requested: CaptureSetupStep | "resume" = "resume") => {
     if (!state || setupBusy) return;
@@ -314,7 +320,7 @@ export function SnapShotSettings() {
     const verified = await settlePromise(async () => {
       if (state?.macPermissions) {
         saveSnapShotSetupResume(wizard?.wasEnabled ?? settings.snapShotEnabled);
-        if (!bridge?.setupSnapShot) throw new Error("Restart GOAT to finish capture setup.");
+        if (!bridge?.setupSnapShot) throw new Error(gt("Restart GOAT to finish capture setup."));
         await bridge.setupSnapShot("test-mac-capture");
       }
       if (state?.mode === "direct")
@@ -327,7 +333,7 @@ export function SnapShotSettings() {
     });
     setSetupBusy(false);
     if (verified._tag === "Success") return verified.value;
-    reportSetupError("Couldn't verify capture access", Cause.squash(verified.cause));
+    reportSetupError(gt("Couldn't verify capture access"), Cause.squash(verified.cause));
     return false;
   };
 
@@ -347,7 +353,7 @@ export function SnapShotSettings() {
       setWizard(null);
     });
     if (closed._tag === "Failure") {
-      reportSetupError("Couldn't close capture setup", Cause.squash(closed.cause));
+      reportSetupError(gt("Couldn't close capture setup"), Cause.squash(closed.cause));
     }
     setSetupBusy(false);
   };
@@ -371,10 +377,12 @@ export function SnapShotSettings() {
             status={
               bridge
                 ? setupBusy && !wizard
-                  ? "Updating capture settings…"
+                  ? gt("Updating capture settings…")
                   : refreshError
                     ? `${refreshError.title}. ${refreshError.message}`
-                    : snapShotStatus(state, settings.snapShotEnabled)
+                    : state?.mode === "unavailable" && state.message
+                      ? state.message
+                      : m(snapShotStatus(state, settings.snapShotEnabled))
                 : undefined
             }
             control={
@@ -387,7 +395,9 @@ export function SnapShotSettings() {
                     disabled={setupBusy}
                     onClick={() => void openSetup()}
                   >
-                    {snapShotSetupButtonLabel(state)}
+                    {m(snapShotSetupButtonLabel(state), {
+                      desktop: state ? captureSetupDesktopName(state) : undefined,
+                    })}
                   </Button>
                 ) : null}
                 <Switch
@@ -407,7 +417,7 @@ export function SnapShotSettings() {
             <>
               <SettingsRow
                 {...setting("snap-shot-accessibility")}
-                description="Include text and controls when the app makes them available."
+                description={gt("Include text and controls when the app makes them available.")}
                 status={accessibilityMessage === undefined ? undefined : m(accessibilityMessage)}
                 control={
                   <Switch
@@ -422,8 +432,8 @@ export function SnapShotSettings() {
                 {...setting("snap-shot-shortcut")}
                 description={
                   state?.linuxBackend === "picker"
-                    ? "Choose a window to capture from any app."
-                    : "Capture the window you're using without switching apps."
+                    ? gt("Choose a window to capture from any app.")
+                    : gt("Capture the window you're using without switching apps.")
                 }
                 status={managedShortcut ? undefined : shortcutStatus}
                 control={
@@ -434,7 +444,7 @@ export function SnapShotSettings() {
                       disabled={setupBusy}
                       onClick={() => void openSetup("shortcut")}
                     >
-                      Change shortcut
+                      {gt("Change shortcut")}
                     </Button>
                   ) : (
                     <>
@@ -446,7 +456,7 @@ export function SnapShotSettings() {
                             disabled={!canSaveShortcut || setupBusy}
                             onClick={() => void saveShortcut()}
                           >
-                            {setupBusy ? "Saving…" : "Save"}
+                            {setupBusy ? gt("Saving…") : gt("Save")}
                           </Button>
                           <Button
                             size="xs"
@@ -459,7 +469,7 @@ export function SnapShotSettings() {
                               setShortcutCheck({ status: "idle", availability: null });
                             }}
                           >
-                            Cancel
+                            {gt("Cancel")}
                           </Button>
                         </>
                       ) : state?.mode === "portal" &&
@@ -471,7 +481,7 @@ export function SnapShotSettings() {
                           disabled={setupBusy || state.shortcutPending}
                           onClick={() => void setup("retry-shortcut")}
                         >
-                          Shortcut permissions
+                          {gt("Shortcut permissions")}
                         </Button>
                       ) : null}
                     </>
@@ -480,7 +490,7 @@ export function SnapShotSettings() {
               />
               <SettingsRow
                 {...setting("snap-shot-sound")}
-                description="Choose the sound played when capture starts."
+                description={gt("Choose the sound played when capture starts.")}
                 control={
                   <Menu>
                     <MenuTrigger
@@ -490,13 +500,14 @@ export function SnapShotSettings() {
                       disabled={!captureAvailable}
                     >
                       {soundSelection === "off" ? (
-                        "Off"
+                        gt("Off")
                       ) : soundSelection === "soft-pop" ? (
                         <>
-                          Whoosh <span className="text-muted-foreground">(Default)</span>
+                          {gt("Whoosh")}
+                          <span className="text-muted-foreground">{gt("(Default)")}</span>
                         </>
                       ) : (
-                        "Click"
+                        gt("Click")
                       )}
                     </MenuTrigger>
                     <MenuPopup align="end">
@@ -507,11 +518,12 @@ export function SnapShotSettings() {
                         value={soundSelection}
                       >
                         <MenuRadioItem closeOnClick value="off">
-                          Off
+                          {gt("Off")}
                         </MenuRadioItem>
                         <div className={soundOptionRowClassName}>
                           <MenuRadioItem closeOnClick value="soft-pop">
-                            Whoosh <span className="text-muted-foreground">(Default)</span>
+                            {gt("Whoosh")}
+                            <span className="text-muted-foreground">{gt("(Default)")}</span>
                           </MenuRadioItem>
                           <MenuItem
                             aria-label={gt("Play Whoosh")}
@@ -523,7 +535,7 @@ export function SnapShotSettings() {
                         </div>
                         <div className={soundOptionRowClassName}>
                           <MenuRadioItem closeOnClick value="camera-shutter">
-                            Click
+                            {gt("Click")}
                           </MenuRadioItem>
                           <MenuItem
                             aria-label={gt("Play Click")}
@@ -540,8 +552,8 @@ export function SnapShotSettings() {
               />
               <SettingsRow
                 {...setting("snap-shot-flash")}
-                description="Show a gentle cue on the captured window."
-                status={feedbackUnavailable}
+                description={gt("Show a gentle cue on the captured window.")}
+                status={feedbackUnavailable ? m(feedbackUnavailable) : undefined}
                 control={
                   <Switch
                     checked={!feedbackUnavailable && settings.snapShotFlash}
@@ -553,8 +565,8 @@ export function SnapShotSettings() {
               />
               <SettingsRow
                 {...setting("snap-shot-animations")}
-                description="Animate captured windows into your draft."
-                status={feedbackUnavailable}
+                description={gt("Animate captured windows into your draft.")}
+                status={feedbackUnavailable ? m(feedbackUnavailable) : undefined}
                 control={
                   <Switch
                     checked={!feedbackUnavailable && settings.snapShotAnimations}
