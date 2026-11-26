@@ -12,7 +12,8 @@ import {
   type SlackChannelStatusEvent,
 } from "@goat/contracts";
 
-import { goatBotRefusedText } from "./availability.ts";
+import { englishDiagnosticMessages, type GoatBotDiagnosticMessages } from "./diagnosticMessages.ts";
+export type { GoatBotDiagnosticMessages } from "./diagnosticMessages.ts";
 import type { GoatBotFaceTaskItem } from "./face.ts";
 import type { GoatBotHomeResolution } from "./home.ts";
 import { deriveGoatBotModelSettings } from "./model.ts";
@@ -123,41 +124,50 @@ export interface GoatBotDiagnosticsInput {
 }
 
 /** Whether the bot can work right now, and why not, as lines with at most one fix each. */
-export function diagnoseGoatBot(input: GoatBotDiagnosticsInput): GoatBotDiagnostics {
+export function diagnoseGoatBot(
+  input: GoatBotDiagnosticsInput,
+  messages: GoatBotDiagnosticMessages = englishDiagnosticMessages,
+): GoatBotDiagnostics {
   const homeId = input.home.state === "claimed" ? input.home.claim.environmentId : null;
   // Model, work and Slack would be read from the computer that refused this device.
   if (input.home.state === "claimed" && input.homeRefused === true && !input.home.homeConnected) {
-    const text = goatBotRefusedText(input.homeLabel);
+    const text = messages.homeRefused(input.homeLabel);
     return {
       verdict: "down",
-      title: "Not working",
-      lines: [{ key: "home", tone: "error", text, action: moveAction(input) }],
+      title: messages.down,
+      lines: [{ key: "home", tone: "error", text, action: moveAction(input, messages) }],
     };
   }
   const lines = [
-    homeLine(input),
-    modelLine(input, homeId),
-    workLine(input.rows, input.turnsWaiting),
-    input.member ? null : slackLine(input, homeId),
+    homeLine(input, messages),
+    modelLine(input, homeId, messages),
+    workLine(input.rows, input.turnsWaiting, messages),
+    input.member ? null : slackLine(input, homeId, messages),
   ].filter((line) => line !== null);
   const has = (tone: GoatBotDiagnosticTone) => lines.some((line) => line.tone === tone);
-  if (has("error")) return { verdict: "down", title: "Not working", lines };
-  if (has("warn")) return { verdict: "attention", title: "Needs attention", lines };
-  if (has("pending")) return { verdict: "checking", title: "Checking…", lines };
-  return { verdict: "ready", title: "Ready", lines };
+  if (has("error")) return { verdict: "down", title: messages.down, lines };
+  if (has("warn")) return { verdict: "attention", title: messages.attention, lines };
+  if (has("pending")) return { verdict: "checking", title: messages.checking, lines };
+  return { verdict: "ready", title: messages.ready, lines };
 }
 
-function moveAction(input: GoatBotDiagnosticsInput): GoatBotDiagnosticAction | null {
+function moveAction(
+  input: GoatBotDiagnosticsInput,
+  messages: GoatBotDiagnosticMessages,
+): GoatBotDiagnosticAction | null {
   return input.moveTarget === null
     ? null
     : {
         kind: "claim_home",
         environmentId: input.moveTarget.environmentId,
-        label: `Make ${input.moveTarget.label} the home`,
+        label: messages.moveHome(input.moveTarget.label),
       };
 }
 
-function homeLine(input: GoatBotDiagnosticsInput): GoatBotDiagnosticLine {
+function homeLine(
+  input: GoatBotDiagnosticsInput,
+  messages: GoatBotDiagnosticMessages,
+): GoatBotDiagnosticLine {
   const line = (
     tone: GoatBotDiagnosticTone,
     text: string,
@@ -165,16 +175,15 @@ function homeLine(input: GoatBotDiagnosticsInput): GoatBotDiagnosticLine {
   ) => ({ key: "home", tone, text, action }) as const;
   switch (input.home.state) {
     case "unknown":
-      return line("pending", "Checking the home machine…");
+      return line("pending", messages.checkingHome);
     case "unclaimed":
-      return line("pending", "Choosing a home machine…");
+      return line("pending", messages.choosingHome);
     case "claimed": {
-      const move = moveAction(input);
-      if (!input.home.homeConnected)
-        return line("error", `Home machine is offline (${input.homeLabel})`, move);
+      const move = moveAction(input, messages);
+      if (!input.home.homeConnected) return line("error", messages.offline(input.homeLabel), move);
       if (!input.home.homeSupportsBot)
-        return line("error", `${input.homeLabel} can't run GOAT Bot`, move);
-      return line("ok", `Answers on ${input.homeLabel}`);
+        return line("error", messages.unsupported(input.homeLabel), move);
+      return line("ok", messages.home(input.homeLabel));
     }
   }
 }
@@ -182,16 +191,17 @@ function homeLine(input: GoatBotDiagnosticsInput): GoatBotDiagnosticLine {
 function modelLine(
   input: GoatBotDiagnosticsInput,
   homeId: EnvironmentId | null,
+  messages: GoatBotDiagnosticMessages,
 ): GoatBotDiagnosticLine {
   const { model } = input;
   if (model === null)
-    return { key: "model", tone: "pending", text: "Checking the model…", action: null };
-  const name = model.provider === null ? model.model : `${model.model} on ${model.provider}`;
+    return { key: "model", tone: "pending", text: messages.checkingModel, action: null };
+  const name = model.provider === null ? model.model : messages.model(model.model, model.provider);
   if (model.available)
     return {
       key: "model",
       tone: "ok",
-      text: model.inherited ? `Uses ${input.mainBotName}'s current model (${name})` : name,
+      text: model.inherited ? messages.inherited(input.mainBotName, name) : name,
       action: null,
     };
   // A member's own model is chosen when it is created; an inherited one changes with GOAT Bot's.
@@ -199,9 +209,9 @@ function modelLine(
   return {
     key: "model",
     tone: "error",
-    text: `Model unavailable: ${model.model}`,
+    text: messages.unavailable(model.model),
     action: fixable
-      ? { kind: "choose_model", environmentId: homeId, label: "Choose another model" }
+      ? { kind: "choose_model", environmentId: homeId, label: messages.chooseModel }
       : null,
   };
 }
@@ -257,10 +267,14 @@ const waitingTurnId = (turn: GoatBotWaitingTurn): string =>
 const waitingTurnKind = (turn: GoatBotWaitingTurn): "approval" | "answer" =>
   typeof turn === "string" || turn.kind !== "approval" ? "answer" : "approval";
 
-function waitingPhrase(approvals: number, answers: number): string | null {
+function waitingPhrase(
+  approvals: number,
+  answers: number,
+  messages: GoatBotDiagnosticMessages,
+): string | null {
   const parts = [
-    approvals > 0 ? approvals + " waiting for your approval" : null,
-    answers > 0 ? answers + " waiting for your answer" : null,
+    approvals > 0 ? messages.approvals(approvals) : null,
+    answers > 0 ? messages.answers(answers) : null,
   ].filter((part) => part !== null);
   return parts.length === 0 ? null : parts.join(" · ");
 }
@@ -284,6 +298,7 @@ export function goatBotWaitingInChatText(botName: string): string {
 function workLine(
   rows: GoatBotDiagnosticsInput["rows"],
   turnsWaiting: ReadonlyArray<GoatBotWaitingTurn>,
+  messages: GoatBotDiagnosticMessages,
 ): GoatBotDiagnosticLine | null {
   const outside = Array.isArray(rows) ? goatBotTurnsOutsideList(turnsWaiting, rows) : turnsWaiting;
   let approvals = 0;
@@ -298,13 +313,14 @@ function workLine(
     return {
       key: "work",
       tone: "warn",
-      text: waitingPhrase(approvals, turnAnswers) ?? turnsOutside + " waiting for your answer",
-      action: { kind: "open_chat", label: "Open the chat" },
+      text: waitingPhrase(approvals, turnAnswers, messages) ?? messages.answers(turnsOutside),
+      action: { kind: "open_chat", label: messages.openChat },
     };
   if (rows === "unavailable") return null;
   if (rows === "failed")
-    return { key: "work", tone: "warn", text: "Couldn't load work", action: null };
-  if (rows === null) return { key: "work", tone: "pending", text: "Loading work…", action: null };
+    return { key: "work", tone: "warn", text: messages.loadFailed, action: null };
+  if (rows === null)
+    return { key: "work", tone: "pending", text: messages.loadingWork, action: null };
   const tasks = rows.flatMap((row) => (row.kind === "task" ? [row.task] : []));
   // Listed rows stay an answer. Only a turn the list leaves out can name an approval.
   const waitingIds = new Set(turnsWaiting.map(waitingTurnId));
@@ -318,9 +334,9 @@ function workLine(
     .filter((task) => task.status === "waiting_input" || waitingIds.has(task.taskId))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   const parts = [
-    running > 0 ? running + " running" : null,
-    starting > 0 ? starting + " starting or queued" : null,
-    waitingPhrase(approvals, waiting.length + turnAnswers),
+    running > 0 ? messages.running(running) : null,
+    starting > 0 ? messages.queued(starting) : null,
+    waitingPhrase(approvals, waiting.length + turnAnswers, messages),
   ].filter((part) => part !== null);
   // A full page can leave older open tasks out, so the counts are only a lower bound.
   const full = tasks.length >= BOT_THREADS_PAGE;
@@ -329,36 +345,37 @@ function workLine(
       ? {
           key: "work",
           tone: "warn",
-          text: "Can't count open work: the newest " + BOT_THREADS_PAGE + " tasks are finished",
+          text: messages.full(BOT_THREADS_PAGE),
           action: null,
         }
-      : { key: "work", tone: "ok", text: "No open work", action: null };
-  const text = (full ? "At least " : "") + parts.join(" · ");
+      : { key: "work", tone: "ok", text: messages.noWork, action: null };
+  const text = full ? messages.atLeast(parts.join(" · ")) : parts.join(" · ");
   const oldest = waiting[0];
   if (oldest !== undefined)
     return {
       key: "work",
       tone: "warn",
       text,
-      action: { kind: "open_task", taskId: oldest.taskId, label: "Answer" },
+      action: { kind: "open_task", taskId: oldest.taskId, label: messages.answer },
       ...(turnsOutside > 0
-        ? { alsoAction: { kind: "open_chat", label: "Open the chat" } as const }
+        ? { alsoAction: { kind: "open_chat", label: messages.openChat } as const }
         : {}),
     };
   return turnsOutside > 0
-    ? { key: "work", tone: "warn", text, action: { kind: "open_chat", label: "Open the chat" } }
+    ? { key: "work", tone: "warn", text, action: { kind: "open_chat", label: messages.openChat } }
     : { key: "work", tone: "ok", text, action: null };
 }
 
 function slackLine(
   input: GoatBotDiagnosticsInput,
   homeId: EnvironmentId | null,
+  messages: GoatBotDiagnosticMessages,
 ): GoatBotDiagnosticLine | null {
   if (input.slack === "unavailable") return null;
   if (input.slack === "loading")
-    return { key: "slack", tone: "pending", text: "Checking Slack…", action: null };
+    return { key: "slack", tone: "pending", text: messages.checkingSlack, action: null };
   if (input.slack === "failed")
-    return { key: "slack", tone: "warn", text: "Couldn't check Slack", action: null };
+    return { key: "slack", tone: "warn", text: messages.slackCheckFailed, action: null };
   const live = input.slackLive;
   const connections = input.slack
     .filter((connection) => connection.enabled)
@@ -375,14 +392,14 @@ function slackLine(
   if (connections.length === 0) return null;
   const action: GoatBotDiagnosticAction | null =
     input.canConfigureSlack && homeId !== null
-      ? { kind: "open_slack_settings", environmentId: homeId, label: "Open Slack settings" }
+      ? { kind: "open_slack_settings", environmentId: homeId, label: messages.slackSettings }
       : null;
   const failed = connections.find((connection) => connection.status === "error");
   if (failed)
     return {
       key: "slack",
       tone: "error",
-      text: `Slack: ${failed.lastError ?? "connection failed"}`,
+      text: messages.slackError(failed.lastError ?? messages.connectionFailed),
       action,
     };
   const joining = connections.find(
@@ -392,7 +409,7 @@ function slackLine(
     return {
       key: "slack",
       tone: "pending",
-      text: joining.status === "connecting" ? "Slack is connecting…" : "Slack is reconnecting…",
+      text: joining.status === "connecting" ? messages.slackConnecting : messages.slackReconnecting,
       action: null,
     };
   const delivery = connections.find(
@@ -404,8 +421,8 @@ function slackLine(
     return {
       key: "slack",
       tone: "warn",
-      text: `Last Slack reply failed (${delivery.code})`,
+      text: messages.deliveryFailed(delivery.code),
       action,
     };
-  return { key: "slack", tone: "ok", text: "Slack connected", action: null };
+  return { key: "slack", tone: "ok", text: messages.slackConnected, action: null };
 }
