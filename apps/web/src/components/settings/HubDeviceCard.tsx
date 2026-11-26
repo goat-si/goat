@@ -265,17 +265,21 @@ export function HubDeviceCard({
 
   const phoneDescription = !isDesktop ? (
     <>
-      To use this server as a hub, run <code>goat serve --tailscale-serve</code> on the server.{" "}
-      Create a pairing link under Authorized clients.
+      {gt(
+        "To use this server as a hub, run {command} on the server. Create a pairing link under Authorized clients.",
+        { command: "goat serve --tailscale-serve" },
+      )}
     </>
   ) : primaryEnvironmentId === null ? (
-    "Connect an environment to pair your phone."
+    gt("Connect an environment to pair your phone.")
   ) : !canManageLocalBackend ? (
-    "Phone QR needs access to this device’s network settings. Create a link under Authorized clients."
+    gt(
+      "Phone QR needs access to this device’s network settings. Create a link under Authorized clients.",
+    )
   ) : !allowed ? (
     gt("This connection cannot create pairing links.")
   ) : (
-    "Scan a QR with your phone to pair the GOAT app."
+    gt("Scan a QR with your phone to pair the GOAT app.")
   );
 
   return (

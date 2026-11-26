@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { AuthHubProxyScope, type AuthEnvironmentScope } from "@goat/contracts";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -10,7 +11,10 @@ export function AccessScopeSummary({
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly label: string;
 }) {
-  const scopeCountLabel = `${scopes.length} ${scopes.length === 1 ? "scope" : "scopes"}`;
+  const gt = useGT();
+  const scopeCountLabel = gt("{count, plural, one {# scope} other {# scopes}}", {
+    count: scopes.length,
+  });
 
   return (
     <>
@@ -22,7 +26,7 @@ export function AccessScopeSummary({
           render={
             <button
               type="button"
-              aria-label={`${label}: show ${scopeCountLabel}`}
+              aria-label={gt("{label}: show {scopes}", { label, scopes: scopeCountLabel })}
               className="cursor-help underline decoration-border underline-offset-2 outline-hidden hover:text-foreground focus-visible:text-foreground"
             />
           }
@@ -35,7 +39,7 @@ export function AccessScopeSummary({
           tooltipStyle
           className="w-max max-w-80 whitespace-normal"
         >
-          <p className="mb-1 font-medium">Granted scopes</p>
+          <p className="mb-1 font-medium">{gt("Granted scopes")}</p>
           <div className="flex flex-col gap-0.5">
             {scopes.map((scope) => (
               <code key={scope} className="font-mono text-foreground/85">
@@ -48,7 +52,7 @@ export function AccessScopeSummary({
       {scopes.includes(AuthHubProxyScope) ? (
         <>
           <span aria-hidden> · </span>
-          <span className="text-foreground">Hub access</span>
+          <span className="text-foreground">{gt("Hub access")}</span>
         </>
       ) : null}
     </>

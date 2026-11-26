@@ -1,5 +1,6 @@
+import { CloudRemoteEnvironmentRows } from "./CloudRemoteEnvironmentRows";
+import { useGT } from "gt-react";
 import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
-import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
 import { disposableRouteRefusal, isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { sshHostProbeErrorText } from "@goat/client-runtime/state/sshHost";
@@ -121,7 +122,6 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
 
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
@@ -163,7 +163,6 @@ import {
   ServerUpdatesAction,
   type ServerUpdateTarget,
 } from "../ServerUpdateAction";
-import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -239,6 +238,7 @@ function SavedBackendListRow({
   onForget,
   onReviewTrust,
 }: SavedBackendListRowProps) {
+  const gt = useGT();
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
@@ -366,7 +366,7 @@ function SavedBackendListRow({
     (serverUpdateState.status === "idle" || serverUpdateState.status === "failed");
 
   const statusTooltip = isGoatConnectUnavailable(environment.entry)
-    ? `${GOAT_CONNECT_COMING_SOON.status}. ${GOAT_CONNECT_COMING_SOON.description}`
+    ? gt("Coming soon. Connect with Tailscale for now.")
     : `${status.tooltipText}${snapshotAge === null ? "" : ` · ${snapshotAge}`}${
         versionMismatch
           ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
@@ -413,7 +413,7 @@ function SavedBackendListRow({
             onClick={() => setRoutesOpen((open) => !open)}
             className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            {routeCount === 1 ? "Routes" : `${routeCount} routes`}
+            {routeCount === 1 ? gt("Routes") : `${routeCount} routes`}
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -432,7 +432,7 @@ function SavedBackendListRow({
             onClick={() => setPermissionsOpen((open) => !open)}
             className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            Permissions
+            {gt("Permissions")}
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -524,7 +524,7 @@ function SavedBackendListRow({
           serverLabel={`${environment.label} server`}
           fromVersion={lastDescriptor?.serverVersion}
           targetVersion={APP_VERSION}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+          label={serverUpdateState.status === "failed" ? gt("Retry update") : gt("Update")}
         />
       ) : null}
       {savedSshTarget === null && showUpdateAction ? (
@@ -536,7 +536,7 @@ function SavedBackendListRow({
           desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
           threadContinuation={supportsServerUpdateThreadContinuation(environment.serverConfig)}
           targetVersion={versionMismatch.clientVersion}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+          label={serverUpdateState.status === "failed" ? gt("Retry update") : gt("Update")}
           appearance="icon"
         />
       ) : null}
@@ -547,13 +547,17 @@ function SavedBackendListRow({
               size="sm"
               checked={enabled}
               disabled={isRemoving || blocked}
-              aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
+              aria-label={
+                enabled
+                  ? gt("Switch off {environment}", { environment: environment.label })
+                  : gt("Switch on {environment}", { environment: environment.label })
+              }
               onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
             />
           }
         />
         <TooltipPopup side="top">
-          {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+          {blocked ? gt("Client not supported") : enabled ? gt("Switch off") : gt("Switch on")}
         </TooltipPopup>
       </Tooltip>
       <Menu>
@@ -577,32 +581,32 @@ function SavedBackendListRow({
           />
           <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
             <RouteIcon />
-            {routesOpen ? "Hide routes" : "Routes"}
+            {routesOpen ? gt("Hide routes") : gt("Routes")}
           </MenuItem>
           {mcpUrl ? (
             <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>
               <CopyIcon />
-              Copy MCP URL
+              {gt("Copy MCP URL")}
             </MenuItem>
           ) : null}
           {errorTraceId ? (
             <MenuItem onClick={() => copyTraceId(errorTraceId)}>
               <CopyIcon />
-              Copy trace ID
+              {gt("Copy trace ID")}
             </MenuItem>
           ) : null}
           <MenuItem onClick={copyDiagnostic}>
             <CopyIcon />
-            Copy diagnostic
+            {gt("Copy diagnostic")}
           </MenuItem>
           <MenuSeparator />
           {savedSshTarget && isSshHostAlias(savedSshTarget.alias) && onForget ? (
             <MenuItem variant="destructive" onClick={() => onForget(environment)}>
-              Forget host…
+              {gt("Forget host…")}
             </MenuItem>
           ) : null}
           <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-            {isRemoving ? "Removing…" : "Remove from this device…"}
+            {isRemoving ? gt("Removing…") : gt("Remove from this device…")}
           </MenuItem>
         </MenuPopup>
       </Menu>
@@ -610,50 +614,12 @@ function SavedBackendListRow({
   );
 }
 
-function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnabled?: boolean }) {
-  return (
-    <Empty className="min-h-52">
-      <EmptyMedia variant="icon">
-        <ChevronsLeftRightEllipsisIcon />
-      </EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>No saved remote environments</EmptyTitle>
-        <EmptyDescription>
-          {cloudEnabled
-            ? "Click “Add device” to pair another environment, or connect one from GOAT Connect."
-            : "Click “Add device” to pair another environment."}
-        </EmptyDescription>
-      </EmptyHeader>
-    </Empty>
-  );
-}
-
-function CloudRemoteEnvironmentRows({
-  primaryEnvironmentId,
-  savedEnvironments,
-  hasPendingAdds,
-}: {
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
-  readonly hasPendingAdds: boolean;
-}) {
-  return hasCloudPublicConfig() ? (
-    <CloudEnvironmentConnectRows
-      primaryEnvironmentId={primaryEnvironmentId}
-      savedEnvironments={savedEnvironments}
-      empty={hasPendingAdds ? null : <EmptyRemoteEnvironments />}
-    />
-  ) : savedEnvironments.length === 0 && !hasPendingAdds ? (
-    <EmptyRemoteEnvironments cloudEnabled={false} />
-  ) : null;
-}
-
 /**
  * Saved machines with their health, switches and row actions, plus the Add device
  * dialog (remote pairing and SSH). Settings > Connections and the Fleet page both render it.
  */
 export function ConnectionEnvironmentsSection({
-  title = "Environments",
+  title,
   searchable = true,
   headerAction,
 }: {
@@ -662,6 +628,7 @@ export function ConnectionEnvironmentsSection({
   readonly searchable?: boolean;
   readonly headerAction?: ReactNode;
 }) {
+  const gt = useGT();
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -762,6 +729,7 @@ export function ConnectionEnvironmentsSection({
   const pendingSshAdds = useAtomValue(pendingSshAddsAtom);
   const sshReviewGeneration = useRef(0);
   const [pendingForget, setPendingForget] = useState<EnvironmentPresentation | null>(null);
+  const forgetAlias = pendingForget ? savedDesktopSshTarget(pendingForget)?.alias : undefined;
   const [removeForgottenConnection, setRemoveForgottenConnection] = useState(false);
   const [forgetBusy, setForgetBusy] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
@@ -864,7 +832,7 @@ export function ConnectionEnvironmentsSection({
       !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope)
     ) {
       setSavedBackendError(
-        "This device can't set up hosts on this environment. Ask its owner for full access.",
+        gt("This device can't set up hosts on this environment. Ask its owner for full access."),
       );
       return;
     }
@@ -938,7 +906,12 @@ export function ConnectionEnvironmentsSection({
   const forgetUnsavedSshHost = async (alias: string) => {
     if (primaryEnvironmentId === null || !ownsSshConfig || sshAddInFlight.current) return;
     const confirmed = await requestConfirmDialog(
-      `Forget ${alias}?\nGOAT removes the SSH entry and pinned key it added for this host. Your own SSH config and keys stay.`,
+      [
+        gt("Forget {host}?", { host: alias }),
+        gt(
+          "GOAT removes the SSH entry and pinned key it added for this host. Your own SSH config and keys stay.",
+        ),
+      ].join("\n"),
       { variant: "destructive" },
     );
     if (confirmed !== true) return;
@@ -1396,7 +1369,9 @@ export function ConnectionEnvironmentsSection({
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">GOAT server</span>
+          <span className="mb-1.5 block text-xs font-medium text-foreground">
+            {gt("GOAT server")}
+          </span>
           <Input
             value={savedBackendHost}
             onChange={(event) => handleSavedBackendHostChange(event.target.value)}
@@ -1406,7 +1381,9 @@ export function ConnectionEnvironmentsSection({
           />
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">Pairing code</span>
+          <span className="mb-1.5 block text-xs font-medium text-foreground">
+            {gt("Pairing code")}
+          </span>
           <Input
             value={savedBackendPairingCode}
             onChange={(event) => setSavedBackendPairingCode(event.target.value)}
@@ -1418,7 +1395,7 @@ export function ConnectionEnvironmentsSection({
       </div>
       <div>
         <span className="mt-1 block text-2xs text-muted-foreground">
-          Paste a pairing link from a GOAT server on your tailnet to fill both fields.
+          {gt("Paste a pairing link from a GOAT server on your tailnet to fill both fields.")}
         </span>
       </div>
     </div>
@@ -1464,7 +1441,7 @@ export function ConnectionEnvironmentsSection({
       {relayRouteOffer !== null ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
           <p className="text-xs text-muted-foreground">
-            This machine is on your GOAT Connect account. Use it as a fallback route.
+            {gt("This machine is on your GOAT Connect account. Use it as a fallback route.")}
           </p>
           <Button
             size="xs"
@@ -1472,7 +1449,7 @@ export function ConnectionEnvironmentsSection({
             disabled={isAddingSavedBackend}
             onClick={() => void addRelayRoute()}
           >
-            Add GOAT Connect
+            {gt("Add GOAT Connect")}
           </Button>
         </div>
       ) : null}
@@ -1485,7 +1462,7 @@ export function ConnectionEnvironmentsSection({
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />
-        {isAddingSavedBackend ? "Adding…" : routeTarget ? "Add route" : "Add device"}
+        {isAddingSavedBackend ? gt("Adding…") : routeTarget ? gt("Add route") : gt("Add device")}
       </Button>
     </div>
   );
@@ -1505,7 +1482,7 @@ export function ConnectionEnvironmentsSection({
             htmlFor="saved-backend-ssh-host"
             className="mb-1.5 block text-xs font-medium text-foreground"
           >
-            SSH host or alias
+            {gt("SSH host or alias")}
           </label>
           <Autocomplete
             items={filteredDiscoveredSshHosts}
@@ -1532,14 +1509,16 @@ export function ConnectionEnvironmentsSection({
             <AutocompleteInput
               id="saved-backend-ssh-host"
               onKeyDown={handleSavedBackendSshHostKeyDown}
-              placeholder="Search hosts or type devbox"
+              placeholder={gt("Search hosts or type devbox")}
               disabled={isAddingSavedBackend}
               spellCheck={false}
             />
             {hasSshHostSuggestionContent ? (
               <AutocompletePopup>
                 {isLoadingDiscoveredSshHosts ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">Loading hosts…</div>
+                  <div className="px-3 py-2 text-xs text-muted-foreground">
+                    {gt("Loading hosts…")}
+                  </div>
                 ) : filteredDiscoveredSshHosts.length > 0 ? (
                   <AutocompleteList className="max-h-72">
                     {filteredDiscoveredSshHosts.map((target, index) => {
@@ -1573,7 +1552,7 @@ export function ConnectionEnvironmentsSection({
                   </AutocompleteList>
                 ) : (
                   <AutocompleteEmpty className="break-all">
-                    No hosts match "{savedBackendSshHost.trim()}".
+                    {gt('No hosts match "{host}".', { host: savedBackendSshHost.trim() })}
                   </AutocompleteEmpty>
                 )}
               </AutocompletePopup>
@@ -1582,7 +1561,9 @@ export function ConnectionEnvironmentsSection({
         </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
           <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Username</span>
+            <span className="mb-1.5 block text-xs font-medium text-foreground">
+              {gt("Username")}
+            </span>
             <Input
               value={
                 configuredSshAlias ? (sshConfigDestination?.user ?? "") : savedBackendSshUsername
@@ -1600,7 +1581,7 @@ export function ConnectionEnvironmentsSection({
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Port</span>
+            <span className="mb-1.5 block text-xs font-medium text-foreground">{gt("Port")}</span>
             <Input
               value={
                 configuredSshAlias
@@ -1625,12 +1606,12 @@ export function ConnectionEnvironmentsSection({
         </div>
         {configuredSshAlias ? (
           <DialogDescription id="saved-backend-ssh-config-hint">
-            From ~/.ssh/config
+            {gt("From ~/.ssh/config")}
           </DialogDescription>
         ) : null}
         {!ownsSshConfig ? (
           <p className="text-sm text-muted-foreground">
-            Add new SSH hosts from the machine that runs this environment.
+            {gt("Add new SSH hosts from the machine that runs this environment.")}
           </p>
         ) : null}
         {isCheckingSsh || sshPreflight ? (
@@ -1650,7 +1631,7 @@ export function ConnectionEnvironmentsSection({
         ) : null}
         {sshProbe ? (
           <div className="space-y-3">
-            <h4 className="text-sm font-medium">Trust this SSH host?</h4>
+            <h4 className="text-sm font-medium">{gt("Trust this SSH host?")}</h4>
             <HandoffReview
               human={sshProbe.human}
               busy={isAddingSavedBackend}
@@ -1683,7 +1664,7 @@ export function ConnectionEnvironmentsSection({
     <>
       <SettingsSection
         {...(searchable ? { id: searchableSetting("remote-environments").id } : {})}
-        title={title}
+        title={title ?? gt("Environments")}
         headerAction={
           <div className="flex items-center gap-1">
             {headerAction}
@@ -1713,27 +1694,31 @@ export function ConnectionEnvironmentsSection({
                   render={
                     <DialogTrigger
                       render={
-                        <Button size="xs" variant="ghost-muted" aria-label="Add device">
+                        <Button size="xs" variant="ghost-muted" aria-label={gt("Add device")}>
                           <PlusIcon className="size-3" />
-                          <span>Add device</span>
+                          <span>{gt("Add device")}</span>
                         </Button>
                       }
                     />
                   }
                 />
-                <TooltipPopup side="top">Add device</TooltipPopup>
+                <TooltipPopup side="top">{gt("Add device")}</TooltipPopup>
               </Tooltip>
               <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
                 <DialogHeader>
                   <DialogTitle>
-                    {routeTarget ? `Add a route to ${routeTarget.label}` : "Add device"}
+                    {routeTarget
+                      ? gt("Add a route to {environment}", { environment: routeTarget.label })
+                      : gt("Add device")}
                   </DialogTitle>
                   <DialogDescription>
                     {routeTarget
-                      ? "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine."
+                      ? gt(
+                          "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine.",
+                        )
                       : desktopBridge
-                        ? "Connect another device using SSH or a GOAT server on your tailnet."
-                        : "Connect to a GOAT server on your tailnet."}
+                        ? gt("Connect another device using SSH or a GOAT server on your tailnet.")
+                        : gt("Connect to a GOAT server on your tailnet.")}
                   </DialogDescription>
                 </DialogHeader>
                 <DialogPanel>
@@ -1850,11 +1835,12 @@ export function ConnectionEnvironmentsSection({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Forget {pendingForget ? savedDesktopSshTarget(pendingForget)?.alias : "host"}?
+              {forgetAlias ? gt("Forget {host}?", { host: forgetAlias }) : gt("Forget host?")}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              GOAT removes its SSH entry and stops its server there when no work is running.
-              Projects and files on the host stay.
+              {gt(
+                "GOAT removes its SSH entry and stops its server there when no work is running. Projects and files on the host stay.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex items-center gap-2 text-sm">
@@ -1863,7 +1849,7 @@ export function ConnectionEnvironmentsSection({
               disabled={forgetBusy}
               onCheckedChange={(checked) => setRemoveForgottenConnection(checked === true)}
             />
-            Also remove this connection from Connections
+            {gt("Also remove this connection from Connections")}
           </label>
           {forgetError ? (
             <p role="alert" className="text-sm text-destructive">
@@ -1872,14 +1858,14 @@ export function ConnectionEnvironmentsSection({
           ) : null}
           <AlertDialogFooter>
             <Button variant="outline" disabled={forgetBusy} onClick={() => setPendingForget(null)}>
-              Cancel
+              {gt("Cancel")}
             </Button>
             <Button
               variant="destructive"
               disabled={forgetBusy || !canWriteSsh || !ownsSshConfig}
               onClick={() => void confirmForgetSshHost()}
             >
-              {forgetBusy ? "Forgetting…" : "Forget host"}
+              {forgetBusy ? gt("Forgetting…") : gt("Forget host")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
