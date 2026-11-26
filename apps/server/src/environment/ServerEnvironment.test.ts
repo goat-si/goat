@@ -233,6 +233,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         retainedLocalSpace: true,
         provenanceProjection: true,
         derivedCap: 1000,
+        conversationMemoryControl: true,
         turnMemory: true,
         scopeMoves: true,
         scopeMoveReceipts: true,

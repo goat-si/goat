@@ -130,6 +130,19 @@ it.effect("writes nothing when any key belongs to a person or another path", () 
   }),
 );
 
+it.effect("a thread with settings:write cannot resume conversation memory", () =>
+  Effect.gen(function* () {
+    const caller = { ...threadScope, grantedScopes: ["settings:write"] as const };
+    const { result } = yield* call(caller, "goat_environment_settings_update", {
+      patch: { conversationMemoryEnabled: true },
+    });
+    expect(result).toMatchObject({ code: "capability_denied" });
+    expect(String(result.message)).toContain(
+      "conversationMemoryEnabled is changed only by a person",
+    );
+  }),
+);
+
 it.effect("does not let an agent change allowed computer use apps", () =>
   Effect.gen(function* () {
     const { result, settings } = yield* call(threadScope, "goat_environment_settings_update", {

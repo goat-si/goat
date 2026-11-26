@@ -11,10 +11,13 @@ import {
   RunId,
   type ThreadPullRequestLink,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySyncService from "../memory/MemorySyncService.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -620,8 +623,126 @@ describe("GOAT Bot reads GOAT memory under the asker's current link", () => {
       const texts = results.map((result) => result[0]!.text);
       assert.isTrue(texts.some((text) => text.includes("Prefers replies in Korean.")));
       assert.isTrue(texts.some((text) => text === "Nothing in memory matches."));
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ conversationMemoryEnabled: false });
+      yield* gateway.ingest(
+        slackInput("recall my language", "Ev-memory-paused", "1760000000.000999", "U1"),
+        memoryContext,
+      );
+      yield* runtime.drain;
+      assert.deepStrictEqual(searched, ["language"]);
+      assert.lengthOf(results, 3);
+      assert.strictEqual(results.at(-1)?.[0]?.text, "Nothing in memory matches.");
     }).pipe(Effect.provide(harness.layer));
   });
+  it.effect("a first pass cannot acquire memory after the person resumes it", () => {
+    searched.length = 0;
+    const harness = makeHarness({ memoryLayer });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const results: string[] = [];
+      yield* linkWith("U1", ["orchestration:read", "orchestration:operate", "memory:read"]);
+      yield* settings.updateSettings({ conversationMemoryEnabled: false });
+      harness.script.current = (input) => {
+        if (input.readsAllowed)
+          return settings
+            .updateSettings({ conversationMemoryEnabled: true })
+            .pipe(
+              Effect.orDie,
+              Effect.as({
+                replyText: "",
+                action: { type: "read", reads: [{ kind: "memory", query: "language" }] },
+              }),
+            );
+        results.push(...(input.readResults ?? []).map((row) => row.text));
+        return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+      };
+      yield* gateway.ingest(
+        slackInput("recall language", "Ev-resume", "1760000000.000501", "U1"),
+        memoryContext,
+      );
+      yield* runtime.drain;
+      assert.deepEqual(searched, []);
+      assert.deepEqual(results, ["Nothing in memory matches."]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect.each([false, true])(
+    "drops a completed memory read while a companion is waiting (resume=%s)",
+    (resume) =>
+      Effect.gen(function* () {
+        const fast = yield* Deferred.make<void>();
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const delayed = Layer.mock(MemoryService.MemoryService)({
+          importPorts: {} as never,
+          search: (input, permit) =>
+            permit.pipe(
+              Effect.andThen(
+                input.query === "slow"
+                  ? Deferred.succeed(started, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                    )
+                  : Deferred.succeed(fast, undefined),
+              ),
+              Effect.as({
+                items: [{ status: "active", payload: { text: "private captured answer" } }],
+                projectionWatermark: 0,
+                nextCursor: null,
+              } as never),
+            ),
+        });
+        const harness = makeHarness({ memoryLayer: Layer.merge(memoryLayer, delayed) });
+        const inputs: ChannelReceptionInput[] = [];
+        harness.script.current = (input) => {
+          inputs.push(input);
+          return input.readsAllowed
+            ? Effect.succeed({
+                replyText: "",
+                action: {
+                  type: "read",
+                  reads: [
+                    { kind: "memory", query: "fast" },
+                    { kind: "conversation", query: "unrelated search" },
+                    { kind: "memory", query: "slow" },
+                  ],
+                },
+              })
+            : Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+        };
+        yield* Effect.gen(function* () {
+          yield* setupBot;
+          const gateway = yield* ChannelGateway.ChannelGateway;
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* linkWith("U1", ["orchestration:read", "orchestration:operate", "memory:read"]);
+          yield* gateway.ingest(
+            slackInput("run two reads", "Ev-pause", "1760000000.000500", "U1"),
+            memoryContext,
+          );
+          const drain = yield* runtime.drain.pipe(Effect.forkChild);
+          yield* Deferred.await(fast);
+          yield* Deferred.await(started);
+          // Let the fast lookup finish and park the collection on its companion before revocation.
+          yield* TestClock.adjust(1);
+          yield* settings.updateSettings({ conversationMemoryEnabled: false });
+          if (resume) yield* settings.updateSettings({ conversationMemoryEnabled: true });
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(drain);
+          assert.deepEqual(
+            inputs.at(-1)?.readResults?.map(({ text }) => text),
+            [
+              "Nothing in memory matches.",
+              "No earlier message in this conversation matches.",
+              "Nothing in memory matches.",
+            ],
+          );
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
 });
 
 describe("GOAT Bot judges visibility with the link as it is when it reads", () => {

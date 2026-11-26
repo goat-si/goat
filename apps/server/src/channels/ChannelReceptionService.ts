@@ -47,9 +47,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { countHostThreads } from "../mcp/hostStatusModel.ts";
-import * as MemoryAccess from "../memory/MemoryAccess.ts";
-import * as MemoryService from "../memory/MemoryService.ts";
-import * as MemorySyncService from "../memory/MemorySyncService.ts";
+import { channelMemoryReadBatch, makeChannelMemorySearch } from "./channelConversationMemory.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -83,7 +81,6 @@ import {
   matchMemoryLines,
   matchTasks,
   pullRequestLabel,
-  RECALL_MEMORY_LINES,
   RECALL_RESULT_CHARS,
   RECALL_TASK_SCAN,
   RECALL_THREAD_RUNS,
@@ -216,9 +213,7 @@ const make = Effect.gen(function* () {
   const botNotes = yield* ChannelBotNoteWriter;
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
-  // Absent in embeddings without memory; the bot then reads only its notes and the ledger.
-  const memoryService = yield* Effect.serviceOption(MemoryService.MemoryService);
-  const memorySync = yield* Effect.serviceOption(MemorySyncService.MemorySyncService);
+  const conversationMemory = yield* makeChannelMemorySearch;
   const remoteThreadRecall = yield* ChannelRemoteRecall.makeRemoteThreadRecall;
 
   // Facts that do not change while the server runs.
@@ -329,6 +324,7 @@ const make = Effect.gen(function* () {
   const generateOutcome = (
     input: ChannelReceptionInput,
     authority?: { connectionId: string; inputId: ChannelInputId },
+    batch?: ReturnType<typeof channelMemoryReadBatch>,
   ) =>
     Effect.gen(function* () {
       const settings = yield* serverSettings.getSettings.pipe(Effect.option);
@@ -339,11 +335,15 @@ const make = Effect.gen(function* () {
       }
       const viewer =
         authority && viewerNow(input.requester, authority.connectionId, authority.inputId);
+      const recheckInput = (current: ChannelReceptionInput) => {
+        const authorized =
+          viewer === undefined ? Effect.succeed(current) : recheckReceptionNotes(current, viewer);
+        return batch === undefined ? authorized : authorized.pipe(Effect.flatMap(batch.recheck));
+      };
       return yield* generateReception({
         cwd: serverConfig.stateDir,
-        input: viewer === undefined ? input : yield* recheckReceptionNotes(input, viewer),
-        recheckInput:
-          viewer === undefined ? undefined : (current) => recheckReceptionNotes(current, viewer),
+        input: yield* recheckInput(input),
+        recheckInput,
         modelSelection: settings.value.textGenerationModelSelection,
       }).pipe(
         Effect.timeoutOption(CHANNEL_RECEPTION_TIMEOUT_MS),
@@ -433,60 +433,6 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  /**
-   * GOAT memory items for a query, under the requester's memory access as it stands now. Empty
-   * when memory is off, not set up, or the requester may not read it.
-   */
-  const searchGoatMemory = (
-    viewer: ChannelRequester,
-    connectionId: string,
-    query: string,
-    inputId: ChannelInputId,
-  ) =>
-    Effect.gen(function* () {
-      if (Option.isNone(memoryService) || Option.isNone(memorySync)) return [];
-      const live = viewerNow(viewer, connectionId, inputId).pipe(
-        Effect.map((current) => current.grantedScopes),
-      );
-      if (!(yield* live).includes("memory:read")) return [];
-      const settings = yield* serverSettings.getSettings;
-      if (!settings.memoryEnabled) return [];
-      const readiness = yield* memorySync.value.readLocalReadiness();
-      if (readiness.bootstrap !== "ready" || readiness.memorySpaceId === null) return [];
-      const page = yield* memoryService.value.search(
-        {
-          memorySpaceId: readiness.memorySpaceId,
-          query: query.trim().normalize("NFC"),
-          limit: RECALL_MEMORY_LINES,
-          mode: "fts",
-        },
-        MemoryAccess.memoryAccessPermit(
-          {
-            grantedScopes: viewer.grantedScopes,
-            // Each permit check reads the link again and fails when it no longer allows reading.
-            reauthorize: (required) =>
-              live.pipe(
-                Effect.orElseSucceed((): ReadonlyArray<string> => []),
-                Effect.flatMap((scopes) =>
-                  required.every((scope) => scopes.includes(scope))
-                    ? Effect.void
-                    : Effect.fail(new MemoryService.MemoryAccessError({ code: "unavailable" })),
-                ),
-              ),
-            readOnly: true,
-          },
-          "read",
-        ),
-      );
-      return page.items.flatMap((item) =>
-        item.status === "active" ? ["- " + item.payload.text.replace(/\s+/gu, " ").trim()] : [],
-      );
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.logInfo("GOAT Bot memory search skipped", { cause }).pipe(Effect.as([])),
-      ),
-    );
-
   const runRead = (
     read: ChannelReceptionRead,
     viewer: ChannelRequester,
@@ -494,6 +440,8 @@ const make = Effect.gen(function* () {
     connectionId: string,
     inputId: ChannelInputId,
     botId: BotId,
+    index: number,
+    batch: ReturnType<typeof channelMemoryReadBatch>,
   ) =>
     Effect.gen(function* () {
       switch (read.kind) {
@@ -510,12 +458,20 @@ const make = Effect.gen(function* () {
             notes + "\n" + journal.split("\n").toReversed().join("\n"),
             read.query,
           );
-          const goat = yield* searchGoatMemory(viewer, connectionId, read.query, inputId);
-          if (local.length === 0 && goat.length === 0) return "Nothing in memory matches.";
-          return [
-            ...(local.length === 0 ? [] : ["GOAT Bot notes and journal:", ...local]),
-            ...(goat.length === 0 ? [] : ["GOAT memory:", ...goat]),
-          ].join("\n");
+          const scopes = viewerNow(viewer, connectionId, inputId).pipe(
+            Effect.map((current) => current.grantedScopes),
+            Effect.orElseSucceed((): ReadonlyArray<never> => []),
+          );
+          return batch.format(
+            index,
+            local,
+            yield* conversationMemory.search(
+              batch.permit,
+              viewer.grantedScopes,
+              scopes,
+              read.query,
+            ),
+          );
         }
         case "work": {
           const matched = matchTasks(yield* visibleTasks(viewer, conversationId), read.query);
@@ -622,13 +578,14 @@ const make = Effect.gen(function* () {
     connectionId: string,
     inputId: ChannelInputId,
     botId: BotId,
+    batch: ReturnType<typeof channelMemoryReadBatch>,
   ): Effect.Effect<
     ReadonlyArray<ChannelReceptionReadResult & { readonly fallbacks: ReadonlyArray<string> }>
   > =>
     Effect.forEach(
       reads,
-      (read) =>
-        runRead(read, viewer, conversationId, connectionId, inputId, botId).pipe(
+      (read, index) =>
+        runRead(read, viewer, conversationId, connectionId, inputId, botId, index, batch).pipe(
           Effect.timeoutOption(CHANNEL_READ_TIMEOUT_MS),
           Effect.map((value) =>
             ChannelRemoteRecall.presentRead(read, Option.getOrUndefined(value)),
@@ -1067,8 +1024,11 @@ const make = Effect.gen(function* () {
                   ...routinePromptFields(routine, workProject),
                   requester,
                 };
-                const generateForInput = (input: ChannelReceptionInput) =>
-                  generateOutcome(input, { connectionId: message.connectionId, inputId });
+                const generateForInput = (
+                  input: ChannelReceptionInput,
+                  batch?: ReturnType<typeof channelMemoryReadBatch>,
+                ) => generateOutcome(input, { connectionId: message.connectionId, inputId }, batch);
+                const batch = channelMemoryReadBatch(yield* conversationMemory.admit);
                 const first = yield* generateForInput({
                   ...base,
                   readsAllowed: workProject === undefined,
@@ -1086,6 +1046,7 @@ const make = Effect.gen(function* () {
                   message.connectionId,
                   inputId,
                   stored.botId,
+                  batch,
                 );
                 // Reads take time too: results read under a link that narrowed meanwhile are dropped,
                 // and everything else in the answer is judged by who the person is now.
@@ -1118,17 +1079,20 @@ const make = Effect.gen(function* () {
                 const recentNow = current.grantedScopes.includes("orchestration:read")
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];
-                const second = yield* generateForInput({
-                  ...rest,
-                  requester: current,
-                  ...(firstNotes !== undefined && canReadChannelBotNotes(current)
-                    ? { notes: firstNotes }
-                    : {}),
-                  ...(journalNow === "" ? {} : { journal: journalNow }),
-                  ...(recentNow.length === 0 ? {} : { recentThreads: recentNow }),
-                  readsAllowed: false,
-                  readResults,
-                });
+                const second = yield* generateForInput(
+                  {
+                    ...rest,
+                    requester: current,
+                    ...(firstNotes !== undefined && canReadChannelBotNotes(current)
+                      ? { notes: firstNotes }
+                      : {}),
+                    ...(journalNow === "" ? {} : { journal: journalNow }),
+                    ...(recentNow.length === 0 ? {} : { recentThreads: recentNow }),
+                    readsAllowed: false,
+                    readResults,
+                  },
+                  batch,
+                );
                 // A pass that asks to read again found nothing to answer from; say so plainly.
                 if (!second.ok || second.result.action.type !== "read") return second;
                 const foundNothing: ReceptionOutcome = {
