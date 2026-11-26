@@ -1,9 +1,8 @@
+import { CloudRemoteEnvironmentRows } from "./CloudRemoteEnvironmentRows";
 import { useGT } from "gt-react";
 import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
-import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
 import { disposableRouteRefusal, isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
-import { sshHostProbeErrorText } from "@goat/client-runtime/state/sshHost";
 import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
 import { desktopOwnsSshHostConfig } from "~/connection/platform";
@@ -69,7 +68,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import * as Option from "effect/Option";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useConnectionClipboardActions } from "./useConnectionClipboardActions";
 import { useCopyConnectionDiagnostic } from "../../hooks/useCopyConnectionDiagnostic";
 import { cn } from "../../lib/utils";
 import { SettingsSection } from "./settingsLayout";
@@ -122,7 +121,6 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
-import { EmptyRemoteEnvironments } from "./EmptyRemoteEnvironments";
 import { AnimatedHeight } from "../AnimatedHeight";
 
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
@@ -164,7 +162,6 @@ import {
   ServerUpdatesAction,
   type ServerUpdateTarget,
 } from "../ServerUpdateAction";
-import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -177,10 +174,35 @@ const NO_SSH_RUNTIME_STATUS = Atom.make(null);
 const isSshHostAlias = Schema.is(SshHostAlias);
 const isSshHostProbeError = Schema.is(SshHostProbeError);
 
-function sshSetupError(result: SshHostResult, host: string) {
+function sshHostProbeErrorText(
+  error: typeof SshHostProbeError.Type,
+  port: number,
+  gt: ReturnType<typeof useGT>,
+) {
+  switch (error.reason) {
+    case "unreachable":
+      return gt("Can't reach {host}. Check the address and that SSH is running, then try again.", {
+        host: error.host,
+      });
+    case "connection_refused":
+      return gt(
+        "{host} refused the connection on port {port}. Check the SSH port, then try again.",
+        { host: error.host, port },
+      );
+    case "alias_conflict":
+      return gt("{host} is already used by another SSH host. Pick a different name.", {
+        host: error.host,
+      });
+    case "invalid_request":
+    case "operation_failed":
+      return error.message;
+  }
+}
+
+function sshSetupError(result: SshHostResult, host: string, gt: ReturnType<typeof useGT>) {
   return result.kind === "error"
     ? result.code === "host_unreachable"
-      ? `Can't reach ${host}. Check that it's running and reachable, then try again.`
+      ? gt("Can't reach {host}. Check that it's running and reachable, then try again.", { host })
       : result.message
     : null;
 }
@@ -240,6 +262,7 @@ function SavedBackendListRow({
   onForget,
   onReviewTrust,
 }: SavedBackendListRowProps) {
+  const gt = useGT();
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
@@ -258,47 +281,7 @@ function SavedBackendListRow({
   const runtimeStatus = runtimeResult?.status;
   const errorTraceId = environment.connection.traceId;
   const copyDiagnostic = useCopyConnectionDiagnostic(environment);
-  const { copyToClipboard: copyTraceIdToClipboard } = useCopyToClipboard<{ traceId: string }>({
-    target: "trace ID",
-    onCopy: ({ traceId }) => {
-      toastManager.add({
-        type: "success",
-        title: "Trace ID copied",
-        description: traceId,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not copy trace ID",
-          description: error.message,
-        }),
-      );
-    },
-  });
-  const copyTraceId = (traceId: string) => {
-    copyTraceIdToClipboard(traceId, { traceId });
-  };
-  const { copyToClipboard: copyMcpUrl } = useCopyToClipboard<{ url: string }>({
-    target: "MCP URL",
-    onCopy: ({ url }) => {
-      toastManager.add({
-        type: "success",
-        title: "MCP URL copied",
-        description: `Add it to an agent, e.g. claude mcp add --transport http goat ${url}`,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not copy MCP URL",
-          description: error.message,
-        }),
-      );
-    },
-  });
+  const { copyTraceId, copyMcpUrl } = useConnectionClipboardActions();
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   const resumingServerUpdate =
@@ -367,12 +350,18 @@ function SavedBackendListRow({
     (serverUpdateState.status === "idle" || serverUpdateState.status === "failed");
 
   const statusTooltip = isGoatConnectUnavailable(environment.entry)
-    ? `${GOAT_CONNECT_COMING_SOON.status}. ${GOAT_CONNECT_COMING_SOON.description}`
-    : `${status.tooltipText}${snapshotAge === null ? "" : ` · ${snapshotAge}`}${
+    ? gt("Coming soon. Connect with Tailscale for now.")
+    : [
+        [status.tooltipText, snapshotAge].filter(Boolean).join(" · "),
         versionMismatch
-          ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
-          : ""
-      }`;
+          ? gt("Update available: {serverVersion} → {clientVersion}", {
+              serverVersion: versionMismatch.serverVersion,
+              clientVersion: versionMismatch.clientVersion,
+            })
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
   return (
     <EnvironmentRow
@@ -414,7 +403,9 @@ function SavedBackendListRow({
             onClick={() => setRoutesOpen((open) => !open)}
             className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            {routeCount === 1 ? "Routes" : `${routeCount} routes`}
+            {routeCount === 1
+              ? gt("Routes")
+              : gt("{count, plural, one {# route} other {# routes}}", { count: routeCount })}
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -433,7 +424,7 @@ function SavedBackendListRow({
             onClick={() => setPermissionsOpen((open) => !open)}
             className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            Permissions
+            {gt("Permissions")}
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -522,22 +513,22 @@ function SavedBackendListRow({
       serverUpdateState.status !== "running" ? (
         <OutdatedServerUpdateAction
           environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
+          serverLabel={gt("{environment} server", { environment: environment.label })}
           fromVersion={lastDescriptor?.serverVersion}
           targetVersion={APP_VERSION}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+          label={serverUpdateState.status === "failed" ? gt("Retry update") : gt("Update")}
         />
       ) : null}
       {savedSshTarget === null && showUpdateAction ? (
         <ServerUpdateAction
           environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
+          serverLabel={gt("{environment} server", { environment: environment.label })}
           selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
           installation={environment.serverConfig?.environment.capabilities.serverInstallation}
           desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
           threadContinuation={supportsServerUpdateThreadContinuation(environment.serverConfig)}
           targetVersion={versionMismatch.clientVersion}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+          label={serverUpdateState.status === "failed" ? gt("Retry update") : gt("Update")}
           appearance="icon"
         />
       ) : null}
@@ -548,13 +539,17 @@ function SavedBackendListRow({
               size="sm"
               checked={enabled}
               disabled={isRemoving || blocked}
-              aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
+              aria-label={
+                enabled
+                  ? gt("Switch off {environment}", { environment: environment.label })
+                  : gt("Switch on {environment}", { environment: environment.label })
+              }
               onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
             />
           }
         />
         <TooltipPopup side="top">
-          {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+          {blocked ? gt("Client not supported") : enabled ? gt("Switch off") : gt("Switch on")}
         </TooltipPopup>
       </Tooltip>
       <Menu>
@@ -565,7 +560,7 @@ function SavedBackendListRow({
               variant="ghost-muted"
               size="icon-xs"
               disabled={isRemoving}
-              aria-label={`More actions for ${environment.label}`}
+              aria-label={gt("More actions for {environment}", { environment: environment.label })}
             />
           }
         >
@@ -578,32 +573,32 @@ function SavedBackendListRow({
           />
           <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
             <RouteIcon />
-            {routesOpen ? "Hide routes" : "Routes"}
+            {routesOpen ? gt("Hide routes") : gt("Routes")}
           </MenuItem>
           {mcpUrl ? (
-            <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>
+            <MenuItem onClick={() => copyMcpUrl(mcpUrl)}>
               <CopyIcon />
-              Copy MCP URL
+              {gt("Copy MCP URL")}
             </MenuItem>
           ) : null}
           {errorTraceId ? (
             <MenuItem onClick={() => copyTraceId(errorTraceId)}>
               <CopyIcon />
-              Copy trace ID
+              {gt("Copy trace ID")}
             </MenuItem>
           ) : null}
           <MenuItem onClick={copyDiagnostic}>
             <CopyIcon />
-            Copy diagnostic
+            {gt("Copy diagnostic")}
           </MenuItem>
           <MenuSeparator />
           {savedSshTarget && isSshHostAlias(savedSshTarget.alias) && onForget ? (
             <MenuItem variant="destructive" onClick={() => onForget(environment)}>
-              Forget host…
+              {gt("Forget host…")}
             </MenuItem>
           ) : null}
           <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-            {isRemoving ? "Removing…" : "Remove from this device…"}
+            {isRemoving ? gt("Removing…") : gt("Remove from this device…")}
           </MenuItem>
         </MenuPopup>
       </Menu>
@@ -611,32 +606,12 @@ function SavedBackendListRow({
   );
 }
 
-function CloudRemoteEnvironmentRows({
-  primaryEnvironmentId,
-  savedEnvironments,
-  hasPendingAdds,
-}: {
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
-  readonly hasPendingAdds: boolean;
-}) {
-  return hasCloudPublicConfig() ? (
-    <CloudEnvironmentConnectRows
-      primaryEnvironmentId={primaryEnvironmentId}
-      savedEnvironments={savedEnvironments}
-      empty={hasPendingAdds ? null : <EmptyRemoteEnvironments />}
-    />
-  ) : savedEnvironments.length === 0 && !hasPendingAdds ? (
-    <EmptyRemoteEnvironments cloudEnabled={false} />
-  ) : null;
-}
-
 /**
  * Saved machines with their health, switches and row actions, plus the Add device
  * dialog (remote pairing and SSH). Settings > Connections and the Fleet page both render it.
  */
 export function ConnectionEnvironmentsSection({
-  title = "Environments",
+  title,
   searchable = true,
   headerAction,
 }: {
@@ -746,6 +721,7 @@ export function ConnectionEnvironmentsSection({
   const pendingSshAdds = useAtomValue(pendingSshAddsAtom);
   const sshReviewGeneration = useRef(0);
   const [pendingForget, setPendingForget] = useState<EnvironmentPresentation | null>(null);
+  const forgetAlias = pendingForget ? savedDesktopSshTarget(pendingForget)?.alias : undefined;
   const [removeForgottenConnection, setRemoveForgottenConnection] = useState(false);
   const [forgetBusy, setForgetBusy] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
@@ -848,7 +824,7 @@ export function ConnectionEnvironmentsSection({
       !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope)
     ) {
       setSavedBackendError(
-        "This device can't set up hosts on this environment. Ask its owner for full access.",
+        gt("This device can't set up hosts on this environment. Ask its owner for full access."),
       );
       return;
     }
@@ -871,16 +847,21 @@ export function ConnectionEnvironmentsSection({
         void registerSavedHubNode(target, route?.label ?? target.alias);
         toastManager.add({
           type: "success",
-          title: route ? "Route added" : "Environment connected",
+          title: route ? gt("Route added") : gt("Environment connected"),
           description: route
-            ? `${route.label} can now be reached over SSH ${target.alias}.`
-            : `${target.alias} is ready over an SSH-managed tunnel.`,
+            ? gt("{environment} can now be reached over SSH {host}.", {
+                environment: route.label,
+                host: target.alias,
+              })
+            : gt("{host} is ready over an SSH-managed tunnel.", { host: target.alias }),
         });
       },
     });
     if (started === null) {
       setSavedBackendError(
-        `GOAT is already adding ${target.alias}. Its progress is in the Connections list.`,
+        gt("GOAT is already adding {host}. Its progress is in the Connections list.", {
+          host: target.alias,
+        }),
       );
       return;
     }
@@ -922,7 +903,12 @@ export function ConnectionEnvironmentsSection({
   const forgetUnsavedSshHost = async (alias: string) => {
     if (primaryEnvironmentId === null || !ownsSshConfig || sshAddInFlight.current) return;
     const confirmed = await requestConfirmDialog(
-      `Forget ${alias}?\nGOAT removes the SSH entry and pinned key it added for this host. Your own SSH config and keys stay.`,
+      [
+        gt("Forget {host}?", { host: alias }),
+        gt(
+          "GOAT removes the SSH entry and pinned key it added for this host. Your own SSH config and keys stay.",
+        ),
+      ].join("\n"),
       { variant: "destructive" },
     );
     if (confirmed !== true) return;
@@ -936,8 +922,8 @@ export function ConnectionEnvironmentsSection({
     setIsAddingSavedBackend(false);
     const message =
       result._tag === "Failure"
-        ? "Could not forget this host. Check your permissions and try again."
-        : sshSetupError(result.value, alias);
+        ? gt("Could not forget this host. Check your permissions and try again.")
+        : sshSetupError(result.value, alias, gt);
     if (message) {
       setSavedBackendError(message);
       return;
@@ -952,11 +938,11 @@ export function ConnectionEnvironmentsSection({
   const checkSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {
     if (sshAddInFlight.current) return;
     if (!ownsSshConfig || primaryEnvironmentId === null) {
-      setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
+      setSavedBackendError(gt("Add new SSH hosts from the machine that runs this environment."));
       return;
     }
     if (!canPreflightSsh) {
-      setSavedBackendError("Manage settings permission is required to check an SSH host.");
+      setSavedBackendError(gt("Manage settings permission is required to check an SSH host."));
       return;
     }
     const generation = ++sshReviewGeneration.current;
@@ -1007,8 +993,8 @@ export function ConnectionEnvironmentsSection({
           const error = squashAtomCommandFailure(probe);
           setSavedBackendError(
             isSshHostProbeError(error)
-              ? sshHostProbeErrorText(error, destination.port)
-              : "Could not review this SSH host. Try checking it again.",
+              ? sshHostProbeErrorText(error, destination.port, gt)
+              : gt("Could not review this SSH host. Try checking it again."),
           );
         }
       }
@@ -1016,10 +1002,10 @@ export function ConnectionEnvironmentsSection({
       const error = squashAtomCommandFailure(result);
       setSavedBackendError(
         isSshHostProbeError(error)
-          ? sshHostProbeErrorText(error, target.port ?? 22)
+          ? sshHostProbeErrorText(error, target.port ?? 22, gt)
           : error instanceof Error
             ? error.message
-            : "Could not check this SSH host. Try again.",
+            : gt("Could not check this SSH host. Try again."),
       );
     }
     sshAddInFlight.current = false;
@@ -1030,7 +1016,7 @@ export function ConnectionEnvironmentsSection({
     if (sshProbe === null || primaryEnvironmentId === null || sshAddInFlight.current) return;
     if (!ownsSshConfig) {
       setSshProbe(null);
-      setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
+      setSavedBackendError(gt("Add new SSH hosts from the machine that runs this environment."));
       return;
     }
     const probe = sshProbe;
@@ -1050,10 +1036,10 @@ export function ConnectionEnvironmentsSection({
       return;
     }
     if (result._tag === "Failure") {
-      setSavedBackendError("Could not approve this host. Try checking it again.");
+      setSavedBackendError(gt("Could not approve this host. Try checking it again."));
       return;
     }
-    const message = sshSetupError(result.value, probe.host);
+    const message = sshSetupError(result.value, probe.host, gt);
     if (message) {
       setSavedBackendError(message);
       return;
@@ -1110,7 +1096,7 @@ export function ConnectionEnvironmentsSection({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not add backend",
+          title: gt("Could not add backend"),
           description: message,
         }),
       );
@@ -1130,7 +1116,7 @@ export function ConnectionEnvironmentsSection({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not add backend",
+            title: gt("Could not add backend"),
             description: message,
           }),
         );
@@ -1145,13 +1131,15 @@ export function ConnectionEnvironmentsSection({
       routeTarget
         ? {
             type: "success",
-            title: "Route added",
-            description: `${routeTarget.label} now has another way to connect.`,
+            title: gt("Route added"),
+            description: gt("{environment} now has another way to connect.", {
+              environment: routeTarget.label,
+            }),
           }
         : {
             type: "success",
-            title: "Device added",
-            description: "This device is saved and will reconnect when GOAT starts.",
+            title: gt("Device added"),
+            description: gt("This device is saved and will reconnect when GOAT starts."),
           },
     );
     setIsAddingSavedBackend(false);
@@ -1234,12 +1222,14 @@ export function ConnectionEnvironmentsSection({
       const message =
         error instanceof Error
           ? error.message
-          : `Failed to switch the backend ${enabled ? "on" : "off"}.`;
+          : enabled
+            ? gt("Failed to switch the backend on.")
+            : gt("Failed to switch the backend off.");
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Could not switch backend ${enabled ? "on" : "off"}`,
+          title: enabled ? gt("Could not switch backend on") : gt("Could not switch backend off"),
           description: message,
         }),
       );
@@ -1256,12 +1246,12 @@ export function ConnectionEnvironmentsSection({
     setRemovingSavedEnvironmentId(null);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
-      const message = error instanceof Error ? error.message : "Failed to remove backend.";
+      const message = error instanceof Error ? error.message : gt("Failed to remove backend.");
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not remove backend",
+          title: gt("Could not remove backend"),
           description: message,
         }),
       );
@@ -1281,7 +1271,12 @@ export function ConnectionEnvironmentsSection({
     }
     // Fail closed: no mounted confirm host means no removal.
     const confirmed = await requestConfirmDialog(
-      `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
+      [
+        gt("Remove {environment} from this device?", { environment: environment.label }),
+        gt(
+          "This forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.",
+        ),
+      ].join("\n"),
       { variant: "destructive" },
     );
     if (confirmed === true) await removeSavedBackend(environment);
@@ -1305,10 +1300,10 @@ export function ConnectionEnvironmentsSection({
         input: { host: target.alias, stopRuntime: "if_idle" },
       });
       if (result._tag === "Failure") {
-        setForgetError("Could not forget this host. Check your permissions and try again.");
+        setForgetError(gt("Could not forget this host. Check your permissions and try again."));
         return;
       }
-      const message = sshSetupError(result.value, target.alias);
+      const message = sshSetupError(result.value, target.alias, gt);
       if (message) {
         setForgetError(message);
         return;
@@ -1380,7 +1375,9 @@ export function ConnectionEnvironmentsSection({
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">GOAT server</span>
+          <span className="mb-1.5 block text-xs font-medium text-foreground">
+            {gt("GOAT server")}
+          </span>
           <Input
             value={savedBackendHost}
             onChange={(event) => handleSavedBackendHostChange(event.target.value)}
@@ -1390,7 +1387,9 @@ export function ConnectionEnvironmentsSection({
           />
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-foreground">Pairing code</span>
+          <span className="mb-1.5 block text-xs font-medium text-foreground">
+            {gt("Pairing code")}
+          </span>
           <Input
             value={savedBackendPairingCode}
             onChange={(event) => setSavedBackendPairingCode(event.target.value)}
@@ -1402,7 +1401,7 @@ export function ConnectionEnvironmentsSection({
       </div>
       <div>
         <span className="mt-1 block text-2xs text-muted-foreground">
-          Paste a pairing link from a GOAT server on your tailnet to fill both fields.
+          {gt("Paste a pairing link from a GOAT server on your tailnet to fill both fields.")}
         </span>
       </div>
     </div>
@@ -1431,7 +1430,9 @@ export function ConnectionEnvironmentsSection({
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
-        setSavedBackendError(error instanceof Error ? error.message : "Could not add the route.");
+        setSavedBackendError(
+          error instanceof Error ? error.message : gt("Could not add the route."),
+        );
       }
       return;
     }
@@ -1439,8 +1440,11 @@ export function ConnectionEnvironmentsSection({
     setAddBackendDialogOpen(false);
     toastManager.add({
       type: "success",
-      title: "Route added",
-      description: `${routeTarget.label} falls back to GOAT Connect when its other routes are unreachable.`,
+      title: gt("Route added"),
+      description: gt(
+        "{environment} falls back to GOAT Connect when its other routes are unreachable.",
+        { environment: routeTarget.label },
+      ),
     });
   };
   const renderRemoteModeBody = () => (
@@ -1448,7 +1452,7 @@ export function ConnectionEnvironmentsSection({
       {relayRouteOffer !== null ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
           <p className="text-xs text-muted-foreground">
-            This machine is on your GOAT Connect account. Use it as a fallback route.
+            {gt("This machine is on your GOAT Connect account. Use it as a fallback route.")}
           </p>
           <Button
             size="xs"
@@ -1456,7 +1460,7 @@ export function ConnectionEnvironmentsSection({
             disabled={isAddingSavedBackend}
             onClick={() => void addRelayRoute()}
           >
-            Add GOAT Connect
+            {gt("Add GOAT Connect")}
           </Button>
         </div>
       ) : null}
@@ -1469,7 +1473,7 @@ export function ConnectionEnvironmentsSection({
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />
-        {isAddingSavedBackend ? "Adding…" : routeTarget ? "Add route" : "Add device"}
+        {isAddingSavedBackend ? gt("Adding…") : routeTarget ? gt("Add route") : gt("Add device")}
       </Button>
     </div>
   );
@@ -1489,7 +1493,7 @@ export function ConnectionEnvironmentsSection({
             htmlFor="saved-backend-ssh-host"
             className="mb-1.5 block text-xs font-medium text-foreground"
           >
-            SSH host or alias
+            {gt("SSH host or alias")}
           </label>
           <Autocomplete
             items={filteredDiscoveredSshHosts}
@@ -1516,14 +1520,16 @@ export function ConnectionEnvironmentsSection({
             <AutocompleteInput
               id="saved-backend-ssh-host"
               onKeyDown={handleSavedBackendSshHostKeyDown}
-              placeholder="Search hosts or type devbox"
+              placeholder={gt("Search hosts or type devbox")}
               disabled={isAddingSavedBackend}
               spellCheck={false}
             />
             {hasSshHostSuggestionContent ? (
               <AutocompletePopup>
                 {isLoadingDiscoveredSshHosts ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">Loading hosts…</div>
+                  <div className="px-3 py-2 text-xs text-muted-foreground">
+                    {gt("Loading hosts…")}
+                  </div>
                 ) : filteredDiscoveredSshHosts.length > 0 ? (
                   <AutocompleteList className="max-h-72">
                     {filteredDiscoveredSshHosts.map((target, index) => {
@@ -1557,7 +1563,7 @@ export function ConnectionEnvironmentsSection({
                   </AutocompleteList>
                 ) : (
                   <AutocompleteEmpty className="break-all">
-                    No hosts match "{savedBackendSshHost.trim()}".
+                    {gt('No hosts match "{host}".', { host: savedBackendSshHost.trim() })}
                   </AutocompleteEmpty>
                 )}
               </AutocompletePopup>
@@ -1566,7 +1572,9 @@ export function ConnectionEnvironmentsSection({
         </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
           <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Username</span>
+            <span className="mb-1.5 block text-xs font-medium text-foreground">
+              {gt("Username")}
+            </span>
             <Input
               value={
                 configuredSshAlias ? (sshConfigDestination?.user ?? "") : savedBackendSshUsername
@@ -1584,7 +1592,7 @@ export function ConnectionEnvironmentsSection({
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Port</span>
+            <span className="mb-1.5 block text-xs font-medium text-foreground">{gt("Port")}</span>
             <Input
               value={
                 configuredSshAlias
@@ -1609,12 +1617,12 @@ export function ConnectionEnvironmentsSection({
         </div>
         {configuredSshAlias ? (
           <DialogDescription id="saved-backend-ssh-config-hint">
-            From ~/.ssh/config
+            {gt("From ~/.ssh/config")}
           </DialogDescription>
         ) : null}
         {!ownsSshConfig ? (
           <p className="text-sm text-muted-foreground">
-            Add new SSH hosts from the machine that runs this environment.
+            {gt(gt("Add new SSH hosts from the machine that runs this environment."))}
           </p>
         ) : null}
         {isCheckingSsh || sshPreflight ? (
@@ -1634,7 +1642,7 @@ export function ConnectionEnvironmentsSection({
         ) : null}
         {sshProbe ? (
           <div className="space-y-3">
-            <h4 className="text-sm font-medium">Trust this SSH host?</h4>
+            <h4 className="text-sm font-medium">{gt("Trust this SSH host?")}</h4>
             <HandoffReview
               human={sshProbe.human}
               busy={isAddingSavedBackend}
@@ -1667,7 +1675,7 @@ export function ConnectionEnvironmentsSection({
     <>
       <SettingsSection
         {...(searchable ? { id: searchableSetting("remote-environments").id } : {})}
-        title={title}
+        title={title ?? gt("Environments")}
         headerAction={
           <div className="flex items-center gap-1">
             {headerAction}
@@ -1710,14 +1718,18 @@ export function ConnectionEnvironmentsSection({
               <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
                 <DialogHeader>
                   <DialogTitle>
-                    {routeTarget ? `Add a route to ${routeTarget.label}` : "Add device"}
+                    {routeTarget
+                      ? gt("Add a route to {environment}", { environment: routeTarget.label })
+                      : gt("Add device")}
                   </DialogTitle>
                   <DialogDescription>
                     {routeTarget
-                      ? "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine."
+                      ? gt(
+                          "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine.",
+                        )
                       : desktopBridge
-                        ? "Connect another device using SSH or a GOAT server on your tailnet."
-                        : "Connect to a GOAT server on your tailnet."}
+                        ? gt("Connect another device using SSH or a GOAT server on your tailnet.")
+                        : gt("Connect to a GOAT server on your tailnet.")}
                   </DialogDescription>
                 </DialogHeader>
                 <DialogPanel>
@@ -1781,7 +1793,7 @@ export function ConnectionEnvironmentsSection({
                 toastManager.add(
                   stackedThreadToast({
                     type: "error",
-                    title: "Could not add a route",
+                    title: gt("Could not add a route"),
                     description: refused,
                   }),
                 );
@@ -1834,11 +1846,12 @@ export function ConnectionEnvironmentsSection({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Forget {pendingForget ? savedDesktopSshTarget(pendingForget)?.alias : "host"}?
+              {forgetAlias ? gt("Forget {host}?", { host: forgetAlias }) : gt("Forget host?")}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              GOAT removes its SSH entry and stops its server there when no work is running.
-              Projects and files on the host stay.
+              {gt(
+                "GOAT removes its SSH entry and stops its server there when no work is running. Projects and files on the host stay.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex items-center gap-2 text-sm">
@@ -1847,7 +1860,7 @@ export function ConnectionEnvironmentsSection({
               disabled={forgetBusy}
               onCheckedChange={(checked) => setRemoveForgottenConnection(checked === true)}
             />
-            Also remove this connection from Connections
+            {gt("Also remove this connection from Connections")}
           </label>
           {forgetError ? (
             <p role="alert" className="text-sm text-destructive">
@@ -1856,14 +1869,14 @@ export function ConnectionEnvironmentsSection({
           ) : null}
           <AlertDialogFooter>
             <Button variant="outline" disabled={forgetBusy} onClick={() => setPendingForget(null)}>
-              Cancel
+              {gt("Cancel")}
             </Button>
             <Button
               variant="destructive"
               disabled={forgetBusy || !canWriteSsh || !ownsSshConfig}
               onClick={() => void confirmForgetSshHost()}
             >
-              {forgetBusy ? "Forgetting…" : "Forget host"}
+              {forgetBusy ? gt("Forgetting…") : gt("Forget host")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
