@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
 import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
 import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 import {
@@ -740,4 +742,14 @@ it("a refused home then removed from the app never says it did not accept this d
       .getByText(/did not accept/)
       .query(),
   ).toBeNull();
+});
+
+it("localizes the Slack unavailable explanation", async () => {
+  setup();
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <GoatBotSettingsPanel />
+    </GTProvider>,
+  );
+  await expect.element(screen.getByText("Slack을 연결할 환경을 선택하세요.")).toBeVisible();
 });

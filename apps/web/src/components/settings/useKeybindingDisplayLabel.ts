@@ -1,20 +1,22 @@
 import type { KeybindingCommand } from "@goat/contracts";
-import { msg, useMessages } from "gt-react";
-import { commandLabel } from "./KeybindingsSettings.logic";
-
-const KEYBINDING_DISPLAY_LABELS: Partial<Record<KeybindingCommand, string>> = {
-  "commandPalette.toggle": msg("Command Palette: Toggle"),
-  "editor.openFavorite": msg("Editor: Open Favorite"),
-  "filePicker.toggle": msg("File Picker: Toggle"),
-  "projectSearch.toggle": msg("Project Search: Toggle"),
-  "rightPanel.close": msg("Right Panel: Close"),
-  "rightPanel.new": msg("Right Panel: New"),
-};
+import { useGT, useMessages } from "gt-react";
+import { commandLabel, scriptKeybindingName } from "./KeybindingsSettings.logic";
 
 export function useKeybindingDisplayLabel() {
+  const gt = useGT();
   const m = useMessages();
   return (command: KeybindingCommand) => {
-    const label = KEYBINDING_DISPLAY_LABELS[command];
-    return label === undefined ? commandLabel(command) : m(label);
+    if (command.startsWith("script.")) {
+      return gt("Run Script: {name}", { name: scriptKeybindingName(command) });
+    }
+    if (command.startsWith("thread.jump.")) {
+      return gt("Thread: Jump: {number}", { number: command.slice("thread.jump.".length) });
+    }
+    if (command.startsWith("modelPicker.jump.")) {
+      return gt("Model Picker: Jump: {number}", {
+        number: command.slice("modelPicker.jump.".length),
+      });
+    }
+    return m(commandLabel(command));
   };
 }

@@ -1,3 +1,4 @@
+import { namedKeybindingLabel } from "./keybindingCommandLabels";
 import { msg } from "gt-react";
 import {
   STATIC_KEYBINDING_COMMANDS,
@@ -117,11 +118,11 @@ export function whenAstToExpression(node: KeybindingWhenNode | undefined): strin
 }
 
 export function whenNodeRemoveLabel(node: KeybindingWhenNode, depth: number): string {
-  if (depth === 0) return "Clear all conditions";
+  if (depth === 0) return msg("Clear all conditions");
   if (node.type === "identifier" || (node.type === "not" && node.node.type === "identifier")) {
-    return "Remove condition";
+    return msg("Remove condition");
   }
-  return "Remove group and its conditions";
+  return msg("Remove group and its conditions");
 }
 
 function wrapWhenExpression(node: KeybindingWhenNode): string {
@@ -139,7 +140,7 @@ export function parseWhenExpressionDraft(
   if (!ast) {
     return {
       ok: false,
-      message: "Use variables with !, &&, ||, and parentheses.",
+      message: msg("Use variables with !, &&, ||, and parentheses."),
     };
   }
 
@@ -204,6 +205,7 @@ export function keybindingConflictLabels(
   rows: ReadonlyArray<KeybindingRow>,
   input: { readonly rowId: string; readonly key: string; readonly when: string },
   platform = navigator.platform,
+  labelForCommand = commandLabel,
 ): ReadonlyArray<string> {
   if (input.key.trim().length === 0) return [];
   const shortcut = parseKeybindingShortcut(input.key);
@@ -217,7 +219,7 @@ export function keybindingConflictLabels(
       shortcutConflictKey(candidate.binding.shortcut, platform) === conflictKey &&
       conflictsWithWhen(candidate.when, input.when)
     ) {
-      conflicts.push(commandLabel(candidate.command));
+      conflicts.push(labelForCommand(candidate.command));
     }
   }
   return [...new Set(conflicts)].toSorted();
@@ -418,26 +420,17 @@ export function buildKeybindingCommandOptions(
 }
 
 export function commandLabel(command: KeybindingCommand): string {
-  if (command === "workspace.focusNext") return "Focus Next Workspace Area";
-  if (command === "workspace.focusPrevious") return "Focus Previous Workspace Area";
-  if (command === "composer.sendAlternate") return "Composer: Opposite Queue or Steer Action";
-  if (command === "composer.sendBackground") return "Composer: Start in Background";
-  if (command === "composer.sendAndNewThread") return "Composer: Send and Start New Thread";
-  if (command === "thread.steerQueuedMessage") return "Queue: Send First Queued Message";
-  if (command === "thread.editQueuedMessage") return "Queue: Edit Last Queued Message";
-  if (command === "thread.copyReference") return "Pull Request: Copy Link or Thread";
-  const usageMetric = METRIC_OPTIONS.find((option) => option.command === command);
-  if (usageMetric) return `Usage: ${usageMetric.label}`;
-  const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);
-  if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
-  if (command === "view.reopenClosed") return "Reopen Closed Tab";
-  if (command === "preview.find") return "Preview: Find in page";
-  if (command === "preview.focusUrl") return "Preview: Focus URL";
+  const label = namedKeybindingLabel(command);
+  if (label !== undefined) return label;
   const raw = String(command);
   if (raw.startsWith("script.") && raw.endsWith(".run")) {
-    return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;
+    return `Run Script: ${scriptKeybindingName(raw)}`;
   }
   return raw.split(".").map(titleCaseCommandSegment).join(": ");
+}
+
+export function scriptKeybindingName(command: string): string {
+  return titleCaseCommandSegment(command.slice("script.".length, -".run".length));
 }
 
 function titleCaseCommandSegment(segment: string): string {

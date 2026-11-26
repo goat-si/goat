@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { userMessageFileLabel } from "./TimelineUserMessageRow.logic";
 import { documentIconColorForFileName } from "~/pierre-icons";
 import { isSvgAttachment } from "@goat/shared/image";
@@ -50,7 +51,7 @@ import { formatComposerContextReference } from "@goat/shared/composerContextRefe
 import { ContextChip, ContextChipLabel, type ContextChipKind } from "../ContextChip";
 import { createContextPresentationRegistry } from "../contextPresentationRegistry";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
-import { SkillChipIcon } from "./SkillInlineText";
+import { SkillDetailsPopover } from "./SkillInlineText";
 import { Button } from "../ui/button";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
@@ -65,6 +66,7 @@ function UserMessageMentionChip(props: {
   record: Extract<KnownComposerContextRecord, { kind: "mention" }>;
   copyMarkdown: string;
 }) {
+  const gt = useGT();
   const ctx = use(TimelineRowCtx);
   const nativeFileDrag = useNativeMentionDrag(
     ctx.activeThreadEnvironmentId,
@@ -81,7 +83,7 @@ function UserMessageMentionChip(props: {
             kind="mention"
             style={accent ? ({ "--context-chip-accent": accent } as CSSProperties) : undefined}
             render={<button type="button" />}
-            aria-label={`Preview ${props.record.path}`}
+            aria-label={gt("Preview {path}", { path: props.record.path })}
             data-markdown-copy={props.copyMarkdown}
             onClick={() => {
               if (ctx.threadRef)
@@ -113,32 +115,23 @@ function UserMessageSkillChip(props: {
   record: Extract<KnownComposerContextRecord, { kind: "skill" }>;
   copyMarkdown: string;
 }) {
+  const gt = useGT();
   const { skills, threadRef } = use(TimelineRowCtx);
   const skill = skills.find((candidate) => candidate.name === props.record.name);
   const label = props.record.label || props.record.name;
   const description = skill?.description?.trim() || skill?.shortDescription?.trim();
   return (
-    <UserMessageContextPopover
-      kind="skill"
-      icon={<SkillChipIcon />}
-      label={label}
-      accessibleLabel={`Skill ${label}`}
-      copyMarkdown={props.copyMarkdown}
-    >
-      <div className="space-y-3 p-2 text-sm">
-        <p className="font-medium">{label}</p>
-        <p>{description || "No description is available for this skill."}</p>
-        {threadRef && skill?.path ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => useRightPanelStore.getState().openFile(threadRef, skill.path)}
-          >
-            View instructions
-          </Button>
-        ) : null}
-      </div>
-    </UserMessageContextPopover>
+    <SkillDetailsPopover label={label} description={description} copyMarkdown={props.copyMarkdown}>
+      {threadRef && skill?.path ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => useRightPanelStore.getState().openFile(threadRef, skill.path)}
+        >
+          {gt("View instructions")}
+        </Button>
+      ) : null}
+    </SkillDetailsPopover>
   );
 }
 

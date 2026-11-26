@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { GoatBotStatusCard } from "../goatBot/GoatBotStatusCard";
 import { useBotRoster, useBotThreads } from "../goatBot/useBotRoster";
 import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";
@@ -6,6 +7,7 @@ import { SettingsSection } from "./settingsLayout";
 
 /** The main bot's status, here too when its home machine is offline and the chat cannot open. */
 export function GoatBotStatusSettings() {
+  const gt = useGT();
   const { supported: homeSupported, resolution } = useGoatBotHomeSettings();
   const environmentId = resolution.state === "claimed" ? resolution.claim.environmentId : null;
   const presentation = useEnvironment(environmentId);
@@ -17,7 +19,7 @@ export function GoatBotStatusSettings() {
   const { groups } = useBotRoster();
   if (!homeSupported) return null;
   return (
-    <SettingsSection id="goat-bot-status" title="Status">
+    <SettingsSection id="goat-bot-status" title={gt("Status")}>
       <GoatBotStatusCard
         className="px-3 py-3 sm:px-4"
         environmentId={environmentId}

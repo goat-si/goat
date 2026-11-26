@@ -21,10 +21,12 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import { serverEnvironment } from "../../state/server";
 import { environmentThreadDetails } from "../../state/threads";
 import { subagentCardElapsed } from "./subagent-card-presentation";
 import { SubagentRow } from "./SubagentRow";
+import { resolveSubagentOpenTarget } from "./threadAgentsPresentation";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 import { WorkLogBlock } from "./work-log-layout";
 
@@ -119,8 +121,12 @@ export function ThreadSubagentGroup(props: {
       progress: live?.progress ?? item.progress,
       model: live?.model ?? null,
       modelSelection: live?.modelSelection,
+      remote: live?.remote,
     };
   });
+  const hosts = useThreadContextHosts(
+    agents.some((agent) => agent.remote !== undefined) ? props.environmentId : null,
+  );
   const grouped = agents.length > 1;
   const label = `${agents.length} subagents`;
   const summary = summarizeSubagentStatuses(agents.map((agent) => agent.status));
@@ -175,29 +181,39 @@ export function ThreadSubagentGroup(props: {
       {!grouped || expanded ? (
         <View className="mb-1 gap-px rounded-xl border border-border bg-card/30 p-1">
           {agents.map((agent) => {
-            const threadId = agent.childThreadId;
+            const open = resolveSubagentOpenTarget(agent, props.environmentId, (host) =>
+              hosts.resolve(host),
+            );
             return (
               <Pressable
                 key={agent.item.id}
                 accessible
-                accessibilityRole={threadId === null ? undefined : "link"}
+                accessibilityRole={open === null ? undefined : "link"}
                 accessibilityHint={
-                  threadId === null ? "Provider-managed agent" : "Opens this agent's thread"
+                  open !== null
+                    ? "Opens this agent's thread"
+                    : agent.remote === undefined
+                      ? "Provider-managed agent"
+                      : `Runs on ${agent.remote.host}. Connect to it to open this agent's thread.`
                 }
-                disabled={threadId === null}
+                disabled={open === null}
                 onPress={() => {
-                  if (threadId === null) return;
+                  if (open === null) return;
                   if (
                     openInspector(
                       { environmentId: props.environmentId, threadId: members[0]!.threadId },
-                      { type: "thread", environmentId: props.environmentId, threadId },
+                      {
+                        type: "thread",
+                        environmentId: open.environmentId,
+                        threadId: open.threadId,
+                      },
                     )
                   )
                     return;
                   navigation.dispatch(
                     StackActions.push("Thread", {
-                      environmentId: String(props.environmentId),
-                      threadId: String(threadId),
+                      environmentId: String(open.environmentId),
+                      threadId: String(open.threadId),
                     }),
                   );
                 }}
@@ -206,6 +222,7 @@ export function ThreadSubagentGroup(props: {
                 <SubagentRow
                   environmentId={props.environmentId}
                   subagent={agent}
+                  openable={open !== null}
                   elapsed={<SubagentElapsed agents={[agent]} />}
                 />
               </Pressable>

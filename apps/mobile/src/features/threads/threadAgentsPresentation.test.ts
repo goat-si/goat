@@ -4,6 +4,7 @@ import {
   projectedSubagentsToRuntime,
 } from "@goat/client-runtime/state/subagentRuntime";
 import {
+  EnvironmentId,
   NodeId,
   ProviderDriverKind,
   RunId,
@@ -15,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import {
   nextWorkflowSelection,
   resolveSubagentRowPresentation,
+  resolveSubagentOpenTarget,
   resolveSubagentStopTarget,
   workflowMemberDetail,
   workflowMemberMetadata,
@@ -139,6 +141,38 @@ const agent = (
   state,
   ...(phaseIndex === undefined ? {} : { phaseIndex }),
   ...overrides,
+});
+
+describe("resolveSubagentOpenTarget", () => {
+  const here = EnvironmentId.make("env-here");
+  const box = EnvironmentId.make("env-box");
+  const hosts = (host: string) => (host === "box" ? box : undefined);
+  const remote = (host: string, threadId: string | null) => ({
+    childThreadId: null,
+    remote: {
+      host,
+      threadId: threadId === null ? null : ThreadId.make(threadId),
+      correlationId: "rr-1",
+    },
+  });
+
+  it("opens a local child in this environment", () => {
+    expect(
+      resolveSubagentOpenTarget({ childThreadId: ThreadId.make("child") }, here, hosts),
+    ).toEqual({ environmentId: here, threadId: "child" });
+  });
+
+  it("opens a task.create child on another machine in that machine's environment", () => {
+    expect(resolveSubagentOpenTarget(remote("box", "remote-child"), here, hosts)).toEqual({
+      environmentId: box,
+      threadId: "remote-child",
+    });
+  });
+
+  it("has nothing to open for a remote child before it has a thread or without its host", () => {
+    expect(resolveSubagentOpenTarget(remote("box", null), here, hosts)).toBeNull();
+    expect(resolveSubagentOpenTarget(remote("elsewhere", "remote-child"), here, hosts)).toBeNull();
+  });
 });
 
 describe("workflowRail", () => {

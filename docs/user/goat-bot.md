@@ -125,6 +125,11 @@ Open the task in full to see **Done means**, the bot's completion criterion, and
 Activity lists the latest status changes, worker launches, linked PRs, and questions. Each worker
 opens in its own thread.
 
+The bot's chat on web and desktop also has the right panel that threads have: use the panel
+button at the top right or the right panel shortcut. It offers a browser, a terminal in the bot's
+folder on its server, and devices. Files, diffs and pull requests live in the threads that do the
+work, so open those from **Go to thread**.
+
 Use **Snooze** to set a task aside for an hour, until tomorrow, or until next week. Find it under
 **Snoozed** on Home and choose **Unsnooze** to bring it back early. It also returns when the snooze
 ends or the task changes status. Questions and approvals still appear in **Needs you**.

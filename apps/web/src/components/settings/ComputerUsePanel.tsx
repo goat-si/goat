@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { computerUseReadinessSteps } from "@goat/client-runtime/computerUse/readinessSteps";
 import { BUILTIN_SKILLS, type CuaHostStatus } from "@goat/contracts";
 import * as Schema from "effect/Schema";
@@ -14,13 +15,12 @@ import { CuaGrantTroubleshooting } from "./CuaGrantSteps";
 import {
   computerUseStatusText,
   computerUseUnavailable,
-  cuaGrantTitle,
   cuaHostRequirements,
   withLiveGrants,
   type CuaPermission,
 } from "./CuaSetupDialog.logic";
 import { SettingsRow, useSettingsSearchTargetId } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import {
   useComputerUseAutoSetup,
   type ComputerUseAutoSetup,
@@ -106,7 +106,14 @@ function statusLine(input: Parameters<typeof setupLine>[0]): StatusLine | null {
   return { text: notice, error: true, retry: line?.retry ?? false, check: line?.check ?? false };
 }
 
+function grantTitle(permission: CuaPermission, gt: ReturnType<typeof useGT>): string {
+  return permission === "accessibility"
+    ? gt("Accessibility")
+    : gt("Screen & System Audio Recording");
+}
+
 function setupLine(input: {
+  readonly gt: ReturnType<typeof useGT>;
   readonly setup: ComputerUseAutoSetup;
   readonly status: CuaHostStatus | null;
   readonly error: string | null;
@@ -115,7 +122,7 @@ function setupLine(input: {
   readonly hostLabel: string;
   readonly readiness: Readiness;
 }): StatusLine | null {
-  const { setup, status, error, localMac, localCheck } = input;
+  const { gt, setup, status, error, localMac, localCheck } = input;
   const { phase } = setup;
   if (phase.step === "failed")
     return { text: phase.message, error: true, retry: true, relaunch: phase.relaunch };
@@ -124,7 +131,7 @@ function setupLine(input: {
     const text = computerUseStatusText({ enabled: false, status, error });
     return text ? { text } : null;
   }
-  if (setup.busy) return { text: "Setting up…" };
+  if (setup.busy) return { text: gt("Setting up…") };
   // No answer says nothing about the grants, so neither the grant nor a restart is offered. A
   // host that is ready and not being set up stays so: its proof is a real capture, and these
   // reads only look for a grant that was taken away.
@@ -134,19 +141,23 @@ function setupLine(input: {
       text: setup.unanswered.message,
       error: true,
       retry: true,
-      retryLabel: "Try again",
-      hint: "GOAT could not read the permissions, so it cannot tell whether one is missing.",
+      retryLabel: gt("Try again"),
+      hint: gt("GOAT could not read the permissions, so it cannot tell whether one is missing."),
     };
   if (localMac && setup.unusable) return { text: setup.unusable, error: true, retry: true };
   if (localMac && setup.missing)
     return {
-      text: `Needs your OK in System Settings: ${cuaGrantTitle(setup.missing)}`,
+      text: gt("Needs your OK in System Settings: {grant}", {
+        grant: grantTitle(setup.missing, gt),
+      }),
       grant: setup.missing,
       relaunch: setup.needsRelaunch,
       hint:
         setup.pollError ??
         (setup.opened && setup.holder
-          ? `Drag ${setup.holder.name} into the list and turn on its switch. Setup continues on its own.`
+          ? gt("Drag {app} into the list and turn on its switch. Setup continues on its own.", {
+              app: setup.holder.name,
+            })
           : null),
     };
   if (error || status === null)
@@ -156,10 +167,12 @@ function setupLine(input: {
     return { text: status.display.reason, error: true };
   if (phase.step === "ready" || input.readiness.ready) {
     const limits = status.display?.capability === "partial" ? status.display.reason : null;
-    const later = status.tools === "available" ? null : "Starts with the next agent turn.";
-    if (!limits && !later) return { text: "Ready" };
+    const later = status.tools === "available" ? null : gt("Starts with the next agent turn.");
+    if (!limits && !later) return { text: gt("Ready") };
     return {
-      text: [limits ? "Ready with limits." : "Ready.", later, limits].filter(Boolean).join(" "),
+      text: [limits ? gt("Ready with limits.") : gt("Ready."), later, limits]
+        .filter(Boolean)
+        .join(" "),
     };
   }
   const reported = status.readiness?.grants;
@@ -241,6 +254,8 @@ export function ComputerUsePanel({
     readonly reveal?: (() => Promise<void>) | undefined;
   };
 }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const setup = useComputerUseAutoSetup({
     queueKey: environmentId,
     enabled,
@@ -263,6 +278,7 @@ export function ComputerUsePanel({
     display: status?.display,
   };
   const line = statusLine({
+    gt,
     setup,
     status,
     error,
@@ -276,10 +292,13 @@ export function ComputerUsePanel({
   return (
     <>
       <SettingsRow
-        {...searchableSetting("computer-use")}
+        {...localizedSetting("computer-use")}
         serverScoped
         settingKeys={["enableCua"]}
-        description={`Let agents see and use apps on ${hostLabel}. By default every app and foreground action is allowed without an approval card, including unattended work; Strict input guards opts into restrictions. Turning it on sets everything up; turning it off stops computer use right away.`}
+        description={gt(
+          "Let agents see and use apps on {host}. By default every app and foreground action is allowed without an approval card, including unattended work; Strict input guards opts into restrictions. Turning it on sets everything up; turning it off stops computer use right away.",
+          { host: hostLabel },
+        )}
         status={
           line || (setup.on && !advanced.open) ? (
             <ComputerUseStatus
@@ -292,7 +311,7 @@ export function ComputerUsePanel({
         }
         control={
           <Switch
-            aria-label="Computer use"
+            aria-label={gt("Computer use")}
             checked={setup.on}
             disabled={!canConfigure || (!setup.on && !supported)}
             onCheckedChange={(checked) => void (checked ? setup.start() : setup.stop())}
@@ -308,7 +327,7 @@ export function ComputerUsePanel({
               advanced.open && "rotate-90",
             )}
           />
-          Advanced
+          {gt("Advanced")}
         </CollapsibleTrigger>
         <CollapsiblePanel>
           <div className="border-t border-border/50 pt-3 *:not-first:border-t *:not-first:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
@@ -326,7 +345,7 @@ export function ComputerUsePanel({
                           variant="outline"
                           onClick={() => void bridge.openGuide("accessibility").catch(() => {})}
                         >
-                          Open Accessibility settings
+                          {gt("Open Accessibility settings")}
                         </Button>
                       ),
                     }
@@ -342,7 +361,9 @@ export function ComputerUsePanel({
                       ? () =>
                           void reveal().catch(() =>
                             setRevealError(
-                              `Could not show ${setup.holder?.name ?? "the helper"} in Finder.`,
+                              gt("Could not show {app} in Finder.", {
+                                app: setup.holder?.name ?? gt("the helper"),
+                              }),
                             ),
                           )
                       : undefined
@@ -356,28 +377,34 @@ export function ComputerUsePanel({
               </div>
             ) : null}
             <SettingSwitchRow
-              {...searchableSetting("computer-use-move-pointer")}
+              {...localizedSetting("computer-use-move-pointer")}
               settingKey="cuaMovePointer"
-              description="Applies with strict input guards on. Off keeps your pointer where you put it: agents click through element tokens, the keyboard and background clicks. On lets a full access agent move your pointer when an app ignores background clicks."
-              label="Let agents move my pointer"
+              description={gt(
+                "Applies with strict input guards on. Off keeps your pointer where you put it: agents click through element tokens, the keyboard and background clicks. On lets a full access agent move your pointer when an app ignores background clicks.",
+              )}
+              label={gt("Let agents move my pointer")}
               checked={movePointer === "allowed"}
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaMovePointer: checked ? "allowed" : "never" })}
             />
             <SettingSwitchRow
-              {...searchableSetting("computer-use-strict-input-guards")}
+              {...localizedSetting("computer-use-strict-input-guards")}
               settingKey="cuaStrictInputGuards"
-              description="Off by default: all apps and foreground actions are allowed without an approval card, and agents see what the OS and driver refuse. On restores app and foreground approvals, protected and denied app rules, unattended-origin limits, and input checks such as chat-send confirmation and paste refusal."
-              label="Strict input guards"
+              description={gt(
+                "Off by default: all apps and foreground actions are allowed without an approval card, and agents see what the OS and driver refuse. On restores app and foreground approvals, protected and denied app rules, unattended-origin limits, and input checks such as chat-send confirmation and paste refusal.",
+              )}
+              label={gt("Strict input guards")}
               checked={strictInputGuards}
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaStrictInputGuards: checked })}
             />
             <SettingSwitchRow
-              {...searchableSetting("computer-use-keep-typed-text")}
+              {...localizedSetting("computer-use-keep-typed-text")}
               settingKey="computerUseKeepTypedText"
-              description="Keep text only when GOAT confirms it reached a normal browser field. Desktop typing and protected fields stay redacted."
-              label="Keep typed text"
+              description={gt(
+                "Keep text only when GOAT confirms it reached a normal browser field. Desktop typing and protected fields stay redacted.",
+              )}
+              label={gt("Keep typed text")}
               checked={keepTypedText}
               canConfigure={canConfigure}
               onChange={(checked) => save({ computerUseKeepTypedText: checked })}
@@ -405,6 +432,7 @@ function ComputerUseStatus({
   canConfigure: boolean;
   onDetails: (() => void) | undefined;
 }) {
+  const gt = useGT();
   const grant = line?.grant;
   return (
     <div className="space-y-1">
@@ -419,10 +447,14 @@ function ComputerUseStatus({
             size="compact"
             variant={setup.opened === grant ? "outline" : "default"}
             disabled={setup.opening}
-            aria-label={`${setup.opened === grant ? "Open again" : "Open"}: ${cuaGrantTitle(grant)} in System Settings`}
+            aria-label={
+              setup.opened === grant
+                ? gt("Open again: {grant} in System Settings", { grant: grantTitle(grant, gt) })
+                : gt("Open: {grant} in System Settings", { grant: grantTitle(grant, gt) })
+            }
             onClick={() => setup.openGrant(grant)}
           >
-            {setup.opened === grant ? "Open again" : "Open"}
+            {setup.opened === grant ? gt("Open again") : gt("Open")}
           </Button>
         ) : null}
         {line?.retry ? (
@@ -432,7 +464,7 @@ function ComputerUseStatus({
             disabled={!canConfigure}
             onClick={() => void setup.start()}
           >
-            {line.retryLabel ?? "Retry setup"}
+            {line.retryLabel ?? gt("Retry setup")}
           </Button>
         ) : line?.check ? (
           <Button
@@ -441,17 +473,17 @@ function ComputerUseStatus({
             disabled={!canConfigure}
             onClick={() => void setup.start()}
           >
-            Run check
+            {gt("Run check")}
           </Button>
         ) : null}
         {line?.relaunch && setup.relaunch ? (
           <Button size="compact" variant="outline" onClick={setup.relaunch}>
-            Quit & reopen
+            {gt("Quit & reopen")}
           </Button>
         ) : null}
         {onDetails ? (
           <Button size="compact" variant="link" onClick={onDetails}>
-            Details
+            {gt("Details")}
           </Button>
         ) : null}
       </div>
@@ -476,19 +508,25 @@ function BuiltInSkillRows({
   canConfigure: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
 }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   return BUILTIN_SKILLS.filter((skill) => skill.anyOf?.includes("computer-use")).map((skill) => (
     <SettingSwitchRow
       key={skill.name}
-      {...searchableSetting(
+      {...localizedSetting(
         skill.name === "computer-use" ? "computer-use-skill" : "screen-code-skill",
       )}
       settingKey="disabledBuiltInSkills"
       description={
         skill.name === "screen-code"
-          ? "Built in. Teaches agents to run bounded screen cells on attached browser or desktop targets. Off keeps the tools without this guide."
-          : "Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+          ? gt(
+              "Built in. Teaches agents to run bounded screen cells on attached browser or desktop targets. Off keeps the tools without this guide.",
+            )
+          : gt(
+              "Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill.",
+            )
       }
-      label={`${skill.displayName} skill`}
+      label={gt("{name} skill", { name: skill.displayName })}
       checked={!disabledSkills.includes(skill.name)}
       canConfigure={canConfigure}
       onChange={(checked) => {

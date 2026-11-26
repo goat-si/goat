@@ -141,7 +141,7 @@ export const GOAT_BOT_ROUTING_RULE = `Route what this needs one of three ways. S
  * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
  * the GOAT orchestration instructions every agent gets.
  */
-export const GOAT_BOT_DISPATCH_RULE = `When more than one machine is connected, spread work instead of doing it all here: check ${goatCallText("host.status")} and the host lists, then start each lane on a machine that has what it needs and room to spare, with ${goatCallText("task.create")} here or ${goatCallText("ssh.thread_launch")} on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.`;
+export const GOAT_BOT_DISPATCH_RULE = `When more than one machine is connected, spread work instead of doing it all here: check ${goatCallText("host.status")} and the host lists, then start each lane on a machine that has what it needs and room to spare, with ${goatCallText("task.create")}, adding target.host and remote.cwd for another machine so the lane stays your subagent; a coding thread there uses ${goatCallText("ssh.thread_launch")}. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.`;
 
 /**
  * With goatclaw on, GOAT Bot fronts the supervisor (design §8.4): it plans and launches managers,

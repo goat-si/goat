@@ -401,8 +401,7 @@ const make = Effect.gen(function* () {
         : Option.some({ own: allRuns, providerTurns: [], notices: new Set<string>() });
       if (Option.isNone(scoped)) return false;
       const runs = scoped.value.own;
-      // A background command's notice run answers the request on its own (channelNoticeAnswers),
-      // so it is never the task's result; it still belongs to the task for everything else.
+      // Command notices and disposed completion wakes still belong to the task's run history.
       const resultRuns = resultRunsOf(runs, scoped.value.notices);
       // Wakes a pre-change digest of the session folded under another task's run, read once.
       const { messages } = records.value;
@@ -444,13 +443,11 @@ const make = Effect.gen(function* () {
         // The newest run since the bound one is the task's current run: a follow-up or a
         // restart continuation replaces the run it follows.
         const floor = bound?.ordinal ?? 0;
-        // Bound to a notice (a recovered send, or a follow-up that joined one), the task's own
-        // newest run still answers it; the notice answers through channelNoticeAnswers.
+        // The task may have bound a wake while it was queued. If it was disposed before it could
+        // run, resume observing the newest eligible run as we do for a bound command notice.
         current =
           resultRuns.findLast((run) => run.ordinal >= floor) ??
-          (bound !== undefined && scoped.value.notices.has(bound.userMessageId)
-            ? resultRuns.at(-1)
-            : undefined);
+          (bound !== undefined && !resultRuns.includes(bound) ? resultRuns.at(-1) : undefined);
       }
       if (current === undefined) return false;
 

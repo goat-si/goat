@@ -193,6 +193,15 @@ it("finds a localized shortcut by its display name, English label, or command ID
       .element(screen.getByText("打开首选编辑器", { exact: true }))
       .not.toBeInTheDocument();
   }
+  await search.fill("复制路径");
+  await expect.element(screen.getByText("文件：复制路径", { exact: true })).toBeVisible();
+  await screen
+    .getByRole("button", { name: /文件：复制路径/ })
+    .filter({ hasText: "fileViewFocus" })
+    .click();
+  await expect
+    .element(page.getByRole("button", { name: "条件组", exact: true }).first())
+    .toBeVisible();
 });
 
 it("announces shortcut and condition controls in Korean", async () => {

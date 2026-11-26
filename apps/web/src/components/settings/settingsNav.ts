@@ -68,7 +68,7 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
     text: msg(
       "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
     ),
-    related: [{ label: "Hub", to: "/settings/hub" }],
+    related: [{ label: msg("Hub"), to: "/settings/hub" }],
   },
   "/settings/memory": { text: msg("What agents remember across threads, and who can read it.") },
   "/settings/integrations": {
@@ -100,14 +100,14 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
       "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
     ),
     related: [
-      { label: "Connect your phone", to: "/settings/connections", hash: "hub-device" },
-      { label: "OpenCodex Home for Codex", to: "/settings/providers" },
+      { label: msg("Connect your phone"), to: "/settings/connections", hash: "hub-device" },
+      { label: msg("OpenCodex Home for Codex"), to: "/settings/providers" },
     ],
   },
   "/settings/connections": {
     text: msg(
       "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
     ),
-    related: [{ label: "Hub", to: "/settings/hub" }],
+    related: [{ label: msg("Hub"), to: "/settings/hub" }],
   },
 };

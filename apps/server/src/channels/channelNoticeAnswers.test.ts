@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelInputId, ChannelTaskId, MessageId, RunId, ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
@@ -358,8 +359,18 @@ describe("a notice answer's shape and place", () => {
 
   it("is never the task's result, while the notice run stays the task's own", () => {
     const runs = [
-      { id: "run:logistics", userMessageId: MessageId.make("message:logistics") },
-      { id: "run:notice", userMessageId: MessageId.make("message:notice") },
+      {
+        id: "run:logistics",
+        userMessageId: MessageId.make("message:logistics"),
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe(at),
+      },
+      {
+        id: "run:notice",
+        userMessageId: MessageId.make("message:notice"),
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe(at),
+      },
     ];
     const notices = noticeMessageIds([
       { id: "message:logistics" },

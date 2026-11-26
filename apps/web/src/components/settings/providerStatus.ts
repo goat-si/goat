@@ -44,61 +44,65 @@ export function getProviderStatusKey(provider: ServerProvider | undefined): Prov
   return provider?.status ?? "warning";
 }
 
-export function getProviderSummary(provider: ServerProvider | undefined) {
+export function getProviderSummary(
+  provider: ServerProvider | undefined,
+  gt = (source: string) => source,
+) {
   if (!provider) {
     return {
-      headline: "Checking provider status",
-      detail: "Waiting for the server to report installation and authentication details.",
+      headline: gt("Checking provider status"),
+      detail: gt("Waiting for the server to report installation and authentication details."),
     };
   }
   if (!provider.enabled || provider.status === "disabled") {
     return {
-      headline: "Disabled",
+      headline: gt("Disabled"),
       detail:
-        provider.message ?? "This provider is installed but disabled for new sessions in GOAT.",
+        provider.message ?? gt("This provider is installed but disabled for new sessions in GOAT."),
     };
   }
   if (!provider.installed) {
     return {
-      headline: "Not found",
-      detail: provider.message ?? "CLI not detected on PATH.",
+      headline: gt("Not found"),
+      detail: provider.message ?? gt("CLI not detected on PATH."),
     };
   }
   if (provider.auth.status === "unauthenticated") {
     const authLabel = provider.auth.label ?? provider.auth.type;
     return {
-      headline: authLabel ? `Not authenticated · ${authLabel}` : "Not authenticated",
+      headline: authLabel ? `${gt("Not authenticated")} · ${authLabel}` : gt("Not authenticated"),
       detail: provider.message ?? null,
     };
   }
   if (isAntigravitySignInUnchecked(provider)) {
     return {
-      headline: "Installed · Sign-in not checked",
+      headline: gt("Installed · Sign-in not checked"),
       detail: provider.message ?? null,
     };
   }
   if (provider.status === "warning") {
     return {
-      headline: "Needs attention",
+      headline: gt("Needs attention"),
       detail:
-        provider.message ?? "The provider is installed, but the server could not fully verify it.",
+        provider.message ??
+        gt("The provider is installed, but the server could not fully verify it."),
     };
   }
   if (provider.status === "error") {
     return {
-      headline: "Unavailable",
-      detail: provider.message ?? "The provider failed its startup checks.",
+      headline: gt("Unavailable"),
+      detail: provider.message ?? gt("The provider failed its startup checks."),
     };
   }
   if (provider.auth.status === "authenticated") {
     const authLabel = provider.auth.label ?? provider.auth.type;
     return {
-      headline: authLabel ? `Authenticated · ${authLabel}` : "Authenticated",
+      headline: authLabel ? `${gt("Authenticated")} · ${authLabel}` : gt("Authenticated"),
       detail: provider.message ?? null,
     };
   }
   return {
-    headline: "Available",
+    headline: gt("Available"),
     detail: provider.message ?? null,
   };
 }

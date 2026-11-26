@@ -179,7 +179,7 @@ it("removes a stored background and returns to the built-in background", async (
   await vi.waitFor(() => expect(getClientSettings().glassBackdrop).toBe("built-in"));
 });
 
-it("distinguishes the background image upload from the background selector in Korean", async () => {
+it("provides Korean accessible names for background controls and the animation preview", async () => {
   backdrop.presence = "missing";
   using _fixture = materialBridge();
   await using screen = await render(
@@ -189,6 +189,9 @@ it("distinguishes the background image upload from the background selector in Ko
       </RegistryProvider>
     </GTProvider>,
   );
+  await expect
+    .element(screen.getByRole("button", { name: "패널 애니메이션 미리보기 다시 재생" }))
+    .toBeInTheDocument();
   await screen.getByRole("combobox", { name: "스타일" }).click();
   await screen.getByRole("option", { name: "Liquid Glass" }).click();
   await expect.element(screen.getByRole("combobox", { name: "배경" })).toBeVisible();

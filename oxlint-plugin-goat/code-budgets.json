@@ -470,7 +470,7 @@
   "apps/web/src/components/LegacySidebar.tsx": { "lines": 3883, "nonNull": 2 },
   "apps/web/src/components/ProviderUpdateLaunchNotification.logic.ts": { "nonNull": 5 },
   "apps/web/src/components/PublishRepositoryDialog.tsx": { "nonNull": 1 },
-  "apps/web/src/components/RightPanelTabs.tsx": { "lines": 1063 },
+  "apps/web/src/components/RightPanelTabs.tsx": { "lines": 1034 },
   "apps/web/src/components/Sidebar.drag.ts": { "nonNull": 1 },
   "apps/web/src/components/Sidebar.logic.test.ts": { "lines": 2403 },
   "apps/web/src/components/Sidebar.logic.ts": { "lines": 1706, "nonNull": 7 },

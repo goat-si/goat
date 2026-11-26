@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { Node } from "@tiptap/core";
 import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { use, type CSSProperties } from "react";
@@ -39,6 +40,7 @@ export const ComposerMentionExtension = Node.create({
 });
 
 function ComposerMentionNodeView({ node }: NodeViewProps) {
+  const gt = useGT();
   const actions = use(ComposerContextActionsContext);
   const path = (node.attrs.path as string) ?? "";
   const nativeFileDrag = useNativeMentionDrag(actions.environmentId, path, actions.cwd);
@@ -51,7 +53,7 @@ function ComposerMentionNodeView({ node }: NodeViewProps) {
       dir="ltr"
       render={<button type="button" />}
       onClick={() => actions.openMention(path)}
-      aria-label={`Preview ${path}`}
+      aria-label={gt("Preview {path}", { path })}
       contentEditable={false}
       spellCheck={false}
       data-composer-mention-chip="true"

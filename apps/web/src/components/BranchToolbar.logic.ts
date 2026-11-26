@@ -34,6 +34,12 @@ export type EnvMode = typeof EnvMode.Type;
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
+/** The primary environment's name when it has no specific one. Translated sentences swap it in. */
+const PRIMARY_ENVIRONMENT_FALLBACK_LABEL = "This device";
+
+export const localizeEnvironmentLabel = (label: string, thisDevice: string): string =>
+  label === PRIMARY_ENVIRONMENT_FALLBACK_LABEL ? thisDevice : label;
+
 function normalizeDisplayLabel(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
@@ -53,7 +59,7 @@ export function resolveEnvironmentOptionLabel(input: {
       if (!label) return false;
       return !GENERIC_LOCAL_ENVIRONMENT_LABELS.has(label.toLowerCase());
     });
-    return preferredLocalLabel ?? "This device";
+    return preferredLocalLabel ?? PRIMARY_ENVIRONMENT_FALLBACK_LABEL;
   }
 
   return runtimeLabel ?? savedLabel ?? input.environmentId;

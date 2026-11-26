@@ -981,6 +981,8 @@ it("localizes the checked status and refresh button name (PR #3835)", async () =
       {panel()}
     </GTProvider>,
   );
+  await expect.element(screen.getByRole("button", { name: "Codex 선택" })).toBeVisible();
+  await expect.element(screen.getByRole("switch", { name: "Codex 사용" })).toBeVisible();
   await expect
     .element(screen.getByRole("button", { name: "프로바이더 상태 새로 고침 5분 전에 확인" }))
     .toBeVisible();
