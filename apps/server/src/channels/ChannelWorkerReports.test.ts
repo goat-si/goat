@@ -5,6 +5,7 @@ import {
   MessageId,
   NodeId,
   RuntimeRequestId,
+  type OrchestrationV2Subagent,
   type ThreadResultReport,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -15,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ThreadResults from "../threadResults/ThreadResultService.ts";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import * as ChannelBotMembers from "./ChannelBotMembers.ts";
 import * as TaskViews from "./channelTaskViews.ts";
@@ -22,7 +24,9 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import { taskIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 import { REMOTE_SETTLE_WAIT_MS } from "./ChannelRemoteWorkers.ts";
 import {
   RemoteMachine,
@@ -145,6 +149,85 @@ describe("a worker's outcome after it asked the person", () => {
       assert.deepStrictEqual(stopped.openQuestions, []);
     }).pipe(provide(harness));
   });
+});
+
+describe("delegated completion wakes", () => {
+  it.effect.each([
+    { bindQueued: false, cause: "delegated_wake_disposed", expected: "completed" },
+    { bindQueued: true, cause: "delegated_wake_disposed", expected: "completed" },
+    { bindQueued: true, cause: "delegated_wake_disposed", expected: "failed" },
+    { bindQueued: true, cause: "person_stop", expected: "cancelled" },
+  ] as const)(
+    "settles as $expected when a queued wake ends before start ($cause, observed queued: $bindQueued)",
+    ({ bindQueued, cause, expected }) => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("Check A and B", "dispose-delegated-wake"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const taskId = taskIdFor(input.inputId, 0);
+        const task = (yield* ledger.getTask(taskId))!.task;
+        const threadId = task.worker!.threadId;
+        const parent = harness.world.latestRun(threadId)!;
+        const child = {
+          runId: parent.id,
+          origin: "app_owned",
+          status: "completed",
+          completedAt: yield* DateTime.now,
+          completionDelivery: { state: "delivered", observedByRunId: parent.id },
+        } as OrchestrationV2Subagent;
+        harness.world.subagents.set(threadId, [child]);
+        yield* TestClock.adjust("1 second");
+        harness.assistant(task, "Checking.");
+        yield* runtime.runPass;
+        yield* runtime.settle([input.inputId]);
+
+        const results = yield* ThreadResults.ThreadResultService;
+        const summary = "A and B both passed.";
+        if (expected !== "failed") {
+          const reported = yield* results.report(threadId, { outcome: "succeeded", summary });
+          assert.strictEqual(reported.runId, parent.id);
+        }
+        const wake = harness.delegatedWake(parent);
+        assert.strictEqual(wake.status, "queued");
+
+        if (bindQueued) {
+          yield* runtime.runPass;
+          assert.strictEqual((yield* ledger.getTask(taskId))?.task.worker?.runId, wake.id);
+        }
+
+        // The queued continuation ended before the original run left the provider.
+        const runs = harness.world.runs.get(threadId)!;
+        harness.world.runs.set(threadId, [
+          ...runs.slice(0, -1),
+          {
+            ...wake,
+            status: "cancelled",
+            completedAt: yield* DateTime.now,
+            terminationCause: { kind: cause },
+          },
+        ]);
+        harness.assistant(task, summary, false, 1);
+        harness.world.setStatus(threadId, parent.ordinal, "completed");
+        yield* runtime.drain;
+
+        const finished = (yield* ledger.getTask(taskId))!.task;
+        assert.strictEqual(finished.status, expected);
+        if (expected === "completed") {
+          assert.strictEqual(finished.worker?.runId, parent.id);
+          assert.strictEqual(finished.resultSummary, summary);
+        }
+        if (expected === "failed")
+          assert.include(finished.resultSummary!, "without a final report");
+      }).pipe(Effect.provide(ThreadResults.layer.pipe(Layer.provideMerge(harness.layer))));
+    },
+  );
 });
 
 describe("a worker on another machine that asked the person", () => {

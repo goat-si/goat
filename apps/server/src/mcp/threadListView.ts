@@ -15,6 +15,7 @@ import {
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { latestUnheldRun } from "@goat/shared/orchestrationV2ThreadError";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestUpdatedAtMs } from "@goat/shared/threadPullRequests";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
@@ -281,8 +282,10 @@ export function threadDetail(
   nowMs: number,
   firstPage: boolean,
 ): OrchestratorMcpThreadDetail {
-  const latest = ThreadManagementService.latestRun(projection);
   const active = ThreadManagementService.latestActiveRun(projection);
+  const latest = active
+    ? ThreadManagementService.latestRun(projection)
+    : (latestUnheldRun(projection.runs) ?? undefined);
   return {
     threadId: projection.thread.id,
     projectId: projection.thread.projectId,

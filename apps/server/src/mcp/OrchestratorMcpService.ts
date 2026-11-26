@@ -61,6 +61,8 @@ import {
   delegatedTaskRun,
   taskStatusForRun,
   taskResultTransfer,
+  taskResultTransfers,
+  taskRunResult,
   pageIncludesTerminalTaskResult,
 } from "./delegatedTaskResult.ts";
 import { timelineItemsWithinBudget } from "./threadReadItems.ts";
@@ -96,7 +98,6 @@ import {
 } from "./ModelSelectionValidation.ts";
 import {
   delegatedTaskProgress,
-  subagentResultForRun,
   delegatedTaskReportRuns,
   SUBAGENT_RESULT_TURN_ITEM_TYPES,
 } from "@goat/provider-core/server/subagentProjection";
@@ -1227,20 +1228,15 @@ const make = Effect.gen(function* () {
       task.result !== null
         ? task.result
         : taskResultRun !== undefined && isTerminalTaskStatus(status)
-          ? subagentResultForRun({ ...childProjection, runs: reportRuns }, taskResultRun).text
+          ? taskRunResult({ ...childProjection, runs: reportRuns }, taskResultRun).text
           : null;
-    const resultTransfers = childControls.contextTransfers.filter(
-      (transfer) =>
-        transfer.type === "subagent_result" &&
-        transfer.sourceThreadId === task.childThreadId &&
-        transfer.targetThreadId === scope.thread.threadId,
-    );
+    const resultTransfers = taskResultTransfers(scope.thread.threadId, childProjection, task);
     const resultTransferForRun = (run: OrchestrationV2Run | undefined) =>
       !canExposeTaskRunResult(run)
         ? null
-        : (resultTransfers.find((transfer) => transfer.sourcePoint.runId === run.id) ??
+        : (resultTransfers.findLast((transfer) => transfer.sourcePoint.runId === run.id) ??
           (run.id === childRun?.id
-            ? resultTransfers.find((transfer) => transfer.sourcePoint.runId === undefined)
+            ? resultTransfers.findLast((transfer) => transfer.sourcePoint.runId === undefined)
             : undefined) ??
           null);
     const resultTransfer = taskResultTransfer(scope.thread.threadId, childProjection, task) ?? null;
@@ -1252,7 +1248,7 @@ const make = Effect.gen(function* () {
     const latestTerminalSummary = canExposeTaskRunResult(terminalRun)
       ? terminalRun.id === childRun?.id
         ? derivedResult
-        : subagentResultForRun({ ...childProjection, runs: [] }, terminalRun).text
+        : taskRunResult({ ...childProjection, runs: [] }, terminalRun).text
       : null;
     const resultContextTransferId = resultTransfer?.id ?? null;
     const latestTerminalResultContextTransferId = resultTransferForRun(terminalRun)?.id ?? null;
@@ -3265,10 +3261,13 @@ const make = Effect.gen(function* () {
         yield* Clock.currentTimeMillis,
         input.afterPosition === undefined && input.itemId === undefined,
       );
-      const recentRuns = target.runs
-        .toSorted((left, right) => right.ordinal - left.ordinal)
-        .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
-        .map(threadRun);
+      const recentRuns = (
+        summary && input.runLimit === undefined && thread.activeRunId === null
+          ? target.runs.filter((run) => run.id === thread.latestRunId)
+          : target.runs
+              .toSorted((left, right) => right.ordinal - left.ordinal)
+              .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
+      ).map(threadRun);
       const { items, start } = timelineItemsWithinBudget(
         { thread, recentRuns, nextPosition: null, hasMore: false, earlierPosition: null },
         timeline.items.map((row) => ({

@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   TurnItemId,
   type ChannelTask,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   type ThreadId,
@@ -17,6 +18,7 @@ import { makeHarness } from "./ChannelHarness.ts";
 
 export const makeSessionHarness = (options: { readonly driver?: "opencode" } = {}) => {
   const items = new Map<ThreadId, OrchestrationV2TurnItem[]>();
+  const wakes = new Map<ThreadId, OrchestrationV2ThreadProjection["messages"][number][]>();
   const layer = Layer.effect(
     ThreadManagement.ThreadManagementService,
     Effect.gen(function* () {
@@ -27,14 +29,15 @@ export const makeSessionHarness = (options: { readonly driver?: "opencode" } = {
           service.getThreadRecords(threadId, fields, filter).pipe(
             Effect.map((records) => {
               const own = items.get(threadId);
-              if (own === undefined) return records;
+              const delegated = wakes.get(threadId);
+              if (own === undefined && delegated === undefined) return records;
               return {
                 ...records,
                 turnItems: [
                   ...("turnItems" in records
                     ? (records.turnItems as ReadonlyArray<OrchestrationV2TurnItem>)
                     : []),
-                  ...own,
+                  ...(own ?? []),
                 ],
                 messages: [
                   // Base user messages stay: a background command's notice is one.
@@ -43,7 +46,8 @@ export const makeSessionHarness = (options: { readonly driver?: "opencode" } = {
                         (message) => message.role === "user",
                       )
                     : []),
-                  ...own.flatMap((item) =>
+                  ...(delegated ?? []),
+                  ...(own ?? []).flatMap((item) =>
                     item.type !== "assistant_message"
                       ? []
                       : [
@@ -153,10 +157,36 @@ export const makeSessionHarness = (options: { readonly driver?: "opencode" } = {
     items.set(worker.threadId, [...prior.filter((other) => other.id !== item.id), item]);
     return item;
   };
+  const delegatedWake = (parent: OrchestrationV2Run) => {
+    const { threadId } = parent;
+    const now = DateTime.makeUnsafe(0);
+    const messageId = MessageId.make("delegated-completion:" + parent.id);
+    const run = harness.world.addRun(threadId, messageId);
+    wakes.set(threadId, [
+      ...(wakes.get(threadId) ?? []),
+      {
+        id: messageId,
+        threadId,
+        runId: run.id,
+        nodeId: null,
+        role: "user",
+        text: "Delegated work finished.",
+        createdBy: "agent",
+        creationSource: "server",
+        streaming: false,
+        attachments: [],
+        createdAt: now,
+        updatedAt: now,
+        delegatedCompletion: { parentRunId: parent.id, generation: 1, taskIds: [] },
+      },
+    ]);
+    return run;
+  };
   return {
     ...harness,
     layer: Layer.mergeAll(layer, providerLayer).pipe(Layer.provideMerge(harness.layer)),
     assistant,
     tool,
+    delegatedWake,
   };
 };

@@ -15,78 +15,103 @@ import {
   withService,
 } from "./OrchestratorMcpService.reviewContinuation.testkit.ts";
 
+const stopWithQueuedNotice = Effect.gen(function* () {
+  const fixture = yield* makeFixture;
+  const created = yield* continued(fixture);
+  const eventSink = yield* EventSink.EventSinkV2;
+  yield* fixture.orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make("stopped-child-notice"),
+    threadId: fixture.childThreadId,
+    messageId: MessageId.make("stopped-child-notice"),
+    text: "Monitor line",
+    attachments: [],
+    dispatchMode: { type: "queue_after_active" },
+    createdBy: "agent",
+    creationSource: "provider",
+    notification: { source: { kind: "monitor" }, outcome: "updated", summary: "Monitor line" },
+  });
+  yield* fixture.orchestrator.dispatch({
+    type: "thread.stop",
+    commandId: CommandId.make("stopped-child-stop"),
+    threadId: fixture.childThreadId,
+  });
+  // This reviewer has two rounds on the same thread. Acknowledge a stable result revision.
+  yield* eventSink.stream({ afterSequence: 0, eventType: "context-transfer.created" }).pipe(
+    Stream.filter(
+      ({ event }) =>
+        event.type === "context-transfer.created" &&
+        event.payload.type === "subagent_result" &&
+        event.payload.sourceThreadId === fixture.childThreadId &&
+        event.payload.targetThreadId === parentId,
+    ),
+    Stream.take(2),
+    Stream.runDrain,
+  );
+  const [, taskRun, notice] = yield* childRuns(fixture.childThreadId);
+  assert.equal(taskRun?.status, "interrupted");
+  assert.equal(notice?.status, "cancelled");
+  assert.deepEqual(notice?.completedAt, taskRun?.completedAt);
+  assert.isDefined(taskRun);
+  return { fixture, taskId: created.taskId, taskRun, notice };
+});
+
 it.effect(
-  "a summary read of a stopped task child whose queued notice Stop cancelled leaves its completion delivery owed",
+  "reading a stopped child acknowledges the interrupted task despite a later cancelled notice",
   () =>
     Effect.gen(function* () {
-      const fixture = yield* makeFixture;
-      const created = yield* continued(fixture);
-      const eventSink = yield* EventSink.EventSinkV2;
-      yield* fixture.orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make("stopped-child-notice"),
-        threadId: fixture.childThreadId,
-        messageId: MessageId.make("stopped-child-notice"),
-        text: "Monitor line",
-        attachments: [],
-        dispatchMode: { type: "queue_after_active" },
-        createdBy: "agent",
-        creationSource: "provider",
-        notification: { source: { kind: "monitor" }, outcome: "updated", summary: "Monitor line" },
-      });
-      const beforeStop = yield* eventSink.latestSequence();
-      yield* fixture.orchestrator.dispatch({
-        type: "thread.stop",
-        commandId: CommandId.make("stopped-child-stop"),
-        threadId: fixture.childThreadId,
-      });
-      // The orchestrator's run-update reactor finalizes the stopped task in the background and
-      // owes its result to the parent: the delivery is claimed before any read.
-      yield* eventSink.stream({ afterSequence: beforeStop, eventType: "subagent.updated" }).pipe(
-        Stream.filter(
-          (stored) =>
-            stored.event.type === "subagent.updated" &&
-            stored.event.payload.id === created.taskId &&
-            stored.event.payload.completionDelivery?.state === "claimed",
-        ),
-        Stream.take(1),
-        Stream.runDrain,
-      );
-      const [, taskRun, notice] = yield* childRuns(fixture.childThreadId);
-      assert.equal(taskRun?.status, "interrupted");
-      assert.equal(notice?.status, "cancelled");
-      assert.deepEqual(notice?.completedAt, taskRun?.completedAt);
-      // The shell presents the run that ran; goat_thread_read names the newest run by ordinal.
-      const shell = yield* fixture.store.getThreadShell(fixture.childThreadId);
-      assert.equal(shell?.latestRunId, taskRun?.id);
-      const read = yield* withService(fixture, (service) =>
+      const { fixture, taskId, taskRun, notice } = yield* stopWithQueuedNotice;
+      yield* withService(fixture, (service) =>
         Effect.gen(function* () {
           const input = { threadId: fixture.childThreadId, view: "summary" as const };
-          const result = yield* service.readThread(scope, input);
-          // What the host service does after a summary read (HostThreadsMcpService.readThread).
-          yield* service.acknowledgeChildRead(scope, input, result.thread);
-          return result.thread;
+          const status = yield* service.threadStatus(scope, { threadId: fixture.childThreadId });
+          assert.equal(status.run?.runId, taskRun.id);
+          const read = yield* service.readThread(scope, input);
+          assert.equal(read.thread.latestRunId, status.run?.runId);
+          assert.equal(read.thread.status, "interrupted");
+          assert.deepEqual(
+            read.recentRuns.map((run) => run.runId),
+            [taskRun.id],
+          );
+          yield* service.acknowledgeChildRead(scope, input, read.thread);
+          const { subagents } = yield* fixture.store.getThreadRecords(parentId, ["subagents"]);
+          assert.equal(
+            subagents.find((task) => task.id === taskId)?.completionDelivery?.state,
+            "acknowledged",
+          );
+          const tail = { threadId: fixture.childThreadId, tail: 1, runLimit: 2 };
+          const again = yield* service.readThread(scope, tail);
+          assert.deepEqual(
+            again.recentRuns.map((run) => run.runId),
+            [notice?.id, taskRun.id],
+          );
+          yield* service.acknowledgeChildRead(scope, tail, again.thread);
         }),
       );
-      assert.equal(read.latestRunId, notice?.id);
-      // The read saw the cancelled notice, not the task's interrupted run, so it acknowledges
-      // nothing and the parent is still woken with the task's result.
-      const task = (yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents.find(
-        (candidate) => candidate.id === created.taskId,
+      const parent = yield* fixture.store.getThreadRecords(parentId, ["runs", "subagents"]);
+      const task = parent.subagents.find((candidate) => candidate.id === taskId);
+      assert.equal(task?.completionDelivery?.state, "acknowledged");
+      assert.isFalse(
+        parent.runs.some((run) => run.delegatedCompletion?.delivery?.taskIds.includes(taskId)),
       );
-      assert.equal(task?.completionDelivery?.state, "claimed");
-      // The claimed delivery is a real wake: it is offered to the parent's still-active run.
-      const parent = yield* fixture.store.getThreadRecords(parentId, ["runs", "messages"]);
-      const delivery = parent.runs
-        .flatMap((run) => run.delegatedCompletion?.delivery ?? [])
-        .find((candidate) => candidate.taskIds.includes(created.taskId));
-      assert.isDefined(delivery);
-      const wake = yield* (yield* ProviderContinuationRequests.ProviderContinuationRequests).take;
-      assert.equal(wake.threadId, parentId);
-      assert.deepEqual(wake.delegatedCompletion, {
-        parentRunId: parent.runs.find((run) => run.delegatedCompletion?.delivery === delivery)?.id,
-        generation: delivery?.generation,
-        messageId: delivery?.messageId,
-      });
     }).pipe(Effect.provide(layerTestWithContinuations)),
+);
+
+it.effect("an unread stopped child still wakes the parent with its result", () =>
+  Effect.gen(function* () {
+    const { fixture, taskId } = yield* stopWithQueuedNotice;
+    const wake = yield* (yield* ProviderContinuationRequests.ProviderContinuationRequests).take;
+    const parent = yield* fixture.store.getThreadRecords(parentId, ["runs"]);
+    const run = parent.runs.find((candidate) =>
+      candidate.delegatedCompletion?.delivery?.taskIds.includes(taskId),
+    );
+    const delivery = run?.delegatedCompletion?.delivery;
+    assert.isDefined(delivery);
+    assert.equal(wake.threadId, parentId);
+    assert.deepEqual(wake.delegatedCompletion, {
+      parentRunId: run?.id,
+      generation: delivery?.generation,
+      messageId: delivery?.messageId,
+    });
+  }).pipe(Effect.provide(layerTestWithContinuations)),
 );
