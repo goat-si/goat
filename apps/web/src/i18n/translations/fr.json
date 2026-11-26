@@ -2411,5 +2411,6 @@
   "607123e0ac2aadb4": "Ce fil de discussion appartient déjà à un autre projet.",
   "eee5af21197fc4a3": "Ce fil de discussion contient déjà une activité dans GOAT.",
   "9d1944a284912b34": "Impossible d'enregistrer la conversation importée.",
-  "23fbdaecd72f9468": "Importation… {processed} projets traités sur {total}"
+  "23fbdaecd72f9468": "Importation… {processed} projets traités sur {total}",
+  "07246e498374788d": "Et {count} de plus"
 }

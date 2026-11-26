@@ -15,9 +15,23 @@ it("decodes import results across old and new client and server versions", () =>
   const newResponse = {
     ...oldResponse,
     skippedThreads: [{ thread: "example", reason: "Unavailable" }],
+    skippedDetailsOmitted: 2,
   };
   expect(decodeImportResult(oldResponse)).toEqual(oldResponse);
+  expect(
+    decodeImportResult({ ...oldResponse, skippedThreads: newResponse.skippedThreads }),
+  ).toEqual({
+    ...oldResponse,
+    skippedThreads: newResponse.skippedThreads,
+  });
   expect(decodeOldImportResult(newResponse)).toEqual(oldResponse);
+  const previousClient = Schema.decodeUnknownSync(
+    AgentSessionImportResult.mapFields(({ skippedDetailsOmitted: _, ...fields }) => fields),
+  );
+  expect(previousClient(newResponse)).toEqual({
+    ...oldResponse,
+    skippedThreads: newResponse.skippedThreads,
+  });
   expect(decodeImportResult(newResponse)).toEqual(newResponse);
 });
 

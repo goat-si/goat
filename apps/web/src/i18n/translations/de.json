@@ -2411,5 +2411,6 @@
   "607123e0ac2aadb4": "Dieser Thread gehört bereits zu einem anderen Projekt.",
   "eee5af21197fc4a3": "Dieser Thread enthält bereits Aktivitäten in GOAT.",
   "9d1944a284912b34": "Die importierte Konversation konnte nicht gespeichert werden.",
-  "23fbdaecd72f9468": "Importieren… {processed} von {total} Projekten bearbeitet"
+  "23fbdaecd72f9468": "Importieren… {processed} von {total} Projekten bearbeitet",
+  "07246e498374788d": "Und {count} weitere"
 }
