@@ -94,9 +94,13 @@ export function MemoryGenerationSettings({
           control={
             <div className="flex flex-wrap items-center justify-end gap-2">
               {selection === null ? (
-                <span className="text-sm text-muted-foreground">No memory model available.</span>
+                <span className="text-sm text-muted-foreground">
+                  {gt("No memory model available.")}
+                </span>
               ) : !separate ? (
-                <span className="text-sm text-muted-foreground">Automatic · {selection.model}</span>
+                <span className="text-sm text-muted-foreground">
+                  {gt("Automatic · {model}", { model: selection.model })}
+                </span>
               ) : null}
               {selection && activeEntry && separate ? (
                 <>
