@@ -275,7 +275,7 @@ function ThemeImportBody({
     for (const file of files) {
       const oversized = describeOversizedThemeFile(file.size, gt);
       if (oversized) {
-        failures.push(gt("{name}: too large", { name: file.name }));
+        failures.push(`${file.name}: ${oversized}`);
         continue;
       }
       try {
