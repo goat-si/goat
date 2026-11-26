@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ChevronRightIcon } from "~/components/solar";
 import { type ReactNode, useState } from "react";
 
@@ -18,6 +19,7 @@ export function AdvancedSettingsDisclosure({
   readonly targetIds: ReadonlyArray<string>;
   readonly children: ReactNode;
 }) {
+  const gt = useGT();
   const [open, setOpen] = useState(false);
   const searchTargetId = useSettingsSearchTargetId();
   const [openedForTarget, setOpenedForTarget] = useState<string | null>(null);
@@ -40,7 +42,7 @@ export function AdvancedSettingsDisclosure({
             open && "rotate-90",
           )}
         />
-        Advanced settings
+        {gt("Advanced settings")}
       </CollapsibleTrigger>
       <CollapsiblePanel keepMounted>
         <div className="flex flex-col gap-4 pt-4">{children}</div>

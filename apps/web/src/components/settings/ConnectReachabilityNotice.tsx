@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { AdvertisedEndpoint, DesktopServerExposureState } from "@goat/contracts";
 import type { ReactNode } from "react";
 
@@ -30,14 +31,16 @@ export type ConnectReachabilityActions = {
   readonly onTurnOnTailscaleHttps: (endpoint: AdvertisedEndpoint) => void;
 };
 
-const TAILSCALE_UNREACHABLE_FALLBACK =
-  "Tailscale HTTPS is on, but Tailscale is not answering. Check that Tailscale is running and signed in on this computer.";
-
-export function tailscaleUnreachableMessage(endpoint: AdvertisedEndpoint | null): string {
+export function tailscaleUnreachableMessage(
+  endpoint: AdvertisedEndpoint | null,
+  gt: ReturnType<typeof useGT>,
+): string {
   if (endpoint?.status === "unavailable" && endpoint.description) {
     return endpoint.description;
   }
-  return TAILSCALE_UNREACHABLE_FALLBACK;
+  return gt(
+    "Tailscale HTTPS is on, but Tailscale is not answering. Check that Tailscale is running and signed in on this computer.",
+  );
 }
 
 /** Offers the missing switch where the user is connecting; the confirm it opens restarts GOAT. */
@@ -57,12 +60,13 @@ export function ConnectReachabilityNotice({
   readonly onBeforeAction?: () => void;
   readonly actions: ConnectReachabilityActions;
 }): ReactNode {
+  const gt = useGT();
   const step = connectReachabilityStep(state, tailscaleHttpsEndpoint);
   if (step === null) return null;
   if (step === "tailscale-unreachable") {
     return (
       <p className="text-sm text-muted-foreground" role="status">
-        {tailscaleUnreachableMessage(tailscaleHttpsEndpoint)}
+        {tailscaleUnreachableMessage(tailscaleHttpsEndpoint, gt)}
       </p>
     );
   }
@@ -73,17 +77,21 @@ export function ConnectReachabilityNotice({
     else if (tailscaleHttpsEndpoint) actions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint);
   };
   return (
-    <div className="space-y-2" role="group" aria-label="Make this computer reachable">
+    <div className="space-y-2" role="group" aria-label={gt("Make this computer reachable")}>
       <p className="text-sm text-muted-foreground">
         {step === "network-access"
-          ? "Other devices cannot reach this computer yet. Turn on Network access so they can connect over your local network or Tailscale."
-          : "Tailscale HTTPS is off. Turn it on for a secure address your devices can use anywhere on your tailnet."}
+          ? gt(
+              "Other devices cannot reach this computer yet. Turn on Network access so they can connect over your local network or Tailscale.",
+            )
+          : gt(
+              "Tailscale HTTPS is off. Turn it on for a secure address your devices can use anywhere on your tailnet.",
+            )}
       </p>
       <p className="text-xs text-muted-foreground">
-        GOAT restarts to apply this, then brings you back here.
+        {gt("GOAT restarts to apply this, then brings you back here.")}
       </p>
       <Button size="sm" disabled={disabled} onClick={start}>
-        {step === "network-access" ? "Turn on Network access" : "Turn on Tailscale HTTPS"}
+        {step === "network-access" ? gt("Turn on Network access") : gt("Turn on Tailscale HTTPS")}
       </Button>
     </div>
   );
