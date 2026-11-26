@@ -376,7 +376,7 @@ export const make = Effect.gen(function* () {
     const readBytes =
       prefix?.endByteOffset ?? (compressed ? MAX_IMPORTED_TRANSCRIPT_BYTES : expected.size);
     if ((!compressed && readBytes > expected.size) || readBytes > MAX_IMPORTED_TRANSCRIPT_BYTES) {
-      return null;
+      return "Transcript exceeds the file size limit." as const;
     }
 
     return yield* Effect.scoped(
@@ -384,7 +384,7 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((file) =>
           Effect.gen(function* () {
             if (!sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))) {
-              return null;
+              return "Transcript changed during import." as const;
             }
             const readChunk = yield* transcriptChunkReader(file, filePath);
             const records: Array<DecodedTranscriptRecord> = [];
@@ -449,7 +449,7 @@ export const make = Effect.gen(function* () {
               if (Option.isNone(next)) {
                 // A compressed rollout's decompressed length is only known at its end.
                 if (compressed && prefix === undefined) break;
-                return null;
+                return "Transcript ended before its expected length." as const;
               }
 
               bytesRead += next.value.byteLength;
@@ -466,10 +466,11 @@ export const make = Effect.gen(function* () {
                 }
                 return true;
               });
-              if (!withinBudget) return null;
+              if (!withinBudget) return "Transcript exceeds the record limit." as const;
             }
 
-            if (recordStarted && !(yield* Effect.try(finishRecord))) return null;
+            if (recordStarted && !(yield* Effect.try(finishRecord)))
+              return "Transcript exceeds the record limit." as const;
             return sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))
               ? {
                   records: source === "claudeAgent" ? claudeHistory.records() : records,
@@ -478,14 +479,20 @@ export const make = Effect.gen(function* () {
                   claudeFields,
                   historyBytes,
                 }
-              : null;
+              : ("Transcript changed during import." as const);
           }),
         ),
       ),
     ).pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Could not read imported transcript", { filePath, cause }).pipe(
-          Effect.as(null),
+          Effect.as(
+            cause._tag === "UnknownError"
+              ? cause.cause instanceof TranscriptJsonLimitError
+                ? ("Transcript exceeds the parser limits." as const)
+                : ("Transcript contains invalid JSON." as const)
+              : ("Could not read the transcript file." as const),
+          ),
         ),
       ),
     );
@@ -983,18 +990,28 @@ export const make = Effect.gen(function* () {
           if (Option.isNone(stats) || stats.value.type !== "File" || endByteOffset > bytesRemaining)
             return null;
           bytesRemaining -= endByteOffset;
-          return yield* readTranscript(
+          const result = yield* readTranscript(
             filePath,
             transcriptIdentity(filePath, stats.value),
             "codex",
             { endByteOffset, historyBytes },
           );
+          return typeof result === "string" ? null : result;
         },
       ),
     });
     return Stream.fromIteratorSucceed(eligibleTranscripts.values(), 1).pipe(
       Stream.mapEffect(({ candidate, transcript }) =>
         Effect.gen(function* () {
+          const skipped = (reason: string) =>
+            Option.some<AgentSessionRecentThread>({
+              _tag: "Skipped",
+              thread:
+                transcript.historyThread?.title.trim().split("\n", 1)[0]?.slice(0, 100) ||
+                transcript.historyThread?.id ||
+                path.basename(transcript.filePath),
+              reason,
+            });
           const completed = completedByFile.get(
             `${candidate.providerInstanceId}\0${transcript.filePath}`,
           );
@@ -1009,7 +1026,7 @@ export const make = Effect.gen(function* () {
             sessionSource === undefined &&
             (transcriptsRemaining === 0 || bytesRemaining === 0)
           ) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped("Project import limit reached.");
           }
           if (transcript.historyThread !== undefined) {
             const completedSource = completed?.[0];
@@ -1034,15 +1051,19 @@ export const make = Effect.gen(function* () {
             const reader = historyReader(transcript.historyThread.homePath);
             if (reader === null) {
               yield* warnHistoryFailure(transcript.historyThread.homePath, "open-failed");
-              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+              return skipped("Could not open the Codex history database.");
             }
             const result = reader.read(transcript.historyThread.id);
             if (result._tag === "Failed") {
               yield* warnHistoryFailure(transcript.historyThread.homePath, result.cause);
-              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+              return skipped("Could not read the conversation from Codex history.");
             }
             if (result._tag !== "Ok" || result.data.bytes > bytesRemaining) {
-              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+              return skipped(
+                result._tag === "Empty"
+                  ? "No importable messages in Codex history."
+                  : "History exceeds the import size limit.",
+              );
             }
             const data = result.data;
             transcriptsRemaining -= 1;
@@ -1077,7 +1098,7 @@ export const make = Effect.gen(function* () {
           }
           const stats = yield* statOption(transcript.filePath);
           if (Option.isNone(stats) || stats.value.type !== "File") {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped("Transcript file is unavailable.");
           }
           const identity = transcriptIdentity(transcript.filePath, stats.value);
           const completedSource = completed?.find(
@@ -1098,17 +1119,21 @@ export const make = Effect.gen(function* () {
             identity.size > MAX_IMPORTED_TRANSCRIPT_BYTES ||
             identity.size > bytesRemaining
           ) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped(
+              transcriptsRemaining === 0
+                ? "Project import limit reached."
+                : "Transcript exceeds the import size limit.",
+            );
           }
           transcriptsRemaining -= 1;
           bytesRemaining -= identity.size;
           const snapshot = yield* readTranscript(transcript.filePath, identity, candidate.source);
-          if (snapshot === null) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+          if (typeof snapshot === "string") {
+            return skipped(snapshot);
           }
 
           if (Option.isNone(snapshot.cwd)) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped("Transcript has no working directory.");
           }
           const rolloutThreadId =
             candidate.source === "codex"
@@ -1120,7 +1145,7 @@ export const make = Effect.gen(function* () {
               : cachedCodexCwdByThread?.get(`${candidate.providerInstanceId}\0${rolloutThreadId}`);
           const expandedCwd = expandHomePath((mappedCwd ?? snapshot.cwd.value).trim(), homeDir);
           if (!path.isAbsolute(expandedCwd) || !(yield* belongsToRoot(path.resolve(expandedCwd)))) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped("Transcript working directory is outside this project.");
           }
           const worktree = yield* rootWorktree(path.resolve(expandedCwd));
 
@@ -1133,7 +1158,7 @@ export const make = Effect.gen(function* () {
                 )
               : [];
           if (inheritedRecords === null) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped("Parent conversation history is unavailable.");
           }
           const parsedThread = parseAgentSessionRecords(
             {
@@ -1156,7 +1181,7 @@ export const make = Effect.gen(function* () {
             return Option.none<AgentSessionRecentThread>();
           }
           if (parsedThread === null) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            return skipped("Invalid session metadata or message format.");
           }
           let savedTitle: string | undefined;
           if (candidate.source === "codex") {

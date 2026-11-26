@@ -1503,7 +1503,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           workspaceRoot: workspace,
         });
 
-        expect(outcomes).toEqual([{ _tag: "Skipped" }]);
+        expect(outcomes).toMatchObject([{ reason: "Parent conversation history is unavailable." }]);
       }),
     );
 
@@ -1666,7 +1666,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                     thread: { messages: [{ text: "Replacement prompt" }] },
                   });
                 } else {
-                  expect(outcomes).toEqual([{ _tag: "Skipped" }]);
+                  expect(outcomes).toMatchObject([{ _tag: "Skipped", reason: expect.any(String) }]);
                 }
               }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
             }),
@@ -1978,7 +1978,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
 
         expect(transcriptOpenCount).toBe(2);
         expect(fullReadBytes).toBe(new TextEncoder().encode(contents).byteLength);
-        expect(outcomes).toEqual([{ _tag: "Skipped" }]);
+        expect(outcomes).toMatchObject([{ reason: "Transcript changed during import." }]);
       }),
     );
 
