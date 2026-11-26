@@ -752,10 +752,9 @@ export function ConnectionsSettings() {
                     {gt("Default distro")}
                   </SelectItem>
                 ) : (
-                  desktopWslState.distros.map((distro) => (
-                    <SelectItem hideIndicator key={distro.name} value={distro.name}>
-                      {distro.name}
-                      {distro.isDefault ? gt(" (default)") : ""}
+                  desktopWslState.distros.map(({ name, isDefault }) => (
+                    <SelectItem hideIndicator key={name} value={name}>
+                      {isDefault ? gt("{label} (default)", { label: name }) : name}
                     </SelectItem>
                   ))
                 )}
