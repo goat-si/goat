@@ -35,6 +35,13 @@ describe("describeUpdateErrorCause", () => {
     cyclic.cause = cyclic;
     assert.include(describeUpdateErrorCause(cyclic), "[truncated cause]");
     assert.isAtMost(describeUpdateErrorCause(cyclic).length, 1024);
+
+    const describeCause = (outer: string, inner: string) =>
+      describeUpdateErrorCause(Object.assign(new Error(outer), { cause: new Error(inner) }));
+    const a = "a".repeat(512);
+    const b = "b".repeat(485);
+    assert.equal(describeCause(`${a.slice(1)}🚀`, "b"), `Error: ${a.slice(1)}; caused by Error: b`);
+    assert.equal(describeCause(a, `${b}🚀`), `Error: ${a}; caused by Error: b`);
   });
 
   it("does not serialize arbitrary payloads or let unreadable errors break logging", () => {
