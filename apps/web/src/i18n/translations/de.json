@@ -1351,5 +1351,10 @@
   "f559f9e7a7d7bcb8": "Open-VSX-Themes suchen",
   "fc3150aaf93858c3": "{name} wird installiert",
   "7c6f912f2d62c6d7": "Beliebt",
-  "9268a10862868fe5": "Vorschau der Panel-Animation erneut abspielen"
+  "9268a10862868fe5": "Vorschau der Panel-Animation erneut abspielen",
+  "38695f22426981d6": "Vorschau von {path}",
+  "2c001fff9ae0e246": "Skill {skill}",
+  "78da54214f570092": "{label}. Details anzeigen",
+  "e9df5a486f8ea01b": "Anleitung anzeigen",
+  "9ff9f24d1568fbaf": "Für diesen Skill ist keine Beschreibung verfügbar."
 }
