@@ -101,7 +101,7 @@ export function WebhookEndpointField({
           disabled={rotating || !canRotate}
           onClick={() => void rotateUrl()}
         >
-          {gt("Rotate")}
+          {gt("Regenerate webhook URL")}
         </Button>
       </div>
       {note !== null ? <p className="text-xs text-muted-foreground">{note}</p> : null}
