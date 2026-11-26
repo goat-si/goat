@@ -1,3 +1,4 @@
+import { useGT, useLocale } from "gt-react";
 import { WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -20,6 +21,8 @@ export function WorktreeCleanupPreviewPanel({
   environmentId: EnvironmentId;
   preview: WorktreeCleanupPreview;
 }) {
+  const gt = useGT();
+  const locale = useLocale();
   const canRespond = useAtomValue(
     serverEnvironment.respondWorktreeCleanupPreview.permissionAtom(environmentId),
   );
@@ -29,17 +32,20 @@ export function WorktreeCleanupPreviewPanel({
   return (
     <SettingsGroup>
       <SettingsRow
-        title="Worktree cleanup preview"
+        title={gt("Worktree cleanup preview")}
         description={
           <span>
             {preview.plannedCount === 1
-              ? "1 worktree matches the cleanup rules below."
-              : `${preview.plannedCount} worktrees match the cleanup rules below.`}{" "}
-            A snapshot of any uncommitted changes is saved first, and you can restore a worktree
-            from its thread.{" "}
+              ? gt("1 worktree matches the cleanup rules below.")
+              : gt("{count} worktrees match the cleanup rules below.", {
+                  count: preview.plannedCount,
+                })}{" "}
+            {gt(
+              "A snapshot of any uncommitted changes is saved first, and you can restore a worktree from its thread.",
+            )}{" "}
             {preview.activatesAt
-              ? `Cleanup starts ${relativeStart(preview.activatesAt)}.`
-              : "Cleanup starts when you confirm."}
+              ? gt("Cleanup starts {time}.", { time: relativeStart(preview.activatesAt, locale) })
+              : gt("Cleanup starts when you confirm.")}
           </span>
         }
         control={
@@ -51,10 +57,10 @@ export function WorktreeCleanupPreviewPanel({
                 void respond({
                   environmentId,
                   input: { previewId: preview.id, response: "confirm" },
-                }).then(showFailure("Could not start worktree cleanup"))
+                }).then(showFailure(gt("Could not start worktree cleanup")))
               }
             >
-              Clean up now
+              {gt("Clean up now")}
             </Button>
             <Button
               size="sm"
@@ -68,10 +74,10 @@ export function WorktreeCleanupPreviewPanel({
                       storageCleanup: WORKTREE_CLEANUP_OFF,
                     },
                   },
-                }).then(showFailure("Could not turn off worktree cleanup"))
+                }).then(showFailure(gt("Could not turn off worktree cleanup")))
               }
             >
-              Turn off
+              {gt("Turn off")}
             </Button>
           </div>
         }
@@ -80,14 +86,11 @@ export function WorktreeCleanupPreviewPanel({
   );
 }
 
-function relativeStart(isoDate: string) {
+function relativeStart(isoDate: string, locale: string) {
   const hours = Math.ceil((Date.parse(isoDate) - Date.now()) / 3_600_000);
-  if (hours <= 0) return "now";
-  return hours < 24
-    ? `in ${hours} ${hours === 1 ? "hour" : "hours"}`
-    : Math.ceil(hours / 24) === 1
-      ? "in 1 day"
-      : `in ${Math.ceil(hours / 24)} days`;
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  if (hours <= 0) return format.format(0, "second");
+  return hours < 24 ? format.format(hours, "hour") : format.format(Math.ceil(hours / 24), "day");
 }
 
 const showFailure = (title: string) => (result: AtomCommandResult<unknown, unknown>) => {

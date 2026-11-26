@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useEffect, useRef, useState } from "react";
 import { Switch } from "../ui/switch";
 import {
@@ -14,8 +15,8 @@ export function RetentionControl({
   onChange,
   minimum = 1,
   maximum = 3650,
-  unit = "days",
-  offLabel = "Off",
+  unit,
+  offLabel,
 }: {
   label: string;
   value: number | null;
@@ -25,6 +26,8 @@ export function RetentionControl({
   unit?: string;
   offLabel?: string;
 }) {
+  const gt = useGT();
+  const unitLabel = unit ?? gt("days");
   const revision = useRef(0);
   const currentValue = useRef(value);
   // oxlint-disable-next-line goat/react-effect-budget -- invalidate pending callbacks when saved settings change
@@ -119,9 +122,9 @@ export function RetentionControl({
           }}
         >
           <NumberFieldGroup>
-            <NumberFieldDecrement aria-label={`Decrease ${label}`} />
+            <NumberFieldDecrement aria-label={gt("Decrease {label}", { label })} />
             <NumberFieldInput
-              aria-label={`${label} in ${unit}`}
+              aria-label={gt("{label} in {unit}", { label, unit: unitLabel })}
               autoFocus={value === null}
               size={new Intl.NumberFormat().format(draft ?? value ?? 8).length}
               className="field-sizing-content w-auto min-w-[1ch] grow-0 text-right"
@@ -153,13 +156,13 @@ export function RetentionControl({
               }}
             />
             <span aria-hidden="true" className="self-center pr-2 text-xs">
-              {unit}
+              {unitLabel}
             </span>
-            <NumberFieldIncrement aria-label={`Increase ${label}`} />
+            <NumberFieldIncrement aria-label={gt("Increase {label}", { label })} />
           </NumberFieldGroup>
         </NumberField>
       ) : (
-        <span className="text-xs text-muted-foreground">{offLabel}</span>
+        <span className="text-xs text-muted-foreground">{offLabel ?? gt("Off")}</span>
       )}
       <Switch
         aria-label={label}
