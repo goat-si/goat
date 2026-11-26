@@ -2225,11 +2225,17 @@ const make = Effect.gen(function* () {
           const refusal =
             launchError instanceof SshRemoteDispatch.SshRemoteDispatchError &&
             launchError.reason !== "ssh_failed" &&
-            launchError.reason !== "host_unavailable"
+            launchError.reason !== "host_unavailable" &&
+            launchError.launchMayHaveStarted !== true
               ? launchError.reason
               : isOrchestratorMcpFailure(launchError)
                 ? launchError.code
                 : null;
+          // The refusing side's own words say what to change; it is remote text, so keep it short.
+          const because =
+            refusal !== null && launchError instanceof Error && launchError.message.trim() !== ""
+              ? `: ${launchError.message.trim().slice(0, 600)}`
+              : ".";
           // Only a definite refusal proves nothing ran; a transport or local storage
           // failure after the call may hide a remote thread that did start.
           yield* recordRemoteTaskResult({
@@ -2239,7 +2245,7 @@ const make = Effect.gen(function* () {
             status: "failed",
             summary:
               refusal !== null
-                ? `Remote launch refused on host ${host}; nothing was launched (${refusal}).`
+                ? `Remote launch refused on host ${host}; nothing was launched (${refusal})${because}`
                 : `launch outcome unknown; inspect ${goatCallText("thread.list")} with host ${host} before retrying`,
           }).pipe(
             Effect.provideService(
