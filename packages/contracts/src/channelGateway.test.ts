@@ -4,6 +4,7 @@ import { OrchestrationV2Notification } from "./orchestrationV2Notification.ts";
 
 import {
   BotProfile,
+  BotWorkResult,
   ChannelGatewayError,
   ChannelCreateBotInput,
   ChannelGetBotStatusResult,
@@ -20,6 +21,40 @@ import {
 
 const json = <S extends Schema.Codec<unknown, unknown>>(schema: S) => Schema.toCodecJson(schema);
 const decodeProfile = Schema.decodeUnknownExit(BotProfile);
+
+it("decodes task evidence across older and current peers", () => {
+  const {
+    attemptEvidence: _evidence,
+    requiredDeliverables: _required,
+    ...oldFields
+  } = BotWorkResult.fields;
+  const old = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+  const current = Schema.decodeUnknownSync(BotWorkResult);
+  const base = {
+    task: {
+      state: "unavailable",
+      task: {
+        taskId: "task-1",
+        title: "Release",
+        status: "running",
+        updatedAt: "2026-11-04T10:00:00.000Z",
+      },
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+  };
+  const added = {
+    attemptEvidence: { summary: "Checks passed", report: "present" },
+    requiredDeliverables: [
+      { id: "build", criterion: "Build passes", attempt: 1, state: "accepted" },
+    ],
+  };
+  expect(current(base)).toEqual(base);
+  expect(current({ ...base, ...added })).toMatchObject(added);
+  expect(old({ ...base, ...added })).toEqual(base);
+});
 
 describe("channel.updateBot input", () => {
   const decode = Schema.decodeUnknownExit(ChannelUpdateBotInput);
