@@ -114,7 +114,7 @@ describe("GOAT provider instructions", () => {
   });
 
   it("keeps bounded child work on another machine a subagent of this thread", () => {
-    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "also on another machine with `target.host`");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "also on another host (`target.host`)");
     assert.notInclude(GOAT_ORCHESTRATION_INSTRUCTIONS, "Remote agents: `ssh.thread_launch`");
   });
 
