@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import {
   AuthSettingsWriteScope,
@@ -22,7 +22,7 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import type { SettingsSearchItemId } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
 import { BlockedBrowserHostsSetting } from "./BlockedBrowserHostsSetting";
@@ -35,9 +35,9 @@ import {
 } from "./useScopedSettings";
 
 const TOOL_LISTING_LABELS: Readonly<Record<AgentToolListing, string>> = {
-  core: "Core",
-  full: "All tools",
-  core_eval: "Core + goat_eval",
+  core: msg("Core"),
+  full: msg("All tools"),
+  core_eval: msg("Core + goat_eval"),
 };
 
 export function AgentToolsSettings() {
@@ -51,15 +51,23 @@ export function AgentToolsSettings() {
         name="goat-discipline"
         label={gt("Development discipline")}
         searchId="goat-discipline-skill"
-        projectDescription="Built in. Off keeps $goat-discipline out of this project's $ menu and turns. Inherit follows the environment."
-        environmentDescription="Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns."
+        projectDescription={gt(
+          "Built in. Off keeps $goat-discipline out of this project's $ menu and turns. Inherit follows the environment.",
+        )}
+        environmentDescription={gt(
+          "Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns.",
+        )}
       />
       <BuiltInSkillSetting
         name="goat-docs"
-        label="GOAT Docs"
+        label={gt("GOAT Docs")}
         searchId="goat-docs-skill"
-        projectDescription="Built in. Off keeps $goat-docs out of this project's $ menu and turns. Inherit follows the environment."
-        environmentDescription="Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns."
+        projectDescription={gt(
+          "Built in. Off keeps $goat-docs out of this project's $ menu and turns. Inherit follows the environment.",
+        )}
+        environmentDescription={gt(
+          "Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns.",
+        )}
       />
     </SettingsSection>
   );
@@ -94,11 +102,12 @@ function AgentThemeWritesSetting() {
 function BuiltInSkillSetting(props: {
   readonly name: BuiltInSkillName;
   readonly label: string;
-  readonly searchId: Parameters<typeof searchableSetting>[0];
+  readonly searchId: SettingsSearchItemId;
   readonly projectDescription: string;
   readonly environmentDescription: string;
 }) {
   const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { scope, connectedEnvironments, targets } = useSettingsScope();
   const canWrite = useScopedSettingsWriteAllowed();
   const persistServer = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -168,7 +177,7 @@ function BuiltInSkillSetting(props: {
       (request) =>
         readEnvironmentScope(request.environmentId, AuthSettingsWriteScope)
           ? persistServer(request)
-          : Promise.reject(new Error("This connection lacks permission to change settings.")),
+          : Promise.reject(new Error(gt("This connection lacks permission to change settings."))),
       () => undefined,
     );
     setPending(false);
@@ -187,7 +196,7 @@ function BuiltInSkillSetting(props: {
   if (!supported) return null;
   return (
     <SettingsRow
-      {...searchableSetting(props.searchId)}
+      {...localizedSetting(props.searchId)}
       mixed={mixed}
       description={projectScope ? props.projectDescription : props.environmentDescription}
       control={
@@ -205,7 +214,7 @@ function BuiltInSkillSetting(props: {
                 {mixed
                   ? gt("Mixed")
                   : choice === "inherit"
-                    ? `Inherit (${reference?.enabled ? "On" : "Off"})`
+                    ? gt("Inherit ({value})", { value: reference?.enabled ? gt("On") : gt("Off") })
                     : choice === "on"
                       ? gt("On")
                       : gt("Off")}
@@ -239,6 +248,7 @@ export function AgentToolListingSetting() {
   const gt = useGT();
   const localizedSetting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
+  const m = useMessages();
   const mixed = useScopedSettingsMixed(["agentToolListing"]);
   const updateSettings = useUpdateScopedSettings();
   // Read from the contract so the control follows whichever default ships.
@@ -274,14 +284,14 @@ export function AgentToolListingSetting() {
             aria-label={gt("GOAT tools agents see")}
           >
             <SelectValue>
-              {mixed ? gt("Mixed") : TOOL_LISTING_LABELS[settings.agentToolListing]}
+              {mixed ? gt("Mixed") : m(TOOL_LISTING_LABELS[settings.agentToolListing])}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {AgentToolListing.literals.map((listing) => (
               <SelectItem hideIndicator key={listing} value={listing}>
                 <span className="flex w-full items-center justify-between gap-5">
-                  <span>{TOOL_LISTING_LABELS[listing]}</span>
+                  <span>{m(TOOL_LISTING_LABELS[listing])}</span>
                   {listing === shippedDefault ? (
                     <span className="text-xs text-muted-foreground">{gt("Default")}</span>
                   ) : null}

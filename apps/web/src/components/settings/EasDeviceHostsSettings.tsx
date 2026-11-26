@@ -105,7 +105,7 @@ export function EasDeviceHostsSettings(props: { environmentId: EnvironmentId | n
           disabled={disabled || editing !== null}
           onClick={() => setEditing({ host: newEasDeviceHost(randomUUID()), isNew: true })}
         >
-          <PlusIcon className="size-3.5" /> Add Expo host
+          <PlusIcon className="size-3.5" /> {gt("Add Expo host")}
         </Button>
       }
     >

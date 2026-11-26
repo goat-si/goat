@@ -693,6 +693,7 @@ function DeviceIntegrationControls({
   agentAccessEnabled: boolean;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const localizedSetting = useTranslatedSearchableSetting();
   const canConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const { state, loaded } = useDeviceState(environmentId);
@@ -784,7 +785,7 @@ function DeviceIntegrationControls({
             >
               {pending === `update-${tool}`
                 ? gt("Updating…")
-                : `Update to v${version.requiredVersion}`}
+                : gt("Update to v{version}", { version: version.requiredVersion })}
             </Button>
           ) : null}
           {state.supportsToolInspection ? (
@@ -819,7 +820,7 @@ function DeviceIntegrationControls({
         {...localizedSetting("device-hub")}
         serverScoped
         settingKeys={["enableDeviceSupport"]}
-        description={deviceHubDescription}
+        description={m(deviceHubDescription)}
         control={
           <>
             <DeviceToolVersions
@@ -901,7 +902,7 @@ function DeviceIntegrationControls({
         {...localizedSetting("agent-device-access")}
         serverScoped
         settingKeys={["enableAgentDeviceAccess"]}
-        description={agentDeviceDescription}
+        description={m(agentDeviceDescription)}
         control={
           <>
             <DeviceToolVersions
@@ -1197,12 +1198,12 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
           <MenuPopup align="end">
             <MenuItem
               disabled={!settingsHydrated || atProfileLimit}
-              onClick={() => createProfile("New profile")}
+              onClick={() => createProfile(gt("New profile"))}
             >
               {gt("Blank profile")}
             </MenuItem>
             {atProfileLimit ? (
-              <MenuItem disabled>You&rsquo;ve reached the profile limit</MenuItem>
+              <MenuItem disabled>{gt("You’ve reached the profile limit")}</MenuItem>
             ) : null}
             <MenuSeparator />
             <MenuGroup>
@@ -1249,6 +1250,10 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
         {listedProfiles.map((profile, index) => {
           const builtIn = isBuiltInBrowserProfileId(profile.id);
           const isDefault = profile.id === resolvedDefaultId;
+          const displayName =
+            profile.id === DEFAULT_BROWSER_PROFILE_ID && profile.name === "Default"
+              ? gt("Default")
+              : profile.name;
           return (
             <div
               key={profile.id}
@@ -1265,23 +1270,17 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       profileWritesDisabled && "opacity-64",
                     )}
                   >
-                    {profile.id === DEFAULT_BROWSER_PROFILE_ID && profile.name === "Default"
-                      ? gt("Default")
-                      : profile.name}
+                    {displayName}
                   </span>
                 ) : (
                   <DraftInput
                     nativeInput
                     size="sm"
                     className="w-full max-w-56"
-                    aria-label={`Rename ${profile.name}`}
+                    aria-label={gt("Rename {name}", { name: displayName })}
                     disabled={profileWritesDisabled || importInFlight}
                     maxLength={BROWSER_PROFILE_NAME_MAX_LENGTH}
-                    value={
-                      profile.id === DEFAULT_BROWSER_PROFILE_ID && profile.name === "Default"
-                        ? gt("Default")
-                        : profile.name
-                    }
+                    value={displayName}
                     onCommit={(next) => renameProfile(profile.id, next)}
                   />
                 )}
@@ -1298,7 +1297,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       size="icon-xs"
                       variant="ghost-muted"
                       disabled={profileWritesDisabled || importInFlight}
-                      aria-label={`${profile.name} options`}
+                      aria-label={gt("{name} options", { name: displayName })}
                     />
                   }
                 >

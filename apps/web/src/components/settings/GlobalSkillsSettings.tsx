@@ -121,8 +121,10 @@ function SkillList({
         title={gt("Skills folder")}
         description={
           <span>
-            Put a skill folder with a SKILL.md in this environment's skills folder, then rescan.
-            Call it in a message with $goat:&lt;folder-name&gt;.
+            {gt(
+              "Put a skill folder with a SKILL.md in this environment's skills folder, then rescan. Call it in a message with {command}.",
+              { command: "$goat:<folder-name>" },
+            )}
             <br />
             {folder ? <code>{folder}</code> : gt("Rescan to show the folder path.")}
           </span>
