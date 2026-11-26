@@ -445,3 +445,25 @@ it("finishes setup without landing when the imported project never reaches the c
   await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
   expect(state.onDone).toHaveBeenCalledWith(undefined);
 });
+
+it("counts completed projects while the remaining history import is pending", async () => {
+  using _now = setup();
+  const pending = deferred<{ importedCount: number; skippedCount: number }>();
+  state.importThreads
+    .mockResolvedValueOnce(
+      AsyncResult.success({
+        importedCount: 0,
+        skippedCount: 1,
+        skippedThreads: [{ thread: "demo", reason: "Transcript changed during import." }],
+      }),
+    )
+    .mockImplementationOnce(async () => AsyncResult.success(await pending.promise));
+  await using _screen = await mountImport();
+  await click("Import 2 projects");
+  await vi.waitFor(() => expect(pageText()).toContain("1 of 2 projects processed"));
+  await act(async () => {
+    pending.resolve({ importedCount: 1, skippedCount: 0 });
+    await pending.promise;
+  });
+  await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
+});

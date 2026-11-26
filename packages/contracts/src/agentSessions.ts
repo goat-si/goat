@@ -89,6 +89,14 @@ export class AgentSessionImportProjectChangedError extends Schema.TaggedError<Ag
 export const AgentSessionImportResult = Schema.Struct({
   importedCount: NonNegativeInt,
   skippedCount: NonNegativeInt,
+  skippedThreads: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        thread: Schema.String,
+        reason: Schema.String,
+      }),
+    ),
+  ),
 });
 export type AgentSessionImportResult = typeof AgentSessionImportResult.Type;
 
