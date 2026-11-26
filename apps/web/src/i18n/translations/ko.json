@@ -2708,5 +2708,8 @@
   "99a79e1c6fc7a750": "GOAT가 다시 시작되어 설정을 적용한 뒤 이 화면으로 돌아옵니다.",
   "96915d6023e224e4": "네트워크 접근 켜기",
   "7fdcffdfb0d64610": "Tailscale HTTPS 켜기",
-  "3fb183637c2c6c45": "Tailscale HTTPS가 켜져 있지만 Tailscale이 응답하지 않습니다. 이 컴퓨터에서 Tailscale이 실행 중이고 로그인되어 있는지 확인하세요."
+  "3fb183637c2c6c45": "Tailscale HTTPS가 켜져 있지만 Tailscale이 응답하지 않습니다. 이 컴퓨터에서 Tailscale이 실행 중이고 로그인되어 있는지 확인하세요.",
+  "90aadd4da681521f": "Tailscale을 감지하려면 네트워크 액세스를 켜세요.",
+  "2ed13ae3a2e16654": "MagicDNS를 통한 HTTPS 액세스를 설정하려면 Tailscale을 시작하세요.",
+  "f060774ce36f44fb": "Tailscale Serve를 사용하여 MagicDNS HTTPS URL로 이 백엔드를 공개합니다."
 }

@@ -234,8 +234,8 @@ export function HubDeviceCard({
           : serveOn
             ? tailscaleUnreachableMessage(tailscaleHttpsEndpoint, gt)
             : tailscaleHttpsEndpoint
-              ? "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-              : missingTailscaleEndpointDescription(exposureState)
+              ? gt("Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL.")
+              : missingTailscaleEndpointDescription(exposureState, gt)
       }
       control={
         tailscaleHttpsEndpoint || serveOn ? (

@@ -2708,5 +2708,8 @@
   "99a79e1c6fc7a750": "GOAT が再起動して設定を適用し、この画面に戻ります。",
   "96915d6023e224e4": "ネットワークアクセスを有効にする",
   "7fdcffdfb0d64610": "Tailscale HTTPS を有効にする",
-  "3fb183637c2c6c45": "Tailscale HTTPS は有効ですが、Tailscale が応答していません。このコンピューターで Tailscale が起動し、ログインしているか確認してください。"
+  "3fb183637c2c6c45": "Tailscale HTTPS は有効ですが、Tailscale が応答していません。このコンピューターで Tailscale が起動し、ログインしているか確認してください。",
+  "90aadd4da681521f": "Tailscale を検出するにはネットワークアクセスをオンにしてください。",
+  "2ed13ae3a2e16654": "MagicDNS を通じた HTTPS アクセスを設定するには Tailscale を起動してください。",
+  "f060774ce36f44fb": "Tailscale Serve を使用して、このバックエンドを MagicDNS の HTTPS URL で公開します。"
 }

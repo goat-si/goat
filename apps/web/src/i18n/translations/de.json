@@ -2708,5 +2708,8 @@
   "99a79e1c6fc7a750": "GOAT startet neu, um die Änderung anzuwenden, und bringt dich hierher zurück.",
   "96915d6023e224e4": "Netzwerkzugriff aktivieren",
   "7fdcffdfb0d64610": "Tailscale HTTPS aktivieren",
-  "3fb183637c2c6c45": "Tailscale HTTPS ist aktiv, aber Tailscale antwortet nicht. Prüfe, ob Tailscale auf diesem Computer läuft und angemeldet ist."
+  "3fb183637c2c6c45": "Tailscale HTTPS ist aktiv, aber Tailscale antwortet nicht. Prüfe, ob Tailscale auf diesem Computer läuft und angemeldet ist.",
+  "90aadd4da681521f": "Aktiviere den Netzwerkzugriff, um Tailscale zu erkennen.",
+  "2ed13ae3a2e16654": "Starte Tailscale, um den HTTPS-Zugriff über MagicDNS einzurichten.",
+  "f060774ce36f44fb": "Verwende Tailscale Serve, um dieses Backend über eine MagicDNS-HTTPS-URL bereitzustellen."
 }

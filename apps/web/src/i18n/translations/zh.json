@@ -2708,5 +2708,8 @@
   "99a79e1c6fc7a750": "GOAT 将重启以应用设置，然后返回此处。",
   "96915d6023e224e4": "开启网络访问",
   "7fdcffdfb0d64610": "开启 Tailscale HTTPS",
-  "3fb183637c2c6c45": "Tailscale HTTPS 已开启，但 Tailscale 没有响应。请检查这台电脑上的 Tailscale 是否正在运行且已登录。"
+  "3fb183637c2c6c45": "Tailscale HTTPS 已开启，但 Tailscale 没有响应。请检查这台电脑上的 Tailscale 是否正在运行且已登录。",
+  "90aadd4da681521f": "开启网络访问以检测 Tailscale。",
+  "2ed13ae3a2e16654": "启动 Tailscale，通过 MagicDNS 设置 HTTPS 访问。",
+  "f060774ce36f44fb": "使用 Tailscale Serve 通过 MagicDNS HTTPS 地址公开此后端。"
 }

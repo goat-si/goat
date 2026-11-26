@@ -275,10 +275,11 @@ export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
  * means unchecked. */
 export function missingTailscaleEndpointDescription(
   state: Pick<DesktopServerExposureState, "mode" | "tailscaleServeEnabled"> | null,
+  gt: (source: string) => string,
 ): string {
   return state && state.mode !== "network-accessible" && !state.tailscaleServeEnabled
-    ? "Turn on Network access to detect Tailscale."
-    : "Start Tailscale to set up HTTPS access through MagicDNS.";
+    ? gt("Turn on Network access to detect Tailscale.")
+    : gt("Start Tailscale to set up HTTPS access through MagicDNS.");
 }
 
 export function resolveTailscaleServeBaseUrl(
