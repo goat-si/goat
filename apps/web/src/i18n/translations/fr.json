@@ -1997,5 +1997,9 @@
   "ae87266a748db24b": "Parc : aucune tâche en cours",
   "e8d0653cf49cd57e": "et {count} de plus",
   "7d5ab92b06b67598": "Décisions, {count} en attente",
-  "f9153168b50dcc15": "Palette de commandes"
+  "f9153168b50dcc15": "Palette de commandes",
+  "e12ad6dc4552a625": "Choisissez un environnement pour connecter Slack.",
+  "f8d542ea3d98cf94": "Connectez-vous à cet environnement pour gérer Slack.",
+  "f927f46b20925f6d": "Slack n’est pas encore disponible sur le serveur de cet environnement.",
+  "f7c920c5577e067e": "Cette connexion ne peut pas modifier les paramètres Slack."
 }

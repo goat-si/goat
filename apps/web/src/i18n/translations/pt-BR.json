@@ -1997,5 +1997,9 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Frota: nenhuma tarefa em andamento",
   "e8d0653cf49cd57e": "e mais {count}",
-  "7d5ab92b06b67598": "Decisões, {count} pendentes"
+  "7d5ab92b06b67598": "Decisões, {count} pendentes",
+  "e12ad6dc4552a625": "Escolha um ambiente para conectar o Slack.",
+  "f8d542ea3d98cf94": "Conecte-se a este ambiente para gerenciar o Slack.",
+  "f927f46b20925f6d": "O Slack ainda não está disponível no servidor deste ambiente.",
+  "f7c920c5577e067e": "Esta conexão não pode alterar as configurações do Slack."
 }

@@ -81,6 +81,8 @@ export function SlackChannelSettings() {
     canConfigure,
   });
 
+  const unavailableMessage = slackSettingsUnavailableMessage(availability);
+
   return (
     <SettingsSection id="slack-channel" title="Slack">
       {availability === "ready" && environmentId !== null ? (
@@ -94,7 +96,9 @@ export function SlackChannelSettings() {
           }
         />
       ) : (
-        <SettingsUnavailableGroup message={slackSettingsUnavailableMessage(availability)}>
+        <SettingsUnavailableGroup
+          message={unavailableMessage === undefined ? undefined : gt(unavailableMessage)}
+        >
           <SettingsRow
             {...localizedSetting("slack-connection")}
             description={gt(

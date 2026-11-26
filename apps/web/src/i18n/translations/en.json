@@ -1997,5 +1997,9 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Fleet: nothing running",
   "e8d0653cf49cd57e": "and {count} more",
-  "7d5ab92b06b67598": "Decisions, {count} waiting"
+  "7d5ab92b06b67598": "Decisions, {count} waiting",
+  "e12ad6dc4552a625": "Choose an environment to connect Slack.",
+  "f8d542ea3d98cf94": "Connect to this environment to manage Slack.",
+  "f927f46b20925f6d": "Slack isn't available on this environment's server yet.",
+  "f7c920c5577e067e": "This connection can't change Slack settings."
 }

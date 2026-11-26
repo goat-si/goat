@@ -1997,5 +1997,9 @@
   "ae87266a748db24b": "Flotte: keine laufenden Aufgaben",
   "e8d0653cf49cd57e": "und {count} weitere",
   "7d5ab92b06b67598": "Entscheidungen, {count} ausstehend",
-  "f9153168b50dcc15": "Befehlspalette"
+  "f9153168b50dcc15": "Befehlspalette",
+  "e12ad6dc4552a625": "Wähle eine Umgebung, um Slack zu verbinden.",
+  "f8d542ea3d98cf94": "Verbinde dich mit dieser Umgebung, um Slack zu verwalten.",
+  "f927f46b20925f6d": "Slack ist auf dem Server dieser Umgebung noch nicht verfügbar.",
+  "f7c920c5577e067e": "Über diese Verbindung können Slack-Einstellungen nicht geändert werden."
 }
