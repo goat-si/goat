@@ -1,3 +1,4 @@
+import { BrowserAppearanceSetting } from "./BrowserAppearanceSetting";
 import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useGT, msg, useMessages } from "gt-react";
 import {
@@ -44,7 +45,6 @@ import {
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_BROWSER_SEARCH_ENGINE,
   DEFAULT_BROWSER_VIEWPORT,
-  DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
   FILL_PREVIEW_VIEWPORT,
   PREVIEW_VIEWPORT_MAX_AREA,
@@ -55,7 +55,6 @@ import {
   isBuiltInBrowserProfileId,
   resolveBrowserProfiles,
   type BrowserImportSource,
-  type PreviewAppearancePreference,
 } from "@goat/contracts";
 import { isValidSearchUrlTemplate } from "@goat/shared/preview";
 import { PREVIEW_VIEWPORT_PRESETS } from "@goat/shared/previewViewport";
@@ -184,12 +183,6 @@ function browserProfileRemovalAvailable(
 const RESPONSIVE_SEED_SIZE = { width: 1280, height: 800 } as const;
 
 const NO_GROUPING: Intl.NumberFormatOptions = { useGrouping: false };
-
-const APPEARANCE_LABELS: Readonly<Record<PreviewAppearancePreference, string>> = {
-  system: msg("System"),
-  light: msg("Light"),
-  dark: msg("Dark"),
-};
 
 const zoomLabel = (zoomFactor: number) => `${Math.round(zoomFactor * 100)}%`;
 
@@ -390,56 +383,6 @@ function BrowserZoomSetting({ disabled }: { readonly disabled: boolean }) {
             {PREVIEW_ZOOM_LEVELS.map((level) => (
               <SelectItem hideIndicator key={level} value={String(level)}>
                 {zoomLabel(level)}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      }
-    />
-  );
-}
-
-function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) {
-  const gt = useGT();
-  const m = useMessages();
-  const localizedSetting = useTranslatedSearchableSetting();
-  const appearance = useClientSettings((settings) => settings.browserDefaultAppearance);
-  const updateSettings = useUpdateScopedSettings();
-
-  return (
-    <SettingsRow
-      {...localizedSetting("browser-default-appearance")}
-      devicePreference
-      description={gt("The color scheme pages are told to prefer. System follows your OS setting.")}
-      resetAction={
-        !disabled && appearance !== DEFAULT_PREVIEW_APPEARANCE ? (
-          <SettingResetButton
-            label={gt("default browser appearance")}
-            onClick={() => updateSettings({ browserDefaultAppearance: DEFAULT_PREVIEW_APPEARANCE })}
-          />
-        ) : null
-      }
-      control={
-        <Select
-          disabled={disabled}
-          value={appearance}
-          onValueChange={(value) => {
-            if (value === "system" || value === "light" || value === "dark") {
-              updateSettings({ browserDefaultAppearance: value });
-            }
-          }}
-        >
-          <SelectTrigger
-            size="sm"
-            className="w-full sm:w-40"
-            aria-label={gt("Default browser appearance")}
-          >
-            <SelectValue>{m(APPEARANCE_LABELS[appearance])}</SelectValue>
-          </SelectTrigger>
-          <SelectPopup align="end" alignItemWithTrigger={false}>
-            {Object.entries(APPEARANCE_LABELS).map(([value, label]) => (
-              <SelectItem hideIndicator key={value} value={value}>
-                {m(label)}
               </SelectItem>
             ))}
           </SelectPopup>
