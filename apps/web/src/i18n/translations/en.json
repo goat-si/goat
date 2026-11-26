@@ -3472,5 +3472,15 @@
   "eee5af21197fc4a3": "This thread already contains activity in GOAT.",
   "9d1944a284912b34": "Could not save the imported conversation.",
   "23fbdaecd72f9468": "Importing… {processed} of {total} projects processed",
-  "07246e498374788d": "And {count} more"
+  "07246e498374788d": "And {count} more",
+  "1f6b058fb5000ba2": "Stopped future chunks. An import already sent may still be applied.",
+  "de73827690f29421": "Some items may have been applied. Check the import result.",
+  "fed20b9eea7642bd": "Memory import is unavailable",
+  "291f9186e43260c6": "Reconnect and check the import result.",
+  "1c8ebc37bff986c9": "Couldn't save import progress. Nothing was imported from this batch.",
+  "d95d6adf5aa437ff": "Check the saved import result before importing more items.",
+  "bb122f1d94960037": "The result is unknown. Reconnect and check the import result.",
+  "4e506a7c2f37a858": "The selection changed. Preview again before importing.",
+  "68a5236a421d0f4c": "Review the result and preview again before importing more items.",
+  "95cec271a3e79153": "The saved result is unavailable. Previous items may have been applied. Preview again."
 }

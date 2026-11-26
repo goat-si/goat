@@ -3472,5 +3472,15 @@
   "eee5af21197fc4a3": "Este hilo ya contiene actividad en GOAT.",
   "9d1944a284912b34": "No se ha podido guardar la conversación importada.",
   "23fbdaecd72f9468": "Importando… {processed} de {total} proyectos procesados",
-  "07246e498374788d": "Y {count} más"
+  "07246e498374788d": "Y {count} más",
+  "1f6b058fb5000ba2": "Se detuvieron los bloques restantes. Una importación ya enviada aún puede aplicarse.",
+  "de73827690f29421": "Es posible que se hayan aplicado algunos elementos. Comprueba el resultado de la importación.",
+  "fed20b9eea7642bd": "La importación de memoria no está disponible",
+  "291f9186e43260c6": "Vuelve a conectarte y comprueba el resultado de la importación.",
+  "1c8ebc37bff986c9": "No se pudo guardar el progreso de la importación. No se importó nada de este lote.",
+  "d95d6adf5aa437ff": "Comprueba el resultado guardado antes de importar más elementos.",
+  "bb122f1d94960037": "Se desconoce el resultado. Vuelve a conectarte y comprueba el resultado de la importación.",
+  "4e506a7c2f37a858": "La selección cambió. Vuelve a obtener la vista previa antes de importar.",
+  "68a5236a421d0f4c": "Revisa el resultado y vuelve a obtener la vista previa antes de importar más elementos.",
+  "95cec271a3e79153": "El resultado guardado no está disponible. Es posible que se hayan aplicado elementos anteriores. Vuelve a obtener la vista previa."
 }

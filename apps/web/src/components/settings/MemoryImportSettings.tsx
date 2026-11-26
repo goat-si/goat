@@ -44,6 +44,37 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { Button } from "../ui/button";
 import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
 
+function translateImportProgress(message: string, gt: ReturnType<typeof useGT>) {
+  switch (message) {
+    case "Stopped future chunks. An import already sent may still be applied.":
+      return gt("Stopped future chunks. An import already sent may still be applied.");
+    case "Some items may have been applied. Check the import result.":
+      return gt("Some items may have been applied. Check the import result.");
+    case "Memory import is unavailable":
+      return gt("Memory import is unavailable");
+    case "Reconnect and check the import result.":
+      return gt("Reconnect and check the import result.");
+    case "Couldn't save import progress. Nothing was imported from this batch.":
+      return gt("Couldn't save import progress. Nothing was imported from this batch.");
+    case "Check the saved import result before importing more items.":
+      return gt("Check the saved import result before importing more items.");
+    case "The result is unknown. Reconnect and check the import result.":
+      return gt("The result is unknown. Reconnect and check the import result.");
+    case "The selection changed. Preview again before importing.":
+      return gt("The selection changed. Preview again before importing.");
+    case "Preview again before importing. Previous items may have been applied.":
+      return gt("Preview again before importing. Previous items may have been applied.");
+    case "Review the result and preview again before importing more items.":
+      return gt("Review the result and preview again before importing more items.");
+    case "The saved result is unavailable. Previous items may have been applied. Preview again.":
+      return gt(
+        "The saved result is unavailable. Previous items may have been applied. Preview again.",
+      );
+    default:
+      return message;
+  }
+}
+
 /** A mount may check a saved receipt; only the explicit Apply button admits writes. */
 export function MemoryImportSettings({
   environmentId,
@@ -570,7 +601,7 @@ export function MemoryImportSettings({
           description={
             <span role="status">
               {busy ? "Import request in progress. " : ""}
-              {progress.message && gt(progress.message)}
+              {progress.message && translateImportProgress(progress.message, gt)}
               {progress.stopped ? " Future chunks stopped. Already sent work can finish." : ""}{" "}
               {progress.phase === "applying" || progress.receipt
                 ? `${progress.settledChunks} chunks completed.`

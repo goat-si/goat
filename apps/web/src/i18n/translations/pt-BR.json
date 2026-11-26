@@ -3472,5 +3472,15 @@
   "eee5af21197fc4a3": "Esta conversa já contém atividades no GOAT.",
   "9d1944a284912b34": "Não foi possível salvar a conversa importada.",
   "23fbdaecd72f9468": "Importando… {processed} de {total} projetos processados",
-  "07246e498374788d": "E mais {count}"
+  "07246e498374788d": "E mais {count}",
+  "1f6b058fb5000ba2": "Os próximos blocos foram interrompidos. Uma importação já enviada ainda pode ser aplicada.",
+  "de73827690f29421": "Alguns itens podem ter sido aplicados. Verifique o resultado da importação.",
+  "fed20b9eea7642bd": "A importação de memória está indisponível",
+  "291f9186e43260c6": "Reconecte-se e verifique o resultado da importação.",
+  "1c8ebc37bff986c9": "Não foi possível salvar o progresso da importação. Nada foi importado deste lote.",
+  "d95d6adf5aa437ff": "Verifique o resultado salvo antes de importar mais itens.",
+  "bb122f1d94960037": "O resultado é desconhecido. Reconecte-se e verifique o resultado da importação.",
+  "4e506a7c2f37a858": "A seleção mudou. Visualize novamente antes de importar.",
+  "68a5236a421d0f4c": "Verifique o resultado e visualize novamente antes de importar mais itens.",
+  "95cec271a3e79153": "O resultado salvo está indisponível. Itens anteriores podem ter sido aplicados. Visualize novamente."
 }
