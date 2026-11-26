@@ -533,6 +533,7 @@ const make = Effect.gen(function* () {
         return yield* new MemoryWorkerError({ code: "unsupported_operation" });
       const meta = work.metadata;
       const checkPolicy = yield* query(ConversationMemory.admitConversationSummary(sql));
+      const summarize = ConversationMemory.admittedSummary(generation, query(checkPolicy));
       let source = yield* readSource(work);
       const existingReceipt = work.space.startsWith("_local:")
         ? undefined
@@ -646,7 +647,7 @@ const make = Effect.gen(function* () {
             renewClaim: renewClaim.pipe(Effect.andThen(query(checkPolicy))),
             generate: (input) =>
               hold
-                .guard(holdKey, redacted(generation.generateMemorySummary(input)))
+                .guard(holdKey, redacted(summarize(input)))
                 .pipe(
                   Effect.mapError((cause) =>
                     cause._tag === "MemoryGenerationHeld"

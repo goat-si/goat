@@ -1,7 +1,9 @@
+import { TextGenerationError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
-import { MemoryWorkerError } from "./MemoryWorkerError.ts";
+import * as Generation from "../textGeneration/TextGeneration.ts";
+import { MemoryWorkerError, safeCode } from "./MemoryWorkerError.ts";
 
 export const setConversationMemoryEnabled = Effect.fn("ConversationMemoryPolicy.set")(function* (
   sql: SqlClient.SqlClient,
@@ -22,6 +24,25 @@ const readConversationMemoryPolicy = (sql: SqlClient.SqlClient) =>
 
 export const readConversationMemoryEnabled = (sql: SqlClient.SqlClient) =>
   readConversationMemoryPolicy(sql).pipe(Effect.map((row) => row?.enabled !== 0));
+
+/** Generates a summary that rechecks the admitted policy after any wait for a provider update. */
+export const admittedSummary =
+  <E>(generation: Generation.TextGeneration["Service"], check: Effect.Effect<void, E>) =>
+  (input: Generation.GenerateMemorySummaryInput) =>
+    generation.generateMemorySummary(input).pipe(
+      Effect.provideService(
+        Generation.MemorySummaryDispatchCheck,
+        check.pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation: "generateMemorySummary",
+                detail: safeCode(cause),
+              }),
+          ),
+        ),
+      ),
+    );
 
 // An off/on cycle must revoke a model call already in flight, even without intervening messages.
 export const admitConversationSummary = Effect.fn("ConversationMemoryPolicy.admitSummary")(

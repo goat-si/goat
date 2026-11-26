@@ -2,7 +2,10 @@ import { assert, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
+import { TextGenerationError } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
@@ -78,5 +81,70 @@ it.effect("takes the installation gate only for a registered provider instance",
     assert.deepEqual(gated, [KNOWN]);
     assert.deepEqual(yield* generate(unknown), { branch: "feature/gate" });
     assert.deepEqual(gated, [KNOWN, KNOWN]);
+  }),
+);
+
+it.effect("rechecks a memory summary after waiting for a provider update", () =>
+  Effect.gen(function* () {
+    const released = yield* Deferred.make<void>();
+    let paused = false;
+    let sent = 0;
+    const instance = {
+      instanceId: KNOWN,
+      textGeneration: {
+        ...noMemoryGeneration,
+        generateMemorySummary: () =>
+          Effect.sync(() => {
+            sent += 1;
+          }).pipe(Effect.andThen(Effect.die("unused result"))),
+      },
+    } as unknown as ProviderInstance;
+    const textGeneration = yield* TextGeneration.make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+            getInstance: () => Effect.succeed(instance),
+            listInstances: Effect.succeed([instance]),
+          }),
+          ServerSettings.layerTest(),
+          Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+            resolveLink: () => Effect.die("unused"),
+          }),
+          Layer.succeed(
+            ProviderInstallationGate.ProviderInstallationGate,
+            ProviderInstallationGate.ProviderInstallationGate.of({
+              execute: (_instanceId, effect) =>
+                Deferred.await(released).pipe(Effect.andThen(effect)),
+              update: () => Effect.die("unused"),
+            }),
+          ),
+        ),
+      ),
+    );
+    const summary = yield* textGeneration
+      .generateMemorySummary({
+        modelSelection: { instanceId: KNOWN, model: "gpt-5" },
+      } as unknown as TextGeneration.GenerateMemorySummaryInput)
+      .pipe(
+        Effect.provideService(
+          TextGeneration.MemorySummaryDispatchCheck,
+          Effect.suspend(() =>
+            paused
+              ? Effect.fail(
+                  new TextGenerationError({
+                    operation: "generateMemorySummary",
+                    detail: "source_invalidated",
+                  }),
+                )
+              : Effect.void,
+          ),
+        ),
+        Effect.flip,
+        Effect.forkChild,
+      );
+    paused = true;
+    yield* Deferred.succeed(released, undefined);
+    assert.equal((yield* Fiber.join(summary)).detail, "source_invalidated");
+    assert.equal(sent, 0);
   }),
 );

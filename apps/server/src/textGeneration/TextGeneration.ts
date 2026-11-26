@@ -44,6 +44,11 @@ export class TextGeneration extends Context.Service<TextGeneration, TextGenerati
   "goat/textGeneration/TextGeneration",
 ) {}
 
+/** A memory summary's last policy check. It runs after any wait for a provider update. */
+export const MemorySummaryDispatchCheck = Context.Reference<
+  Effect.Effect<void, TextGenerationError>
+>("goat/textGeneration/MemorySummaryDispatchCheck", { defaultValue: () => Effect.void });
+
 type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
@@ -229,7 +234,12 @@ export const make = Effect.gen(function* () {
           );
   return TextGeneration.of({
     resolveMemoryConflict: gated(ungated.resolveMemoryConflict),
-    generateMemorySummary: gated(ungated.generateMemorySummary),
+    generateMemorySummary: gated((input) =>
+      MemorySummaryDispatchCheck.pipe(
+        Effect.flatten,
+        Effect.andThen(ungated.generateMemorySummary(input)),
+      ),
+    ),
     generateCommitMessage: (input) =>
       capable("generateCommitMessage", input).pipe(
         Effect.flatMap(gated(ungated.generateCommitMessage)),
