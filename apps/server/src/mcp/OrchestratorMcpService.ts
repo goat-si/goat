@@ -3265,10 +3265,13 @@ const make = Effect.gen(function* () {
         yield* Clock.currentTimeMillis,
         input.afterPosition === undefined && input.itemId === undefined,
       );
-      const recentRuns = target.runs
-        .toSorted((left, right) => right.ordinal - left.ordinal)
-        .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
-        .map(threadRun);
+      const recentRuns = (
+        summary && input.runLimit === undefined && thread.activeRunId === null
+          ? target.runs.filter((run) => run.id === thread.latestRunId)
+          : target.runs
+              .toSorted((left, right) => right.ordinal - left.ordinal)
+              .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
+      ).map(threadRun);
       const { items, start } = timelineItemsWithinBudget(
         { thread, recentRuns, nextPosition: null, hasMore: false, earlierPosition: null },
         timeline.items.map((row) => ({
