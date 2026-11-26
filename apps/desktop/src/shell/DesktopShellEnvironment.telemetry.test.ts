@@ -1,6 +1,10 @@
 import { envOutput, runShellEnvironment } from "./DesktopShellEnvironment.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { vi } from "vite-plus/test";
+
+// The shell test kit spies on node:os, which needs a spyable module mock in each test file.
+vi.mock("node:os", { spy: true });
 
 describe("DesktopShellEnvironment telemetry variables", () => {
   it.effect("keeps Windows telemetry opt-outs over inherited opt-ins", () =>
