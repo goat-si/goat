@@ -535,8 +535,8 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                       value === "merge" || value === "squash" || value === "rebase"
                         ? mergeMethodLabels[value]
                         : value === "last"
-                          ? "Last selected"
-                          : "Mixed"
+                          ? gt("Last selected")
+                          : gt("Mixed")
                     }
                   </SelectValue>
                 </SelectTrigger>
