@@ -50,7 +50,7 @@ function PreviewFindBar({
   };
 
   return (
-    <div className="absolute top-2 right-2 z-40 w-[min(22rem,calc(100%-1rem))]">
+    <div className="pointer-events-auto absolute top-2 right-2 z-40 w-[min(22rem,calc(100%-1rem))]">
       <InputGroup role="search" aria-label={gt("Find in page")} variant="popover">
         <InputGroupInput
           ref={input}

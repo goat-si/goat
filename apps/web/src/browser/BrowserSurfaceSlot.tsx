@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStableCallback } from "../hooks/useStableCallback";
 
 import {
@@ -23,6 +24,8 @@ export function BrowserSurfaceSlot(props: {
   readonly passive?: boolean;
   /** Whether this slot is the one presenting the tab right now. */
   readonly onPresentedChange?: (presented: boolean) => void;
+  /** Page overlays (find bar, agent cursor) that must paint above the webview. */
+  readonly children?: ReactNode;
 }) {
   const {
     tabId,
@@ -33,14 +36,26 @@ export function BrowserSurfaceSlot(props: {
     className,
     fitSourceContent = false,
     passive = false,
+    children,
   } = props;
   const presentationRef = useRef({ visible, cornerRadius, zIndex });
   const updateRef = useRef<(() => void) | null>(null);
   const presentedChange = useStableCallback((presented: boolean) =>
     props.onPresentedChange?.(presented),
   );
+  const [lifted, setLifted] = useState<{ zIndex: number; container: Element } | null>(null);
+  const liftedRect = useBrowserSurfaceStore((state) =>
+    lifted === null ? null : (state.byTabId[tabId]?.rect ?? null),
+  );
 
   const attachSurface = (element: HTMLDivElement) => {
+    // The webview lives in a fixed layer outside the slot, so a sheet's stacking context would cover
+    // it. Lift it above the sheet, and its overlays with it, since they cannot leave the sheet's context.
+    const sheet = element.closest('[data-slot="sheet-viewport"]');
+    const minZIndex = sheet ? Number(getComputedStyle(sheet).zIndex) + 1 || 0 : 0;
+    if (sheet?.parentElement && minZIndex > 0) {
+      setLifted({ zIndex: minZIndex, container: sheet.parentElement });
+    }
     const measure = () => {
       const rect = element.getBoundingClientRect();
       return {
@@ -73,7 +88,7 @@ export function BrowserSurfaceSlot(props: {
           lease = acquireBrowserSurface(tabId, fitSourceContent);
         }
         const { cornerRadius: radius, zIndex: layer } = presentationRef.current;
-        if (!shown || !lease.present(rect, true, radius, layer)) {
+        if (!shown || !lease.present(rect, true, radius, Math.max(layer, minZIndex))) {
           lease.release();
           lease = null;
           setPresented(false);
@@ -104,16 +119,17 @@ export function BrowserSurfaceSlot(props: {
     const update = () => {
       const { rect, sized } = measure();
       const presentation = presentationRef.current;
+      const effectiveZIndex = Math.max(presentation.zIndex, minZIndex);
       const shown = lease.present(
         rect,
         presentation.visible && sized,
         presentation.cornerRadius,
-        presentation.zIndex,
+        effectiveZIndex,
       );
       if (presentation.visible && !shown) {
         lease.release();
         lease = acquireBrowserSurface(tabId, fitSourceContent);
-        lease.present(rect, sized, presentation.cornerRadius, presentation.zIndex);
+        lease.present(rect, sized, presentation.cornerRadius, effectiveZIndex);
       }
     };
     updateRef.current = update;
@@ -147,5 +163,32 @@ export function BrowserSurfaceSlot(props: {
     zIndex,
   ]);
 
-  return <div ref={attachSurface} className={className} data-browser-surface-slot={tabId} />;
+  return (
+    <>
+      <div ref={attachSurface} className={className} data-browser-surface-slot={tabId} />
+      {lifted === null
+        ? children
+        : liftedRect && visible
+          ? createPortal(
+              // In the sheet's portal and marked as a nested portal, so the dialog keeps treating
+              // it as its own content for focus, outside presses and aria-hidden.
+              <div
+                className="pointer-events-none fixed overflow-hidden"
+                style={{
+                  left: liftedRect.x,
+                  top: liftedRect.y,
+                  width: liftedRect.width,
+                  height: liftedRect.height,
+                  zIndex: Math.max(zIndex, lifted.zIndex) + 1,
+                }}
+                data-browser-surface-overlay={tabId}
+                data-base-ui-portal=""
+              >
+                {children}
+              </div>,
+              lifted.container,
+            )
+          : null}
+    </>
+  );
 }
