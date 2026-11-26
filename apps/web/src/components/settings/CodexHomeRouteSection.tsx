@@ -9,7 +9,6 @@ import {
   type ProviderInstanceId,
 } from "@goat/contracts";
 import {
-  CODEX_ROUTE_BUSY_MESSAGE,
   codexRouteErrorMessage,
   openCodexHomeHandoff,
   openCodexRouteSummary,
@@ -84,17 +83,20 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
   const status = !codex
     ? usesHome
       ? observed?.effectiveBaseUrl
-        ? `Uses OpenCodex Home · ${observed.effectiveBaseUrl}`
-        : "OpenCodex Home route not checked. Check status."
+        ? gt("Uses OpenCodex Home · {endpoint}", { endpoint: observed.effectiveBaseUrl })
+        : gt("OpenCodex Home route not checked. Check status.")
       : ownSettings
     : usesHome && observed?.state === "not_running"
-      ? `OpenCodex isn't running on ${props.environmentLabel}.`
-      : openCodexRouteSummary(observed ?? { modelRoute: props.settings.modelRoute });
+      ? gt("OpenCodex isn't running on {device}.", { device: props.environmentLabel })
+      : openCodexRouteSummary(observed ?? { modelRoute: props.settings.modelRoute }, gt);
   const needsSetup = usesHome && providerHomeNeedsSetup(driver, observed);
-  const handoff = openCodexHomeHandoff({
-    environmentLabel: props.environmentLabel,
-    action: confirmRoute === "default" ? "disconnect" : "connect",
-  });
+  const handoff = openCodexHomeHandoff(
+    {
+      environmentLabel: props.environmentLabel,
+      action: confirmRoute === "default" ? "disconnect" : "connect",
+    },
+    gt,
+  );
   async function run(action: () => Promise<void>) {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -133,7 +135,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
   return (
     <SettingsSection title={gt("Model route")}>
       <SettingsRow
-        title={status ?? "Check model route status"}
+        title={status ?? gt("Check model route status")}
         description={gt("{provider} runs on {environment}.", {
           provider: providerLabel,
           environment: props.environmentLabel,
@@ -205,10 +207,10 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
       />
       {usesHome || confirmRoute === "opencodex" ? (
         <SettingsRow
-          title={`OpenCodex base URL on ${props.environmentLabel}`}
+          title={gt("OpenCodex base URL on {device}", { device: props.environmentLabel })}
           control={
             <Input
-              aria-label={`OpenCodex base URL on ${props.environmentLabel}`}
+              aria-label={gt("OpenCodex base URL on {device}", { device: props.environmentLabel })}
               value={baseUrl}
               placeholder={DEFAULT_OPENCODEX_BASE_URL}
               disabled={disabled}
@@ -233,10 +235,13 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
         <SettingsRow
           title={gt("Set up this machine from Home")}
           description={
-            openCodexHomeHandoff({
-              environmentLabel: props.environmentLabel,
-              action: "connect",
-            }).instruction
+            openCodexHomeHandoff(
+              {
+                environmentLabel: props.environmentLabel,
+                action: "connect",
+              },
+              gt,
+            ).instruction
           }
           control={
             props.onOpenHubSetup ? (
@@ -272,7 +277,13 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
           }
         />
       ) : null}
-      {props.active ? <SettingsRow title={CODEX_ROUTE_BUSY_MESSAGE} /> : null}
+      {props.active ? (
+        <SettingsRow
+          title={gt(
+            "Wait for this instance's active turns to finish before changing its model route.",
+          )}
+        />
+      ) : null}
       {confirmRoute !== null && !props.readOnly ? (
         <AlertDialog
           open
@@ -290,7 +301,15 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
               <AlertDialogDescription>
                 {confirmRoute === "default"
                   ? handoff.instruction
-                  : `Codex on ${props.environmentLabel} will send model requests through OpenCodex Home and use its accounts${authMode === "none" ? ", without a sign-in on this machine" : ""}. If Home is unavailable, this instance stops working instead of switching accounts.`}
+                  : authMode === "none"
+                    ? gt(
+                        "Codex on {device} will send model requests through OpenCodex Home and use its accounts, without a sign-in on this machine. If Home is unavailable, this instance stops working instead of switching accounts.",
+                        { device: props.environmentLabel },
+                      )
+                    : gt(
+                        "Codex on {device} will send model requests through OpenCodex Home and use its accounts. If Home is unavailable, this instance stops working instead of switching accounts.",
+                        { device: props.environmentLabel },
+                      )}
               </AlertDialogDescription>
               {error ? (
                 <p role="alert" className="text-sm text-destructive">

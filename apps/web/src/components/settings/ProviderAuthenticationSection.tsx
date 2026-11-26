@@ -25,7 +25,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsRow } from "./settingsLayout";
-import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { ProviderAuthEmail } from "./ProviderAuthEmail";
 
 const ProviderAuthTerminal = lazy(() => import("./ProviderAuthTerminal"));
 
@@ -176,15 +176,8 @@ export function ProviderAuthenticationSection({
       description={
         signedIn && !active && provider.auth.email?.trim() ? (
           <span>
-            Signed in as{" "}
-            <RedactedSensitiveText
-              key={provider.auth.email}
-              value={provider.auth.email}
-              ariaLabel="Toggle account email visibility"
-              revealTooltip="Click to reveal email"
-              hideTooltip="Click to hide email"
-              className="max-w-full truncate"
-            />
+            {gt("Signed in as")}{" "}
+            <ProviderAuthEmail email={provider.auth.email} className="max-w-full truncate" />
           </span>
         ) : (
           <span role="status">{accountDescription}</span>

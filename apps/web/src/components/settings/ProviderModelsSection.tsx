@@ -398,9 +398,9 @@ export function ProviderModelsSection({
           <span className="text-xs text-muted-foreground">
             {gt("{count, plural, one {# model} other {# models}}", { count: models.length })}
             {favoriteCount > 0
-              ? ` · ${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}`
+              ? ` · ${gt("{count, plural, one {# favorite} other {# favorites}}", { count: favoriteCount })}`
               : ""}
-            {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
+            {hiddenCount > 0 ? ` · ${gt("{count} hidden", { count: hiddenCount })}` : ""}
           </span>
         </div>
         {driverKind !== "antigravity" && !isAdding ? (
@@ -547,10 +547,10 @@ const ProviderModelRow = memo(function ProviderModelRow({
   const capLabels = describeModelCapabilities(model, flagMissingReasoning).map((label) => m(label));
   const nameClassName = cn("text-xs", isHidden ? "text-muted-foreground" : "text-foreground/90");
   const pickerTooltip = model.isCustom
-    ? "Custom models are always shown in the picker"
+    ? gt("Custom models are always shown in the picker")
     : isHidden
-      ? "Hidden from picker"
-      : "Shown in picker";
+      ? gt("Hidden from picker")
+      : gt("Shown in picker");
 
   return (
     <div
@@ -568,9 +568,11 @@ const ProviderModelRow = memo(function ProviderModelRow({
               variant="ghost-muted"
               disabled={!canWritePreferences}
               onClick={() => onToggleFavorite(model.slug)}
-              aria-label={`${isFavorite ? "Remove" : "Add"} ${model.name} ${
-                isFavorite ? "from" : "to"
-              } favorites`}
+              aria-label={
+                isFavorite
+                  ? gt("Remove {model} from favorites", { model: model.name })
+                  : gt("Add {model} to favorites", { model: model.name })
+              }
             />
           }
         >
@@ -621,7 +623,7 @@ const ProviderModelRow = memo(function ProviderModelRow({
                     variant="ghost-muted"
                     disabled={!canWritePreferences || !canMoveUp}
                     onClick={() => onMove(model.slug, -1)}
-                    aria-label={`Move ${model.name} up`}
+                    aria-label={gt("Move {model} up", { model: model.name })}
                   />
                 }
               >
@@ -637,7 +639,7 @@ const ProviderModelRow = memo(function ProviderModelRow({
                     variant="ghost-muted"
                     disabled={!canWritePreferences || !canMoveDown}
                     onClick={() => onMove(model.slug, 1)}
-                    aria-label={`Move ${model.name} down`}
+                    aria-label={gt("Move {model} down", { model: model.name })}
                   />
                 }
               >
@@ -656,7 +658,7 @@ const ProviderModelRow = memo(function ProviderModelRow({
                     size="icon-micro"
                     variant="ghost-muted"
                     disabled={!canManageCustomModels}
-                    aria-label={`Edit ${model.slug}`}
+                    aria-label={gt("Edit {model}", { model: model.slug })}
                     onClick={() => onToggleEdit(model.slug)}
                   />
                 }
@@ -672,7 +674,7 @@ const ProviderModelRow = memo(function ProviderModelRow({
                     size="icon-micro"
                     variant="ghost-muted"
                     disabled={!canManageCustomModels}
-                    aria-label={`Remove ${model.slug}`}
+                    aria-label={gt("Remove {model}", { model: model.slug })}
                     onClick={() => onRemove(model.slug)}
                   />
                 }
@@ -692,7 +694,7 @@ const ProviderModelRow = memo(function ProviderModelRow({
             checked={!isHidden}
             disabled={!canWritePreferences || model.isCustom}
             onCheckedChange={(checked) => onSetHidden(model.slug, !checked)}
-            aria-label={`Show ${model.name} in the model picker`}
+            aria-label={gt("Show {model} in the model picker", { model: model.name })}
           />
         </TooltipTrigger>
         <TooltipPopup side="top">{pickerTooltip}</TooltipPopup>
