@@ -309,12 +309,16 @@ export function isWslSettingsRowVisible(input: {
  * Once client/server versions match, this passive Version label follows the sidebar update action,
  * including retryable failures. Rechecks retain downloaded-update labels; `state` is null outside desktop.
  */
-export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null): string {
-  if (!state) return "Up to date";
+export function resolveLocalVersionStatusLabel(
+  state: DesktopUpdateState | null,
+  gt: (source: string, variables?: { version: string }) => string = (source, variables) =>
+    variables ? source.replace("{version}", () => variables.version) : source,
+): string {
+  if (!state) return gt("Up to date");
   if (state.status === "downloading") {
     return state.availableVersion
-      ? `Downloading update ${state.availableVersion}`
-      : "Downloading update";
+      ? gt("Downloading update {version}", { version: state.availableVersion })
+      : gt("Downloading update");
   }
   const action = resolveDesktopUpdateButtonAction(state);
   if (
@@ -323,14 +327,14 @@ export function resolveLocalVersionStatusLabel(state: DesktopUpdateState | null)
     (state.status === "checking" && state.downloadedVersion !== null)
   ) {
     const version = getDesktopUpdateDownloadedVersion(state);
-    return version ? `Update ${version} downloaded` : "Update downloaded";
+    return version ? gt("Update {version} downloaded", { version }) : gt("Update downloaded");
   }
   if (action === "download") {
     return state.availableVersion
-      ? `Update ${state.availableVersion} available`
-      : "Update available";
+      ? gt("Update {version} available", { version: state.availableVersion })
+      : gt("Update available");
   }
-  return "Up to date";
+  return gt("Up to date");
 }
 
 export type QrEndpointOption = {
@@ -508,19 +512,6 @@ export function sortDesktopPairingLinks(links: ReadonlyArray<ServerPairingLinkRe
   return [...links].toSorted(
     (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
   );
-}
-
-export function summarizeAuthorizedClients(
-  sessions: ReadonlyArray<ServerClientSessionRecord>,
-  links: ReadonlyArray<ServerPairingLinkRecord>,
-): string {
-  const parts = [
-    `${sessions.length} ${sessions.length === 1 ? "client" : "clients"}`,
-    links.length > 0
-      ? `${links.length} ${links.length === 1 ? "pairing link" : "pairing links"}`
-      : null,
-  ];
-  return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
 export function sortDesktopClientSessions(sessions: ReadonlyArray<ServerClientSessionRecord>) {
