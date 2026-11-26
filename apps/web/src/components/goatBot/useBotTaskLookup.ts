@@ -9,7 +9,13 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { botTaskLookupDecision } from "./botTaskLookupDecision";
 
 type LookupError = "missing" | "failed" | "denied";
-type Answer = { period: number; revision: unknown; value?: BotWorkResult; error?: LookupError };
+type Answer = {
+  period: number;
+  revision: unknown;
+  changeRevision: string | undefined;
+  value?: BotWorkResult;
+  error?: LookupError;
+};
 
 function failureKind(error: unknown): LookupError {
   if (!error || typeof error !== "object") return "failed";
@@ -30,6 +36,7 @@ export function useBotTaskLookup(
     readonly refreshing: boolean;
     readonly holdsTask: boolean;
     readonly revision?: unknown;
+    readonly changeRevision?: string;
   },
   available: boolean,
 ) {
@@ -62,7 +69,11 @@ export function useBotTaskLookup(
     ...list,
     holdsTask,
     held,
-    stale: stale === period.id || (readsActivity && held && answer.revision !== list.revision),
+    stale:
+      stale === period.id ||
+      (readsActivity &&
+        held &&
+        (answer.revision !== list.revision || answer.changeRevision !== list.changeRevision)),
     inFlight,
   });
   const start = useStableCallback((id: number) => {
@@ -71,14 +82,20 @@ export function useBotTaskLookup(
     setRunning(id);
     setStale(null);
     const revision = list.revision;
+    const changeRevision = list.changeRevision;
     void command({ environmentId, input: { taskId, botId } }).then((result) => {
       if (live.current !== id) return;
       runningRef.current = null;
       setRunning(null);
       setAnswer(
         result._tag === "Success"
-          ? { period: id, revision, value: result.value }
-          : { period: id, revision, error: failureKind(squashAtomCommandFailure(result)) },
+          ? { period: id, revision, changeRevision, value: result.value }
+          : {
+              period: id,
+              revision,
+              changeRevision,
+              error: failureKind(squashAtomCommandFailure(result)),
+            },
       );
     });
   });

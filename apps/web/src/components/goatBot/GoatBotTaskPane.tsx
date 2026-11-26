@@ -85,7 +85,6 @@ export function GoatBotTaskPane({
   const listedTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const botId = member?.botId ?? BotId.make("main");
   const changes = useGoatBotTaskChanges(environmentId);
-  const lookupRevision = [workRevision, changes];
   const lookup = useBotTaskLookup(
     environmentId,
     taskId,
@@ -94,7 +93,8 @@ export function GoatBotTaskPane({
       established,
       refreshing: pending,
       holdsTask: listedTask !== undefined,
-      revision: lookupRevision,
+      revision: workRevision,
+      changeRevision: changes,
     },
     member?.state !== "deleted",
   );
