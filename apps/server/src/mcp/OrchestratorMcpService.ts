@@ -2229,7 +2229,8 @@ const make = Effect.gen(function* () {
           const refusal =
             launchError instanceof SshRemoteDispatch.SshRemoteDispatchError &&
             launchError.reason !== "ssh_failed" &&
-            launchError.reason !== "host_unavailable"
+            launchError.reason !== "host_unavailable" &&
+            launchError.launchMayHaveStarted !== true
               ? launchError.reason
               : isOrchestratorMcpFailure(launchError)
                 ? launchError.code
