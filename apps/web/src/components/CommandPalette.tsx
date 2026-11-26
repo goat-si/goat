@@ -924,18 +924,18 @@ function OpenCommandPaletteDialog(props: {
     highlightClearedRef.current = true;
     setHighlightedItemValue(null);
   });
-  function popView(): void {
+  const popView = useStableCallback((): void => {
     browseNavigation.invalidate();
+    cloneLookupGeneration.current += 1;
+    setIsRemoteProjectLookingUp(false);
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
-    if (viewStack.length <= 1) {
-      setAddProjectEnvironmentId(null);
-    } else if (newProjectFlow?.sourcesEnvironmentId) {
+    if (viewStack.length <= 1) setAddProjectEnvironmentId(null);
+    else if (newProjectFlow?.sourcesEnvironmentId)
       setAddProjectEnvironmentId(newProjectFlow.sourcesEnvironmentId);
-    }
     dispatchSearch({ type: "back" });
     setHighlightedItemValue(null);
-  }
+  });
   function handleQueryChange(nextQuery: string, source: EventTarget | null): void {
     browseNavigation.invalidate();
     clearTypedHighlight();
