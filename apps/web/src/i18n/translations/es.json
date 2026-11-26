@@ -1679,5 +1679,10 @@
   "f559f9e7a7d7bcb8": "Buscar temas de Open VSX",
   "fc3150aaf93858c3": "Instalando {name}",
   "7c6f912f2d62c6d7": "Populares",
-  "9268a10862868fe5": "Volver a reproducir la vista previa de la animación del panel"
+  "9268a10862868fe5": "Volver a reproducir la vista previa de la animación del panel",
+  "38695f22426981d6": "Vista previa de {path}",
+  "2c001fff9ae0e246": "Habilidad {skill}",
+  "78da54214f570092": "{label}. Mostrar detalles",
+  "e9df5a486f8ea01b": "Ver instrucciones",
+  "9ff9f24d1568fbaf": "Esta habilidad no tiene descripción."
 }

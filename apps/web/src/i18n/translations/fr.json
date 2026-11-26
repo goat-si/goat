@@ -1679,5 +1679,10 @@
   "f559f9e7a7d7bcb8": "Rechercher des thèmes Open VSX",
   "fc3150aaf93858c3": "Installation de {name}",
   "7c6f912f2d62c6d7": "Populaires",
-  "9268a10862868fe5": "Rejouer l’aperçu de l’animation du panneau"
+  "9268a10862868fe5": "Rejouer l’aperçu de l’animation du panneau",
+  "38695f22426981d6": "Aperçu de {path}",
+  "2c001fff9ae0e246": "Compétence {skill}",
+  "78da54214f570092": "{label}. Afficher les détails",
+  "e9df5a486f8ea01b": "Voir les instructions",
+  "9ff9f24d1568fbaf": "Aucune description n’est disponible pour cette compétence."
 }
