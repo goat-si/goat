@@ -53,6 +53,17 @@ describe("buildCodexAdditionalContext", () => {
     });
   });
 
+  it("clears the tool guidance when neither browser nor device is available", () => {
+    const context = buildCodexAdditionalContext(
+      { model: "test-model" },
+      {
+        browser: false,
+        device: false,
+      },
+    );
+    NodeAssert.deepEqual(context.goat_code_tools, { kind: "application", value: "" });
+  });
+
   it.each([false, true])("gates browser routing on the attachment, browser=%s", (browser) => {
     const text = Object.values(
       buildCodexAdditionalContext({ model: "test-model" }, { browser, device: false }),

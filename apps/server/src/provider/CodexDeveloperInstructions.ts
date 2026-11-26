@@ -32,10 +32,6 @@ const normalizeAvailability = (
 ): GoatToolAvailability =>
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
-/** Code mode defers nested MCP tools (openai/codex#32101), so it needs the two names spelled out. */
-const CODEX_CODE_MODE_TOOLS =
-  "In code mode, find GOAT tools with `tools.mcp__goat__goat_describe` and call them with `tools.mcp__goat__goat_call`.";
-
 /**
  * Describing `preview_*` or `device_*` tools that aren't in the turn's tool list would be worse
  * than saying nothing: the instructions actively steer the model away from Playwright,
@@ -44,11 +40,7 @@ const CODEX_CODE_MODE_TOOLS =
  */
 const toolInstructions = (availability: boolean | GoatToolAvailability): string => {
   const tools = normalizeAvailability(availability);
-  return [
-    CODEX_CODE_MODE_TOOLS,
-    goatBrowserInstructions(tools.browser),
-    tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : "",
-  ]
+  return [goatBrowserInstructions(tools.browser), tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : ""]
     .filter(Boolean)
     .join("\n\n");
 };
@@ -110,6 +102,6 @@ export function buildCodexAdditionalContext(
           ]),
         )
       : {}),
-    ...(tools ? { goat_code_tools: { kind: "application", value: tools } } : {}),
+    goat_code_tools: { kind: "application", value: tools },
   };
 }
