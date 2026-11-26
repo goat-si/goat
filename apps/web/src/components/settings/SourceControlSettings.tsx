@@ -137,26 +137,30 @@ function isVcsNotReady(item: VcsDiscoveryItem | SourceControlProviderDiscoveryIt
   return !isProviderDiscoveryItem(item) && !item.implemented;
 }
 
-function authPresentation(auth: SourceControlProviderAuth): {
+function authPresentation(
+  auth: SourceControlProviderAuth,
+  gt: ReturnType<typeof useGT>,
+): {
   readonly label: string;
   readonly badge: "warning" | null;
 } {
   if (auth.status === "authenticated") {
-    return { label: "Authenticated", badge: null };
+    return { label: gt("Authenticated"), badge: null };
   }
   if (auth.status === "unauthenticated") {
-    return { label: "Not authenticated", badge: "warning" };
+    return { label: gt("Not authenticated"), badge: "warning" };
   }
-  return { label: "Status unknown", badge: null };
+  return { label: gt("Status unknown"), badge: null };
 }
 
 function RedactedAccount(props: { readonly account: string | null }) {
+  const gt = useGT();
   return (
     <RedactedSensitiveText
       value={props.account}
-      ariaLabel="Toggle source control account visibility"
-      revealTooltip="Click to reveal account"
-      hideTooltip="Click to hide account"
+      ariaLabel={gt("Toggle source control account visibility")}
+      revealTooltip={gt("Click to reveal account")}
+      hideTooltip={gt("Click to hide account")}
     />
   );
 }
@@ -204,21 +208,24 @@ function SourceControlItemMark({
   );
 }
 
-function itemSummary({
-  item,
-  auth,
-  authAccount,
-}: {
-  readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
-  readonly auth: SourceControlProviderAuth | null;
-  readonly authAccount: string | null;
-}) {
+function itemSummary(
+  {
+    item,
+    auth,
+    authAccount,
+  }: {
+    readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
+    readonly auth: SourceControlProviderAuth | null;
+    readonly authAccount: string | null;
+  },
+  gt: ReturnType<typeof useGT>,
+) {
   if (isVcsNotReady(item)) {
-    return <span>Support for {item.label} is coming soon.</span>;
+    return <span>{gt("Support for {label} is coming soon.", { label: item.label })}</span>;
   }
 
   if (item.status !== "available") {
-    return <span>Not available on this server: {item.installHint}</span>;
+    return <span>{gt("Not available on this server: {hint}", { hint: item.installHint })}</span>;
   }
 
   if (auth) {
@@ -226,10 +233,10 @@ function itemSummary({
       const authDetail = optionLabel(auth.detail);
       return (
         <>
-          <span>Authenticated</span>
+          <span>{gt("Authenticated")}</span>
           {authAccount ? (
             <>
-              <span aria-hidden>as</span>
+              <span aria-hidden>·</span>
               <RedactedAccount account={authAccount} />
             </>
           ) : null}
@@ -239,31 +246,41 @@ function itemSummary({
     }
 
     if (!item.executable && auth.status === "unauthenticated") {
-      return <span>Available. {item.installHint}</span>;
+      return <span>{gt("Available. {hint}", { hint: item.installHint })}</span>;
     }
 
     if (auth.status === "unauthenticated" && auth.accounts?.some((entry) => entry.authenticated)) {
-      return <span>{optionLabel(auth.detail) ?? `Every ${item.label} host is turned off.`}</span>;
+      return (
+        <span>
+          {optionLabel(auth.detail) ??
+            gt("Every {label} host is turned off.", { label: item.label })}
+        </span>
+      );
     }
 
     if (auth.status === "unauthenticated") {
       return (
         <span>
-          {item.label} is not authenticated on this server. Sign in or configure credentials using
-          the <code className="rounded bg-muted px-1 py-px text-2xs">{item.executable}</code> tool
-          on the server host to enable change request features.
+          {gt(
+            "{label} is not authenticated on this server. To enable change request features, sign in or configure credentials on the server host with this tool:",
+            { label: item.label },
+          )}{" "}
+          <code className="rounded bg-muted px-1 py-px text-2xs">{item.executable}</code>
         </span>
       );
     }
     const authDetail = optionLabel(auth.detail);
     return (
       <span>
-        Could not verify {item.label}. {authDetail ?? item.installHint}
+        {gt("Could not verify {label}. {detail}", {
+          label: item.label,
+          detail: authDetail ?? item.installHint,
+        })}
       </span>
     );
   }
 
-  return <span>Available</span>;
+  return <span>{gt("Available")}</span>;
 }
 
 function DiscoveryItemRow({
@@ -286,7 +303,7 @@ function DiscoveryItemRow({
     ? item.status === "available" && item.auth.status === "authenticated"
     : item.status === "available" && item.implemented;
   const auth = isProviderDiscoveryItem(item) ? item.auth : null;
-  const authStatus = auth ? authPresentation(auth) : null;
+  const authStatus = auth ? authPresentation(auth, gt) : null;
   const authAccount = auth ? optionLabel(auth.account) : null;
   const [isExpanded, setIsExpanded] = useState(false);
   const hasDetails = children !== undefined;
@@ -326,7 +343,7 @@ function DiscoveryItemRow({
               ) : null}
             </div>
             <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs leading-normal text-muted-foreground/80">
-              {itemSummary({ item, auth, authAccount })}
+              {itemSummary({ item, auth, authAccount }, gt)}
             </p>
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
