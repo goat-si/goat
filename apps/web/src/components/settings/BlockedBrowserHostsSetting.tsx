@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   addBlockedBrowserHost,
   removeBlockedBrowserHost,
@@ -11,6 +12,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { useScopedSettingsWriteAllowed, useUpdateScopedSettings } from "./useScopedSettings";
 
 export function BlockedBrowserHostsSetting() {
+  const gt = useGT();
   const { scope, targets } = useSettingsScope();
   const canWrite = useScopedSettingsWriteAllowed();
   const update = useUpdateScopedSettings();
@@ -32,8 +34,10 @@ export function BlockedBrowserHostsSetting() {
   };
   return (
     <SettingsRow
-      title="Blocked browser hosts"
-      description="Agents cannot use these hosts or their subdomains. Select one environment to edit its list."
+      title={gt("Blocked browser hosts")}
+      description={gt(
+        "Agents cannot use these hosts or their subdomains. Select one environment to edit its list.",
+      )}
       serverScoped
       settingKeys={["blockedBrowserHosts"]}
       control={
@@ -50,13 +54,13 @@ export function BlockedBrowserHostsSetting() {
                   update({ blockedBrowserHosts: removeBlockedBrowserHost(hosts ?? [], host) })
                 }
               >
-                Remove
+                {gt("Remove")}
               </Button>
             </div>
           ))}
           <div className="flex items-center gap-2">
             <Input
-              aria-label="Host to block"
+              aria-label={gt("Host to block")}
               aria-invalid={error !== null}
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -64,7 +68,7 @@ export function BlockedBrowserHostsSetting() {
               placeholder="example.com"
             />
             <Button variant="outline" size="sm" disabled={disabled} onClick={add}>
-              Add
+              {gt("Add")}
             </Button>
           </div>
           {error ? (

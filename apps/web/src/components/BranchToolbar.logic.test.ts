@@ -1,7 +1,9 @@
-import { ProviderInstanceId, RunId, type VcsRef } from "@goat/contracts";
+import { EnvironmentId, ProviderInstanceId, RunId, type VcsRef } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
+  localizeEnvironmentLabel,
+  resolveEnvironmentOptionLabel,
   deriveLocalBranchNameFromRemoteRef,
   isWorktreeChangeBlocked,
   resolveBranchSelectionTarget,
@@ -428,4 +430,15 @@ it("shows unavailable SSH rather than a local worktree after profile removal", (
       savedLabel: null,
     }),
   ).toBe("SSH · unavailable connection");
+});
+
+it("shows an unnamed primary environment in the reader's language and keeps real names", () => {
+  const environmentId = EnvironmentId.make("env-primary");
+  const name = (runtimeLabel: string) =>
+    localizeEnvironmentLabel(
+      resolveEnvironmentOptionLabel({ isPrimary: true, environmentId, runtimeLabel }),
+      "이 기기",
+    );
+  expect(name("local")).toBe("이 기기");
+  expect(name("MacBook")).toBe("MacBook");
 });

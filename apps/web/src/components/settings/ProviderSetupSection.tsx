@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -47,15 +48,16 @@ export function readAntigravityAuthMethod(config: unknown): AntigravityAuthMetho
 }
 
 export function ProviderSetupSection(props: ProviderSetupSectionProps) {
+  const gt = useGT();
   return (
     <section
-      aria-label="Antigravity setup"
+      aria-label={gt("Antigravity setup")}
       className="@container/setup divide-y divide-border/50 text-xs [&_[data-slot=settings-row]]:rounded-none"
     >
       <SettingsRow
         className="@max-lg/setup:[&>div:first-child]:flex @max-lg/setup:[&>div:first-child]:items-stretch @max-lg/setup:[&>div:first-child]:gap-3"
-        title="Environment"
-        description="Device that runs this provider."
+        title={gt("Environment")}
+        description={gt("Device that runs this provider.")}
         control={
           <div className="flex min-w-0 flex-col gap-2 sm:items-end">
             <span className="text-muted-foreground [overflow-wrap:anywhere]">
@@ -63,18 +65,21 @@ export function ProviderSetupSection(props: ProviderSetupSectionProps) {
             </span>
             {!props.enabled && !props.readOnly ? (
               <Button size="sm" variant="outline" onClick={props.onEnable}>
-                Enable Antigravity
+                {gt("Enable Antigravity")}
               </Button>
             ) : null}
           </div>
         }
       />
       {props.readOnly ? (
-        <SettingsRow title="Setup unavailable" description="Provider setup is read-only." />
+        <SettingsRow
+          title={gt("Setup unavailable")}
+          description={gt("Provider setup is read-only.")}
+        />
       ) : props.provider?.setup === undefined ? (
         <SettingsRow
-          title="Update required"
-          description="Update this environment to manage Antigravity."
+          title={gt("Update required")}
+          description={gt("Update this environment to manage Antigravity.")}
         />
       ) : (
         <ProviderSetupActions
@@ -106,6 +111,7 @@ function ProviderSetupActions({
   readonly provider: ServerProvider;
   readonly authMethod: AntigravityAuthMethod;
 }) {
+  const gt = useGT();
   const target = { environmentId, input: { instanceId } };
   const authQuery = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
   const installQuery = useEnvironmentQuery(serverEnvironment.providerInstallState(target));
@@ -183,8 +189,8 @@ function ProviderSetupActions({
       </p>
       {usesCustomBinary || !provider.setup?.canInstall ? (
         <SettingsRow
-          title="Runtime"
-          description="Install and manage Antigravity."
+          title={gt("Runtime")}
+          description={gt("Install and manage Antigravity.")}
           status={
             <div className="space-y-2">
               {customBinaryStatus ? (
@@ -192,7 +198,9 @@ function ProviderSetupActions({
               ) : null}
               {!installed && !provider.setup?.canInstall ? (
                 <p className="text-muted-foreground">
-                  Automatic installation unavailable. Set a binary path or use another environment.
+                  {gt(
+                    "Automatic installation unavailable. Set a binary path or use another environment.",
+                  )}
                 </p>
               ) : null}
               {!provider.setup?.canInstall && installation?.installedVersion ? (
@@ -214,8 +222,8 @@ function ProviderSetupActions({
       ) : null}
       {installation?.canRemove && !installActive ? (
         <SettingsRow
-          title="Downloaded runtime"
-          description="Google sign-in and thread history are kept."
+          title={gt("Downloaded runtime")}
+          description={gt("Google sign-in and thread history are kept.")}
           control={
             <Tooltip>
               <TooltipTrigger
@@ -223,7 +231,7 @@ function ProviderSetupActions({
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    aria-label="Remove downloaded runtime"
+                    aria-label={gt("Remove downloaded runtime")}
                     disabled={actionsDisabled || authActive}
                     onClick={() => void removeRuntime()}
                   />
@@ -231,7 +239,7 @@ function ProviderSetupActions({
               >
                 <Trash2Icon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup>Remove downloaded runtime</TooltipPopup>
+              <TooltipPopup>{gt("Remove downloaded runtime")}</TooltipPopup>
             </Tooltip>
           }
         />
@@ -262,7 +270,7 @@ function ProviderSetupActions({
                 installQuery.refresh();
               }}
             >
-              Retry setup status
+              {gt("Retry setup status")}
             </Button>
           ) : null}
         </div>

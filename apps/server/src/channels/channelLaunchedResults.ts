@@ -174,9 +174,9 @@ export const readLaunchedEnds = (
     { concurrency: 1 },
   ).pipe(Effect.map((ends) => ends.flat()));
 
-/** A task's own runs that can carry its work: not a background command's notice. */
-export const ownResultRuns = <R extends Pick<OrchestrationV2Run, "userMessageId">>(
-  own: ReadonlyArray<R>,
+/** A task's own runs that can carry its work. */
+export const ownResultRuns = (
+  own: ReadonlyArray<OrchestrationV2Run>,
   messages: Parameters<typeof noticeMessageIds>[0],
 ) => resultRunsOf(own, noticeMessageIds(messages));
 

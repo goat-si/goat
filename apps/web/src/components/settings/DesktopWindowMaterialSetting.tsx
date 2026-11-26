@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import type { DesktopWindowMaterialState } from "@goat/contracts";
 import { useState } from "react";
 import { useDesktopWindowMaterial } from "../../desktop/useDesktopWindowMaterial";
@@ -13,36 +14,38 @@ import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 function materialStatus(state: DesktopWindowMaterialState | null): string {
-  if (!state) return "Checking system glass availability…";
+  if (!state) return msg("Checking system glass availability…");
   if (!state.capability.supported) {
     const platform = window.desktopBridge?.getClientPlatform?.() ?? navigator.platform;
     if (/darwin|mac/i.test(platform)) {
       return state.capability.reason === "os-version"
-        ? "Requires macOS 26 or later."
-        : "System glass is not available on this Mac.";
+        ? msg("Requires macOS 26 or later.")
+        : msg("System glass is not available on this Mac.");
     }
-    if (state.capability.reason === "os-version") return "Requires Windows 11 22H2 or later.";
-    return "System glass is not available on this device.";
+    if (state.capability.reason === "os-version") return msg("Requires Windows 11 22H2 or later.");
+    return msg("System glass is not available on this device.");
   }
   switch (state.reason) {
     case "accessibility":
-      return "Off while reduced transparency or high contrast is on.";
+      return msg("Off while reduced transparency or high contrast is on.");
     case "opaque":
-      return "Off at 100% glass opacity.";
+      return msg("Off at 100% glass opacity.");
     case "fullscreen":
-      return "Paused in full screen.";
+      return msg("Paused in full screen.");
     case "native-failed":
-      return "The system material could not be applied.";
+      return msg("The system material could not be applied.");
     case "restart":
-      return "Restart GOAT to use Liquid Glass.";
+      return msg("Restart GOAT to use Liquid Glass.");
     case "active":
-      return state.applied === "windows-mica" ? "Using Mica." : "Using Liquid Glass.";
+      return state.applied === "windows-mica" ? msg("Using Mica.") : msg("Using Liquid Glass.");
     default:
-      return "Use the system material in the sidebar and title bar.";
+      return msg("Use the system material in the sidebar and title bar.");
   }
 }
 
 export function DesktopWindowMaterialSetting() {
+  const gt = useGT();
+  const m = useMessages();
   const setting = useTranslatedSearchableSetting();
   const { available, state } = useDesktopWindowMaterial();
   const enabled = useScopedSettings((settings) => settings.desktopSystemMaterialEnabled);
@@ -68,14 +71,14 @@ export function DesktopWindowMaterialSetting() {
         {...setting("desktop-system-material")}
         description={
           presetForcesMaterial && !statusTakesPriority
-            ? "On while the Liquid Glass style is selected."
-            : materialStatus(state)
+            ? gt("On while the Liquid Glass style is selected.")
+            : m(materialStatus(state))
         }
         control={
           <div className="flex items-center gap-2">
             {canRestart ? (
               <Button size="xs" variant="outline" onClick={() => setRestartOpen(true)}>
-                Restart
+                {gt("Restart")}
               </Button>
             ) : null}
             <Switch

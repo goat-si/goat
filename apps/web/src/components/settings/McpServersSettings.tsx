@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { goatMcpProviderName, type EnvironmentId, type GoatMcpServer } from "@goat/contracts";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -39,12 +40,13 @@ import {
 } from "./McpServersSettings.logic";
 
 export function McpServersSettings() {
+  const gt = useGT();
   const { environment, scope } = useSettingsScope();
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
   const projectScoped = scope.kind === "project" || scope.kind === "checkout";
   return (
-    <SettingsSection id="mcp-servers" title="MCP servers">
+    <SettingsSection id="mcp-servers" title={gt("MCP servers")}>
       {connected && environment ? (
         <ServerList
           key={environment.environmentId}
@@ -53,8 +55,8 @@ export function McpServersSettings() {
         />
       ) : (
         <SettingsRow
-          title="MCP servers"
-          description="Connect an environment to manage its MCP servers."
+          title={gt("MCP servers")}
+          description={gt("Connect an environment to manage its MCP servers.")}
         />
       )}
     </SettingsSection>
@@ -68,6 +70,7 @@ function ServerList({
   environmentId: EnvironmentId;
   projectScoped: boolean;
 }) {
+  const gt = useGT();
   const servers = useEnvironmentSettings(environmentId, (settings) => settings.mcpServers);
   const canWrite =
     useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId)) && !projectScoped;
@@ -95,12 +98,12 @@ function ServerList({
     <>
       {projectScoped ? (
         <p className="px-4 pt-3 text-xs text-muted-foreground">
-          Environment-wide setting. Select an environment to change it.
+          {gt("Environment-wide setting. Select an environment to change it.")}
         </p>
       ) : null}
       <SettingsRow
-        title="Manage servers"
-        description="Servers are available to new agent sessions on this environment."
+        title={gt("Manage servers")}
+        description={gt("Servers are available to new agent sessions on this environment.")}
         control={
           <Button
             size="sm"
@@ -108,7 +111,7 @@ function ServerList({
             disabled={!canWrite || pending}
             onClick={() => setEditing({})}
           >
-            Add server
+            {gt("Add server")}
           </Button>
         }
       />
@@ -138,7 +141,7 @@ function ServerList({
                 disabled={!canWrite || pending}
                 onClick={() => setEditing({ name })}
               >
-                Edit
+                {gt("Edit")}
               </Button>
               <Button
                 size="xs"
@@ -146,7 +149,7 @@ function ServerList({
                 disabled={!canWrite || pending}
                 onClick={() => setRemoving(name)}
               >
-                Remove
+                {gt("Remove")}
               </Button>
             </div>
           }
@@ -179,11 +182,13 @@ function ServerList({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the server and its stored secrets from this environment.
+              {gt("This removes the server and its stored secrets from this environment.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               variant="destructive"
               disabled={pending}
@@ -194,7 +199,7 @@ function ServerList({
                   });
               }}
             >
-              Remove
+              {gt("Remove")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -220,6 +225,7 @@ function ServerDialog({
   save: (name: string, server: GoatMcpServer) => Promise<boolean>;
   onClose: () => void;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState<Draft>(() => draftFor(originalName, existing));
   const [error, setError] = useState<string | null>(null);
   const change = (patch: Partial<Draft>) => setDraft((previous) => ({ ...previous, ...patch }));
@@ -241,8 +247,8 @@ function ServerDialog({
     >
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>{existing ? "Edit MCP server" : "Add MCP server"}</DialogTitle>
-          <DialogDescription>Changes apply to new agent sessions.</DialogDescription>
+          <DialogTitle>{existing ? gt("Edit MCP server") : gt("Add MCP server")}</DialogTitle>
+          <DialogDescription>{gt("Changes apply to new agent sessions.")}</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <form
@@ -254,7 +260,7 @@ function ServerDialog({
             }}
           >
             <div className="grid gap-1">
-              <Label htmlFor="mcp-name">Name</Label>
+              <Label htmlFor="mcp-name">{gt("Name")}</Label>
               <Input
                 id="mcp-name"
                 value={draft.name}
@@ -263,7 +269,7 @@ function ServerDialog({
               />
             </div>
             <fieldset className="grid gap-1">
-              <legend>Transport</legend>
+              <legend>{gt("Transport")}</legend>
               <div className="flex gap-4">
                 <label>
                   <input
@@ -288,7 +294,7 @@ function ServerDialog({
             {draft.transport === "stdio" ? (
               <>
                 <div className="grid gap-1">
-                  <Label htmlFor="mcp-command">Command</Label>
+                  <Label htmlFor="mcp-command">{gt("Command")}</Label>
                   <Input
                     id="mcp-command"
                     value={draft.command}
@@ -296,7 +302,7 @@ function ServerDialog({
                   />
                 </div>
                 <div className="grid gap-1">
-                  <Label htmlFor="mcp-args">Arguments, one per line</Label>
+                  <Label htmlFor="mcp-args">{gt("Arguments, one per line")}</Label>
                   <Textarea
                     id="mcp-args"
                     value={draft.args}
@@ -313,12 +319,14 @@ function ServerDialog({
                   onChange={(event) => change({ url: event.target.value })}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Don't put secrets in the URL; add them as headers.
+                  {gt("Don't put secrets in the URL; add them as headers.")}
                 </p>
               </div>
             )}
             <fieldset className="grid gap-2">
-              <legend>{draft.transport === "stdio" ? "Environment variables" : "Headers"}</legend>
+              <legend>
+                {draft.transport === "stdio" ? gt("Environment variables") : gt("Headers")}
+              </legend>
               {draft.entries.map((entry, index) => (
                 <div key={entry.id} className="flex gap-2">
                   <Input
@@ -351,7 +359,7 @@ function ServerDialog({
                     size="sm"
                     onClick={() => change({ entries: draft.entries.filter((_, i) => i !== index) })}
                   >
-                    Remove
+                    {gt("Remove")}
                   </Button>
                 </div>
               ))}
@@ -366,7 +374,7 @@ function ServerDialog({
                     })
                   }
                 >
-                  Add key
+                  {gt("Add key")}
                 </Button>
               </div>
             </fieldset>
@@ -379,10 +387,10 @@ function ServerDialog({
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={pending}>
-            Cancel
+            {gt("Cancel")}
           </Button>
           <Button type="submit" form="mcp-server-form" disabled={pending}>
-            Save
+            {gt("Save")}
           </Button>
         </DialogFooter>
       </DialogPopup>
