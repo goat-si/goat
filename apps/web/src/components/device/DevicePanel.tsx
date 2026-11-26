@@ -49,8 +49,12 @@ import { DeviceWorkspace } from "./DeviceWorkspace";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 import { floatPreview } from "../preview/floatPreview";
 
-const platformLabel = (platform: DevicePlatform) =>
-  platform === "ios" ? "iOS Simulators" : "Android Emulators";
+const platformLabel = (platform: DevicePlatform, devices: readonly DeviceSummary[]) =>
+  platform === "ios"
+    ? "iOS Simulators"
+    : devices.some((device) => device.physical)
+      ? "Android Devices"
+      : "Android Emulators";
 
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
   `${device.hostId}\u0000${device.id}`;
@@ -370,7 +374,9 @@ export function DevicePanel(props: {
                       <section key={group.platform} className="space-y-3">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Smartphone className="size-4 shrink-0" />
-                          <h3 className="font-medium">{platformLabel(group.platform)}</h3>
+                          <h3 className="font-medium">
+                            {platformLabel(group.platform, group.devices)}
+                          </h3>
                         </div>
                         <DiscoveryList>
                           {group.devices.map((device) => (
