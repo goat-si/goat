@@ -271,6 +271,7 @@ export const make = Effect.gen(function* () {
         retainedLocalSpace: true,
         provenanceProjection: true,
         derivedCap: 1000,
+        conversationMemoryControl: true,
         turnMemory: true,
         scopeMoves: true,
         scopeMoveReceipts: true,
