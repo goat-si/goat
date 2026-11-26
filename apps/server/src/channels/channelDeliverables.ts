@@ -222,10 +222,10 @@ export const recordRequiredProgress = Effect.fn("ChannelTask.recordRequiredProgr
   input: ChannelTaskReportInput,
   ownedRuns: ReadonlyArray<RunId>,
 ) {
-  return yield* sql
+  const changed = yield* sql
     .withTransaction(
       Effect.gen(function* () {
-        if (yield* ledger.hasTaskEvent(input.eventId)) return;
+        if (yield* ledger.hasTaskEvent(input.eventId)) return false;
         const stored = yield* ledger.getTask(prior.task.taskId);
         if (
           !stored ||
@@ -260,7 +260,9 @@ export const recordRequiredProgress = Effect.fn("ChannelTask.recordRequiredProgr
           { actor: "agent", eventId: input.eventId, narrate: milestone },
         );
         if (!written) return yield* invalid();
+        return true;
       }),
     )
     .pipe(Effect.catchTags({ SqlError: () => Effect.fail(unavailable()) }));
+  if (changed) yield* ledger.announceTaskChanges([prior.ownerId]);
 });

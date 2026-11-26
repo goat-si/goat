@@ -9,13 +9,18 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Queue from "effect/Queue";
+import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 
 import { remoteTaskObservationJson } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as ThreadResults from "../threadResults/ThreadResultService.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import { ask, current, reportFrom, sessionHarness, settle } from "./ChannelBotSession.testkit.ts";
 import { readRequiredDeliverables } from "./channelDeliverables.ts";
-import { setupBot } from "./testkit/ChannelHarness.ts";
+import { owner, setupBot } from "./testkit/ChannelHarness.ts";
+import { watchTaskChanges } from "./testkit/taskChanges.ts";
+import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
 
 const plan = [
   { id: "mac", criterion: "Mac build produces an app" },
@@ -89,6 +94,17 @@ const finishLocal = (
     VALUES (${child},${run},json_object('outcome',${report}),'now')`;
   });
 describe("GOAT Bot required worker delivery", () => {
+  it.effect("announces a committed silent required-result update", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const task = yield* ask("look: verify releases", "silent-revision");
+      const seen = yield* watchTaskChanges(owner);
+      yield* progress(task, "declare-silent", { requiredDeliverables: plan });
+      yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+      assert.deepStrictEqual(yield* Queue.poll(seen), Option.some(1));
+    }).pipe(Effect.provide(harness.layer));
+  });
   it.effect(
     "keeps an omitted worker pending, refuses a missing report, and accepts only the current retried worker",
     () => {

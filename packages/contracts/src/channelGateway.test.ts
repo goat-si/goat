@@ -5,6 +5,8 @@ import { OrchestrationV2Notification } from "./orchestrationV2Notification.ts";
 import {
   BotProfile,
   BotWorkResult,
+  BotTaskRow,
+  BotTaskSummary,
   ChannelGatewayError,
   ChannelCreateBotInput,
   ChannelGetBotStatusResult,
@@ -28,16 +30,33 @@ it("decodes task evidence across older and current peers", () => {
     requiredDeliverables: _required,
     ...oldFields
   } = BotWorkResult.fields;
-  const old = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+  const { doneMeans: _doneMeans, ...oldSummary } = BotTaskSummary.fields;
+  const oldRow = Schema.Struct({ ...BotTaskRow.fields, task: Schema.Struct(oldSummary) });
+  const old = Schema.decodeUnknownSync(
+    Schema.Struct({
+      ...oldFields,
+      task: Schema.Union([
+        Schema.Struct({ state: Schema.Literal("known"), row: oldRow }),
+        Schema.Struct({ state: Schema.Literal("unavailable"), task: Schema.Struct(oldSummary) }),
+      ]),
+    }),
+  );
   const current = Schema.decodeUnknownSync(BotWorkResult);
   const base = {
     task: {
-      state: "unavailable",
-      task: {
-        taskId: "task-1",
-        title: "Release",
-        status: "running",
-        updatedAt: "2026-11-04T10:00:00.000Z",
+      state: "known",
+      row: {
+        kind: "task",
+        task: {
+          taskId: "task-1",
+          title: "Release",
+          status: "running",
+          updatedAt: "2026-11-04T10:00:00.000Z",
+        },
+        view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+        lastActivityAt: "2026-11-04T10:00:00.000Z",
+        unread: false,
+        mainMessagesSinceQuiet: 0,
       },
     },
     codingRows: [],
@@ -53,7 +72,16 @@ it("decodes task evidence across older and current peers", () => {
   };
   expect(current(base)).toEqual(base);
   expect(current({ ...base, ...added })).toMatchObject(added);
-  expect(old({ ...base, ...added })).toEqual(base);
+  const newer = {
+    ...base,
+    ...added,
+    task: {
+      ...base.task,
+      row: { ...base.task.row, task: { ...base.task.row.task, doneMeans: "Build passes" } },
+    },
+  };
+  expect(current(newer).task).toMatchObject({ row: { task: { doneMeans: "Build passes" } } });
+  expect(old(newer)).toEqual(base);
 });
 
 describe("channel.updateBot input", () => {
