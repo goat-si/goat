@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ChannelReceptionInput, ModelSelection, ProviderInstanceId } from "@goat/contracts";
+import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
 import type {
   ChannelReceptionGenerationInput,
   TextGenerationOperations,
@@ -40,18 +40,7 @@ export type {
   MemoryGenerationExecution,
 } from "@goat/provider-core/server/textGeneration";
 
-type ChannelReceptionRequest = ChannelReceptionGenerationInput & {
-  readonly recheckInput?:
-    | ((input: ChannelReceptionInput) => Effect.Effect<ChannelReceptionInput>)
-    | undefined;
-};
-type ServerTextGeneration = Omit<TextGenerationOperations, "generateChannelReception"> & {
-  readonly generateChannelReception?: (
-    request: ChannelReceptionRequest,
-  ) => ReturnType<NonNullable<TextGenerationOperations["generateChannelReception"]>>;
-};
-
-export class TextGeneration extends Context.Service<TextGeneration, ServerTextGeneration>()(
+export class TextGeneration extends Context.Service<TextGeneration, TextGenerationOperations>()(
   "goat/textGeneration/TextGeneration",
 ) {}
 
@@ -183,10 +172,10 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
       );
     }),
-    generateChannelReception: Effect.fn("TextGeneration.generateChannelReception")(function* ({
-      recheckInput,
-      ...request
-    }: ChannelReceptionRequest) {
+    generateChannelReception: Effect.fn("TextGeneration.generateChannelReception")(function* (
+      request: ChannelReceptionGenerationInput,
+    ) {
+      const { recheckInput } = request;
       const provider = yield* resolveAgent(
         "generateChannelReception",
         request.modelSelection.instanceId,
