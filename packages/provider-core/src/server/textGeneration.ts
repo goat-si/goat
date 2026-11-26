@@ -85,6 +85,10 @@ export interface ChannelReceptionGenerationInput {
   /** An empty scratch directory: reception reads no checkout rules or files. */
   cwd: string;
   input: ChannelReceptionInput;
+  /** Re-evaluate recall and requester permissions when each provider attempt sends its prompt. */
+  readonly recheckInput?:
+    | ((input: ChannelReceptionInput) => Effect.Effect<ChannelReceptionInput>)
+    | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }
