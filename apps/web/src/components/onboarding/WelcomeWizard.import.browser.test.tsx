@@ -485,7 +485,8 @@ it("translates skipped-thread reasons from the server", async () => {
   state.importThreads.mockResolvedValue(
     AsyncResult.success({
       importedCount: 1,
-      skippedCount: 1,
+      skippedCount: 4,
+      skippedDetailsOmitted: 3,
       skippedThreads: [{ thread: "Example", reason: "Transcript changed during import." }],
     }),
   );
@@ -494,4 +495,5 @@ it("translates skipped-thread reasons from the server", async () => {
   await vi.waitFor(() => expect(pageText()).toContain("Some history was not imported"));
   await click("Show details");
   await vi.waitFor(() => expect(pageText()).toContain("가져오는 동안 대화 기록이 변경되었습니다."));
+  expect(pageText()).toContain("그 외 6개");
 });

@@ -252,12 +252,19 @@ const make = Effect.gen(function* () {
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources, input);
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
+    let skippedCount = 0;
     const skippedThreads: Array<{ thread: string; reason: string }> = [];
+    const recordSkip = (thread: string, reason: string) => {
+      skippedCount += 1;
+      if (skippedThreads.length < 20) {
+        skippedThreads.push({ thread: thread.slice(0, 100), reason: reason.slice(0, 200) });
+      }
+    };
 
     yield* Stream.runForEach(outcomes, (outcome) =>
       Effect.gen(function* () {
         if (outcome._tag === "Skipped") {
-          skippedThreads.push({ thread: outcome.thread, reason: outcome.reason });
+          recordSkip(outcome.thread, outcome.reason);
           return;
         }
         const source = outcome.source;
@@ -487,20 +494,22 @@ const make = Effect.gen(function* () {
           importedThreadIds.add(threadId);
           importedCount += 1;
         } else if (typeof imported === "string") {
-          skippedThreads.push({
-            thread:
-              outcome.thread.title.trim().split("\n", 1)[0]?.slice(0, 100) ||
+          recordSkip(
+            outcome.thread.title.trim().split("\n", 1)[0]?.slice(0, 100) ||
               source.providerSessionId,
-            reason: imported,
-          });
+            imported,
+          );
         }
       }),
     );
 
     return {
       importedCount,
-      skippedCount: skippedThreads.length,
+      skippedCount,
       ...(skippedThreads.length ? { skippedThreads } : {}),
+      ...(skippedCount > skippedThreads.length
+        ? { skippedDetailsOmitted: skippedCount - skippedThreads.length }
+        : {}),
     } satisfies AgentSessionImportResult;
   });
 
