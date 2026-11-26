@@ -280,5 +280,5 @@ it.effect.each(["memory", "connect"] as const)(
       yield* sql`DROP TRIGGER fail_opt_out`;
       yield* refresh;
       expect(yield* readConversationMemoryEnabled(sql)).toBe(false);
-    }).pipe(Effect.provide(app), Effect.provide(storage)),
+    }).pipe(Effect.provide(app.pipe(Layer.provideMerge(storage)))),
 );

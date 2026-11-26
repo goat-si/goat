@@ -5042,6 +5042,11 @@ it.effect.each(turnStartMemoryCases)(
                   Layer.mock(ChannelLedger.ChannelLedger)({
                     getTask: () => Effect.succeed(channelTask),
                     latestTaskBrief: () => Effect.undefined,
+                    preserveInputMemoryPause: (thread, _message, origin) =>
+                      Effect.sync(() => {
+                        assert.equal(thread, threadId);
+                        assert.equal(origin, channelTask.task.originInputId);
+                      }),
                     isForwardPending: (sequence) =>
                       Effect.succeed(sequence === 1 && forwardPending),
                     completeForward: ({ sequence }) =>
