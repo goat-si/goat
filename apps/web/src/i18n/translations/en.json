@@ -1096,6 +1096,7 @@
   "7a425150e0d6f830": "Run it in a terminal when you are ready to update.",
   "6be86a17d8d0a4d7": "Updating",
   "9830a1c71816a262": "Update now",
+  "1d05138f674931f1": "Sensitive values are stored separately and never returned to the app.",
   "f090f9c45d12cf61": "Clear {label}",
   "ac0de2a59d9c8860": "Device",
   "4cd59ceb5e2d6c47": "{provider} update command copied",

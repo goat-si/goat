@@ -481,7 +481,7 @@ export function ProviderEnvironmentSection(props: {
             </div>
           ))}
           <p className="text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app.
+            {gt("Sensitive values are stored separately and never returned to the app.")}
             {rows.some((row) => row.valueRedacted === true)
               ? gt(" Enter a new value to rename a saved one or make it plain text.")
               : null}
