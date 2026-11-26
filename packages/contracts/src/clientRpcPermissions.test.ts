@@ -168,6 +168,10 @@ describe("memory client guards", () => {
     ).toEqual(["source-control:write", "orchestration:operate"]);
   });
   it("requires explicit transcript permission for readSource and guards bindings", () => {
+    expect(clientRpcRequiredScopes(WS_METHODS.memoryThreadPreference, {})).toEqual([
+      "memory:read",
+      "orchestration:read",
+    ]);
     expect(Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, WS_METHODS.memoryReadSource)).toBe(true);
     expect(clientRpcRequiredScopes(WS_METHODS.memoryReadSource, {})).toEqual([
       "memory:read",
