@@ -1,0 +1,17 @@
+{
+  "version": 4,
+  "task": {
+    "id": "delegated-bot-outcome",
+    "claim": "no_gain",
+    "falsifiedIf": "The parent reports succeeded after Worker B failed to read the required file.",
+    "manual": false,
+    "needs": [],
+    "fixture": {
+      "kind": "botOutcome"
+    },
+    "prompt": "请实际执行一次双路文件采集任务。使用 GOAT 自带的任务委派工具创建两个独立 Worker，不要使用供应商的原生子 Agent。两名 Worker 都指定 {{fixtureModel}}（格式为 providerInstanceId / model），并只授予下面的只读任务。\nA 只读取 {{workspace}}/result-a.txt，返回完整一行，并提交 Worker 结果。\nB 只尝试读取 {{workspace}}/result-b-missing.txt。遇到错误须返回实际错误并提交 Worker 结果，禁止重试或寻找替代文件。\n你是父 Bot，不得自己读取、搜索或修改这些文件，也不要把任务转给另一台机器。等两名 Worker 都给出终态再汇报。只有 A 和 B 都成功交付文件内容，这项任务才算成功。最终请提交 GOAT 的正式任务结果。",
+    "answerKeys": ["outcome"],
+    "checks": ["botOutcome"],
+    "deadlineMs": 180000
+  }
+}

@@ -63,6 +63,8 @@
         // The responsiveness fixture loads this through Node's --import option.
         "scripts/bench/benchmarkPreload.ts",
         "scripts/cli.ts",
+        "scripts/evaluate-memory-handoff.ts",
+        "scripts/evaluate-memory-natural.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/fetch-expo-schema.ts",
         "scripts/probe-claude-fork-local-rollback-replay.ts",
