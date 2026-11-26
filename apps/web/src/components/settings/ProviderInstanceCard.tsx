@@ -266,7 +266,7 @@ function ProviderEnvironmentFieldRow(props: {
               size="icon-sm"
               variant="ghost-destructive"
               onClick={() => props.onRemove(props.field)}
-              aria-label={`Clear ${props.field.label}`}
+              aria-label={gt("Clear {label}", { label: props.field.label })}
             >
               <XIcon className="size-3.5" />
             </Button>
@@ -501,8 +501,8 @@ function ProjectOverrideInheritance({
 }) {
   const gt = useGT();
   const layers = [
-    { key: "project", label: "Project", enabled: projectEnabled, effective: true },
-    { key: "device", label: "Device", enabled: deviceEnabled, effective: false },
+    { key: "project", label: gt("Project"), enabled: projectEnabled, effective: true },
+    { key: "device", label: gt("Device"), enabled: deviceEnabled, effective: false },
   ];
   return (
     <Popover>
@@ -731,7 +731,7 @@ export function ProviderInstanceCard({
     onCopy: ({ providerName }) => {
       toastManager.add({
         type: "success",
-        title: `${providerName} update command copied`,
+        title: gt("{provider} update command copied", { provider: providerName }),
         description: gt("Run it in a terminal when you are ready to update."),
       });
     },
@@ -739,7 +739,7 @@ export function ProviderInstanceCard({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Could not copy ${providerName} update command`,
+          title: gt("Could not copy {provider} update command", { provider: providerName }),
           description: error.message,
         }),
       );
@@ -988,7 +988,9 @@ export function ProviderInstanceCard({
               {isUpdating
                 ? gt("Updating")
                 : versionAdvisory.targetVersion
-                  ? `Install ${getProviderVersionLabel(versionAdvisory.targetVersion)}`
+                  ? gt("Install {version}", {
+                      version: getProviderVersionLabel(versionAdvisory.targetVersion),
+                    })
                   : gt("Update now")}
             </Button>
           ) : null}
@@ -1103,7 +1105,7 @@ export function ProviderInstanceCard({
                 deviceEnabled={deviceEnabled}
               />
               <SettingResetButton
-                label={`${displayName} enablement`}
+                label={gt("{provider} enablement", { provider: displayName })}
                 tooltip={gt("Reset to the device setting")}
                 disabled={readOnly || !canWriteSettings}
                 onClick={projectOverride.onReset}
