@@ -48,6 +48,23 @@ Turning sharing off does not stop OpenTelemetry exports to your own receiver.</p
 <p>GOAT builds released before this change shared usage data by default. Builds released before
 GOAT’s own endpoint existed send these events to the endpoint of the project GOAT was forked from,
 at <code>ingest.t3.codes</code>, which forwards them to PostHog, until you update.</p>
+<h2 id="network-use-that-is-not-telemetry">Network use that is not telemetry</h2>
+<p>GOAT also goes online to do what you ask and to stay current. These requests carry no usage events
+and do not depend on <strong>Share usage data</strong>:</p>
+<ul>
+<li><strong>Update checks.</strong> The desktop app checks GOAT’s release feed for a new version, and the mobile
+app checks for an app update when it opens. The server checks installed provider CLIs for newer
+versions and fetches model list updates; turn that off with <strong>Provider update checks</strong> in
+Settings.</li>
+<li><strong>Downloads.</strong> Installing or updating a provider CLI or Cua Driver downloads it from its
+publisher. GOAT starts Cua Driver with its own telemetry turned off.</li>
+<li><strong>Provider accounts.</strong> Signing in to a provider, listing its models, and showing usage limits
+talk to that provider with your account.</li>
+<li><strong>Things you start</strong>, such as voice input, cloud machines, mobile device builds, webhooks, or
+starring GOAT on GitHub, talk to the service involved.</li>
+</ul>
+<p>Codex, Claude Code, and the other agents GOAT runs follow their own telemetry settings; GOAT does
+not change them.</p>
 <h2 id="mobile-diagnostics">Mobile diagnostics</h2>
 <p>In the mobile app, <strong>Settings &gt; Diagnostics</strong> lets you copy a startup crash report or a thread
 stream report. The reports stay on the device until you share them. A crash report can include an
@@ -73,4 +90,4 @@ settings. An overridden signal shows <strong>Set by environment</strong> and nam
 receivers that need authentication and <code>GOAT_OTLP_PROTOCOL=http/protobuf</code> for receivers that do
 not accept JSON. An endpoint set with <code>OTEL_EXPORTER_OTLP_*</code> takes its headers and protocol from
 <code>OTEL_EXPORTER_OTLP_HEADERS</code> and <code>OTEL_EXPORTER_OTLP_PROTOCOL</code> instead.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-is-sent-when-sharing-is-on">What is sent when sharing is on</a></li><li><a href="#turn-sharing-on-or-off">Turn sharing on or off</a></li><li><a href="#mobile-diagnostics">Mobile diagnostics</a></li><li><a href="#export-diagnostics-to-your-own-receiver">Export diagnostics to your own receiver</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-is-sent-when-sharing-is-on">What is sent when sharing is on</a></li><li><a href="#turn-sharing-on-or-off">Turn sharing on or off</a></li><li><a href="#network-use-that-is-not-telemetry">Network use that is not telemetry</a></li><li><a href="#mobile-diagnostics">Mobile diagnostics</a></li><li><a href="#export-diagnostics-to-your-own-receiver">Export diagnostics to your own receiver</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
