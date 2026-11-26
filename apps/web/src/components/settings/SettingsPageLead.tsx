@@ -1,4 +1,4 @@
-import { useMessages } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Fragment } from "react";
 
@@ -12,6 +12,7 @@ function settingsPath(pathname: string): SettingsPath | null {
 
 /** Names the page for assistive tech and says in one line what it holds. */
 export function SettingsPageLead() {
+  const gt = useGT();
   const m = useMessages();
   const pathname = useLocation({ select: (location) => location.pathname });
   const path = settingsPath(pathname);
@@ -26,9 +27,9 @@ export function SettingsPageLead() {
           {lead.related?.length ? (
             <>
               {" "}
-              <span className="whitespace-nowrap">See also:</span>{" "}
+              <span className="whitespace-nowrap">{gt("See also:")}</span>{" "}
               {lead.related.map((link, index) => (
-                <Fragment key={link.label}>
+                <Fragment key={m(link.label)}>
                   {index > 0 ? " · " : null}
                   <Link
                     to={link.to}
@@ -36,7 +37,7 @@ export function SettingsPageLead() {
                     hashScrollIntoView={false}
                     className="text-foreground/80 underline underline-offset-2 hover:text-foreground focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
                   >
-                    {link.label}
+                    {m(link.label)}
                   </Link>
                 </Fragment>
               ))}

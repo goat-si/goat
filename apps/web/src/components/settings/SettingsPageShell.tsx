@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useRouter, type AnyRouter } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { XIcon } from "~/components/solar";
@@ -45,6 +46,7 @@ export function SettingsPageShell({
   actions?: ReactNode;
   children: ReactNode;
 }) {
+  const gt = useGT();
   const router = useRouter();
   const closeSettings = useCloseAppModal();
   // Created once so re-renders never re-register the command.
@@ -73,7 +75,7 @@ export function SettingsPageShell({
                     <Button
                       size="icon-sm"
                       variant="ghost"
-                      aria-label="Close settings"
+                      aria-label={gt("Close settings")}
                       onClick={() => void closeSettings()}
                     />
                   }

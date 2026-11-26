@@ -1,8 +1,8 @@
+import { msg } from "gt-react";
 import {
   STORAGE_CLEAN_MAX_ITEMS,
   type HostDiskPressure,
   type HostDiskUsage,
-  type HostPressureLevel,
   type StorageCleanItem,
   type StorageCleanResult,
   type StorageItem,
@@ -13,15 +13,15 @@ import { formatBytes } from "~/lib/formatBytes";
 
 /** In the order the breakdown lists them: what usually takes the most space first. */
 export const STORAGE_KIND_LABELS: Readonly<Record<StorageItemKind, string>> = {
-  worktree: "Worktrees",
-  build_output: "Build outputs in worktrees",
-  orphan_folder: "Leftover folders",
-  stale_registration: "Missing worktrees git still lists",
-  runtime_version: "GOAT runtimes",
-  rotated_logs: "Rotated logs",
-  temp: "Temporary folders",
-  attachments: "Files of deleted threads",
-  kache: "kache build cache",
+  worktree: msg("Worktrees"),
+  build_output: msg("Build outputs in worktrees"),
+  orphan_folder: msg("Leftover folders"),
+  stale_registration: msg("Missing worktrees git still lists"),
+  runtime_version: msg("GOAT runtimes"),
+  rotated_logs: msg("Rotated logs"),
+  temp: msg("Temporary folders"),
+  attachments: msg("Files of deleted threads"),
+  kache: msg("kache build cache"),
 };
 
 export interface StorageKindTotal {
@@ -104,29 +104,31 @@ export const largestWorktrees = (items: ReadonlyArray<StorageItem>, limit: numbe
     .toSorted((left, right) => (right.bytes ?? -1) - (left.bytes ?? -1))
     .slice(0, limit);
 
-export function diskSummary(
-  disk: HostDiskUsage | null,
-  pressure: HostDiskPressure | null,
-): { readonly text: string; readonly level: HostPressureLevel | null } {
+export function diskSummary(disk: HostDiskUsage | null, pressure: HostDiskPressure | null) {
   const reading = pressure ?? disk;
-  if (reading === null || reading.totalBytes <= 0)
-    return { text: "Free space not reported", level: null };
-  const percent = Math.round((reading.availableBytes / reading.totalBytes) * 100);
+  if (reading === null || reading.totalBytes <= 0) return null;
   return {
-    text:
-      formatBytes(reading.availableBytes) +
-      " free of " +
-      formatBytes(reading.totalBytes) +
-      " (" +
-      percent +
-      "%)",
+    free: formatBytes(reading.availableBytes),
+    total: formatBytes(reading.totalBytes),
+    percent: Math.round((reading.availableBytes / reading.totalBytes) * 100),
     level: pressure?.level ?? null,
   };
 }
 
 export const STORAGE_STATE_LABELS = {
-  removable: "Can be removed",
-  needs_attention: "Needs attention",
-  protected: "In use",
-  report_only: "Shown only",
+  removable: msg("Can be removed"),
+  needs_attention: msg("Needs attention"),
+  protected: msg("In use"),
+  report_only: msg("Shown only"),
 } as const satisfies Record<StorageItem["state"], string>;
+
+export function storageRelativeTime(isoDate: string, locale: string, nowMs = Date.now()) {
+  const elapsed = nowMs - Date.parse(isoDate);
+  if (!Number.isFinite(elapsed)) return "";
+  const minutes = Math.max(0, Math.floor(elapsed / 60_000));
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+  if (minutes === 0) return format.format(0, "second");
+  if (minutes < 60) return format.format(-minutes, "minute");
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? format.format(-hours, "hour") : format.format(-Math.floor(hours / 24), "day");
+}
