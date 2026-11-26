@@ -119,7 +119,8 @@ function withoutStoredChoice() {
   };
 }
 
-const HIDDEN = ["bot-coding", "channel-worker:work"];
+// A channel worker is GOAT Bot's own work, so it leaves the list with the bot's threads.
+const HIDDEN = ["bot-coding"];
 const SHOWN = ["bot-observation", "channel-worker:work", "goat-bot-session:conversation"];
 
 async function expectRows(ids: ReadonlyArray<string>) {

@@ -288,7 +288,9 @@ export function GoatBotTimeline({
     const root = scrollRef.current;
     if (firstUnreadId === undefined || divider === null || root === null) return;
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      (entries) => {
+        // A busy page can deliver several crossings at once; only the newest says where it is now.
+        const entry = entries.at(-1);
         if (entry === undefined) return;
         setDividerAbove(
           !entry.isIntersecting && entry.boundingClientRect.bottom < (entry.rootBounds?.top ?? 0),
