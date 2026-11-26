@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { AuthMemoryReadScope, type EnvironmentId, type MemoryItem } from "@goat/contracts";
 import { presentMemoryItem } from "@goat/client-runtime/memory-presentation";
@@ -14,7 +15,7 @@ import { Button } from "../ui/button";
 import { memoryForgetIntent } from "./MemorySettings.logic";
 
 export function MemoryForgetControl({
-  label = "Forget memory",
+  label,
   environmentId,
   item,
   onForgotten,
@@ -24,6 +25,7 @@ export function MemoryForgetControl({
   label?: string;
   onForgotten?: ((message: string) => void) | undefined;
 }) {
+  const gt = useGT();
   const canForget = useAtomValue(memoryEnvironment.forget.permissionAtom(environmentId));
   return (
     <MemoryForgetRequest
@@ -31,7 +33,7 @@ export function MemoryForgetControl({
       environmentId={environmentId}
       item={item}
       canForget={canForget}
-      label={label}
+      label={label ?? gt("Forget memory")}
       onForgotten={onForgotten}
     />
   );
@@ -50,6 +52,7 @@ function MemoryForgetRequest({
   label: string;
   onForgotten?: ((message: string) => void) | undefined;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const connection = Option.getOrNull(usePreparedConnection(environmentId));
   const forget = useAtomCommand(memoryEnvironment.forget, { reportFailure: false });
@@ -83,29 +86,29 @@ function MemoryForgetRequest({
     setBusy(false);
     if (result._tag === "Success") {
       if (result.value.outcome === "rejected") {
-        setMessage("Could not forget this memory. Review the record before trying again.");
+        setMessage(gt("Could not forget this memory. Review the record before trying again."));
         setIntent(null);
         return;
       }
-      const notice =
-        "Forgotten. Other devices remove it when they sync." +
-        (imported.current
-          ? " The provider's original conversation stays, but forgotten content is never imported again."
-          : "");
+      const notice = imported.current
+        ? gt(
+            "Forgotten. Other devices remove it when they sync. The provider's original conversation stays, but forgotten content is never imported again.",
+          )
+        : gt("Forgotten. Other devices remove it when they sync.");
       setMessage(notice);
       onForgotten?.(notice);
       setIntent(null);
-    } else setMessage("Forget request failed. Try again to continue this request.");
+    } else setMessage(gt("Forget request failed. Try again to continue this request."));
   }
   return (
     <div>
       {message ? <p role="status">{message}</p> : null}
       {available || intent ? (
         intent && canForget ? (
-          <div role="group" aria-label="Forget confirmation">
-            <p>Forget this memory? This cannot be undone.</p>
+          <div role="group" aria-label={gt("Forget confirmation")}>
+            <p>{gt("Forget this memory? This cannot be undone.")}</p>
             <Button size="sm" variant="destructive" disabled={busy} onClick={() => void submit()}>
-              Confirm forget
+              {gt("Confirm forget")}
             </Button>
             <Button
               size="sm"
@@ -116,7 +119,7 @@ function MemoryForgetRequest({
                 setMessage(null);
               }}
             >
-              Cancel
+              {gt("Cancel")}
             </Button>
           </div>
         ) : (
