@@ -849,6 +849,7 @@ export function MemoryDetails({
   scopeMoves?: boolean;
   memoryEnabled: boolean;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const { environments } = useEnvironments();
   const deviceName = (id: EnvironmentId) =>
@@ -941,7 +942,7 @@ export function MemoryDetails({
             <MemoryForgetControl
               environmentId={environmentId}
               item={item}
-              label="Forget"
+              label={gt("Forget")}
               onForgotten={(message) => {
                 onForgotten(message);
                 void navigate({
