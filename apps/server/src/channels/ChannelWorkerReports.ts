@@ -17,6 +17,7 @@ import {
   localChildThreadId,
   type OrchestrationV2Run,
   type ThreadId,
+  type RunId,
 } from "@goat/contracts";
 import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
@@ -30,6 +31,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { readThreadResult, readWorkerSettlement } from "../threadResults/ThreadResultService.ts";
 import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
+import { hasDeliverableReport, recordRequiredProgress } from "./channelDeliverables.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import {
   anyLaunchedResultOwed,
@@ -844,10 +846,11 @@ const make = Effect.gen(function* () {
       // In a GOAT Bot session only the task's newest result run may report for it; an earlier
       // run's delayed report, another task's, or a background command's notice is refused.
       const sessionWorker = isGoatBotSessionThreadId(worker.threadId);
+      let ownedRuns: ReadonlyArray<RunId> = [];
       if (sessionWorker) {
         const caller = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         const runId = Option.isSome(caller) ? caller.value.thread?.runId : undefined;
-        if (input.doneMeans !== undefined && runId === undefined)
+        if ((input.doneMeans !== undefined || hasDeliverableReport(input)) && runId === undefined)
           return yield* new ChannelGatewayError({ reason: "forbidden" });
         if (runId !== undefined) {
           const records = yield* threads
@@ -856,12 +859,13 @@ const make = Effect.gen(function* () {
           const own = yield* sessionTaskRuns(sql, worker.threadId, records, stored.task).pipe(
             Effect.orElseSucceed((): ReadonlyArray<OrchestrationV2Run> => []),
           );
+          if (input.requiredDeliverables) ownedRuns = own.map((run) => run.id);
           if (resultRunsOf(own, noticeMessageIds(records.messages)).at(-1)?.id !== runId)
             return yield* new ChannelGatewayError({ reason: "forbidden" });
         }
       }
       if (
-        input.doneMeans !== undefined &&
+        (input.doneMeans !== undefined || hasDeliverableReport(input)) &&
         (!sessionWorker || stored.task.kind !== "turn" || input.status !== "running")
       )
         return yield* new ChannelGatewayError({ reason: "invalid_input" });
@@ -873,6 +877,17 @@ const make = Effect.gen(function* () {
         case "running": {
           // A GOAT Bot turn's running report is a direct message to the person unless milestone:false.
           const milestone = input.milestone ?? (task.kind === "turn" ? true : undefined);
+          if (hasDeliverableReport(input)) {
+            yield* recordRequiredProgress(
+              sql,
+              ledger,
+              Option.getOrUndefined(childWorkStore),
+              stored,
+              input,
+              ownedRuns,
+            );
+            return;
+          }
           yield* commitTransition(
             ledger,
             stored,
@@ -916,7 +931,10 @@ const make = Effect.gen(function* () {
           return;
         case "completed":
           // Held until the run itself finishes; reconcile then decides.
-          if (worker.runId === undefined) {
+          if (
+            worker.runId === undefined ||
+            task.requiredDeliverables?.some((item) => item.review?.decision !== "accepted")
+          ) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
           }
           yield* commitTransition(

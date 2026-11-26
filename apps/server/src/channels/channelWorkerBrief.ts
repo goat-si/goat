@@ -229,6 +229,7 @@ export const turnInstruction = (
     GOAT_BOT_ROUTING_RULE,
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,
+    'When the person requires several separate worker results, declare all of them in requiredDeliverables on your running channel.task_report before dispatch. Use task.create with clientRequestId "required:<id>:<attempt>" (start at 1). On SSH, use task.create with target.host and remote.cwd for that item. Review each worker report against its criterion with reviewDeliverable and concrete evidence. Use retryDeliverable for a failed item while this task is active. Report success only after all items are accepted.',
     ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
     files.sharedNotes === undefined
       ? "Keep the shared notes file unchanged. Ask the person to make shared note changes through the All bots memory view."

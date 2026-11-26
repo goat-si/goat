@@ -12,6 +12,15 @@
   "7eed14b9c7fd7661": "Del sistema",
   "2c1c93a646bbea6e": "Idioma",
   "0a75e464d833bca8": "Ajustes",
+  "28c4aee6105fd014": "Resultados obligatorios aceptados",
+  "96db07a16d81979f": "Ejecutor en {host}",
+  "cd9e0573b4527cba": "Sin iniciar",
+  "9756b09ffd8a55c6": "En curso",
+  "b185ea720a85e9c2": "Pendiente de aceptación",
+  "26aeccb614ec69f1": "Aceptado",
+  "50373722fa3f4c66": "Aceptado",
+  "d4d89c139de812a8": "Fallido",
+  "c996d7846e4250ef": "Intento {attempt}",
   "858561b97fdd72f2": "Buscar ajustes",
   "79e4d73c1bc8cf45": "Comprobando",
   "4681c4c9541539a4": "Iniciar sesión",
@@ -76,5 +85,10 @@
   "7ebd9f61d1766c38": "Instalar actualización de la aplicación",
   "a840ff60c35b919d": "Ver versiones beta",
   "5df0a7f15501c3d9": "No se pudieron abrir las versiones beta",
-  "78a04e0e625c0990": "Error de actualización"
+  "78a04e0e625c0990": "Error de actualización",
+  "de2c01041f849c5a": "Criterio de finalización",
+  "61ee56caa5880fae": "Equipo del agente de trabajo",
+  "0158b772ab348c18": "Última actualización",
+  "b949b3f1ed6bb373": "Informe del agente recibido",
+  "a7a2c522026264c0": "Falta el informe del agente"
 }

@@ -4,6 +4,9 @@ import { OrchestrationV2Notification } from "./orchestrationV2Notification.ts";
 
 import {
   BotProfile,
+  BotWorkResult,
+  BotTaskRow,
+  BotTaskSummary,
   ChannelGatewayError,
   ChannelCreateBotInput,
   ChannelGetBotStatusResult,
@@ -20,6 +23,66 @@ import {
 
 const json = <S extends Schema.Codec<unknown, unknown>>(schema: S) => Schema.toCodecJson(schema);
 const decodeProfile = Schema.decodeUnknownExit(BotProfile);
+
+it("decodes task evidence across older and current peers", () => {
+  const {
+    attemptEvidence: _evidence,
+    requiredDeliverables: _required,
+    ...oldFields
+  } = BotWorkResult.fields;
+  const { doneMeans: _doneMeans, ...oldSummary } = BotTaskSummary.fields;
+  const oldRow = Schema.Struct({ ...BotTaskRow.fields, task: Schema.Struct(oldSummary) });
+  const old = Schema.decodeUnknownSync(
+    Schema.Struct({
+      ...oldFields,
+      task: Schema.Union([
+        Schema.Struct({ state: Schema.Literal("known"), row: oldRow }),
+        Schema.Struct({ state: Schema.Literal("unavailable"), task: Schema.Struct(oldSummary) }),
+      ]),
+    }),
+  );
+  const current = Schema.decodeUnknownSync(BotWorkResult);
+  const base = {
+    task: {
+      state: "known",
+      row: {
+        kind: "task",
+        task: {
+          taskId: "task-1",
+          title: "Release",
+          status: "running",
+          updatedAt: "2026-11-04T10:00:00.000Z",
+        },
+        view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+        lastActivityAt: "2026-11-04T10:00:00.000Z",
+        unread: false,
+        mainMessagesSinceQuiet: 0,
+      },
+    },
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+  };
+  const added = {
+    attemptEvidence: { summary: "Checks passed", report: "present" },
+    requiredDeliverables: [
+      { id: "build", criterion: "Build passes", attempt: 1, state: "accepted" },
+    ],
+  };
+  expect(current(base)).toEqual(base);
+  expect(current({ ...base, ...added })).toMatchObject(added);
+  const newer = {
+    ...base,
+    ...added,
+    task: {
+      ...base.task,
+      row: { ...base.task.row, task: { ...base.task.row.task, doneMeans: "Build passes" } },
+    },
+  };
+  expect(current(newer).task).toMatchObject({ row: { task: { doneMeans: "Build passes" } } });
+  expect(old(newer)).toEqual(base);
+});
 
 describe("channel.updateBot input", () => {
   const decode = Schema.decodeUnknownExit(ChannelUpdateBotInput);

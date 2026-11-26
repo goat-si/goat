@@ -42,6 +42,7 @@ it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", asy
     state.lookup.mockResolvedValue(
       AsyncResult.success({
         task: { state: "known", row },
+        attemptEvidence: { summary: "Checking the release manifest." },
         approvalObservation: {
           worker,
           needsYou,
@@ -88,6 +89,8 @@ it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", asy
   );
   await renderTask();
   expect(container.textContent).toContain("1 waiting");
+  expect(container.textContent).toContain("Latest update Checking the release manifest.");
+  expect(container.textContent).not.toContain("Worker report missing");
   const link = container.querySelector<HTMLButtonElement>(
     '[aria-label="Open worker · Waiting worker"]',
   );
@@ -112,4 +115,51 @@ it.each(["ready", "failed"])("shows chipless approvals with a %s Work list", asy
   );
   expect(container.textContent).not.toContain("waiting");
   expect(container.querySelector('[aria-label="Open worker · Waiting worker"]')).toBeNull();
+});
+
+it("refreshes an open task's required results after a silent task change", async () => {
+  reset();
+  state.readApprovalAtoms = true;
+  state.lookupCapable = true;
+  state.snoozeCapable = true;
+  const taskId = ChannelTaskId.make("task");
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId, title: "Review", status: "running", updatedAt: at },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  if (row.kind !== "task") throw new Error("expected a task");
+  const result = (summary: string, state: "pending" | "accepted", updatedAt = row.task.updatedAt) =>
+    AsyncResult.success({
+      task: { state: "known", row: { ...row, task: { ...row.task, updatedAt } } },
+      attemptEvidence: { summary },
+      requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1, state }],
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    });
+  state.lookup.mockResolvedValue(result("Before", "pending"));
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
+  appAtomRegistry.set(
+    taskChanges,
+    AsyncResult.success({ subscription: 1, value: { revision: 0 } }),
+  );
+  await renderWork(
+    <WorkWithChip visible taskId={taskId} onOpenTask={() => {}} onOpenThread={() => {}} />,
+  );
+  expect(container.textContent).toContain("Before");
+  state.lookup.mockResolvedValue(result("After", "accepted", "2026-11-04T10:01:00.000Z"));
+  await act(async () =>
+    appAtomRegistry.set(
+      taskChanges,
+      AsyncResult.success({ subscription: 1, value: { revision: 1 } }),
+    ),
+  );
+  expect(container.textContent).toContain("After");
+  expect(container.textContent).toContain("1/1");
 });

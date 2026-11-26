@@ -17,6 +17,7 @@ import {
 import {
   botReportAwaitsDelegates,
   clearBotReportDue,
+  missingDeliverablesForRun,
   markBotReportDue,
   settlementReportRun,
 } from "./delegatedBotReports.ts";
@@ -38,14 +39,22 @@ export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
       "run_not_found",
       "run_mismatch",
       "delegates_pending",
+      "deliverables_pending",
       "attachment_invalid",
       "attachment_limit",
       "storage",
     ]),
     cause: Schema.optional(Schema.Defect()),
+    missing: Schema.optionalKey(Schema.Array(Schema.String)),
   },
 ) {
   override get message(): string {
+    if (this.reason === "deliverables_pending")
+      return (
+        "Required results still need acceptance: " +
+        this.missing?.join(", ") +
+        ". Review each current worker result with channel.task_report before reporting success."
+      );
     if (this.reason === "attachment_invalid")
       return "Reference an existing attachment in this thread with its messageId, the runId and current attempt id.";
     if (this.reason === "attachment_limit")
@@ -301,6 +310,14 @@ const make = Effect.gen(function* () {
     const report = yield* sql
       .withTransaction(
         Effect.gen(function* () {
+          if (bot && input.outcome === "succeeded") {
+            const missing = yield* missingDeliverablesForRun(sql, threadId, run, records.runs);
+            if (missing.length)
+              return yield* new ThreadResultError({
+                reason: "deliverables_pending",
+                missing: missing.map((row) => row.id),
+              });
+          }
           const previous = yield* readStoredThreadResultReport(threadId, run.id).pipe(
             Effect.provideService(SqlClient.SqlClient, sql),
           );

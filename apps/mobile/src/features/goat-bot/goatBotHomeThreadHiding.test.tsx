@@ -33,6 +33,7 @@ import {
 // RPC reads), the catalog, snapshots and presentations, native components, the Home-mode hook's
 // inputs, the row menu, and Home's other parts (face, status card, library, memory, search).
 type Props = Record<string, unknown> & { children?: ReactNode };
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
 const nativeAlert = vi.hoisted(() => vi.fn());
 const fx = vi.hoisted(() => ({
   registry: undefined as unknown as import("effect/reactivity").AtomRegistry.AtomRegistry,
@@ -55,6 +56,8 @@ const fx = vi.hoisted(() => ({
   reads: [] as string[],
 }));
 // Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
+
 vi.mock("./useKeptPerComputer", () => ({
   useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
     live.data,

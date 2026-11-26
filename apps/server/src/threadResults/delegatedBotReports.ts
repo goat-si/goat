@@ -113,3 +113,21 @@ export const settlementReportRun = Effect.fn("ThreadResults.settlementReportRun"
   }
   return null;
 });
+
+/** One session may host several tasks. Only the task of this run can veto its report. */
+export const missingDeliverablesForRun = Effect.fn("ThreadResults.missingDeliverablesForRun")(
+  function* (
+    sql: SqlClient.SqlClient,
+    threadId: ThreadId,
+    run: OrchestrationV2Run,
+    runs: ReadonlyArray<OrchestrationV2Run>,
+  ) {
+    const direct = yield* resolveSessionRun(sql, threadId, { runs, messages: [] }, run.id);
+    const owner = direct ?? (yield* resolveSessionRun(sql, threadId, undefined, run.id));
+    if (!owner) return [];
+    return yield* sql<{ id: string }>`SELECT json_extract(item.value,'$.id') AS id
+    FROM channel_tasks t, json_each(t.task_json,'$.requiredDeliverables') item
+    WHERE t.task_id=${owner.task_id} AND t.generation=${owner.task_generation}
+    AND json_extract(item.value,'$.review.decision') IS NOT 'accepted'`;
+  },
+);

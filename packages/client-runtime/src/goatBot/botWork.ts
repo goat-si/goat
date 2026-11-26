@@ -1,7 +1,9 @@
 import {
   isGoatBotConversationThreadId,
+  localChildThreadId,
   type BotRemoteWork,
   type BotThreadRow,
+  type BotWorkResult,
   type ChannelChildWork,
   type ChannelTaskId,
   type ChannelTaskChip,
@@ -12,6 +14,41 @@ import {
 
 import { goatBotTaskWait } from "./activity.ts";
 
+export function newestBotTaskSummary(
+  listed: Extract<BotThreadRow, { kind: "task" }>["task"] | undefined,
+  work: BotWorkResult | undefined,
+) {
+  if (!work || !listed) return listed;
+  const found = work.task.state === "known" ? work.task.row.task : work.task.task;
+  if (listed.taskId !== found.taskId) return listed;
+  if (found.version !== undefined && listed.version !== undefined)
+    return found.version > listed.version ? found : listed;
+  const generation = (found.generation ?? 1) - (listed.generation ?? 1);
+  return generation > 0 ||
+    (generation === 0 && Date.parse(found.updatedAt) > Date.parse(listed.updatedAt))
+    ? found
+    : listed;
+}
+
+/** A list refresh and the by-id lookup can arrive in either order, especially on retry. */
+export function botTaskAttemptEvidence(
+  work: BotWorkResult | undefined,
+  task: Extract<BotThreadRow, { kind: "task" }>["task"] | undefined,
+) {
+  if (work?.attemptEvidence === undefined || task === undefined) return null;
+  const found = work.task.state === "known" ? work.task.row.task : work.task.task;
+  if (
+    found.taskId !== task.taskId ||
+    (found.generation ?? 1) !== (task.generation ?? 1) ||
+    found.status !== task.status ||
+    (found.version !== undefined && task.version !== undefined
+      ? found.version !== task.version
+      : found.updatedAt !== task.updatedAt)
+  )
+    return null;
+  return { ...work.attemptEvidence, worker: work.approvalObservation?.worker };
+}
+
 export interface BotWorkTask {
   readonly row: Extract<BotThreadRow, { readonly kind: "task" }>;
   readonly subagents: ReadonlyArray<{
@@ -20,6 +57,7 @@ export interface BotWorkTask {
     readonly label: string;
     readonly host?: string;
     readonly destinationHint?: string;
+    readonly thread?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
   }>;
   readonly threads: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -71,7 +109,10 @@ export function groupBotWork(
     }
     for (const child of group?.children ?? []) {
       if (child.surface === "delegate_local" || child.surface === "delegate_remote") {
+        const threadId =
+          child.surface === "delegate_local" ? localChildThreadId(child.destination) : undefined;
         subagents.push({
+          ...(threadId === undefined ? {} : { thread: { environmentId, threadId } }),
           childWorkId: child.childWorkId,
           state: child.state,
           label: child.state === "unknown" ? "uncertain" : child.state,

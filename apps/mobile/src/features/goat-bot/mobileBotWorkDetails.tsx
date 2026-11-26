@@ -1,3 +1,4 @@
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   botTaskActivityFallbackName,
   botTaskActivityFallbackNames,
@@ -50,6 +51,33 @@ export function workThreadLink(input: {
     return { text: "Open work thread", label: "Work thread: " + input.taskTitle };
   const text = workThreadName(coding.title);
   return { text, label: "GOAT thread: " + text };
+}
+
+export function MobileSubagentWork({
+  agent,
+  disabled,
+  onOpenThread,
+}: {
+  readonly agent: BotWorkTask["subagents"][number];
+  readonly disabled: boolean;
+  readonly onOpenThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
+}) {
+  const thread = agent.thread;
+  const shell = useThreadShell(
+    thread ? scopeThreadRef(thread.environmentId, thread.threadId) : null,
+  );
+  const name = shell?.title?.trim() || agent.host || agent.destinationHint || "Subagent";
+  const text = name + " · " + agent.label;
+  if (!thread || !shell) return <Text className="text-foreground-muted">{text}</Text>;
+  return (
+    <MobileWorkThreadLink
+      link={{ text, label: text }}
+      worker={thread}
+      disabled={disabled}
+      mutedWhenDisabled
+      onPress={() => onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })}
+    />
+  );
 }
 
 export function mobileBotWorkDetails(props: {
@@ -127,9 +155,7 @@ export function mobileBotWorkDetails(props: {
     ...entry.subagents.map((agent) => ({
       key: JSON.stringify(["task-detail", id, "subagent", agent.childWorkId]),
       render: () => (
-        <Text className="text-foreground-muted">
-          {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
-        </Text>
+        <MobileSubagentWork agent={agent} disabled={closed} onOpenThread={openThread} />
       ),
     })),
   ];

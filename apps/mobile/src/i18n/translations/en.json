@@ -12,6 +12,15 @@
   "7eed14b9c7fd7661": "System default",
   "2c1c93a646bbea6e": "Language",
   "0a75e464d833bca8": "Settings",
+  "28c4aee6105fd014": "Required results accepted",
+  "96db07a16d81979f": "Worker on {host}",
+  "cd9e0573b4527cba": "Not started",
+  "9756b09ffd8a55c6": "In progress",
+  "b185ea720a85e9c2": "Awaiting acceptance",
+  "26aeccb614ec69f1": "Accepted",
+  "50373722fa3f4c66": "Accepted",
+  "d4d89c139de812a8": "Failed",
+  "c996d7846e4250ef": "Attempt {attempt}",
   "858561b97fdd72f2": "Search settings",
   "79e4d73c1bc8cf45": "Checking",
   "4681c4c9541539a4": "Sign in",
@@ -76,5 +85,10 @@
   "7ebd9f61d1766c38": "Install app update",
   "a840ff60c35b919d": "Check beta builds",
   "5df0a7f15501c3d9": "Could not open beta builds",
-  "78a04e0e625c0990": "Update failed"
+  "78a04e0e625c0990": "Update failed",
+  "de2c01041f849c5a": "Done means",
+  "61ee56caa5880fae": "Worker machine",
+  "0158b772ab348c18": "Latest update",
+  "b949b3f1ed6bb373": "Worker report received",
+  "a7a2c522026264c0": "Worker report missing"
 }

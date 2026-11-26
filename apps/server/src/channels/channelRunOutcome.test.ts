@@ -233,3 +233,21 @@ describe("a bot turn's answer", () => {
     assert.strictEqual(completedSummary(event), "Deployed.");
   });
 });
+
+it("keeps a parent resumable when a required worker has not delivered its result", () => {
+  const planned = {
+    ...turn,
+    requiredDeliverables: [{ id: "linux", criterion: "Linux regression tests pass", attempt: 1 }],
+  };
+  for (const reported of [undefined, { outcome: "succeeded" as const, summary: "Done" }]) {
+    const event = settleCompletedRun({
+      task: planned,
+      runId,
+      reported,
+      fallbackSummary: "Done",
+      now,
+    });
+    assert.strictEqual(event.type, "task.question.opened");
+    if (event.type === "task.question.opened") assert.include(event.payload.question.text, "linux");
+  }
+});

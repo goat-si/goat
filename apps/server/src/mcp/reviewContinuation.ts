@@ -29,7 +29,6 @@ import {
 } from "../orchestration-v2/goat/ReviewRoundEvidence.ts";
 import type * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
-import { admitDelegate, releaseReservation } from "./childWorkAdmission.ts";
 import type { McpThreadInvocationScope } from "./McpInvocationContext.ts";
 import { stableCommandId } from "./stableCommandId.ts";
 
@@ -269,17 +268,12 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
           }
           // Channel-owned callers count child work through their own ledger, which has no
           // continuation record; they start fresh rounds instead.
-          const admission = yield* admitDelegate(call.channelChildWork, {
-            callerThreadId: scope.thread.threadId,
-            callerRunId: scope.thread.runId,
-            prompt: input.task,
-            clientRequestId: input.clientRequestId,
-            target: input.target,
-            role: input.role,
-          });
-          if (admission !== undefined) {
-            if (admission._tag !== "existing")
-              yield* releaseReservation(call.channelChildWork, admission);
+          const ownership = Option.isSome(call.channelChildWork)
+            ? yield* call.channelChildWork.value
+                .ownershipForCaller(scope.thread.threadId, scope.thread.runId)
+                .pipe(Effect.mapError((error) => failure("orchestration_error", error.detail)))
+            : undefined;
+          if (ownership && ownership._tag !== "not_channel_owned") {
             return yield* failure(
               "invalid_request",
               "continueFrom is not available to channel-owned threads; start a fresh review round.",

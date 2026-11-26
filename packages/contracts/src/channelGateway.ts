@@ -30,7 +30,6 @@ import {
   ChannelQuestionId,
   ChannelReceptionId,
   ChannelReplyAddress,
-  ChannelTaskEventId,
   ChannelTaskId,
 } from "./channelCommon.ts";
 import {
@@ -40,8 +39,9 @@ import {
   ChannelTaskStatus,
   ChannelWorkerRef,
   ChannelTaskDoneMeans,
+  ChannelTaskAttemptEvidence,
 } from "./channelLedger.ts";
-import { ChannelSkillProposal } from "./channelSkillProposal.ts";
+import { ChannelDeliverableView } from "./channelDeliverables.ts";
 import { ChannelTaskNeedsYou, ChannelTaskPullRequest } from "./channelWorkerObservation.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { GoatBotHomeClaim } from "./settings.ts";
@@ -190,28 +190,7 @@ export const ChannelDeliveryReceipt = Schema.Struct({
 });
 export type ChannelDeliveryReceipt = typeof ChannelDeliveryReceipt.Type;
 
-/**
- * A worker's report on its assigned task. The sender's identity and thread come from the MCP
- * invocation, not from this payload, and must match the task's current assignment.
- */
-export const ChannelTaskReportInput = Schema.Struct({
-  taskId: ChannelTaskId,
-  eventId: ChannelTaskEventId,
-  generation: PositiveInt,
-  status: Schema.Literals(["running", "waiting_input", "completed", "failed"]),
-  summary: TrimmedNonEmptyString,
-  doneMeans: Schema.optionalKey(
-    ChannelTaskDoneMeans.annotate({
-      description:
-        "On the first running report from a GOAT Bot session, a one-sentence completion criterion for the work it is starting.",
-    }),
-  ),
-  milestone: Schema.optional(Schema.Boolean),
-  question: Schema.optional(TrimmedNonEmptyString),
-  /** Only on a completed report; see ChannelSkillProposal. */
-  skillProposal: Schema.optional(ChannelSkillProposal),
-});
-export type ChannelTaskReportInput = typeof ChannelTaskReportInput.Type;
+export { ChannelTaskReportInput } from "./channelTaskReport.ts";
 
 /** Creates a one-time code that links an external account to this server's owner. */
 export const ChannelIdentityLinkCreateInput = Schema.Struct({
@@ -311,6 +290,7 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   {
     reason: ChannelGatewayErrorReason,
     conflictingBotName: Schema.optionalKey(BotProfile.fields.name),
+    deliverableProblem: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
     attachmentProblem: Schema.optionalKey(Schema.Literal("expired")),
     /** Seconds the caller should wait before retrying, when the transport said so. */
     retryAfterSeconds: Schema.optionalKey(PositiveInt),
@@ -325,6 +305,7 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   },
 ) {
   override get message(): string {
+    if (this.deliverableProblem) return this.deliverableProblem;
     return this.conflictingBotName === undefined
       ? CHANNEL_GATEWAY_FAILURE_MESSAGES[this.reason]
       : `A bot named “${this.conflictingBotName}” is already active.`;
@@ -535,6 +516,7 @@ export const BotThreadRow = Schema.Union([
       doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
       title: TrimmedNonEmptyString,
       status: ChannelTaskStatus,
+      version: Schema.optionalKey(PositiveInt),
       updatedAt: IsoDateTime,
       completedAt: Schema.optional(IsoDateTime),
       /** The attempt this row shows; absent means the first. */
@@ -586,6 +568,7 @@ export const BotTaskSummary = Schema.Struct({
   doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
   titleTruncated: Schema.optionalKey(Schema.Boolean),
   status: ChannelTaskStatus,
+  version: Schema.optionalKey(PositiveInt),
   updatedAt: IsoDateTime,
   completedAt: Schema.optional(IsoDateTime),
   generation: Schema.optional(PositiveInt),
@@ -657,6 +640,9 @@ export const ChannelBotTaskActivity = Schema.Struct({
 });
 
 export const BotWorkResult = Schema.Struct({
+  requiredDeliverables: Schema.optionalKey(
+    Schema.Array(ChannelDeliverableView).check(Schema.isMaxLength(16)),
+  ),
   task: Schema.Union([
     Schema.Struct({ state: Schema.Literal("known"), row: BotTaskRow }),
     Schema.Struct({
@@ -668,6 +654,7 @@ export const BotWorkResult = Schema.Struct({
   codingRows: Schema.Array(BotCodingRow),
   remoteWork: Schema.Array(BotRemoteWork),
   activity: Schema.optionalKey(ChannelBotTaskActivity),
+  attemptEvidence: Schema.optionalKey(ChannelTaskAttemptEvidence),
   launchesTruncated: Schema.Boolean,
   partial: Schema.Boolean,
   approvalObservation: Schema.optional(

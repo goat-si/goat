@@ -12,6 +12,15 @@
   "7eed14b9c7fd7661": "Systemstandard",
   "2c1c93a646bbea6e": "Sprache",
   "0a75e464d833bca8": "Einstellungen",
+  "28c4aee6105fd014": "Abgenommene Pflichtergebnisse",
+  "96db07a16d81979f": "Ausführender auf {host}",
+  "cd9e0573b4527cba": "Nicht gestartet",
+  "9756b09ffd8a55c6": "In Bearbeitung",
+  "b185ea720a85e9c2": "Wartet auf Abnahme",
+  "26aeccb614ec69f1": "Abgenommen",
+  "50373722fa3f4c66": "Abgenommen",
+  "d4d89c139de812a8": "Fehlgeschlagen",
+  "c996d7846e4250ef": "Versuch {attempt}",
   "858561b97fdd72f2": "Einstellungen durchsuchen",
   "79e4d73c1bc8cf45": "Wird geprüft",
   "4681c4c9541539a4": "Anmelden",
@@ -76,5 +85,10 @@
   "7ebd9f61d1766c38": "App-Update installieren",
   "a840ff60c35b919d": "Beta-Versionen ansehen",
   "5df0a7f15501c3d9": "Beta-Versionen konnten nicht geöffnet werden",
-  "78a04e0e625c0990": "Update fehlgeschlagen"
+  "78a04e0e625c0990": "Update fehlgeschlagen",
+  "de2c01041f849c5a": "Abschlusskriterium",
+  "61ee56caa5880fae": "Rechner des Ausführenden",
+  "0158b772ab348c18": "Letzte Aktualisierung",
+  "b949b3f1ed6bb373": "Bericht des Ausführenden erhalten",
+  "a7a2c522026264c0": "Bericht des Ausführenden fehlt"
 }

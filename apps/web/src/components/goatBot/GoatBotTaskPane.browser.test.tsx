@@ -1,3 +1,4 @@
+vi.mock("./useGoatBotTaskChanges", () => ({ useGoatBotTaskChanges: () => "stream:1:0" }));
 import {
   BotProfile,
   BotThreadRow,

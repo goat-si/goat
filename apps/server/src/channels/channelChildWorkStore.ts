@@ -10,6 +10,8 @@
  */
 import {
   ChannelChildWork,
+  ChannelDeliverables,
+  requiredDeliverableRequestKey,
   type ChannelChildWorkDestination,
   type ChannelChildWorkId,
   type ChannelChildWorkState,
@@ -19,6 +21,7 @@ import {
   localChildThreadId,
   type ThreadId,
 } from "@goat/contracts";
+import { childWorkIdFor } from "./channelIds.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -43,6 +46,7 @@ const toStoreError =
       cause,
     });
 
+const decodeDeliverables = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelDeliverables));
 const encode = Schema.encodeSync(Schema.fromJsonString(ChannelChildWork));
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
 
@@ -88,8 +92,9 @@ function fillAcknowledgedDestination(
 }
 
 export type ChannelChildWorkAdmitResult =
-  | { readonly _tag: "admitted" }
+  | { readonly _tag: "admitted"; readonly record: ChannelChildWork }
   | { readonly _tag: "at_capacity" }
+  | { readonly _tag: "invalid_deliverable"; readonly detail: string }
   | { readonly _tag: "existing"; readonly record: ChannelChildWork }
   /** The owning task finished or a retry moved it to another generation. */
   | { readonly _tag: "owner_settled" };
@@ -131,6 +136,7 @@ export class ChannelChildWorkStore extends Context.Service<
     readonly admitReserved: (
       record: ChannelChildWork,
       capacity: number,
+      launchDigest?: string,
     ) => Effect.Effect<ChannelChildWorkAdmitResult, ChannelChildWorkStoreError>;
     /**
      * Compare-and-set on state; returns the updated record, or undefined when the record moved
@@ -232,7 +238,7 @@ const make = Effect.gen(function* () {
       Effect.mapError(toStoreError("findByDestinationThread")),
     );
 
-  const admitReserved = (record: ChannelChildWork, capacity: number) =>
+  const admitReserved = (record: ChannelChildWork, capacity: number, launchDigest?: string) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
@@ -240,26 +246,69 @@ const make = Effect.gen(function* () {
             SELECT value_json FROM channel_runtime_state
             WHERE key = ${keyFor(record.taskId, record.childWorkId)}
           `;
-          if (existing[0] !== undefined) {
-            return {
-              _tag: "existing",
-              record: decode(existing[0].value_json),
-            } as const satisfies ChannelChildWorkAdmitResult;
-          }
-          // Checked in this write so a retry and an admission are ordered: either the retry sees
-          // this record, or this admission sees the task at its next generation.
-          const owners = yield* sql<{ readonly generation: number }>`
-            SELECT generation FROM channel_tasks WHERE task_id = ${record.taskId}
-              AND status NOT IN ('completed', 'failed', 'cancelled')
+          const prior = existing[0] === undefined ? undefined : decode(existing[0].value_json);
+          const [owner] = yield* sql<{
+            readonly generation: number;
+            readonly items: string | null;
+          }>`
+            SELECT generation, json_extract(task_json, '$.requiredDeliverables') AS items
+            FROM channel_tasks WHERE task_id = ${record.taskId}
+              AND status NOT IN ('completed','failed','cancelled')
           `;
-          if (owners[0]?.generation !== record.generation) {
-            return { _tag: "owner_settled" } as const satisfies ChannelChildWorkAdmitResult;
+          if (owner?.generation !== record.generation) {
+            if (prior && !prior.launchDigest) return { _tag: "existing", record: prior } as const;
+            return { _tag: "owner_settled" } as const;
           }
+          const delegate = isDelegateSurface(record.surface);
+          let admitted = record;
+          if (owner.items != null && (delegate || record.requestKey.startsWith("required:"))) {
+            const items = decodeDeliverables(owner.items);
+            const open = items.filter((entry) => !entry.review);
+            const item = open.find(
+              (entry) =>
+                requiredDeliverableRequestKey(entry.id, entry.attempt) === record.requestKey,
+            );
+            if (!delegate || !item || !launchDigest)
+              return {
+                _tag: "invalid_deliverable",
+                detail: open.length
+                  ? "For task.create, set clientRequestId to the matching required item: " +
+                    open
+                      .map((entry) => requiredDeliverableRequestKey(entry.id, entry.attempt))
+                      .join(", ") +
+                    "."
+                  : "This task has no open required item for this delegate.",
+              } as const;
+            const previous =
+              item.attempt > 1
+                ? yield* get(
+                    record.taskId,
+                    childWorkIdFor(
+                      record.taskId,
+                      record.generation,
+                      requiredDeliverableRequestKey(item.id, item.attempt - 1),
+                    ),
+                  )
+                : prior;
+            if (
+              (item.attempt > 1 || prior) &&
+              (!previous ||
+                !previous.launchDigest ||
+                launchDigest !== previous.launchDigest ||
+                previous.promptDigest !== record.promptDigest)
+            )
+              return {
+                _tag: "invalid_deliverable",
+                detail:
+                  "Retry the required item with its original task, destination, and launch options.",
+              } as const;
+            admitted = { ...record, launchDigest };
+          }
+          if (prior) return { _tag: "existing", record: prior } as const;
           const siblings = yield* sql<{ readonly value_json: string }>`
             SELECT value_json FROM channel_runtime_state
             WHERE key >= ${prefixFor(record.taskId)} AND key < ${afterFor(record.taskId)}
           `;
-          const delegate = isDelegateSurface(record.surface);
           const active = readRows(siblings).filter(
             (sibling) =>
               isChannelChildWorkActive(sibling.state) &&
@@ -270,9 +319,12 @@ const make = Effect.gen(function* () {
           }
           yield* sql`
             INSERT INTO channel_runtime_state (key, value_json, updated_at)
-            VALUES (${keyFor(record.taskId, record.childWorkId)}, ${encode(record)}, ${record.updatedAt})
+            VALUES (${keyFor(record.taskId, record.childWorkId)}, ${encode(admitted)}, ${record.updatedAt})
           `;
-          return { _tag: "admitted" } as const satisfies ChannelChildWorkAdmitResult;
+          return {
+            _tag: "admitted",
+            record: admitted,
+          } as const satisfies ChannelChildWorkAdmitResult;
         }),
       )
       .pipe(Effect.mapError(toStoreError("admitReserved")));
