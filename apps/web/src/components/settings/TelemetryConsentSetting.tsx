@@ -1,13 +1,13 @@
+import { useGT } from "gt-react";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
-const USAGE_DATA_DESCRIPTION =
-  "Send GOAT which providers, models and features you use, turn results, durations and token counts, under a random ID for this install. Never prompts, responses, code, file paths or credentials.";
-
 export function TelemetryConsentSetting() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting()("usage-data");
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { connectedEnvironments } = useSettingsScope();
@@ -21,15 +21,17 @@ export function TelemetryConsentSetting() {
     .find((value) => value !== undefined);
   return (
     <SettingsRow
-      {...searchableSetting("usage-data")}
+      {...setting}
       serverScoped
       settingKeys={["telemetryConsent"]}
-      description={USAGE_DATA_DESCRIPTION}
+      description={gt(
+        "Send GOAT which providers, models and features you use, turn results, durations and token counts, under a random ID for this install. Never prompts, responses, code, file paths or credentials.",
+      )}
       status={
         !supported
-          ? "Update the selected servers to change this setting."
+          ? gt("Update the selected servers to change this setting.")
           : override !== undefined
-            ? "Set by GOAT_TELEMETRY_ENABLED in a selected server's environment."
+            ? gt("Set by GOAT_TELEMETRY_ENABLED in a selected server's environment.")
             : undefined
       }
       control={
@@ -44,7 +46,7 @@ export function TelemetryConsentSetting() {
           onCheckedChange={(checked) =>
             updateSettings({ telemetryConsent: checked ? "granted" : "declined" })
           }
-          aria-label="Share usage data"
+          aria-label={setting.title}
         />
       }
     />
