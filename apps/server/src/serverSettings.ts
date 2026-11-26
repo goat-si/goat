@@ -1005,6 +1005,9 @@ const decodeCommittedMemorySettingsJson = Schema.decodeUnknownExit(
     }),
   ),
 );
+const decodeConversationMemoryPause = Schema.decodeUnknownExit(
+  fromLenientJson(Schema.Struct({ conversationMemoryEnabled: Schema.Literal(false) })),
+);
 const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
 
 function selectionSupportsTextGeneration(
@@ -1290,6 +1293,14 @@ const make = Effect.gen(function* () {
         Exit.isFailure(legacy) ||
         (projection.value.memoryHubVersion === undefined && hasCommittedHubEpoch(current))
       ) {
+        // A rejected Hub change must still honor an explicit memory opt-out.
+        if (Exit.isSuccess(decodeConversationMemoryPause(raw))) {
+          yield* conversationMemory.reconcile(false);
+          yield* providerPolicy.publish({
+            ...(yield* providerPolicy.configured),
+            conversationMemoryEnabled: false,
+          });
+        }
         // Withdrawing Connect hub access never waits on the memory-hub projection.
         if (
           publishConnectPolicy &&
