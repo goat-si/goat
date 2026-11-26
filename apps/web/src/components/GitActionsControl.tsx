@@ -296,11 +296,17 @@ function CheckoutGitActionsControl({
     workspaceMutationId,
   });
 
+  const [selectionBranch, setSelectionBranch] = useState(gitStatusForActions?.refName ?? null);
+  if (gitStatusForActions && selectionBranch !== gitStatusForActions.refName) {
+    setSelectionBranch(gitStatusForActions.refName);
+    setExcludedFiles(new Set());
+  }
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   // Repository-relative paths need the worktree root from this status snapshot.
   const workingTreeRoot = gitStatusForActions?.workingTree.rootPath ?? null;
+  // A stash can temporarily hide excluded paths. Only current files affect the commit.
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
-  const allSelected = excludedFiles.size === 0;
+  const allSelected = selectedFiles.length === allFiles.length;
   const noneSelected = selectedFiles.length === 0;
   const initAction = useVcsInitAction(sourceControlScope);
   const runImmediateGitAction = useGitStackedAction(sourceControlScope);
@@ -502,6 +508,9 @@ function CheckoutGitActionsControl({
     }
 
     const actionResult = result.value;
+    if (actionResult.commit.status === "created") {
+      setExcludedFiles((current) => (current === excludedFiles ? new Set() : current));
+    }
     syncThreadBranchAfterGitAction(actionResult);
     if (isPanel) {
       setInlineSuccess({
@@ -590,28 +599,25 @@ function CheckoutGitActionsControl({
     });
   };
 
-  // Keep a typed message for the retry unless the user already started a new one.
-  const restoreDialogCommitMessageOnFailure = (commitMessage: string) => (committed: boolean) => {
-    if (committed || !commitMessage) return;
-    setDialogCommitMessage((current) => current || commitMessage);
-  };
-
-  const runDialogActionOnNewBranch = () => {
+  const runDialogAction = async (featureBranch: boolean) => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
 
     setIsCommitDialogOpen(false);
     setDialogCommitMessage("");
-    setExcludedFiles(new Set());
     setIsEditingFiles(false);
 
-    void runGitActionWithToast({
+    const committed = await runGitActionWithToast({
       action: "commit",
       ...(commitMessage ? { commitMessage } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
-      featureBranch: true,
-      skipDefaultBranchPrompt: true,
-    }).then(restoreDialogCommitMessageOnFailure(commitMessage));
+      featureBranch,
+      skipDefaultBranchPrompt: featureBranch,
+    });
+    if (!committed && commitMessage) {
+      // Keep a typed message for the retry unless the user already started a new one.
+      setDialogCommitMessage((current) => current || commitMessage);
+    }
   };
 
   const runQuickAction = () => {
@@ -691,24 +697,10 @@ function CheckoutGitActionsControl({
       void runGitActionWithToast({ action: "create_pr" });
       return;
     }
-    setExcludedFiles(new Set());
     setIsEditingFiles(false);
     setIsCommitDialogOpen(true);
   };
 
-  const runDialogAction = () => {
-    if (!isCommitDialogOpen) return;
-    const commitMessage = dialogCommitMessage.trim();
-    setIsCommitDialogOpen(false);
-    setDialogCommitMessage("");
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
-    void runGitActionWithToast({
-      action: "commit",
-      ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
-    }).then(restoreDialogCommitMessageOnFailure(commitMessage));
-  };
   const openChangedFileInEditor = (filePath: string) => {
     if (workingTreeRoot === null) {
       toastManager.add({
@@ -1274,14 +1266,14 @@ function CheckoutGitActionsControl({
               variant="outline"
               size="sm"
               disabled={!canChangeThreadBranch || noneSelected}
-              onClick={runDialogActionOnNewBranch}
+              onClick={() => void runDialogAction(true)}
             >
               Commit on new branch
             </Button>
             <Button
               size="sm"
               disabled={!canWriteSourceControl || noneSelected}
-              onClick={runDialogAction}
+              onClick={() => void runDialogAction(false)}
             >
               Commit
             </Button>
