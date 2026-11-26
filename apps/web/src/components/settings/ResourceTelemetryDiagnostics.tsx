@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ProcessSignalActions } from "./ProcessSignalActions";
 import { AuthEnvironmentMaintainScope } from "@goat/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -5,13 +6,14 @@ import {
   ActivityIcon,
   TriangleAlertIcon as AlertTriangleIcon,
   BatteryIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CpuIcon,
   DatabaseIcon,
   GaugeIcon,
   HardDriveIcon,
   MemoryStickIcon,
 } from "~/components/solar";
-import { ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
 import type {
   BackgroundBooleanState,
   EnvironmentId,
@@ -231,6 +233,7 @@ function AggregateCard({
   accentClass: string;
   aggregate: ResourceTelemetryAggregate;
 }) {
+  const gt = useGT();
   return (
     <div className="relative overflow-hidden border-t border-border/60 px-4 py-4 first:border-t-0 md:border-t-0 md:border-l md:first:border-l-0 sm:px-5">
       <span className={cn("absolute inset-x-5 top-0 h-0.5 rounded-full opacity-75", accentClass)} />
@@ -239,7 +242,9 @@ function AggregateCard({
           {label}
         </div>
         <div className="rounded-md bg-muted/55 px-1.5 py-0.5 font-mono text-3xs tabular-nums text-muted-foreground/70">
-          {aggregate.processCount} {aggregate.processCount === 1 ? "process" : "processes"}
+          {gt("{count, plural, one {{count} process} other {{count} processes}}", {
+            count: aggregate.processCount,
+          })}
         </div>
       </div>
       <div className="mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">

@@ -2434,6 +2434,7 @@
   "9fbfeda9a553d68f": "espaço não corresponde",
   "9fc38bc8c28228d0": "Novo atalho de teclado",
   "9fcbf7c597bfb19d": "esquecimento pendente",
+  "9fd31461cee8ff82": "{count, plural, one {{count} processo} other {{count} processos}}",
   "9ff9f24d1568fbaf": "Esta habilidade não tem descrição.",
   "9fff46fd3103a534": "O modelo lê o pull request em várias etapas para escrever o guia de revisão. Um modelo mais capaz pode ajudar. Quando desativado, usa o modelo de redação do controle de versão.",
   "a02601ee26430ec4": "{host} já é usado por outro host SSH. Escolha outro nome.",

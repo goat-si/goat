@@ -2434,6 +2434,7 @@
   "9fbfeda9a553d68f": "space mismatch",
   "9fc38bc8c28228d0": "new keybinding",
   "9fcbf7c597bfb19d": "forget pending",
+  "9fd31461cee8ff82": "{count, plural, one {{count} process} other {{count} processes}}",
   "9ff9f24d1568fbaf": "No description is available for this skill.",
   "9fff46fd3103a534": "Model that reads a pull request to write its review guide. It reads the change itself over many steps, so a stronger model helps. Off uses the source control writer model.",
   "a02601ee26430ec4": "{host} is already used by another SSH host. Pick a different name.",

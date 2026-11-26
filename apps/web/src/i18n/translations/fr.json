@@ -2434,6 +2434,7 @@
   "9fbfeda9a553d68f": "espace incompatible",
   "9fc38bc8c28228d0": "Nouveau raccourci clavier",
   "9fcbf7c597bfb19d": "oubli en attente",
+  "9fd31461cee8ff82": "{count, plural, one {{count} processus} other {{count} processus}}",
   "9ff9f24d1568fbaf": "Aucune description n’est disponible pour cette compétence.",
   "9fff46fd3103a534": "Ce modèle lit la pull request en plusieurs étapes pour rédiger son guide de revue. Un modèle plus performant peut être utile. Si l’option est désactivée, le modèle de rédaction pour la gestion de versions est utilisé.",
   "a02601ee26430ec4": "{host} est déjà utilisé par un autre hôte SSH. Choisissez un autre nom.",

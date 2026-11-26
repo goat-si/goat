@@ -2434,6 +2434,7 @@
   "9fbfeda9a553d68f": "Speicherbereich stimmt nicht überein",
   "9fc38bc8c28228d0": "Neues Tastenkürzel",
   "9fcbf7c597bfb19d": "Vergessen ausstehend",
+  "9fd31461cee8ff82": "{count, plural, one {{count} Prozess} other {{count} Prozesse}}",
   "9ff9f24d1568fbaf": "Für diesen Skill ist keine Beschreibung verfügbar.",
   "9fff46fd3103a534": "Das Modell liest den Pull Request in mehreren Schritten und schreibt einen Review-Leitfaden. Ein leistungsfähigeres Modell ist dafür hilfreich. Ist diese Option aus, wird das Modell für Versionsverwaltungstexte verwendet.",
   "a02601ee26430ec4": "{host} wird bereits von einem anderen SSH-Host verwendet. Wählen Sie einen anderen Namen.",
