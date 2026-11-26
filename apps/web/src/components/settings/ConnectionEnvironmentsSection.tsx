@@ -69,7 +69,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import * as Option from "effect/Option";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useConnectionClipboardActions } from "./useConnectionClipboardActions";
 import { useCopyConnectionDiagnostic } from "../../hooks/useCopyConnectionDiagnostic";
 import { cn } from "../../lib/utils";
 import { SettingsSection } from "./settingsLayout";
@@ -175,10 +175,10 @@ const NO_SSH_RUNTIME_STATUS = Atom.make(null);
 const isSshHostAlias = Schema.is(SshHostAlias);
 const isSshHostProbeError = Schema.is(SshHostProbeError);
 
-function sshSetupError(result: SshHostResult, host: string) {
+function sshSetupError(result: SshHostResult, host: string, gt: ReturnType<typeof useGT>) {
   return result.kind === "error"
     ? result.code === "host_unreachable"
-      ? `Can't reach ${host}. Check that it's running and reachable, then try again.`
+      ? gt("Can't reach {host}. Check that it's running and reachable, then try again.", { host })
       : result.message
     : null;
 }
@@ -257,47 +257,7 @@ function SavedBackendListRow({
   const runtimeStatus = runtimeResult?.status;
   const errorTraceId = environment.connection.traceId;
   const copyDiagnostic = useCopyConnectionDiagnostic(environment);
-  const { copyToClipboard: copyTraceIdToClipboard } = useCopyToClipboard<{ traceId: string }>({
-    target: "trace ID",
-    onCopy: ({ traceId }) => {
-      toastManager.add({
-        type: "success",
-        title: "Trace ID copied",
-        description: traceId,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not copy trace ID",
-          description: error.message,
-        }),
-      );
-    },
-  });
-  const copyTraceId = (traceId: string) => {
-    copyTraceIdToClipboard(traceId, { traceId });
-  };
-  const { copyToClipboard: copyMcpUrl } = useCopyToClipboard<{ url: string }>({
-    target: "MCP URL",
-    onCopy: ({ url }) => {
-      toastManager.add({
-        type: "success",
-        title: "MCP URL copied",
-        description: `Add it to an agent, e.g. claude mcp add --transport http goat ${url}`,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not copy MCP URL",
-          description: error.message,
-        }),
-      );
-    },
-  });
+  const { copyTraceId, copyMcpUrl } = useConnectionClipboardActions();
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   const resumingServerUpdate =
@@ -529,7 +489,7 @@ function SavedBackendListRow({
       serverUpdateState.status !== "running" ? (
         <OutdatedServerUpdateAction
           environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
+          serverLabel={gt("{environment} server", { environment: environment.label })}
           fromVersion={lastDescriptor?.serverVersion}
           targetVersion={APP_VERSION}
           label={serverUpdateState.status === "failed" ? gt("Retry update") : gt("Update")}
@@ -538,7 +498,7 @@ function SavedBackendListRow({
       {savedSshTarget === null && showUpdateAction ? (
         <ServerUpdateAction
           environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
+          serverLabel={gt("{environment} server", { environment: environment.label })}
           selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
           installation={environment.serverConfig?.environment.capabilities.serverInstallation}
           desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
@@ -576,7 +536,7 @@ function SavedBackendListRow({
               variant="ghost-muted"
               size="icon-xs"
               disabled={isRemoving}
-              aria-label={`More actions for ${environment.label}`}
+              aria-label={gt("More actions for {environment}", { environment: environment.label })}
             />
           }
         >
@@ -592,7 +552,7 @@ function SavedBackendListRow({
             {routesOpen ? gt("Hide routes") : gt("Routes")}
           </MenuItem>
           {mcpUrl ? (
-            <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>
+            <MenuItem onClick={() => copyMcpUrl(mcpUrl)}>
               <CopyIcon />
               {gt("Copy MCP URL")}
             </MenuItem>
@@ -863,16 +823,21 @@ export function ConnectionEnvironmentsSection({
         void registerSavedHubNode(target, route?.label ?? target.alias);
         toastManager.add({
           type: "success",
-          title: route ? "Route added" : "Environment connected",
+          title: route ? gt("Route added") : gt("Environment connected"),
           description: route
-            ? `${route.label} can now be reached over SSH ${target.alias}.`
-            : `${target.alias} is ready over an SSH-managed tunnel.`,
+            ? gt("{environment} can now be reached over SSH {host}.", {
+                environment: route.label,
+                host: target.alias,
+              })
+            : gt("{host} is ready over an SSH-managed tunnel.", { host: target.alias }),
         });
       },
     });
     if (started === null) {
       setSavedBackendError(
-        `GOAT is already adding ${target.alias}. Its progress is in the Connections list.`,
+        gt("GOAT is already adding {host}. Its progress is in the Connections list.", {
+          host: target.alias,
+        }),
       );
       return;
     }
@@ -934,7 +899,7 @@ export function ConnectionEnvironmentsSection({
     const message =
       result._tag === "Failure"
         ? "Could not forget this host. Check your permissions and try again."
-        : sshSetupError(result.value, alias);
+        : sshSetupError(result.value, alias, gt);
     if (message) {
       setSavedBackendError(message);
       return;
@@ -1050,7 +1015,7 @@ export function ConnectionEnvironmentsSection({
       setSavedBackendError("Could not approve this host. Try checking it again.");
       return;
     }
-    const message = sshSetupError(result.value, probe.host);
+    const message = sshSetupError(result.value, probe.host, gt);
     if (message) {
       setSavedBackendError(message);
       return;
@@ -1107,7 +1072,7 @@ export function ConnectionEnvironmentsSection({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not add backend",
+          title: gt("Could not add backend"),
           description: message,
         }),
       );
@@ -1127,7 +1092,7 @@ export function ConnectionEnvironmentsSection({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not add backend",
+            title: gt("Could not add backend"),
             description: message,
           }),
         );
@@ -1142,13 +1107,15 @@ export function ConnectionEnvironmentsSection({
       routeTarget
         ? {
             type: "success",
-            title: "Route added",
-            description: `${routeTarget.label} now has another way to connect.`,
+            title: gt("Route added"),
+            description: gt("{environment} now has another way to connect.", {
+              environment: routeTarget.label,
+            }),
           }
         : {
             type: "success",
-            title: "Device added",
-            description: "This device is saved and will reconnect when GOAT starts.",
+            title: gt("Device added"),
+            description: gt("This device is saved and will reconnect when GOAT starts."),
           },
     );
     setIsAddingSavedBackend(false);
@@ -1231,12 +1198,14 @@ export function ConnectionEnvironmentsSection({
       const message =
         error instanceof Error
           ? error.message
-          : `Failed to switch the backend ${enabled ? "on" : "off"}.`;
+          : enabled
+            ? gt("Failed to switch the backend on.")
+            : gt("Failed to switch the backend off.");
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Could not switch backend ${enabled ? "on" : "off"}`,
+          title: enabled ? gt("Could not switch backend on") : gt("Could not switch backend off"),
           description: message,
         }),
       );
@@ -1253,12 +1222,12 @@ export function ConnectionEnvironmentsSection({
     setRemovingSavedEnvironmentId(null);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
-      const message = error instanceof Error ? error.message : "Failed to remove backend.";
+      const message = error instanceof Error ? error.message : gt("Failed to remove backend.");
       setSavedBackendError(message);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not remove backend",
+          title: gt("Could not remove backend"),
           description: message,
         }),
       );
@@ -1278,7 +1247,12 @@ export function ConnectionEnvironmentsSection({
     }
     // Fail closed: no mounted confirm host means no removal.
     const confirmed = await requestConfirmDialog(
-      `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
+      [
+        gt("Remove {environment} from this device?", { environment: environment.label }),
+        gt(
+          "This forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.",
+        ),
+      ].join("\n"),
       { variant: "destructive" },
     );
     if (confirmed === true) await removeSavedBackend(environment);
@@ -1305,7 +1279,7 @@ export function ConnectionEnvironmentsSection({
         setForgetError("Could not forget this host. Check your permissions and try again.");
         return;
       }
-      const message = sshSetupError(result.value, target.alias);
+      const message = sshSetupError(result.value, target.alias, gt);
       if (message) {
         setForgetError(message);
         return;
@@ -1432,7 +1406,9 @@ export function ConnectionEnvironmentsSection({
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
-        setSavedBackendError(error instanceof Error ? error.message : "Could not add the route.");
+        setSavedBackendError(
+          error instanceof Error ? error.message : gt("Could not add the route."),
+        );
       }
       return;
     }
@@ -1440,8 +1416,11 @@ export function ConnectionEnvironmentsSection({
     setAddBackendDialogOpen(false);
     toastManager.add({
       type: "success",
-      title: "Route added",
-      description: `${routeTarget.label} falls back to GOAT Connect when its other routes are unreachable.`,
+      title: gt("Route added"),
+      description: gt(
+        "{environment} falls back to GOAT Connect when its other routes are unreachable.",
+        { environment: routeTarget.label },
+      ),
     });
   };
   const renderRemoteModeBody = () => (
@@ -1790,7 +1769,7 @@ export function ConnectionEnvironmentsSection({
                 toastManager.add(
                   stackedThreadToast({
                     type: "error",
-                    title: "Could not add a route",
+                    title: gt("Could not add a route"),
                     description: refused,
                   }),
                 );
