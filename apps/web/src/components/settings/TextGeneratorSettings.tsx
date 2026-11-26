@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ProviderInstanceId, TextGeneratorConfig, type ServerSettingsPatch } from "@goat/contracts";
 import { useState } from "react";
 import { randomUUID } from "../../lib/utils";
@@ -17,6 +18,7 @@ export function TextGeneratorSettings(props: {
   readonly canSelect: boolean;
   readonly onPatch: (patch: ServerSettingsPatch) => Promise<boolean>;
 }) {
+  const gt = useGT();
   const [kind, setKind] = useState<"openaiCompatible" | "anthropic">("openaiCompatible");
   const [label, setLabel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -56,10 +58,12 @@ export function TextGeneratorSettings(props: {
       .finally(() => setBusy(false));
   };
   return (
-    <SettingsSection title="Text generators">
+    <SettingsSection title={gt("Text generators")}>
       <SettingsRow
-        title="Model APIs"
-        description="Add an API for thread titles, commits, and pull requests. Requests send the relevant text to the configured endpoint."
+        title={gt("Model APIs")}
+        description={gt(
+          "Add an API for thread titles, commits, and pull requests. Requests send the relevant text to the configured endpoint.",
+        )}
       />
       {Object.entries(props.generators).map(([rawId, generator]) => {
         const id = ProviderInstanceId.make(rawId);
@@ -85,7 +89,7 @@ export function TextGeneratorSettings(props: {
                     setClearKey(false);
                   }}
                 >
-                  Edit
+                  {gt("Edit")}
                 </Button>
                 <Button
                   size="sm"
@@ -95,7 +99,7 @@ export function TextGeneratorSettings(props: {
                     if (selection) void props.onPatch({ textGenerationModelSelection: selection });
                   }}
                 >
-                  Use for text generation
+                  {gt("Use for text generation")}
                 </Button>
                 <Button
                   size="sm"
@@ -106,7 +110,7 @@ export function TextGeneratorSettings(props: {
                       void props.onPatch({ sourceControlWriterModelSelection: selection });
                   }}
                 >
-                  Use for source control
+                  {gt("Use for source control")}
                 </Button>
                 <Button
                   size="sm"
@@ -118,7 +122,7 @@ export function TextGeneratorSettings(props: {
                     })
                   }
                 >
-                  {generator.enabled ? "Disable" : "Enable"}
+                  {generator.enabled ? gt("Disable") : gt("Enable")}
                 </Button>
                 <Button
                   size="sm"
@@ -126,7 +130,7 @@ export function TextGeneratorSettings(props: {
                   disabled={!props.canManage}
                   onClick={() => void props.onPatch({ textGenerators: { [id]: null } })}
                 >
-                  Remove
+                  {gt("Remove")}
                 </Button>
               </div>
             }
@@ -135,7 +139,7 @@ export function TextGeneratorSettings(props: {
       })}
       {props.canManage ? (
         <SettingsRow
-          title={editing === null ? "Add a text generator" : "Edit text generator"}
+          title={editing === null ? gt("Add a text generator") : gt("Edit text generator")}
           control={
             <form
               className="grid gap-2"
@@ -150,7 +154,7 @@ export function TextGeneratorSettings(props: {
                   if (value === "openaiCompatible" || value === "anthropic") setKind(value);
                 }}
               >
-                <SelectTrigger aria-label="API type">
+                <SelectTrigger aria-label={gt("API type")}>
                   <SelectValue>{API_KIND_LABELS[kind]}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
@@ -161,26 +165,26 @@ export function TextGeneratorSettings(props: {
                 </SelectPopup>
               </Select>
               <Input
-                aria-label="Name"
-                placeholder="Name (optional)"
+                aria-label={gt("Name")}
+                placeholder={gt("Name (optional)")}
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
               />
               <Input
-                aria-label="API base URL"
+                aria-label={gt("API base URL")}
                 placeholder="https://api.example/v1"
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
               />
               <Input
-                aria-label="Model ID"
-                placeholder="Model ID"
+                aria-label={gt("Model ID")}
+                placeholder={gt("Model ID")}
                 value={model}
                 onChange={(event) => setModel(event.target.value)}
               />
               <SecretInput
-                aria-label="API key"
-                placeholder="API key (optional)"
+                aria-label={gt("API key")}
+                placeholder={gt("API key (optional)")}
                 configured={
                   previous !== undefined &&
                   !destinationChanged &&
@@ -195,7 +199,7 @@ export function TextGeneratorSettings(props: {
               />
               {destinationChanged && previous.apiKey !== "" && !apiKey ? (
                 <p className="text-xs text-muted-foreground">
-                  Re-enter the API key for the new address.
+                  {gt("Re-enter the API key for the new address.")}
                 </p>
               ) : null}
               {previous && previous.apiKey !== "" && !clearKey ? (
@@ -208,11 +212,11 @@ export function TextGeneratorSettings(props: {
                     setClearKey(true);
                   }}
                 >
-                  Clear saved key
+                  {gt("Clear saved key")}
                 </Button>
               ) : null}
               <Button type="submit" size="sm" disabled={!valid || busy}>
-                {editing === null ? "Add text generator" : "Save text generator"}
+                {editing === null ? gt("Add text generator") : gt("Save text generator")}
               </Button>
               {editing !== null ? (
                 <Button
@@ -228,7 +232,7 @@ export function TextGeneratorSettings(props: {
                     setClearKey(false);
                   }}
                 >
-                  Cancel edit
+                  {gt("Cancel edit")}
                 </Button>
               ) : null}
             </form>

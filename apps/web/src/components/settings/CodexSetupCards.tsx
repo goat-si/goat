@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { Children, type ReactNode } from "react";
 import { ChevronRightIcon } from "~/components/solar";
 import { OpenAI } from "../Icons";
@@ -13,12 +14,13 @@ export function CodexSignInDescription({
   readonly controls?: string;
   readonly onToggle?: () => void;
 }) {
+  const gt = useGT();
   if (!onToggle) return <div className="leading-relaxed">{label}</div>;
   return (
     <button
       type="button"
       className="inline-flex items-center gap-1.5 rounded-sm text-left leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      aria-label="Having trouble signing in?"
+      aria-label={gt("Having trouble signing in?")}
       aria-expanded={expanded}
       aria-controls={controls}
       onClick={onToggle}

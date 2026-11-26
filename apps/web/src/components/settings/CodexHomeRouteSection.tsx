@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   DEFAULT_OPENCODEX_BASE_URL,
   type CodexHomeAuth,
@@ -57,6 +58,7 @@ export interface CodexHomeRouteSectionProps {
 
 /** Route changes use the owning editor's atomic instance mutation. */
 export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
+  const gt = useGT();
   const [baseUrl, setBaseUrl] = useState(props.settings.opencodexBaseUrl);
   const [confirmRoute, setConfirmRoute] = useState<CodexModelRoute | null>(null);
   const [pending, setPending] = useState(false);
@@ -76,7 +78,9 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
   // Never show an old route's successful observation after a settings change.
   const observed =
     props.status?.modelRoute === props.settings.modelRoute ? props.status : undefined;
-  const ownSettings = codex ? "Uses Codex's own settings" : "Uses the provider's own settings";
+  const ownSettings = codex
+    ? gt("Uses Codex's own settings")
+    : gt("Uses the provider's own settings");
   const status = !codex
     ? usesHome
       ? observed?.effectiveBaseUrl
@@ -127,23 +131,30 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
   const request = (modelRoute: CodexModelRoute) =>
     codex ? setConfirmRoute(modelRoute) : apply(modelRoute);
   return (
-    <SettingsSection title="Model route">
+    <SettingsSection title={gt("Model route")}>
       <SettingsRow
         title={status ?? "Check model route status"}
-        description={`${providerLabel} runs on ${props.environmentLabel}.`}
+        description={gt("{provider} runs on {environment}.", {
+          provider: providerLabel,
+          environment: props.environmentLabel,
+        })}
       />
       {codex ? (
         <SettingsRow
-          title="Home authentication"
+          title={gt("Home authentication")}
           description={
             writesBlocked
-              ? "Update GOAT on this machine to change Home authentication."
+              ? gt("Update GOAT on this machine to change Home authentication.")
               : managed
-                ? "Managed Codex uses Home without a sign-in. OpenAI authentication for Home needs an instance that uses your Codex CLI."
-                : "None uses Home without a sign-in on this machine. OpenAI keeps this instance's own sign-in."
+                ? gt(
+                    "Managed Codex uses Home without a sign-in. OpenAI authentication for Home needs an instance that uses your Codex CLI.",
+                  )
+                : gt(
+                    "None uses Home without a sign-in on this machine. OpenAI keeps this instance's own sign-in.",
+                  )
           }
           control={
-            <div className="flex gap-2" role="group" aria-label="Home authentication">
+            <div className="flex gap-2" role="group" aria-label={gt("Home authentication")}>
               {(["openai", "none"] as const).map((mode) => (
                 <Button
                   key={mode}
@@ -152,29 +163,33 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
                   disabled={disabled || managed}
                   onClick={() => setAuthDraft(mode)}
                 >
-                  {mode === "openai" ? "OpenAI" : "None"}
+                  {mode === "openai" ? "OpenAI" : gt("None")}
                 </Button>
               ))}
             </div>
           }
         />
       ) : writesBlocked ? (
-        <SettingsRow title="Update GOAT on this machine to route this instance through Home." />
+        <SettingsRow
+          title={gt("Update GOAT on this machine to route this instance through Home.")}
+        />
       ) : null}
       {managed && !props.readOnly ? (
         <SettingsRow
-          title="Use your own Codex CLI"
+          title={gt("Use your own Codex CLI")}
           control={
             <Button variant="outline" onClick={props.onAddInstance}>
-              Add instance
+              {gt("Add instance")}
             </Button>
           }
         />
       ) : null}
       <SettingsRow
-        title={usesHome ? "Uses OpenCodex Home" : ownSettings}
+        title={usesHome ? gt("Uses OpenCodex Home") : ownSettings}
         description={
-          usesHome || codex ? undefined : "OpenCodex Home uses Home's accounts and shared quota."
+          usesHome || codex
+            ? undefined
+            : gt("OpenCodex Home uses Home's accounts and shared quota.")
         }
         control={
           !props.readOnly ? (
@@ -183,7 +198,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
               disabled={disabled}
               onClick={() => request(usesHome ? "default" : "opencodex")}
             >
-              {usesHome ? "Stop using OpenCodex Home" : "Use OpenCodex Home"}
+              {usesHome ? gt("Stop using OpenCodex Home") : gt("Use OpenCodex Home")}
             </Button>
           ) : undefined
         }
@@ -206,17 +221,17 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
       usesHome &&
       (baseUrl !== props.settings.opencodexBaseUrl || (codex && authMode !== savedAuth)) ? (
         <SettingsRow
-          title="Home route"
+          title={gt("Home route")}
           control={
             <Button variant="ghost" disabled={disabled} onClick={() => request("opencodex")}>
-              Save route
+              {gt("Save route")}
             </Button>
           }
         />
       ) : null}
       {needsSetup ? (
         <SettingsRow
-          title="Set up this machine from Home"
+          title={gt("Set up this machine from Home")}
           description={
             openCodexHomeHandoff({
               environmentLabel: props.environmentLabel,
@@ -226,7 +241,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
           control={
             props.onOpenHubSetup ? (
               <Button variant="outline" onClick={props.onOpenHubSetup}>
-                Open Hub devices
+                {gt("Open Hub devices")}
               </Button>
             ) : undefined
           }
@@ -234,7 +249,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
       ) : null}
       {!props.readOnly ? (
         <SettingsRow
-          title="Home connection"
+          title={gt("Home connection")}
           control={
             <div className="flex flex-wrap gap-2">
               {props.onOpenDashboard ? (
@@ -243,7 +258,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
                   disabled={pending}
                   onClick={() => void run(props.onOpenDashboard!)}
                 >
-                  Open OpenCodex
+                  {gt("Open OpenCodex")}
                 </Button>
               ) : null}
               <Button
@@ -251,7 +266,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
                 disabled={pending || props.canRefresh === false}
                 onClick={() => void run(props.onRefresh)}
               >
-                Check status
+                {gt("Check status")}
               </Button>
             </div>
           }
@@ -268,7 +283,9 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
           <AlertDialogPopup>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {confirmRoute === "default" ? "Stop using OpenCodex Home" : "Use OpenCodex Home"}
+                {confirmRoute === "default"
+                  ? gt("Stop using OpenCodex Home")
+                  : gt("Use OpenCodex Home")}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {confirmRoute === "default"
@@ -283,10 +300,12 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <Button disabled={disabled} onClick={() => apply(confirmRoute)}>
-                {confirmRoute === "default" ? "Stop using OpenCodex Home" : "Use OpenCodex Home"}
+                {confirmRoute === "default"
+                  ? gt("Stop using OpenCodex Home")
+                  : gt("Use OpenCodex Home")}
               </Button>
               <Button variant="ghost" disabled={pending} onClick={() => setConfirmRoute(null)}>
-                Cancel
+                {gt("Cancel")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogPopup>
