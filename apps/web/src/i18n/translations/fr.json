@@ -3811,5 +3811,6 @@
   "bb122f1d94960037": "Le résultat est inconnu. Reconnectez-vous et vérifiez le résultat de l’importation.",
   "4e506a7c2f37a858": "La sélection a changé. Vérifiez à nouveau l’aperçu avant d’importer.",
   "68a5236a421d0f4c": "Vérifiez le résultat et l’aperçu avant d’importer d’autres éléments.",
-  "95cec271a3e79153": "Le résultat enregistré est indisponible. Des éléments précédents ont peut-être été appliqués. Vérifiez à nouveau l’aperçu."
+  "95cec271a3e79153": "Le résultat enregistré est indisponible. Des éléments précédents ont peut-être été appliqués. Vérifiez à nouveau l’aperçu.",
+  "a766a8ac2670096c": "{count, plural, one {{count} fusion chargée} other {{count} fusions chargées}}"
 }
