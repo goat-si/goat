@@ -98,6 +98,30 @@ export const CHILD_SETUP_QUOTA_NOTE =
 export const CHILD_SETUP_PERMISSION_NOTE =
   "Managing this device needs permission on the selected Home.";
 
+export interface ChildSetupText {
+  readonly reasons: Readonly<Record<ChildSetupReason, string>>;
+  readonly states: Readonly<Record<ChildSetup["state"], string>>;
+  readonly steps: Readonly<Record<ChildReadyStep, string>>;
+  readonly actions: Readonly<Record<ChildReadyNextAction, string | null>>;
+  readonly ready: string;
+  readonly unavailable: string;
+  readonly withReason: (state: string, reason: string) => string;
+}
+const DEFAULT_CHILD_TEXT: ChildSetupText = {
+  reasons: CHILD_REASON_LABEL,
+  states: {
+    running: CHILD_STATE.running.label,
+    child: CHILD_STATE.child.label,
+    degraded: CHILD_STATE.degraded.label,
+    blocked: CHILD_STATE.blocked.label,
+  },
+  actions: CHILD_NEXT_STEP_LABEL,
+  steps: CHILD_STEP_LABEL,
+  ready: "Ready",
+  unavailable: "Setup status unavailable. Refresh status.",
+  withReason: (state, reason) => `${state}: ${reason}`,
+};
+
 const SENDABLE_ACTIONS: ReadonlySet<ChildReadyNextAction> = new Set([
   "continue_setup",
   "retry",
@@ -125,6 +149,7 @@ function presentChildReadiness(
   status: OpenCodexChildBootstrapStatus | undefined,
   host: string | null = null,
   current = true,
+  text: ChildSetupText = DEFAULT_CHILD_TEXT,
 ): ChildSetup | null {
   if (status === undefined) return null;
   const setup = status.setup === undefined ? undefined : withoutUnprovenReady(status.setup);
@@ -158,7 +183,7 @@ function presentChildReadiness(
   const moving =
     status.state === "running" || running !== undefined || setup?.readiness === "verifying";
   const base = CHILD_STATE[status.state];
-  const reason = status.reason === undefined ? null : CHILD_REASON_LABEL[status.reason];
+  const reason = status.reason === undefined ? null : text.reasons[status.reason];
   return {
     state: status.state,
     tone: !current
@@ -171,22 +196,22 @@ function presentChildReadiness(
             ? "progress"
             : base.tone,
     label: !current
-      ? "Setup status unavailable. Refresh status."
+      ? text.unavailable
       : proof !== null
-        ? "Ready"
+        ? text.ready
         : running !== undefined
-          ? `${CHILD_STEP_LABEL[running.step]}…`
+          ? `${text.steps[running.step]}…`
           : reason === null
-            ? base.label
-            : `${base.label}: ${reason}`,
+            ? text.states[status.state]
+            : text.withReason(text.states[status.state], reason),
     detail: failure?.message.trim() || status.message?.trim() || null,
     checkedAt: status.checkedAt,
     host,
-    steps: steps.map((step) => ({ label: CHILD_STEP_LABEL[step.step], outcome: step.state })),
+    steps: steps.map((step) => ({ label: text.steps[step.step], outcome: step.state })),
     nextAction,
     actionable,
-    actionLabel: actionable ? CHILD_NEXT_STEP_LABEL[nextAction] : null,
-    guidance: SENDABLE_ACTIONS.has(nextAction) ? null : CHILD_NEXT_STEP_LABEL[nextAction],
+    actionLabel: actionable ? text.actions[nextAction] : null,
+    guidance: SENDABLE_ACTIONS.has(nextAction) ? null : text.actions[nextAction],
     proof,
   };
 }
@@ -251,6 +276,7 @@ export function hubDeviceList(input: {
   readonly hosts: ReadonlyArray<HostStatusEntry>;
   /** False after a failed status read, so an older Ready is not shown as current. */
   readonly statusCurrent?: boolean;
+  readonly childText?: ChildSetupText;
 }): ReadonlyArray<HubDeviceRow> {
   const nodes = input.nodes ?? [];
   const byRoute = new Map<string, HubNode>();
@@ -313,6 +339,7 @@ export function hubDeviceList(input: {
       entry.opencodexChild,
       entry.host,
       input.statusCurrent ?? true,
+      input.childText,
     );
     const childOptIn =
       entry.opencodexChildOptIn === undefined
