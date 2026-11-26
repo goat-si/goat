@@ -1,3 +1,4 @@
+import { localizeEnvironmentLabel } from "../BranchToolbar.logic";
 import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -65,13 +66,10 @@ function GoatBotProfileSection() {
     setSeen({ environmentId, refused, hold: nextHold });
   }
   if (!supported) return null;
-  // The primary environment's generic fallback name is English data; show it in the user's language.
   const label =
     environment.label == null
       ? gt("this computer")
-      : environment.label === "This device"
-        ? gt("this device")
-        : environment.label;
+      : localizeEnvironmentLabel(environment.label, gt("this device"));
   const refusedLine = gt("GOAT on {device} did not accept this device", { device: label });
   const deniedLine = gt("GOAT on {device} did not let this device read the bot's profile", {
     device: label,

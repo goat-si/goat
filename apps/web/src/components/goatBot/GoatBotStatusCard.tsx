@@ -1,3 +1,4 @@
+import { localizeEnvironmentLabel } from "../BranchToolbar.logic";
 import { useGoatBotDiagnosticMessages } from "./useGoatBotDiagnosticMessages";
 import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -125,10 +126,19 @@ export function GoatBotStatusCard({
       homeLabel:
         homeId === null
           ? ""
-          : (home.environments.find((entry) => entry.environmentId === homeId)?.label ??
-            homeId.slice(0, 8)),
+          : localizeEnvironmentLabel(
+              home.environments.find((entry) => entry.environmentId === homeId)?.label ??
+                homeId.slice(0, 8),
+              gt("this device"),
+            ),
       homeRefused,
-      moveTarget: home.moveTarget,
+      moveTarget:
+        home.moveTarget === null
+          ? null
+          : {
+              ...home.moveTarget,
+              label: localizeEnvironmentLabel(home.moveTarget.label, gt("this device")),
+            },
       member: member !== null,
       mainBotName,
       model:
