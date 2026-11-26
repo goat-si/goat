@@ -1,5 +1,5 @@
 {
-  "0f146ec243d0ec2b": "Durante a pausa, os agentes não podem ler nem salvar memórias do GOAT neste ambiente. As mensagens desse período ficam fora dos resumos futuros.",
+  "0df2005b6be2aa79": "Durante a pausa, os agentes não podem ler nem salvar memórias do GOAT neste ambiente. As mensagens desse período ficam fora dos resumos futuros. Uma solicitação que já estava sendo enviada quando você pausou ainda pode ser concluída.",
   "bff6d8d7d2ebfda1": "As configurações de memória foram atualizadas.",
   "fc747df3adbcb304": "Usar a memória do GOAT nas conversas",
   "18e223f1dde7235c": "Não foi possível atualizar as configurações de memória.",

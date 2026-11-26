@@ -1,5 +1,5 @@
 {
-  "0f146ec243d0ec2b": "While paused, agents cannot read or save GOAT memories in this environment. Messages from this period are excluded from future summaries.",
+  "0df2005b6be2aa79": "While paused, agents cannot read or save GOAT memories in this environment. Messages from this period are excluded from future summaries. A request that was already being sent when you paused may still finish.",
   "bff6d8d7d2ebfda1": "Memory settings updated.",
   "fc747df3adbcb304": "Use GOAT memory in conversations",
   "18e223f1dde7235c": "Could not update memory settings.",

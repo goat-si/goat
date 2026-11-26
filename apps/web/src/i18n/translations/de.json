@@ -1,5 +1,5 @@
 {
-  "0f146ec243d0ec2b": "Während der Pause können Agenten in dieser Umgebung keine GOAT-Erinnerungen lesen oder speichern. Nachrichten aus dieser Zeit werden von künftigen Zusammenfassungen ausgeschlossen.",
+  "0df2005b6be2aa79": "Während der Pause können Agenten in dieser Umgebung keine GOAT-Erinnerungen lesen oder speichern. Nachrichten aus dieser Zeit werden von künftigen Zusammenfassungen ausgeschlossen. Eine Anfrage, die beim Pausieren bereits gesendet wurde, kann noch abgeschlossen werden.",
   "bff6d8d7d2ebfda1": "Die Gedächtniseinstellungen wurden aktualisiert.",
   "fc747df3adbcb304": "GOAT-Gedächtnis in Unterhaltungen verwenden",
   "18e223f1dde7235c": "Die Gedächtniseinstellungen konnten nicht aktualisiert werden.",

@@ -88,7 +88,7 @@ function ConversationControls({ environmentId }: { environmentId: EnvironmentId 
           <SettingsSwitchRow
             label={gt("Use GOAT memory in conversations")}
             subtitle={gt(
-              "While paused, agents cannot read or save GOAT memories in this environment. Messages from this period are excluded from future summaries.",
+              "While paused, agents cannot read or save GOAT memories in this environment. Messages from this period are excluded from future summaries. A request that was already being sent when you paused may still finish.",
             )}
             value={!paused}
             disabled={disabled}
