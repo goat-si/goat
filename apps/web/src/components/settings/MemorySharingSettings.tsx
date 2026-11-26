@@ -396,27 +396,31 @@ export function MemoryAdministration({
   const blocked = busy || !canHub || pending !== null || recovery;
   return (
     <>
-      <SettingsSection title="Sharing" id="memory-sharing">
+      <SettingsSection title={gt("Sharing")} id="memory-sharing">
         <SettingsRow
           title={
             !hub
               ? error
-                ? "Sharing unavailable"
-                : "Loading sharing"
+                ? gt("Sharing unavailable")
+                : gt("Loading sharing")
               : hub.settings.mode === "hub"
-                ? "This device is the hub"
+                ? gt("This device is the hub")
                 : hub?.settings.mode === "member"
-                  ? "Memory sharing"
-                  : "Sharing off"
+                  ? gt("Memory sharing")
+                  : gt("Sharing off")
           }
           description={
             !hub
-              ? "Sharing settings are not loaded yet."
+              ? gt("Sharing settings are not loaded yet.")
               : hub.settings.mode === "hub"
-                ? "Memory is on. Devices you add here share memory with it."
+                ? gt("Memory is on. Devices you add here share memory with it.")
                 : hub?.settings.mode === "member"
-                  ? `Shares memory with ${name(hub.settings.hubEnvironmentId)}.`
-                  : "Sharing is off. Memory stays on this device. Make this device the hub, or add it from the hub's Memory settings."
+                  ? gt("Shares memory with {device}.", {
+                      device: name(hub.settings.hubEnvironmentId),
+                    })
+                  : gt(
+                      "Sharing is off. Memory stays on this device. Make this device the hub, or add it from the hub's Memory settings.",
+                    )
           }
           status={
             sync && hub?.settings.mode !== "disabled" ? presentMemorySync(sync).label : undefined
@@ -437,7 +441,7 @@ export function MemoryAdministration({
                     })
                   }
                 >
-                  Make this device the hub
+                  {gt("Make this device the hub")}
                 </Button>
               ) : (
                 <Button
@@ -446,7 +450,7 @@ export function MemoryAdministration({
                   disabled={blocked}
                   onClick={() => setConfirm("disable")}
                 >
-                  {hub.settings.mode === "member" ? "Leave sharing" : "Turn sharing off"}
+                  {hub.settings.mode === "member" ? gt("Leave sharing") : gt("Turn sharing off")}
                 </Button>
               )
             ) : undefined
@@ -454,8 +458,8 @@ export function MemoryAdministration({
         />
         {confirm === "disable" && hub ? (
           <SettingsRow
-            title="Stop sharing on this device?"
-            description="Saved memories stay."
+            title={gt("Stop sharing on this device?")}
+            description={gt("Saved memories stay.")}
             control={
               <div className="flex gap-2">
                 <Button
@@ -470,7 +474,7 @@ export function MemoryAdministration({
                     })
                   }
                 >
-                  Stop sharing
+                  {gt("Stop sharing")}
                 </Button>
                 <Button
                   size="sm"
@@ -478,7 +482,7 @@ export function MemoryAdministration({
                   disabled={busy || pending !== null}
                   onClick={() => setConfirm(null)}
                 >
-                  Cancel
+                  {gt("Cancel")}
                 </Button>
               </div>
             }
@@ -486,7 +490,7 @@ export function MemoryAdministration({
         ) : null}
         {error ? (
           <SettingsRow
-            title="Could not complete request"
+            title={gt("Could not complete request")}
             description={<span role="alert">{error}</span>}
             control={
               <div className="flex gap-2">
@@ -513,7 +517,7 @@ export function MemoryAdministration({
                     }
                   }}
                 >
-                  {recovery ? "Review latest settings" : "Retry"}
+                  {recovery ? gt("Review latest settings") : gt("Retry")}
                 </Button>
                 {pending !== null ? (
                   <Button
@@ -526,7 +530,7 @@ export function MemoryAdministration({
                       )
                     }
                   >
-                    Stop retrying
+                    {gt("Stop retrying")}
                   </Button>
                 ) : null}
               </div>
@@ -535,7 +539,7 @@ export function MemoryAdministration({
         ) : null}
       </SettingsSection>
       {hub?.settings.mode === "hub" ? (
-        <SettingsSection title="Devices">
+        <SettingsSection title={gt("Devices")}>
           {members
             .filter((member) => member.environmentId !== environmentId)
             .map((member) => {
@@ -552,7 +556,7 @@ export function MemoryAdministration({
                   title={name(id)}
                   status={
                     member.status === "pending_ack"
-                      ? "Waiting for the device to confirm"
+                      ? gt("Waiting for the device to confirm")
                       : undefined
                   }
                   description={replaceReason}
@@ -568,7 +572,7 @@ export function MemoryAdministration({
                           setConfirm("rotate");
                         }}
                       >
-                        Replace key
+                        {gt("Replace key")}
                       </Button>
                       <Button
                         size="sm"
@@ -576,7 +580,7 @@ export function MemoryAdministration({
                         disabled={blocked}
                         onClick={() => setConfirm(id)}
                       >
-                        Remove
+                        {gt("Remove")}
                       </Button>
                     </div>
                   }
@@ -606,8 +610,10 @@ export function MemoryAdministration({
           />
           {device && !writable(device) ? (
             <SettingsRow
-              title="Settings write permission required on this device"
-              description="Connect the device in Settings → Connections first, using an account with settings access."
+              title={gt("Settings write permission required on this device")}
+              description={gt(
+                "Connect the device in Settings → Connections first, using an account with settings access.",
+              )}
             />
           ) : null}
           {(confirm === "add" || confirm === "rotate") && device ? (
@@ -617,12 +623,16 @@ export function MemoryAdministration({
               }
               description={
                 loopbackAddress(endpoint)
-                  ? "Localhost points to the device itself. Enter an address reachable from the other device."
-                  : "Address the device uses to reach this hub. Check that the device can reach it; saving an address does not verify connectivity."
+                  ? gt(
+                      "Localhost points to the device itself. Enter an address reachable from the other device.",
+                    )
+                  : gt(
+                      "Address the device uses to reach this hub. Check that the device can reach it; saving an address does not verify connectivity.",
+                    )
               }
               control={
                 <div className="flex flex-wrap items-center gap-2">
-                  <label htmlFor="memory-hub-address">Hub address</label>
+                  <label htmlFor="memory-hub-address">{gt("Hub address")}</label>
                   <Input
                     id="memory-hub-address"
                     value={endpoint}
@@ -638,7 +648,7 @@ export function MemoryAdministration({
                       )
                     }
                   >
-                    Confirm
+                    {gt("Confirm")}
                   </Button>
                   <Button
                     size="sm"
@@ -646,7 +656,7 @@ export function MemoryAdministration({
                     disabled={busy || pending !== null}
                     onClick={() => setConfirm(null)}
                   >
-                    Cancel
+                    {gt("Cancel")}
                   </Button>
                 </div>
               }
@@ -655,7 +665,7 @@ export function MemoryAdministration({
           {confirm && confirm !== "disable" && confirm !== "add" && confirm !== "rotate" ? (
             <SettingsRow
               title={`Remove ${name(confirm)}?`}
-              description="This device will lose access to shared memory."
+              description={gt("This device will lose access to shared memory.")}
               control={
                 <div className="flex gap-2">
                   <Button
@@ -670,7 +680,7 @@ export function MemoryAdministration({
                       })
                     }
                   >
-                    Remove device
+                    {gt("Remove device")}
                   </Button>
                   <Button
                     size="sm"
@@ -678,7 +688,7 @@ export function MemoryAdministration({
                     disabled={busy || pending !== null}
                     onClick={() => setConfirm(null)}
                   >
-                    Cancel
+                    {gt("Cancel")}
                   </Button>
                 </div>
               }
@@ -706,7 +716,7 @@ export function MemoryAdministration({
                   disabled={busy || recovery || !canOwner || pending !== null}
                   onClick={() => void saveOwner(id, false)}
                 >
-                  Remove
+                  {gt("Remove")}
                 </Button>
               }
             />
@@ -721,12 +731,12 @@ export function MemoryAdministration({
               <SettingsRow
                 key={r.requesterEnvironmentId}
                 title={name(r.requesterEnvironmentId)}
-                status="Removal pending"
+                status={gt("Removal pending")}
               />
             ))}
           <SettingsRow
             title={gt("Allow device")}
-            description={!canOwner ? "Settings write permission is required." : undefined}
+            description={!canOwner ? gt("Settings write permission is required.") : undefined}
             control={
               <div className="flex gap-2">
                 {picker(
