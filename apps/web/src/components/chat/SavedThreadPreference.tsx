@@ -3,17 +3,12 @@ import type { ScopedThreadRef } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useGT } from "gt-react";
 import { validateMemorySettingsSearch } from "../settings/MemorySettings.logic";
-import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { memoryEnvironment } from "../../state/memory";
 
 export function SavedThreadPreference({ thread }: { thread: ScopedThreadRef }) {
   const saved = useAtomValue(memoryEnvironment.savedThreadPreference(thread));
-  const paused = useEnvironmentSettings(
-    thread.environmentId,
-    (settings) => settings.conversationMemoryEnabled === false,
-  );
   const gt = useGT();
-  if (!saved || paused) return null;
+  if (!saved) return null;
   return (
     <div className="chat-content-lane py-1 text-xs text-muted-foreground">
       <span>{gt("Preference saved from this conversation")}</span>{" "}

@@ -1,6 +1,5 @@
 import { issueConversationRunCheck } from "./conversationRunEligibility.ts";
 import { makeSavedPreferenceReader } from "./savedThreadPreference.ts";
-import { readConversationMemoryEnabled } from "./conversationMemoryPolicy.ts";
 import { makeTurnMemoryReader } from "./TurnMemoryReceipts.ts";
 import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeMoveMemory } from "./MemoryMove.ts";
@@ -2553,12 +2552,7 @@ const make = Effect.fnUntraced(function* (
         return yield* (yield* ProviderMemoryImportRuntime).run(input, permit);
       }),
     commitLocalIntent,
-    savedThreadPreference: makeSavedPreferenceReader(
-      environmentId,
-      memoryStableUuid,
-      read,
-      readConversationMemoryEnabled(sql).pipe(Effect.orElseSucceed(() => false)),
-    ),
+    savedThreadPreference: makeSavedPreferenceReader(environmentId, memoryStableUuid, read),
     inspectTurn: makeTurnMemoryReader(sql, store, read),
     readSource,
     prepareSourceRead,

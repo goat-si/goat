@@ -18,16 +18,6 @@ vi.mock("../../state/memory", () => ({
   },
 }));
 vi.mock("gt-react", () => ({ useGT: () => (text: string) => text }));
-const conversationMemory = Atom.make(true);
-vi.mock("../../hooks/useSettings", async () => {
-  const { useAtomValue } = await import("@effect/atom-react");
-  return {
-    useEnvironmentSettings: (
-      _environmentId: unknown,
-      select: (settings: { conversationMemoryEnabled: boolean }) => unknown,
-    ) => select({ conversationMemoryEnabled: useAtomValue(conversationMemory) }),
-  };
-});
 
 it("links the source chat to one current entry and clears it on revocation or a thread switch", async () => {
   const registry = AtomRegistry.make();
@@ -63,25 +53,4 @@ it("links the source chat to one current entry and clears it on revocation or a 
   await expect.element(link).toBeVisible();
   await act(() => registry.set(preference(source), null));
   expect(screen.container.textContent).toBe("");
-});
-
-it("hides the saved preference while conversation memory is paused and shows it again on resume", async () => {
-  const registry = AtomRegistry.make();
-  const environmentId = EnvironmentId.make("source-device");
-  const threadId = ThreadId.make("paused-thread");
-  registry.set(conversationMemory, true);
-  registry.set(preference(threadId), {
-    memorySpaceId: MemorySpaceId.make("00000000-0000-4000-8000-000000000001"),
-    memoryId: MemoryId.make("00000000-0000-4000-8000-000000000002"),
-  });
-  await using screen = await render(
-    <RegistryContext value={registry}>
-      <SavedThreadPreference thread={{ environmentId, threadId }} />
-    </RegistryContext>,
-  );
-  await expect.element(screen.getByRole("link", { name: "View" })).toBeVisible();
-  await act(() => registry.set(conversationMemory, false));
-  expect(screen.container.textContent).toBe("");
-  await act(() => registry.set(conversationMemory, true));
-  await expect.element(screen.getByRole("link", { name: "View" })).toBeVisible();
 });
