@@ -521,6 +521,19 @@ it.effect.each(["remote_refused", "invalid_request", "caller_changed"] as const)
     }).pipe(Effect.provide(database)),
 );
 
+it.effect("keeps the remote's reason in a refused remote task's summary", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.refuse("remote_refused");
+    yield* Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const handle = yield* service.delegateTask(scope, input);
+      assert.equal(handle.status, "failed");
+      assert.include(handle.summary ?? "", "Launch refused or unanswered");
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
+);
+
 it.effect("reports a later authority refusal as a definite unlaunched task", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
