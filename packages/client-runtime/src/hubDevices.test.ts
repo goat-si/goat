@@ -17,6 +17,7 @@ import {
   disposableSwitchSaveError,
   hubDeviceList,
   presentChildSetup,
+  missingCliLabel,
 } from "./hubDevices.ts";
 import type { HubDevice, HubSnapshot } from "./state/hubFleet.ts";
 
@@ -228,6 +229,9 @@ describe("hubDeviceList", () => {
       ["node:n1", ["Codex", "Claude"]],
       ["node:n2", null],
     ]);
+    // Mobile shows this English sentence; the web builds a translated one from the names.
+    expect(missingCliLabel(["Codex", "Claude"])).toBe("Codex and Claude CLIs missing");
+    expect(missingCliLabel(["Codex"])).toBe("Codex CLI missing");
   });
 
   it("names no missing CLI from a status it could not read now", () => {

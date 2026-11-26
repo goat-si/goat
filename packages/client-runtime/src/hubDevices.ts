@@ -246,6 +246,12 @@ export interface HubDeviceRow {
   readonly missingClis: ReadonlyArray<string> | null;
 }
 
+/** "Codex CLI missing" or "Codex and Claude CLIs missing", for clients that show English. */
+export function missingCliLabel(names: ReadonlyArray<string>): string {
+  if (names.length === 1) return names[0] + " CLI missing";
+  return names.slice(0, -1).join(", ") + " and " + names.at(-1) + " CLIs missing";
+}
+
 /** The CLIs a machine's own provider probes found missing; null when none or stale. */
 function missingCliNames(entry: HostStatusEntry, current: boolean): ReadonlyArray<string> | null {
   if (!current || entry.reachability !== "ok" || entry.lastKnown === true) return null;

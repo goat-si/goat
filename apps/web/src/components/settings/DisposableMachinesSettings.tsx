@@ -85,7 +85,7 @@ export function DisposableMachinesSettings({
   const [error, setError] = useState<string | null>(null);
   const [keyCopiedFor, setKeyCopiedFor] = useState<string | null>(null);
   const rowKey = useCopyToClipboard({
-    onError: () => setError(gt(gt("Could not copy. Select the machine key and copy it yourself."))),
+    onError: () => setError(gt("Could not copy. Select the machine key and copy it yourself.")),
   });
   const [thread, setThread] = useState("");
   const [cap, setCap] = useState(String(settings.cap));

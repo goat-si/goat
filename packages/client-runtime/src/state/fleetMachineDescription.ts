@@ -41,7 +41,9 @@ function describeMachine(
   if (osName !== null && noun !== null) return gt("{os} {kind}", { os: osName, kind: gt(noun) });
   if (osName !== null) return osName;
   if (kind === "linux") return "Linux";
-  return noun === null ? null : gt(noun.charAt(0).toUpperCase() + noun.slice(1));
+  if (noun === null) return null;
+  const label = gt(noun);
+  return label.charAt(0).toLocaleUpperCase() + label.slice(1);
 }
 
 /** "Boat · Stopped · via Mac", "MacBook", or null when nothing is known about the host. */
