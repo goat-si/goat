@@ -132,6 +132,9 @@ function timelineItem(input: {
       : { parentModelSelection: task.parentModelSelection }),
     runId: input.row.item.runId,
     messageId,
+    ...(message?.attachments?.length
+      ? { attachments: message.attachments.map(({ id, name }) => ({ id, name })) }
+      : {}),
     createdBy: message?.createdBy ?? null,
     creationSource: message?.creationSource ?? null,
     ...(message?.senderThreadId === undefined ? {} : { senderThreadId: message.senderThreadId }),

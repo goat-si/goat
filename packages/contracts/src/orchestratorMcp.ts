@@ -1,3 +1,5 @@
+import { OrchestratorMcpThreadTimelineItem } from "./orchestratorMcpThreadTimelineItem.ts";
+export { OrchestratorMcpThreadTimelineItem } from "./orchestratorMcpThreadTimelineItem.ts";
 import {
   OrchestratorMcpFreshSession,
   OrchestratorMcpScheduledTask,
@@ -65,7 +67,6 @@ import {
   OrchestrationV2CreationSource,
   OrchestrationV2ProviderFailureClass,
   OrchestrationV2RunStatus,
-  OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
 import { ProviderOptionSelection, ProviderOptionSelectionValue } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -741,30 +742,6 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type OrchestratorMcpThreadDetail = typeof OrchestratorMcpThreadDetail.Type;
-
-export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
-  position: NonNegativeInt,
-  visibility: Schema.Literals(["local", "inherited", "synthetic"]),
-  sourceThreadId: ThreadId,
-  itemId: TurnItemId,
-  subagentId: Schema.optional(NodeId),
-  role: Schema.optional(OrchestratorMcpTaskRole),
-  modelSelection: Schema.optional(ModelSelection),
-  parentModelSelection: Schema.optional(ModelSelection),
-  runId: Schema.NullOr(RunId),
-  messageId: Schema.NullOr(MessageId),
-  createdBy: Schema.NullOr(OrchestrationV2Actor),
-  creationSource: Schema.NullOr(OrchestrationV2CreationSource),
-  senderThreadId: Schema.optional(ThreadId),
-  type: Schema.String,
-  status: OrchestrationV2TurnItemStatus,
-  title: Schema.NullOr(Schema.String),
-  text: Schema.NullOr(Schema.String),
-  textTruncated: Schema.Boolean,
-  nextTextOffset: Schema.optional(Schema.NullOr(NonNegativeInt)),
-  updatedAt: IsoDateTime,
-});
-export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
   stop: Schema.optional(OrchestratorMcpRunStop),
