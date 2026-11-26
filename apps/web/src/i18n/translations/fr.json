@@ -3786,5 +3786,15 @@
   "43fa6ec9c6ecca7d": "Impossible d'examiner cet hôte SSH. Essayez de le vérifier à nouveau.",
   "45d9700e2e542245": "Impossible de vérifier cet hôte SSH. Veuillez réessayer.",
   "1fc85fcf9dbe17bf": "Impossible d'approuver cet hôte. Essayez de le vérifier à nouveau.",
-  "07246e498374788d": "Et {count} de plus"
+  "07246e498374788d": "Et {count} de plus",
+  "1f6b058fb5000ba2": "Les blocs suivants ont été arrêtés. Une importation déjà envoyée peut encore être appliquée.",
+  "de73827690f29421": "Certains éléments ont peut-être été appliqués. Vérifiez le résultat de l’importation.",
+  "fed20b9eea7642bd": "L’importation de mémoire est indisponible",
+  "291f9186e43260c6": "Reconnectez-vous et vérifiez le résultat de l’importation.",
+  "1c8ebc37bff986c9": "Impossible d’enregistrer la progression. Aucun élément de ce lot n’a été importé.",
+  "d95d6adf5aa437ff": "Vérifiez le résultat enregistré avant d’importer d’autres éléments.",
+  "bb122f1d94960037": "Le résultat est inconnu. Reconnectez-vous et vérifiez le résultat de l’importation.",
+  "4e506a7c2f37a858": "La sélection a changé. Vérifiez à nouveau l’aperçu avant d’importer.",
+  "68a5236a421d0f4c": "Vérifiez le résultat et l’aperçu avant d’importer d’autres éléments.",
+  "95cec271a3e79153": "Le résultat enregistré est indisponible. Des éléments précédents ont peut-être été appliqués. Vérifiez à nouveau l’aperçu."
 }
