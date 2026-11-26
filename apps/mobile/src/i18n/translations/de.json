@@ -1,11 +1,11 @@
 {
-  "0df2005b6be2aa79": "Während der Pause können Agenten in dieser Umgebung keine GOAT-Erinnerungen lesen oder speichern. Nachrichten aus dieser Zeit werden von künftigen Zusammenfassungen ausgeschlossen. Eine Anfrage, die beim Pausieren bereits gesendet wurde, kann noch abgeschlossen werden.",
+  "0df2005b6be2aa79": "Während der Pause können Agenten in dieser Umgebung keine GOAT-Erinnerungen lesen oder speichern. Nachrichten aus dieser Zeit werden von künftigen Zusammenfassungen ausgeschlossen. Eine Anfrage, die beim Pausieren schon unterwegs war, kann noch abgeschlossen werden.",
   "bff6d8d7d2ebfda1": "Die Gedächtniseinstellungen wurden aktualisiert.",
   "fc747df3adbcb304": "GOAT-Gedächtnis in Unterhaltungen verwenden",
   "18e223f1dde7235c": "Die Gedächtniseinstellungen konnten nicht aktualisiert werden.",
   "8a795e9e7df9e275": "Agentenzugriff",
   "9739b2af01240c7a": "Agenten den Zugriff auf das Gedächtnis erlauben",
-  "c150c9eff751195c": "Agenten auf diesem Gerät dürfen das Gedächtnis im Rahmen ihrer Berechtigungen nutzen. Die Freigabe zwischen Geräten wird separat verwaltet.",
+  "20952a8af6213701": "Agenten in dieser Umgebung dürfen das Gedächtnis im Rahmen ihrer Berechtigungen nutzen. Die Freigabe zwischen Geräten wird separat verwaltet.",
   "2f890e1e55af5ae5": "Gedächtnis",
   "d2d02339e50a2443": "Unterhaltungen speichern",
   "2f46e6da3ef449fa": "GOAT fasst abgeschlossene Unterhaltungen als Erinnerungen zusammen. Deaktivieren stoppt neue Zusammenfassungen. Gespeicherte Erinnerungen bleiben erhalten.",

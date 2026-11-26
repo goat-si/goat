@@ -109,7 +109,7 @@ function ConversationControls({ environmentId }: { environmentId: EnvironmentId 
         <SettingsSwitchRow
           label={gt("Allow agent memory access")}
           subtitle={gt(
-            "Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices.",
+            "Allow agents in this environment to use memory within their granted scope. This is separate from sharing memories between devices.",
           )}
           value={config?.settings.enableAgentMemoryAccess ?? false}
           disabled={disabled || paused}

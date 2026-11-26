@@ -37,7 +37,7 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
         <SettingsRow
           title={gt("Allow agent memory access")}
           description={gt(
-            "Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices.",
+            "Allow agents in this environment to use memory within their granted scope. This is separate from sharing memories between devices.",
           )}
           control={
             <Switch

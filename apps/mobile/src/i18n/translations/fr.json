@@ -5,7 +5,7 @@
   "18e223f1dde7235c": "Impossible de mettre à jour les paramètres de mémoire.",
   "8a795e9e7df9e275": "Accès des agents",
   "9739b2af01240c7a": "Autoriser les agents à accéder à la mémoire",
-  "c150c9eff751195c": "Autorise les agents de cet appareil à utiliser la mémoire dans la limite de leurs autorisations. Le partage entre appareils se règle séparément.",
+  "20952a8af6213701": "Autorise les agents de cet environnement à utiliser la mémoire dans la limite de leurs autorisations. Le partage entre appareils se règle séparément.",
   "2f890e1e55af5ae5": "Mémoire",
   "d2d02339e50a2443": "Mémoriser les conversations",
   "2f46e6da3ef449fa": "GOAT résume les conversations terminées en souvenirs. Désactiver cette option arrête les nouveaux résumés et conserve les souvenirs enregistrés.",

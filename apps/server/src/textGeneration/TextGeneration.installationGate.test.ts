@@ -86,6 +86,7 @@ it.effect("takes the installation gate only for a registered provider instance",
 
 it.effect("rechecks a memory summary after waiting for a provider update", () =>
   Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
     const released = yield* Deferred.make<void>();
     let paused = false;
     let sent = 0;
@@ -114,7 +115,10 @@ it.effect("rechecks a memory summary after waiting for a provider update", () =>
             ProviderInstallationGate.ProviderInstallationGate,
             ProviderInstallationGate.ProviderInstallationGate.of({
               execute: (_instanceId, effect) =>
-                Deferred.await(released).pipe(Effect.andThen(effect)),
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(released)),
+                  Effect.andThen(effect),
+                ),
               update: () => Effect.die("unused"),
             }),
           ),
@@ -142,6 +146,7 @@ it.effect("rechecks a memory summary after waiting for a provider update", () =>
         Effect.flip,
         Effect.forkChild,
       );
+    yield* Deferred.await(entered);
     paused = true;
     yield* Deferred.succeed(released, undefined);
     assert.equal((yield* Fiber.join(summary)).detail, "source_invalidated");

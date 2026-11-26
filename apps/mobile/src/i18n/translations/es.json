@@ -5,7 +5,7 @@
   "18e223f1dde7235c": "No se pudo actualizar la configuración de memoria.",
   "8a795e9e7df9e275": "Acceso de los agentes",
   "9739b2af01240c7a": "Permitir que los agentes accedan a la memoria",
-  "c150c9eff751195c": "Permite que los agentes de este dispositivo usen la memoria según sus permisos. La memoria compartida entre dispositivos se configura por separado.",
+  "20952a8af6213701": "Permite que los agentes de este entorno usen la memoria según sus permisos. La memoria compartida entre dispositivos se configura por separado.",
   "2f890e1e55af5ae5": "Memoria",
   "d2d02339e50a2443": "Recordar conversaciones",
   "2f46e6da3ef449fa": "GOAT resume las conversaciones terminadas en la memoria. Al desactivarlo no se generan más resúmenes y se conservan los recuerdos guardados.",

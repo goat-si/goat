@@ -5,7 +5,7 @@
   "18e223f1dde7235c": "Could not update memory settings.",
   "8a795e9e7df9e275": "Agent access",
   "9739b2af01240c7a": "Allow agent memory access",
-  "c150c9eff751195c": "Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices.",
+  "20952a8af6213701": "Allow agents in this environment to use memory within their granted scope. This is separate from sharing memories between devices.",
   "2f890e1e55af5ae5": "Memory",
   "d2d02339e50a2443": "Remember conversations",
   "2f46e6da3ef449fa": "GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories.",
