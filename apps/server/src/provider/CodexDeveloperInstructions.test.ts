@@ -53,6 +53,17 @@ describe("buildCodexAdditionalContext", () => {
     });
   });
 
+  it("clears the tool guidance when neither browser nor device is available", () => {
+    const context = buildCodexAdditionalContext(
+      { model: "test-model" },
+      {
+        browser: false,
+        device: false,
+      },
+    );
+    NodeAssert.deepEqual(context.goat_code_tools, { kind: "application", value: "" });
+  });
+
   it.each([false, true])("gates browser routing on the attachment, browser=%s", (browser) => {
     const text = Object.values(
       buildCodexAdditionalContext({ model: "test-model" }, { browser, device: false }),
@@ -117,7 +128,17 @@ describe("buildCodexAdditionalContext", () => {
     const sections = Object.keys(context)
       .filter((key) => key.startsWith("goat_code_orchestration_"))
       .sort()
-      .map((key) => context[key]!);
+      .map((key) => ({
+        ...context[key]!,
+        value: context[key]!.value.replaceAll("tools.mcp__goat__", ""),
+      }));
+
+    const rendered = Object.entries(context)
+      .filter(([key]) => key.startsWith("goat_code_orchestration_"))
+      .map(([, entry]) => entry.value)
+      .join("\n\n");
+    NodeAssert.match(rendered, /`tools\.mcp__goat__goat_describe`/);
+    NodeAssert.match(rendered, /`tools\.mcp__goat__goat_call`/);
 
     NodeAssert.deepEqual(
       sections,
