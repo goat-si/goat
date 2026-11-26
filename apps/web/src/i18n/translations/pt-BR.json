@@ -1138,5 +1138,15 @@
   "700d035b4e934d1f": "{name}: {activity}",
   "ae87266a748db24b": "Frota: nenhuma tarefa em andamento",
   "e8d0653cf49cd57e": "e mais {count}",
-  "7d5ab92b06b67598": "Decisões, {count} pendentes"
+  "7d5ab92b06b67598": "Decisões, {count} pendentes",
+  "aead644e2cf1233f": "Mostrar todas",
+  "f001fa7b329c8fbf": "Ocultar chamadas bem-sucedidas",
+  "ad208e3e32c85029": "Ocultar todas",
+  "5a543f8af34abca6": "Modo zen",
+  "0e3eebdc9ad239b4": "Oculte comandos, edições e buscas dos agentes para ler a conversa com mais facilidade. Ao ocultar chamadas bem-sucedidas, as falhas continuam visíveis. O modo zen também oculta mensagens intermediárias e mostra apenas as respostas finais. Aprovações, perguntas e erros sempre aparecem.",
+  "c4044f008123f399": "Compartilhe a conversa com um convidado que pode acompanhá-la ao vivo no navegador e enviar mensagens que você aprova.",
+  "d74cae03e5184cb7": "Entre no GOAT Connect para usar links de convidados.",
+  "4681c4c9541539a4": "Entrar",
+  "f239f97357fdcb0f": "Para usar links de convidados, entre no GOAT Connect e vincule esta máquina. Desativar esta opção desativa todos os links de convidados.",
+  "88f6bae5adcdb0ec": "Abrir conexões"
 }

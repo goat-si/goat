@@ -1138,5 +1138,15 @@
   "ae87266a748db24b": "Parc : aucune tâche en cours",
   "e8d0653cf49cd57e": "et {count} de plus",
   "7d5ab92b06b67598": "Décisions, {count} en attente",
-  "f9153168b50dcc15": "Palette de commandes"
+  "f9153168b50dcc15": "Palette de commandes",
+  "aead644e2cf1233f": "Tout afficher",
+  "f001fa7b329c8fbf": "Masquer les appels réussis",
+  "ad208e3e32c85029": "Tout masquer",
+  "5a543f8af34abca6": "Mode zen",
+  "0e3eebdc9ad239b4": "Masquez les commandes, modifications et recherches des agents pour lire le fil comme une conversation. Si vous masquez les appels réussis, les échecs restent visibles. Le mode zen masque aussi les messages intermédiaires et affiche uniquement les réponses finales. Les demandes d’approbation, les questions et les erreurs restent visibles.",
+  "c4044f008123f399": "Partagez un fil avec un invité qui peut le suivre en direct dans son navigateur et envoyer des messages que vous approuvez.",
+  "d74cae03e5184cb7": "Connectez-vous à GOAT Connect pour utiliser les liens invités.",
+  "4681c4c9541539a4": "Se connecter",
+  "f239f97357fdcb0f": "Pour utiliser les liens invités, connectez-vous à GOAT Connect et associez cette machine. Désactiver cette option désactive tous les liens invités.",
+  "88f6bae5adcdb0ec": "Ouvrir les connexions"
 }
