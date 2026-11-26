@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { MemoryMoveControl } from "./MemoryMoveControl";
 import type { MemorySyncStatus } from "@goat/contracts";
 import {
@@ -17,7 +18,6 @@ import {
 } from "@goat/contracts";
 import {
   memoryForgetRequest,
-  memoryHiddenSelectionLabel,
   memoryMoveCandidate,
   memoryMoveCandidateCurrent,
   type MemoryMoveCandidate,
@@ -47,6 +47,56 @@ import {
 } from "../ui/alert-dialog";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
+const FAILURE_MESSAGES = new Set<string>([
+  msg("unavailable"),
+  msg("source unavailable"),
+  msg("not found"),
+  msg("forgotten"),
+  msg("revision changed"),
+  msg("operation id reused"),
+  msg("missing parent"),
+  msg("conflict changed"),
+  msg("lease expired"),
+  msg("fenced"),
+  msg("claim busy"),
+  msg("invalid output"),
+  msg("generation failed"),
+  msg("secret detected"),
+  msg("bootstrap required"),
+  msg("space mismatch"),
+  msg("unsupported protocol"),
+  msg("invalid cursor"),
+  msg("cursor expired"),
+  msg("hub disabled"),
+  msg("identity mismatch"),
+  msg("route unavailable"),
+  msg("lease required"),
+  msg("attempt expired"),
+  msg("unsupported operation"),
+  msg("payload too large"),
+  msg("generation input too large"),
+  msg("storage failed"),
+  msg("source invalidated"),
+  msg("thread lineage incomplete"),
+  msg("capacity exceeded"),
+  msg("base compacted"),
+  msg("revert expired"),
+  msg("scanner pending"),
+  msg("forget pending"),
+  msg("hub upgrade required"),
+  msg("hub unavailable"),
+  msg("move receipt missing"),
+  msg("Request could not be confirmed"),
+]);
+
+function useMemoryFailureLabel() {
+  const m = useMessages();
+  return (reason: string) => {
+    const label = reason.replaceAll("_", " ");
+    return FAILURE_MESSAGES.has(label) ? m(label) : reason;
+  };
+}
+
 export function MemoryOriginPicker({
   environmentId,
   origin,
@@ -58,13 +108,14 @@ export function MemoryOriginPicker({
   fromLink?: ScopedThreadRef;
   onChange: (origin?: ScopedThreadRef) => void;
 }) {
+  const gt = useGT();
   const conversations = useThreadShells().filter(
     (thread) => thread.environmentId === environmentId,
   );
   const linked = fromLink && !conversations.some((thread) => thread.id === fromLink.threadId);
   return (
     <SettingsRow
-      title="Saved from conversation"
+      title={gt("Saved from conversation")}
       control={
         <Select
           value={origin?.threadId ?? null}
@@ -79,15 +130,17 @@ export function MemoryOriginPicker({
             );
           }}
         >
-          <SelectTrigger aria-label="Saved from conversation">
-            <SelectValue placeholder="Any conversation" />
+          <SelectTrigger aria-label={gt("Saved from conversation")}>
+            <SelectValue placeholder={gt("Any conversation")} />
           </SelectTrigger>
           <SelectPopup>
-            <SelectItem value="">Any conversation</SelectItem>
-            {linked ? <SelectItem value={fromLink.threadId}>This conversation</SelectItem> : null}
+            <SelectItem value="">{gt("Any conversation")}</SelectItem>
+            {linked ? (
+              <SelectItem value={fromLink.threadId}>{gt("This conversation")}</SelectItem>
+            ) : null}
             {conversations.map((thread) => (
               <SelectItem key={thread.id} value={thread.id}>
-                {thread.id === fromLink?.threadId ? "This conversation" : thread.title}
+                {thread.id === fromLink?.threadId ? gt("This conversation") : thread.title}
               </SelectItem>
             ))}
           </SelectPopup>
@@ -125,8 +178,16 @@ export function useWebMemoryBatch(
   items: readonly MemoryItem[],
   readItems: () => readonly MemoryItem[],
 ) {
+  const gt = useGT();
+  const failureLabel = useMemoryFailureLabel();
   const registry = useContext(RegistryContext);
   const permitted = useAtomValue(memoryEnvironment.forget.permissionAtom(environmentId));
+  const m = useMessages();
+  const resultLabels = {
+    Forgotten: msg("Forgotten"),
+    "Pending sync": msg("Pending sync"),
+    Failed: msg("Failed"),
+  };
   const allowed = enabled && permitted;
   const forget = useAtomCommand(memoryEnvironment.forget, { reportFailure: false });
   const key = `${filterKey}:${allowed}`;
@@ -183,10 +244,10 @@ export function useWebMemoryBatch(
           type="checkbox"
           checked={checked}
           disabled={state.busy}
-          aria-label={`Select memory ${memoryId.slice(-8)}`}
+          aria-label={gt("Select memory {id}", { id: memoryId.slice(-8) })}
           onChange={() => toggle(memoryId, item)}
         />
-        Select
+        {gt("Select")}
       </label>
     );
   }
@@ -198,12 +259,16 @@ export function useWebMemoryBatch(
     rowState: state,
     row: (item: MemoryItem) => selectionControl(item.memoryId, item),
     hiddenRows: missing.map((id) => (
-      <SettingsRow key={id} title={memoryHiddenSelectionLabel(id)} control={selectionControl(id)} />
+      <SettingsRow
+        key={id}
+        title={gt("Memory {id} · Text hidden", { id: id.slice(-8) })}
+        control={selectionControl(id)}
+      />
     )),
     controls: !allowed ? null : (
       <>
         <SettingsRow
-          title="Manage several memories"
+          title={gt("Manage several memories")}
           control={
             <div className="flex flex-wrap gap-2">
               <Button
@@ -212,7 +277,7 @@ export function useWebMemoryBatch(
                 disabled={state.busy}
                 onClick={() => (state.selecting ? set(emptyBulk(key)) : patch({ selecting: true }))}
               >
-                {state.selecting ? "Done selecting" : "Select memories"}
+                {state.selecting ? gt("Done selecting") : gt("Select memories")}
               </Button>
               {state.selecting && canMove ? (
                 <MemoryMoveControl
@@ -236,19 +301,22 @@ export function useWebMemoryBatch(
                   disabled={!state.selected.size || state.busy}
                   onClick={() => patch({ confirmation: true })}
                 >
-                  Forget {state.selected.size}
+                  {gt("Forget {count}", { count: state.selected.size })}
                 </Button>
               ) : null}
             </div>
           }
         />
         {state.results.length ? (
-          <SettingsRow title="Forget results">
+          <SettingsRow title={gt("Forget results")}>
             <ul aria-live="polite" className="text-sm">
               {state.results.map(({ request, status, reason }) => (
                 <li key={request.memoryId}>
-                  Memory {request.memoryId.slice(-8)} · {status}
-                  {reason ? ` · ${reason}` : ""}
+                  {gt("Memory {id} · {status}", {
+                    id: request.memoryId.slice(-8),
+                    status: m(resultLabels[status]),
+                  })}
+                  {reason ? ` · ${failureLabel(reason)}` : ""}
                 </li>
               ))}
             </ul>
@@ -260,15 +328,21 @@ export function useWebMemoryBatch(
         >
           <AlertDialogPopup>
             <AlertDialogHeader>
-              <AlertDialogTitle>Forget {state.selected.size} memories?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {gt("Forget {count, plural, one {# memory} other {# memories}}?", {
+                  count: state.selected.size,
+                })}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                Forgotten memories will also be removed from other devices when they sync.
+                {gt("Forgotten memories will also be removed from other devices when they sync.")}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+              <AlertDialogClose render={<Button variant="outline" />}>
+                {gt("Cancel")}
+              </AlertDialogClose>
               <Button variant="destructive" onClick={() => void submit()}>
-                Confirm forget
+                {gt("Confirm forget")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogPopup>
@@ -290,6 +364,8 @@ export function WebMemorySuggestions({
   memorySpaceId: MemorySpaceId;
   onSaved: () => void;
 }) {
+  const gt = useGT();
+  const failureLabel = useMemoryFailureLabel();
   const input = { memorySpaceId };
   const list = useEnvironmentQuery(memoryEnvironment.suggestions({ environmentId, input }));
   const allowed = useAtomValue(memoryEnvironment.acceptSuggestion.permissionAtom(environmentId));
@@ -308,28 +384,27 @@ export function WebMemorySuggestions({
     const target = { environmentId, input: { memorySpaceId, suggestionId } };
     if (action === "accept") {
       const result = await accept(target);
-      if (result._tag !== "Success") setNotice("Could not accept this suggestion.");
-      else if (result.value.status === "refused")
-        setNotice(result.value.reason.replaceAll("_", " "));
+      if (result._tag !== "Success") setNotice(gt("Could not accept this suggestion."));
+      else if (result.value.status === "refused") setNotice(failureLabel(result.value.reason));
       else {
-        if (result.value.status === "accepted") setNotice("Memory saved");
+        if (result.value.status === "accepted") setNotice(gt("Memory saved"));
         onSaved();
       }
     } else if ((await dismiss(target))._tag !== "Success")
-      setNotice("Could not dismiss this suggestion.");
+      setNotice(gt("Could not dismiss this suggestion."));
     setBusy(null);
     list.refresh();
   }
   return (
-    <SettingsSection title="Suggestions">
+    <SettingsSection title={gt("Suggestions")}>
       {notice ? <SettingsRow title={<span role="status">{notice}</span>} /> : null}
-      {list.error ? <SettingsRow title="Could not load suggestions" /> : null}
+      {list.error ? <SettingsRow title={gt("Could not load suggestions")} /> : null}
       {!suggestions?.length ? (
         <SettingsRow
-          title={suggestions ? "No pending suggestions" : "Review suggestions"}
+          title={suggestions ? gt("No pending suggestions") : gt("Review suggestions")}
           control={
             <Button variant="outline" size="sm" onClick={list.refresh}>
-              Show suggestions
+              {gt("Show suggestions")}
             </Button>
           }
         />
@@ -340,8 +415,8 @@ export function WebMemorySuggestions({
           title={suggestion.text}
           description={
             suggestion.state === "accepting"
-              ? "Waiting for the memory hub"
-              : suggestion.reason.replaceAll("_", " ")
+              ? gt("Waiting for the memory hub")
+              : failureLabel(suggestion.reason)
           }
           control={
             <div className="flex flex-wrap gap-2">
@@ -351,7 +426,7 @@ export function WebMemorySuggestions({
                 disabled={!allowed || busy !== null || suggestion.state === "accepting"}
                 onClick={() => void act(suggestion.suggestionId, "accept")}
               >
-                Accept
+                {gt("Accept")}
               </Button>
               <Button
                 variant="ghost"
@@ -359,7 +434,7 @@ export function WebMemorySuggestions({
                 disabled={!canDismiss || busy !== null || suggestion.state === "accepting"}
                 onClick={() => void act(suggestion.suggestionId, "dismiss")}
               >
-                Dismiss
+                {gt("Dismiss")}
               </Button>
             </div>
           }
@@ -406,8 +481,51 @@ export function measureMemoryListRow(
   return { page, height, sizes };
 }
 
+const MEMORY_STATUS_MESSAGES = new Set<string>([
+  msg("Memory sharing off"),
+  msg("Receiving initial memories"),
+  msg("Hub connected"),
+  msg("Hub disconnected"),
+  msg("Memory sync error"),
+  msg("Connect a memory space"),
+  msg("Hub connection not confirmed"),
+  msg("Memory search unavailable"),
+  msg("Some memories are still being indexed"),
+  msg("Memory coverage unknown"),
+  msg("Memory search ready"),
+  msg("Originals retained for revert"),
+  msg("Waiting for active work"),
+  msg("Work pending"),
+  msg("Checkpoint retained"),
+  msg("Memory storage unavailable"),
+  msg("Search indexing paused"),
+  msg("Memory cleanup needs attention"),
+  msg("Reports waiting to be delivered"),
+  msg("Memory storage nearly full"),
+  msg("Memory storage getting full"),
+  msg("Memory storage usage unknown"),
+  msg("Memory storage available"),
+  msg("Search storage usage unknown"),
+  msg("Search indexing available"),
+  msg("Checking content"),
+  msg("Sensitive content on hold; forgetting is available"),
+  msg("Waiting for earlier memories"),
+  msg("Memory processing pending"),
+  msg("Cleaning up remaining content"),
+  msg("Sync progress unknown"),
+  msg("Receiving memories"),
+  msg("Memories received"),
+  msg("Some reports could not be delivered"),
+  msg("Some memory changes could not be accepted"),
+  msg("Memory storage limit reached"),
+]);
+
 /** Producer helpers keep raw storage fields and timestamps out of Settings. */
 export function MemoryStatusRows({ sync }: { sync: MemorySyncStatus }) {
+  const gt = useGT();
+  const localize = useMessages();
+  const statusLabel = (source: string) =>
+    MEMORY_STATUS_MESSAGES.has(source) ? localize(source) : source;
   const storage = presentMemoryStorage(sync.storage);
   const processing = presentMemoryProcessing(sync.processing, sync.generationHold);
   const labels = [
@@ -419,18 +537,20 @@ export function MemoryStatusRows({ sync }: { sync: MemorySyncStatus }) {
     processing.receiveLabel,
     processing.reportLabel,
     processing.admissionLabel,
-  ].filter(Boolean);
+  ].filter((label) => label !== null);
   return (
-    <SettingsSection title="Memory status">
-      <SettingsRow title="Hub" description={presentMemorySync(sync).label} />
+    <SettingsSection title={gt("Memory status")}>
+      <SettingsRow title={gt("Hub")} description={statusLabel(presentMemorySync(sync).label)} />
       <SettingsRow
-        title="Storage"
-        description={[storage.label, storage.searchLabel, ...storage.reasons].join(". ")}
+        title={gt("Storage")}
+        description={[storage.label, storage.searchLabel, ...storage.reasons]
+          .map(statusLabel)
+          .join(". ")}
       />
-      <SettingsRow title="Coverage" description={processing.coverage.label} />
+      <SettingsRow title={gt("Coverage")} description={statusLabel(processing.coverage.label)} />
       <SettingsRow
-        title="Processing"
-        description={labels.join(". ") || "No pending processing reported"}
+        title={gt("Processing")}
+        description={labels.map(statusLabel).join(". ") || gt("No pending processing reported")}
       />
     </SettingsSection>
   );
