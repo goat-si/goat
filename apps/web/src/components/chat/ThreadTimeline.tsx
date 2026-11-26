@@ -1,3 +1,4 @@
+import { SavedThreadPreference } from "./SavedThreadPreference";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { type ComponentProps, useLayoutEffect } from "react";
 import { useIncrementalTimelineEntries } from "../../hooks/useIncrementalTimelineEntries";
@@ -74,6 +75,11 @@ export function ThreadTimeline({
     readyActivity,
   ]);
   return (
-    <MessagesTimeline {...timelineProps} syncing={syncing} timelineEntries={displayed.entries} />
+    <>
+      {threadDetailRef && !timelineProps.paintOnly && (
+        <SavedThreadPreference thread={threadDetailRef} />
+      )}
+      <MessagesTimeline {...timelineProps} syncing={syncing} timelineEntries={displayed.entries} />
+    </>
   );
 }
