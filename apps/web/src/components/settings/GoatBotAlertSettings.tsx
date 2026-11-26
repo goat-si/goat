@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { goatBotAlertChoices } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
@@ -8,6 +9,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function GoatBotAlertSettings() {
+  const gt = useGT();
   const computers = useEnvironments().environments.filter(
     (computer) =>
       computer.connection.phase === "connected" &&
@@ -15,7 +17,7 @@ export function GoatBotAlertSettings() {
   );
   if (computers.length === 0) return null;
   return (
-    <SettingsSection id="goat-bot-alerts" title="Bot alerts">
+    <SettingsSection id="goat-bot-alerts" title={gt("Bot alerts")}>
       {computers.map((computer) => (
         <GoatBotAlertRow
           key={computer.environmentId}
@@ -34,12 +36,19 @@ function GoatBotAlertRow({
   readonly environmentId: EnvironmentId;
   readonly label: string;
 }) {
+  const gt = useGT();
+  const labels = {
+    needs_you: gt("Needs you"),
+    needs_you_and_results: gt("Needs you and results"),
+    off: gt("Off"),
+  };
+  const alertChoices = goatBotAlertChoices.map(({ value }) => ({ value, label: labels[value] }));
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
   const { settings, allowed, save, message } = useGoatBotModel(environmentId);
   return (
     <SettingsRow
       title={label}
-      description="Show notifications from this computer while GOAT is running."
+      description={gt("Show notifications from this computer while GOAT is running.")}
       status={message ?? permissionMessage}
       control={
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -54,30 +63,33 @@ function GoatBotAlertRow({
                   (permission) => {
                     setPermissionMessage(
                       permission === "granted"
-                        ? "Notifications allowed."
-                        : "Allow notifications in your browser or system settings.",
+                        ? gt("Notifications allowed.")
+                        : gt("Allow notifications in your browser or system settings."),
                     );
                   },
                   () => setPermissionMessage("Notifications are unavailable in this browser."),
                 );
               }}
             >
-              Allow notifications
+              {gt("Allow notifications")}
             </Button>
           ) : null}
           <Select
             value={settings.goatBotAlerts}
-            items={goatBotAlertChoices}
+            items={alertChoices}
             disabled={!allowed}
             onValueChange={(value) => {
               if (value !== null) void save({ goatBotAlerts: value });
             }}
           >
-            <SelectTrigger size="sm" aria-label={`Bot alerts on ${label}`}>
+            <SelectTrigger
+              size="sm"
+              aria-label={gt("Bot alerts on {computer}", { computer: label })}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectPopup>
-              {goatBotAlertChoices.map(({ value, label }) => (
+              {alertChoices.map(({ value, label }) => (
                 <SelectItem key={value} value={value}>
                   {label}
                 </SelectItem>

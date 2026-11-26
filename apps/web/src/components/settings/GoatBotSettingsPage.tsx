@@ -1,3 +1,4 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
@@ -25,11 +26,12 @@ import { GoatBotAlertSettings } from "./GoatBotAlertSettings";
 import { GoatBotSettings } from "./GoatBotSettings";
 import { GoatBotStatusSettings } from "./GoatBotStatusSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 import { SlackChannelSettings } from "./SlackChannelSettings";
 
 /** The main bot's name, avatar and purpose, on the computer GOAT Bot runs on. */
 function GoatBotProfileSection() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { environment } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const presentation = useEnvironment(environmentId);
@@ -68,10 +70,10 @@ function GoatBotProfileSection() {
   const deniedLine = `GOAT on ${label} did not let this device read the bot's profile`;
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
-    <SettingsSection id="goat-bot-profile" title="Profile">
+    <SettingsSection id="goat-bot-profile" title={gt("Profile")}>
       {refused ? (
         <SettingsRow
-          {...searchableSetting("goat-bot-profile")}
+          {...localizedSetting("goat-bot-profile")}
           title="GOAT Bot"
           status={readable ? deniedLine : refusedLine}
         />
@@ -108,6 +110,8 @@ function GoatBotProfileRow({
   readonly refusedLine: string;
   readonly deniedLine: string;
 }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   // Read in every phase: offline the query keeps its last answer and sends nothing.
   const profiles = useEnvironmentQuery(channelEnvironment.listBots({ environmentId, input: {} }));
   const mayEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
@@ -123,7 +127,7 @@ function GoatBotProfileRow({
   return (
     <>
       <SettingsRow
-        {...searchableSetting("goat-bot-profile")}
+        {...localizedSetting("goat-bot-profile")}
         title={main === undefined ? "GOAT Bot" : [main.avatar, main.name].filter(Boolean).join(" ")}
         description={
           main !== undefined
@@ -131,12 +135,12 @@ function GoatBotProfileRow({
             : offline
               ? undefined
               : profiles.error
-                ? "Could not load the bot's profile."
+                ? gt("Could not load the bot's profile.")
                 : answer === null && (starting || profiles.isPending || profiles.data !== null)
-                  ? "Loading…"
-                  : "The profile appears once GOAT Bot has started."
+                  ? gt("Loading…")
+                  : gt("The profile appears once GOAT Bot has started.")
         }
-        status={offline ? "Offline" : undefined}
+        status={offline ? gt("Offline") : undefined}
         control={
           <Button
             size="sm"
@@ -144,7 +148,7 @@ function GoatBotProfileRow({
             disabled={main === undefined || !canEdit}
             onClick={() => setEditing(main ?? null)}
           >
-            Edit
+            {gt("Edit")}
           </Button>
         }
       />
@@ -182,6 +186,7 @@ function GoatBotProfileRow({
 
 /** Every GOAT Bot control in one place: where it runs, then the channels that reach it. */
 export function GoatBotSettingsPanel() {
+  const localizedSetting = useTranslatedSearchableSetting();
   const gt = useGT();
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
   const suggestionsHidden = useClientSettings((settings) => settings.goatBotSuggestedHidden);
@@ -208,14 +213,16 @@ export function GoatBotSettingsPanel() {
           }
         />
       </SettingsSection>
-      <SettingsSection id="goat-bot-suggestions" title="Home">
+      <SettingsSection id="goat-bot-suggestions" title={gt("Home")}>
         <SettingsRow
-          {...searchableSetting("goat-bot-suggestions")}
-          title="Suggestions on the bot's home"
-          description="Offer things GOAT can set up for the bot, such as reaching it from Slack. Applies to this device."
+          {...localizedSetting("goat-bot-suggestions")}
+          title={gt("Suggestions on the bot's home")}
+          description={gt(
+            "Offer things GOAT can set up for the bot, such as reaching it from Slack. Applies to this device.",
+          )}
           control={
             <Switch
-              aria-label="Suggestions on the bot's home"
+              aria-label={gt("Suggestions on the bot's home")}
               checked={!suggestionsHidden}
               onCheckedChange={(checked) =>
                 void persistClientSettingsPatch({ goatBotSuggestedHidden: !checked })
@@ -227,8 +234,8 @@ export function GoatBotSettingsPanel() {
       <SlackChannelSettings />
       <SettingsSection id="imessage" title="iMessage">
         <SettingsRow
-          {...searchableSetting("imessage-channel")}
-          title="Set up in Terminal"
+          {...localizedSetting("imessage-channel")}
+          title={gt("Set up in Terminal")}
           description={
             <>
               On the Mac that runs GOAT Bot, give GOAT Full Disk Access, run{" "}
