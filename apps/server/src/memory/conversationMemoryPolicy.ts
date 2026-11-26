@@ -14,7 +14,7 @@ export const setConversationMemoryEnabled = Effect.fn("ConversationMemoryPolicy.
     WHERE ${value} != coalesce((SELECT enabled FROM conversation_memory_policy ORDER BY generation DESC LIMIT 1),1)`;
 });
 
-export const readConversationMemoryPolicy = (sql: SqlClient.SqlClient) =>
+const readConversationMemoryPolicy = (sql: SqlClient.SqlClient) =>
   sql<{ generation: number; enabled: number }>`SELECT generation,enabled
     FROM conversation_memory_policy ORDER BY generation DESC LIMIT 1`.pipe(
     Effect.map((rows) => rows[0]),
@@ -39,5 +39,12 @@ export const admitConversationSummary = Effect.fn("ConversationMemoryPolicy.admi
   },
 );
 
-export const hasConversationMemoryPauses = (sql: SqlClient.SqlClient) =>
-  readConversationMemoryPolicy(sql).pipe(Effect.map((row) => row !== undefined));
+// Channel requests can carry a paused origin from another environment, even before the first local pause.
+export const readThreadConversationMemoryPolicy = (sql: SqlClient.SqlClient, threadId: string) =>
+  sql<{ generation: number; enabled: number }>`WITH latest AS (
+    SELECT generation, enabled FROM conversation_memory_policy ORDER BY generation DESC LIMIT 1
+  ) SELECT generation, enabled FROM latest
+    UNION ALL SELECT 0, 1 WHERE NOT EXISTS (SELECT 1 FROM latest)
+      AND EXISTS (SELECT 1 FROM conversation_memory_excluded_messages WHERE thread_id=${threadId})`.pipe(
+    Effect.map((rows) => rows[0]),
+  );

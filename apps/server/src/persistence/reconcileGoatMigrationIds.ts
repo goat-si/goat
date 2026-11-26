@@ -174,6 +174,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ChannelInputSessionAuthority",
   "TurnMemoryReceipts",
   "ConversationMemoryPolicy",
+  "ConversationMemoryExcludedMessages",
 ]);
 
 type MigrationEntry<E> = readonly [

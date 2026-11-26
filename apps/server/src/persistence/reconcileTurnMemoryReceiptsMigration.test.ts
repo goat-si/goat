@@ -21,6 +21,7 @@ it.effect("appends turn receipts to an up-to-date dev ledger", () =>
     assert.deepStrictEqual(yield* runMigrations(), [
       [185, "TurnMemoryReceipts"],
       [186, "ConversationMemoryPolicy"],
+      [187, "ConversationMemoryExcludedMessages"],
     ]);
     assert.deepStrictEqual(yield* readLedger, migrationManifest);
     assert.deepStrictEqual(yield* readReceipts, []);
