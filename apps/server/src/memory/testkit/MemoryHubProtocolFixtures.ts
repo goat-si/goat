@@ -8,6 +8,7 @@ export const moveFloorCapabilities = {
   provenanceProjection: true,
   derivedCap: 1000,
   turnMemory: true,
+  savedThreadPreference: true,
   originFilter: true,
   originUpdates: true,
   originCatchup: true,
