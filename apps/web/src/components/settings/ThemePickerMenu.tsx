@@ -50,8 +50,6 @@ export type ThemeChoice = {
   actions: ThemeChoiceActions;
 };
 
-const MODE_LABELS: Record<ThemeAppearance, string> = { light: "Light", dark: "Dark" };
-
 function ThemeSwatches({ swatches }: { swatches: ReadonlyArray<ThemeSwatch> }) {
   return (
     <span aria-hidden className="flex shrink-0 items-center gap-0.5">
@@ -72,49 +70,56 @@ function ModeIcon({ mode }: { mode: ThemeAppearance }) {
 }
 
 function OwnedModesIndicator({ ownedModes }: { ownedModes: ReadonlyArray<ThemeAppearance> }) {
+  const gt = useGT();
   const [mode] = ownedModes;
   if (ownedModes.length !== 1 || !mode) return <MenuRadioItemIndicator />;
   return (
     <span className="flex shrink-0 text-muted-foreground">
       <ModeIcon mode={mode} />
-      <span className="sr-only">, used for {mode} mode</span>
+      <span className="sr-only">
+        {mode === "light" ? gt(", used for light mode") : gt(", used for dark mode")}
+      </span>
     </span>
   );
 }
 
 function ThemeChoiceActionsMenu({ choice }: { choice: ThemeChoice }) {
+  const gt = useGT();
   const { actions } = choice;
   if (!actions.edit && !actions.exportFile && !actions.remove) {
     return (
-      <MenuItem aria-label={`Duplicate ${choice.label}`} onClick={actions.duplicate}>
+      <MenuItem
+        aria-label={gt("Duplicate {theme}", { theme: choice.label })}
+        onClick={actions.duplicate}
+      >
         <CopyIcon />
       </MenuItem>
     );
   }
   return (
     <MenuSub>
-      <MenuSubTrigger aria-label={`More actions for ${choice.label}`} />
+      <MenuSubTrigger aria-label={gt("More actions for {theme}", { theme: choice.label })} />
       <MenuSubPopup>
         <MenuItem onClick={actions.duplicate}>
           <CopyIcon />
-          Duplicate
+          {gt("Duplicate")}
         </MenuItem>
         {actions.edit ? (
           <MenuItem onClick={actions.edit}>
             <PenLineIcon />
-            Edit
+            {gt("Edit")}
           </MenuItem>
         ) : null}
         {actions.exportFile ? (
           <MenuItem onClick={actions.exportFile}>
             <UploadIcon />
-            Export file
+            {gt("Export file")}
           </MenuItem>
         ) : null}
         {actions.remove ? (
           <MenuItem onClick={actions.remove} variant="destructive">
             <TrashIcon />
-            Remove…
+            {gt("Remove…")}
           </MenuItem>
         ) : null}
       </MenuSubPopup>
@@ -123,6 +128,7 @@ function ThemeChoiceActionsMenu({ choice }: { choice: ThemeChoice }) {
 }
 
 function ThemeChoiceRow({ choice }: { choice: ThemeChoice }) {
+  const gt = useGT();
   const [onlySwatch] = choice.swatches;
   const singleMode = choice.swatches.length === 1 && onlySwatch ? onlySwatch.mode : null;
   return (
@@ -133,7 +139,7 @@ function ThemeChoiceRow({ choice }: { choice: ThemeChoice }) {
           <span className="min-w-0 flex-1 truncate">{choice.label}</span>
           {singleMode ? (
             <span className="shrink-0 text-xs text-muted-foreground">
-              {MODE_LABELS[singleMode]} only
+              {singleMode === "light" ? gt("Light only") : gt("Dark only")}
             </span>
           ) : null}
           <OwnedModesIndicator ownedModes={choice.ownedModes} />
@@ -151,6 +157,7 @@ function ModeThemeSubmenu({
   mode: ThemeAppearance;
   choices: ReadonlyArray<ThemeChoice>;
 }) {
+  const gt = useGT();
   const options = choices.flatMap((choice) => {
     const swatch = choice.swatches.find((candidate) => candidate.mode === mode);
     return swatch ? [{ choice, swatch }] : [];
@@ -160,7 +167,9 @@ function ModeThemeSubmenu({
     <MenuSub>
       <MenuSubTrigger>
         <ModeIcon mode={mode} />
-        <span className="shrink-0">For {mode} mode</span>
+        <span className="shrink-0">
+          {mode === "light" ? gt("For light mode") : gt("For dark mode")}
+        </span>
         {current ? (
           <span className="min-w-0 flex-1 truncate text-end text-xs text-muted-foreground">
             {current.choice.label}
@@ -169,7 +178,7 @@ function ModeThemeSubmenu({
       </MenuSubTrigger>
       <MenuSubPopup>
         <MenuRadioGroup
-          aria-label={`${MODE_LABELS[mode]} mode theme`}
+          aria-label={mode === "light" ? gt("Light mode theme") : gt("Dark mode theme")}
           value={current?.choice.key ?? ""}
         >
           {options.map(({ choice, swatch }) => (
@@ -244,7 +253,7 @@ export function ThemePickerMenu({
         </span>
       </MenuTrigger>
       <MenuPopup align="end" className="w-72">
-        <MenuRadioGroup aria-label="Themes" value={checkedKey}>
+        <MenuRadioGroup aria-label={gt("Themes")} value={checkedKey}>
           {groups.map((group, index) => {
             const previous = groups[index - 1];
             const separated =
@@ -273,11 +282,11 @@ export function ThemePickerMenu({
         <MenuSeparator />
         <MenuItem onClick={onCreate}>
           <PaintbrushIcon />
-          Create theme…
+          {gt("Create theme…")}
         </MenuItem>
         <MenuItem onClick={onAdd}>
           <PlusIcon />
-          Add theme…
+          {gt("Add theme…")}
         </MenuItem>
       </MenuPopup>
     </Menu>
