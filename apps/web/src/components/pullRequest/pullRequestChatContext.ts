@@ -57,7 +57,7 @@ export function bounded(value: string): string {
   if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
     end -= 1;
   }
-  return `${trimmed.slice(0, end)}...`;
+  return `${trimmed.slice(0, end).trimEnd()}...`;
 }
 
 export function reviewThreadContext(

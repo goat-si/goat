@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { PullRequestComment } from "@goat/contracts";
+import { GitCommandError, type PullRequestComment } from "@goat/contracts";
 import { reviewCommentContextLabel } from "~/lib/composerContextRecords";
 import {
   appendHandoff,
   buildAskAboutPullRequestHandoff,
   buildPullRequestCommentContext,
+  checkoutFailureDescription,
 } from "./pullRequestDetail.logic";
 import { bounded } from "./pullRequestChatContext";
 
@@ -12,6 +13,20 @@ describe("bounding review text", () => {
   it("does not split a surrogate pair at the cut", () => {
     // The emoji starts exactly at the cut, so its halves straddle it.
     expect(bounded(`${"x".repeat(996)}😀 and more of the review.`)).toBe(`${"x".repeat(996)}...`);
+  });
+
+  it("drops trailing spaces before the ellipsis in bounded review findings and failure messages", () => {
+    expect(bounded(`${"x".repeat(996)} and more of the review.`)).toBe(`${"x".repeat(996)}...`);
+    expect(
+      checkoutFailureDescription(
+        new GitCommandError({
+          cwd: "/workspace",
+          operation: "GitVcsDriver.createWorktree",
+          command: "git worktree add",
+          detail: `${"x".repeat(318)} tail`,
+        }),
+      ),
+    ).toBe(`${"x".repeat(318)}…`);
   });
 });
 

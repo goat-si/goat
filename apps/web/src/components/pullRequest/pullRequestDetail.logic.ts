@@ -1145,7 +1145,7 @@ export function readableFailure(failure: unknown, hint: string): string {
   let end = FAILURE_DETAIL_MAX_LENGTH - 1;
   const last = detail.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${detail.slice(0, end)}…`;
+  return `${detail.slice(0, end).trimEnd()}…`;
 }
 
 const isGitCommandError = Schema.is(GitCommandError);
