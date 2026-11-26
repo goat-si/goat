@@ -191,7 +191,7 @@ export function openCodexHomeHandoff(
       };
 }
 
-export const CODEX_ROUTE_BUSY_MESSAGE =
+const CODEX_ROUTE_BUSY_MESSAGE =
   "Wait for this instance's active turns to finish before changing its model route.";
 const CODEX_ROUTE_STALE_MESSAGE = "Settings changed on another device. Review them and try again.";
 
