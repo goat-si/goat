@@ -132,9 +132,10 @@ it("refreshes an open task's required results after a silent task change", async
     unread: false,
     mainMessagesSinceQuiet: 0,
   });
-  const result = (summary: string, state: "pending" | "accepted") =>
+  if (row.kind !== "task") throw new Error("expected a task");
+  const result = (summary: string, state: "pending" | "accepted", updatedAt = row.task.updatedAt) =>
     AsyncResult.success({
-      task: { state: "known", row },
+      task: { state: "known", row: { ...row, task: { ...row.task, updatedAt } } },
       attemptEvidence: { summary },
       requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1, state }],
       codingRows: [],
@@ -152,7 +153,7 @@ it("refreshes an open task's required results after a silent task change", async
     <WorkWithChip visible taskId={taskId} onOpenTask={() => {}} onOpenThread={() => {}} />,
   );
   expect(container.textContent).toContain("Before");
-  state.lookup.mockResolvedValue(result("After", "accepted"));
+  state.lookup.mockResolvedValue(result("After", "accepted", "2026-11-04T10:01:00.000Z"));
   await act(async () =>
     appAtomRegistry.set(
       taskChanges,

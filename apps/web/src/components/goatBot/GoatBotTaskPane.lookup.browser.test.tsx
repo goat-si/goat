@@ -261,7 +261,8 @@ it("shows one accepted result while the failed Linux check still needs work", as
 
 it("refreshes an open task's evidence after a silent task change", async () => {
   setup();
-  state.noRows = true;
+  state.row.status = "running";
+  state.row.unread = false;
   state.lookupSupported = true;
   state.snoozeSupported = true;
   const row = decodeBotThreadRow({
@@ -277,10 +278,15 @@ it("refreshes an open task's evidence after a silent task change", async () => {
     unread: false,
     mainMessagesSinceQuiet: 0,
   });
-  const result = (summary: string, state: "pending" | "accepted") => ({
+  if (row.kind !== "task") throw new Error("expected a task");
+  const result = (
+    summary: string,
+    state: "pending" | "accepted",
+    updatedAt = row.task.updatedAt,
+  ) => ({
     _tag: "Success",
     value: {
-      task: { state: "known", row },
+      task: { state: "known", row: { ...row, task: { ...row.task, updatedAt } } },
       attemptEvidence: { summary },
       requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1, state }],
       codingRows: [],
@@ -292,7 +298,7 @@ it("refreshes an open task's evidence after a silent task change", async () => {
   state.lookup.mockResolvedValue(result("Before", "pending"));
   await using screen = await render(<Pane onClose={() => {}} />);
   await expect.element(screen.getByText("Before")).toBeVisible();
-  state.lookup.mockResolvedValue(result("After", "accepted"));
+  state.lookup.mockResolvedValue(result("After", "accepted", "2026-11-04T10:01:00.000Z"));
   state.changes = "stream:1:1";
   await screen.rerender(<Pane onClose={() => {}} />);
   await expect.element(screen.getByText("After")).toBeVisible();

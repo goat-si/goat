@@ -14,6 +14,20 @@ import {
 
 import { goatBotTaskWait } from "./activity.ts";
 
+export function newestBotTaskSummary(
+  listed: Extract<BotThreadRow, { kind: "task" }>["task"] | undefined,
+  work: BotWorkResult | undefined,
+) {
+  if (!work || !listed) return listed;
+  const found = work.task.state === "known" ? work.task.row.task : work.task.task;
+  if (listed.taskId !== found.taskId) return listed;
+  const generation = (found.generation ?? 1) - (listed.generation ?? 1);
+  return generation > 0 ||
+    (generation === 0 && Date.parse(found.updatedAt) > Date.parse(listed.updatedAt))
+    ? found
+    : listed;
+}
+
 /** A list refresh and the by-id lookup can arrive in either order, especially on retry. */
 export function botTaskAttemptEvidence(
   work: BotWorkResult | undefined,

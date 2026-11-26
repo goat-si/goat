@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import {
   botTaskAttemptEvidence,
   botHomeWork,
+  newestBotTaskSummary,
   COLLAPSED_FINISHED,
   groupBotWork,
   workRowCollapsed,
@@ -299,6 +300,12 @@ it("only presents the matching task and attempt, even while an older lookup is h
     summary: "Build launched",
     worker: work.approvalObservation?.worker,
   });
+  const newerList = { ...entry.task, generation: 2 };
+  expect(newestBotTaskSummary(newerList, work)).toEqual(newerList);
+  expect(botTaskAttemptEvidence(work, newestBotTaskSummary(newerList, work))).toBeNull();
+  const laterList = { ...entry.task, updatedAt: "2026-11-06T00:00:00.000Z" };
+  expect(newestBotTaskSummary(laterList, work)).toEqual(laterList);
+  expect(botTaskAttemptEvidence(work, newestBotTaskSummary(laterList, work))).toBeNull();
   expect(botTaskAttemptEvidence(work, { ...entry.task, generation: 2 })).toBeNull();
   expect(botTaskAttemptEvidence(work, { ...entry.task, status: "failed" })).toBeNull();
   expect(

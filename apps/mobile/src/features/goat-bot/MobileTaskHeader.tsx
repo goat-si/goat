@@ -1,5 +1,6 @@
 import {
   botTaskAttemptEvidence,
+  newestBotTaskSummary,
   taskAttemptLabel,
   mergeBotRemoteWorkers,
   type BotWorkTask,
@@ -107,17 +108,19 @@ export function MobileTaskHeader(props: {
         : unavailable
           ? lookedUpTitle(unavailable.task.task.title, unavailable.task.task.titleTruncated)
           : (props.title ?? "Task thread");
-  const status = task
-    ? mobileBotTaskStatus(task.row, props.chips)
-    : unavailable
-      ? mobileTaskSummaryStatus(unavailable.task.task, props.chips)
-      : null;
-  const summary = task?.row.task ?? unavailable?.task.task;
-  const generation = summary?.generation;
-  const doneMeans = summary?.doneMeans;
   const result =
     lookup.state === "known" || lookup.state === "unavailable" ? lookup.result : undefined;
   const details = props.screen.listedDetails ?? result;
+  const summary = props.task
+    ? newestBotTaskSummary(props.task.row.task, details)
+    : (task?.row.task ?? unavailable?.task.task);
+  const status = task
+    ? mobileBotTaskStatus({ ...task.row, task: summary ?? task.row.task }, props.chips)
+    : unavailable
+      ? mobileTaskSummaryStatus(unavailable.task.task, props.chips)
+      : null;
+  const generation = summary?.generation;
+  const doneMeans = summary?.doneMeans;
   const evidence = botTaskAttemptEvidence(details, summary);
   const worker = evidence?.worker;
   const machine =
@@ -158,10 +161,7 @@ export function MobileTaskHeader(props: {
             : gt("Worker report missing")}
         </Text>
       )}
-      <MobileRequiredResults
-        work={props.screen.listedDetails ?? result}
-        task={task?.row.task ?? unavailable?.task.task}
-      />
+      <MobileRequiredResults work={details} task={summary} />
       {result?.activity && <MobileBotTaskActivity work={result} />}
       {!props.enabled ? (
         <Text className="text-foreground-muted">

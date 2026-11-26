@@ -10,6 +10,7 @@ import {
   goatBotTaskWait,
   isRetryableTaskStatus,
   mergeBotRemoteWorkers,
+  newestBotTaskSummary,
   presentTaskStatus,
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
@@ -100,14 +101,16 @@ export function GoatBotTaskPane({
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
-  const taskSummary =
-    task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
+  const taskSummary = newestBotTaskSummary(
+    task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined,
+    lookup.value,
+  );
   const evidence = botTaskAttemptEvidence(lookup.value, taskSummary);
   const chip = chips.get(taskId);
   // What Home's row and the bot's face say this task waits for; an unlisted task has no view.
   const wait =
     task?.kind === "task"
-      ? botTaskWait(task, chip)
+      ? botTaskWait({ ...task, task: taskSummary ?? task.task }, chip)
       : taskSummary
         ? goatBotTaskWait({
             status: taskSummary.status,
