@@ -1258,7 +1258,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const removeFromSelection = useThreadSelectionStore((state) => state.removeFromSelection);
-  const setSelectionAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
     threadId: ThreadId;
   }>({
@@ -1703,7 +1702,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
     }
@@ -1740,16 +1738,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const isShiftClick = event.shiftKey;
     const threadKey = scopedThreadKey(threadRef);
     const currentSelectionCount = useThreadSelectionStore.getState().selectedThreadKeys.size;
+    const openThreadKey =
+      routeRowKey !== null && orderedProjectThreadKeys.includes(routeRowKey) ? routeRowKey : null;
 
     if (isModClick) {
       event.preventDefault();
-      toggleThreadSelection(threadKey);
+      toggleThreadSelection(threadKey, openThreadKey);
       return;
     }
 
     if (isShiftClick) {
       event.preventDefault();
-      rangeSelectTo(threadKey, orderedProjectThreadKeys);
+      rangeSelectTo(threadKey, orderedProjectThreadKeys, openThreadKey);
       return;
     }
 
@@ -1761,7 +1761,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (currentSelectionCount > 0) {
       clearSelection();
     }
-    setSelectionAnchor(threadKey);
     if (isMobile) {
       setOpenMobile(false);
     }
@@ -3508,7 +3507,6 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   const desktopUpdateState = useDesktopUpdateState();
   const [desktopUpdateActionPending, setDesktopUpdateActionPending] = useState(false);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
-  const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const platform = navigator.platform;
   const {
     projectsLength,
@@ -3561,7 +3559,6 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
     }
