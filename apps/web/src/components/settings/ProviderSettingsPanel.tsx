@@ -1,8 +1,6 @@
 import { useGT, useLocale } from "gt-react";
-import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isSecretsFeatureEnabled } from "../../env";
 import { SecretsSettingsPanel } from "./SecretsSettings";
-import { environmentTransportLabel } from "./EnvironmentRow.logic";
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
@@ -48,7 +46,6 @@ import * as Result from "effect/Result";
 import { PlusIcon } from "~/components/solar";
 import { useRef, useState, type ReactNode } from "react";
 
-import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   useEnvironmentSettings,
   usePersistEnvironmentProviderInstanceMutation,
@@ -133,6 +130,7 @@ import {
   buildProviderInstanceOverridePatch,
   modelListChanges,
   providerConfigString,
+  providerEnvironmentDetail,
   configuredBinaryPath,
   classifyProviderEnvironmentAccess,
   isProviderSettingsEnvironmentAvailable,
@@ -202,15 +200,6 @@ function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }
   return <span>{gt("Checked {time}", { time })}</span>;
 }
 
-function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
-  if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
-  if (environment.relayManaged)
-    return isGoatConnectEnabled() ? "GOAT Connect" : environmentTransportLabel(environment);
-  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
-  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
-  return environment.displayUrl ?? "Remote device";
-}
-
 const providerCardHeightClassName =
   "@min-[48rem]/providers:h-[min(44rem,calc(100dvh-11rem))] @min-[48rem]/providers:min-h-[32rem]";
 
@@ -262,16 +251,17 @@ function EnvironmentUnavailablePlaceholder({
   readonly access: Exclude<ProviderEnvironmentAccess, { kind: "editable" | "read-only" }>;
   readonly deviceTabs?: ReactNode;
 }) {
+  const gt = useGT();
   const isLoading = access.kind === "loading";
   const title = isLoading
-    ? "Loading provider settings"
+    ? gt("Loading provider settings")
     : access.kind === "error"
-      ? "Could not connect to this device"
-      : "Provider settings are unavailable";
+      ? gt("Could not connect to this device")
+      : gt("Provider settings are unavailable");
   const description = isLoading
     ? access.reason === "permissions"
-      ? "Checking what this session is allowed to change."
-      : `Waiting for ${environment.label}'s configuration.`
+      ? gt("Checking what this session is allowed to change.")
+      : gt("Waiting for {device}'s configuration.", { device: environment.label })
     : connectionStatusTitle(environment.connection);
   const error = isLoading ? null : environment.connection.error;
   // Wedged devices can remain here indefinitely; a spinner would continuously repaint.
@@ -401,7 +391,7 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
         >
           {options.map((environment) => {
             const machine = resolveEnvironmentMachineKind(environment.serverConfig);
-            const detail = providerEnvironmentDetail(environment);
+            const detail = providerEnvironmentDetail(environment, gt);
             const statusText = connectionStatusTitle(environment.connection);
             return (
               <Tooltip key={environment.environmentId}>
@@ -923,7 +913,9 @@ export function EnvironmentProviderSettings({
   const deleteInstance = useStableCallback(
     async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) => {
       const confirmed = await confirmProviderInstanceRemoval(
-        `Remove the ${providerInstanceName(instance)} provider instance?`,
+        gt("Remove the {provider} provider instance?", {
+          provider: providerInstanceName(instance),
+        }),
       );
       if (!confirmed) return;
       const updateResult = await persistProviderInstance({
@@ -969,7 +961,9 @@ export function EnvironmentProviderSettings({
       resolveProviderInstanceEnabled(instance) &&
       !resolveProviderInstanceEnabled({ driver: driverKind });
     const confirmed = await confirmProviderInstanceRemoval(
-      `Reset the ${providerInstanceName(instance)} provider to its defaults?`,
+      gt("Reset the {provider} provider to its defaults?", {
+        provider: providerInstanceName(instance),
+      }),
       turnsOff ? " It will also be turned off." : "",
     );
     if (!confirmed) return;
@@ -1166,7 +1160,10 @@ export function EnvironmentProviderSettings({
           <SettingsGroup divided={false} className="overflow-hidden">
             <SettingsRow
               title={gt("Limited permissions")}
-              description={`This session can view ${environmentLabel}'s providers but can't change their settings.`}
+              description={gt(
+                "This session can view {device}'s providers but can't change their settings.",
+                { device: environmentLabel },
+              )}
             />
           </SettingsGroup>
         ) : null}
@@ -1192,7 +1189,7 @@ export function EnvironmentProviderSettings({
                     onClick={() => setIsAddInstanceDialogOpen(true)}
                   >
                     <PlusIcon className="size-4 shrink-0" />
-                    Add provider
+                    {gt("Add provider")}
                   </button>
                 ) : null}
               </div>
@@ -1554,14 +1551,17 @@ function ProviderInstanceRow({
               title={gt("Cloud sign-in")}
               description={
                 authSource && authSource.enabled && !authSourceSignsInHere
-                  ? `Signs in with ${authSourceName}. Sign in to ${authSourceName} on this machine, then refresh.`
-                  : `Signs in with ${authSourceName}.`
+                  ? gt(
+                      "Signs in with {provider}. Sign in to {provider} on this machine, then refresh.",
+                      { provider: authSourceName },
+                    )
+                  : gt("Signs in with {provider}.", { provider: authSourceName })
               }
             />
             {authSource && !authSource.enabled ? (
               <SettingsRow
                 title={gt("Account provider is off")}
-                description={`Turn on ${authSourceName} to sign in.`}
+                description={gt("Turn on {provider} to sign in.", { provider: authSourceName })}
               />
             ) : !readOnly && authSource && authSourceSignsInHere ? (
               <ProviderAuthenticationSection

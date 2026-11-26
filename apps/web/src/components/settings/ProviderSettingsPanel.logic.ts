@@ -1,3 +1,7 @@
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
+import { environmentTransportLabel } from "./EnvironmentRow.logic";
+import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
+import type { EnvironmentPresentation } from "../../state/environments";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import {
   AuthProvidersManageScope,
@@ -166,4 +170,16 @@ export function providerConfigString(config: unknown, key: string): string | nul
 export function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
   return typeof config.binaryPath === "string" ? config.binaryPath.trim() : "";
+}
+
+export function providerEnvironmentDetail(
+  environment: EnvironmentPresentation,
+  gt: (source: string) => string,
+): string {
+  if (environment.entry.target._tag === "PrimaryConnectionTarget") return gt("Primary device");
+  if (environment.relayManaged)
+    return isGoatConnectEnabled() ? "GOAT Connect" : environmentTransportLabel(environment);
+  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
+  if (isDesktopLocalConnectionTarget(environment.entry.target)) return gt("Local device");
+  return environment.displayUrl ?? gt("Remote device");
 }

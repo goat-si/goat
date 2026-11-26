@@ -69,7 +69,7 @@ import { deriveProviderSettingsFields, ProviderSettingsForm } from "./ProviderSe
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
-import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { ProviderAuthEmail } from "./ProviderAuthEmail";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -161,21 +161,6 @@ const CLOUD_VENDOR_NAMES: ReadonlyMap<string, string> = new Map([
   ["claudeCloud", "Claude"],
   ["devinCloud", "Devin"],
 ]);
-
-function ProviderAuthEmail(props: { readonly email: string | undefined }) {
-  const email = props.email?.trim();
-  if (!email) return null;
-
-  return (
-    <RedactedSensitiveText
-      value={email}
-      ariaLabel="Toggle account email visibility"
-      revealTooltip="Click to reveal email"
-      hideTooltip="Click to hide email"
-      className="max-w-full truncate"
-    />
-  );
-}
 
 function readProviderEnvironmentVariable(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
@@ -677,11 +662,13 @@ export function ProviderInstanceCard({
   const statusKey = enabled ? getProviderStatusKey(effectiveProvider) : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const summary = enabled
-    ? getProviderSummary(effectiveProvider)
-    : { headline: "Disabled", detail: null };
+    ? getProviderSummary(effectiveProvider, gt)
+    : { headline: gt("Disabled"), detail: null };
   const authEmail = liveProvider?.auth.email?.trim();
   const cloudVendor = CLOUD_VENDOR_NAMES.get(instance.driver);
-  const cloudSignInLabel = cloudVendor ? `Uses your ${cloudVendor} sign-in` : undefined;
+  const cloudSignInLabel = cloudVendor
+    ? gt("Uses your {provider} sign-in", { provider: cloudVendor })
+    : undefined;
   const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
   const authLabel =
     enabled && liveProvider?.auth.status === "authenticated"
@@ -736,7 +723,8 @@ export function ProviderInstanceCard({
     displayName: instance.displayName?.trim() || driverOption?.label || String(instance.driver),
     ...(codexRoute ? { codexRoute } : {}),
   });
-  const routeSummary = instance.driver === "codex" ? openCodexRouteSummary(codexRoute) : undefined;
+  const routeSummary =
+    instance.driver === "codex" ? openCodexRouteSummary(codexRoute, gt) : undefined;
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
   const redesign = useClientSettings((settings) => settings.redesignEnabled);
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
@@ -917,8 +905,8 @@ export function ProviderInstanceCard({
     isAuthenticated && authEmail ? (
       <>
         {needsAttention ? statusDotNode : null}
-        <span>{cloudSignInLabel ?? "Authenticated as"}</span>
-        <ProviderAuthEmail email={authEmail} />
+        <span>{cloudSignInLabel ?? gt("Authenticated as")}</span>
+        <ProviderAuthEmail email={authEmail} className="max-w-full truncate" />
         {authLabel ? <span>· {authLabel}</span> : null}
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
@@ -1070,7 +1058,7 @@ export function ProviderInstanceCard({
             type="button"
             className="pointer-events-auto absolute inset-0 cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={onSelect}
-            aria-label={`Select ${displayName}`}
+            aria-label={gt("Select {provider}", { provider: displayName })}
             aria-pressed={selected}
           />
           {titleIconNode}
@@ -1126,7 +1114,7 @@ export function ProviderInstanceCard({
             checked={enabled}
             disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
             onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-            aria-label={`Enable ${displayName}`}
+            aria-label={gt("Enable {provider}", { provider: displayName })}
           />
         </span>
       </div>

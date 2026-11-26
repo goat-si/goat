@@ -32,7 +32,7 @@ import { ChatGptUsageButton } from "./ChatGptUsageButton";
 import { ChatGptAccountPicker } from "./ChatGptAccountPicker";
 import { CodexSignInDescription, CodexWelcomeCard } from "./CodexSetupCards";
 import { Input } from "../ui/input";
-import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { ProviderAuthEmail } from "./ProviderAuthEmail";
 import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
@@ -63,7 +63,7 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
   const existingReady = props.enabled && existingState === "ready";
   const existingAuthenticated = props.provider?.auth.status === "authenticated";
   const existingChecking = existingState === "checking";
-  const existingSummary = getProviderSummary(props.provider);
+  const existingSummary = getProviderSummary(props.provider, gt);
   const content =
     props.mode === "existing" && props.presentation === "onboarding" ? (
       <CodexWelcomeCard
@@ -72,15 +72,8 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
           existingReady ? (
             props.provider?.auth.email?.trim() ? (
               <>
-                Signed in as{" "}
-                <RedactedSensitiveText
-                  value={props.provider.auth.email.trim()}
-                  ariaLabel="Toggle account email visibility"
-                  revealTooltip="Click to reveal email"
-                  hideTooltip="Click to hide email"
-                  className="break-all"
-                />
-                .
+                {gt("Signed in as")}{" "}
+                <ProviderAuthEmail email={props.provider.auth.email} className="break-all" />.
               </>
             ) : (
               gt("Connected with your Codex CLI.")
@@ -543,14 +536,7 @@ function ManagedCodexSetup({
   ) : authenticated ? (
     provider?.auth.email?.trim() ? (
       <>
-        Signed in as{" "}
-        <RedactedSensitiveText
-          value={provider.auth.email.trim()}
-          ariaLabel="Toggle account email visibility"
-          revealTooltip="Click to reveal email"
-          hideTooltip="Click to hide email"
-        />
-        .
+        {gt("Signed in as")} <ProviderAuthEmail email={provider.auth.email} />.
       </>
     ) : (
       "Signed in with ChatGPT."
@@ -735,15 +721,8 @@ function ManagedCodexSetup({
             ) : authenticated ? (
               provider?.auth.email?.trim() ? (
                 <>
-                  Signed in as{" "}
-                  <RedactedSensitiveText
-                    value={provider.auth.email.trim()}
-                    ariaLabel="Toggle account email visibility"
-                    revealTooltip="Click to reveal email"
-                    hideTooltip="Click to hide email"
-                    className="break-all"
-                  />
-                  .
+                  {gt("Signed in as")}{" "}
+                  <ProviderAuthEmail email={provider.auth.email} className="break-all" />.
                 </>
               ) : (
                 gt("Connected to ChatGPT.")
