@@ -154,6 +154,8 @@ export interface GoatBotChatViewProps {
   readonly canOpenCurrentBot?: boolean | undefined;
   /** The environment whose bot history is shown, which can differ from a new home during a move. */
   readonly environmentId?: EnvironmentId | null | undefined;
+  /** The right panel's toggle, for a header that has one. */
+  readonly panelControls?: ReactNode | undefined;
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
@@ -204,6 +206,7 @@ function GoatBotChatViewContent({
   onCheckAgain,
   openHome = null,
   onHomeHandled,
+  panelControls,
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -505,6 +508,7 @@ function GoatBotChatViewContent({
             ) : null}
           </div>
           <div aria-hidden className="flex-1 basis-0" />
+          {panelControls}
         </WorkspacePageHeader>
         {availability.kind === "offline" ||
         availability.kind === "home_offline" ||
