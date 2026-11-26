@@ -16,6 +16,14 @@ const layer = Layer.effectContext(
   Effect.gen(function* () {
     const current = yield* Ref.make(Option.none<Snapshot.MemorySnapshot["Service"]>());
     const proxy = {
+      canDeliver: (snapshot) =>
+        Ref.get(current).pipe(
+          Effect.flatMap((service) =>
+            Option.isSome(service) && service.value.canDeliver
+              ? service.value.canDeliver(snapshot)
+              : Effect.succeed(false),
+          ),
+        ),
       recordDelivery: (...args) =>
         Ref.get(current).pipe(
           Effect.flatMap((service) =>

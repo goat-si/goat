@@ -346,6 +346,8 @@ export class AcpSessionRuntime extends Context.Service<
       options?: {
         readonly dispatched?: Deferred.Deferred<void>;
         readonly released?: Deferred.Deferred<void>;
+        /** Revalidate revocable blocks after serialization and the outgoing request log. */
+        readonly prepareForDispatch?: Effect.Effect<EffectAcpSchema.PromptRequest["prompt"]>;
       },
     ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
     readonly cancel: Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -1990,9 +1992,12 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
                 const fiber = yield* runLoggedRequest(
                   "session/prompt",
                   requestPayload,
-                  acp.agent
-                    .prompt(requestPayload)
-                    .pipe(Effect.provideService(EffectAcpProtocol.AcpOutgoingQueued, queued)),
+                  Effect.gen(function* () {
+                    const prompt = promptOptions?.prepareForDispatch
+                      ? yield* promptOptions.prepareForDispatch
+                      : requestPayload.prompt;
+                    return yield* acp.agent.prompt({ ...requestPayload, prompt });
+                  }).pipe(Effect.provideService(EffectAcpProtocol.AcpOutgoingQueued, queued)),
                 ).pipe(Effect.forkIn(runtimeScope));
                 const active = { fiber, completed, queued } satisfies AcpActivePrompt;
                 yield* Ref.set(activePromptRef, Option.some(active));

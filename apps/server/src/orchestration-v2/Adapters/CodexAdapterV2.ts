@@ -6460,20 +6460,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               recordLoaded(threadId, runtime, mcpSession);
             }
-            const memoryContext = yield* MemoryContext.refreshSnapshot(turnInput);
-            const clearMemoryContext =
-              memoryByThread.has(threadId) ||
-              (yield* Ref.get(additionalContextByThread)).get(threadId)?.goat_memory !== undefined;
-            yield* clearMemoryDelivery(threadId);
-            const validatedMemory =
-              memoryContext === undefined
-                ? undefined
-                : yield* Effect.try(() => MemoryContext.validateMemoryContext(memoryContext));
             const turnStartParams = yield* buildCodexTurnStartParams({
               nativeThreadId: threadId,
               codexInput,
-              memoryContext: validatedMemory,
-              clearMemoryContext,
               runtimePolicy: turnInput.runtimePolicy,
               modelSelection: turnInput.modelSelection,
               hasGoatMcp: mcpSession !== undefined,
@@ -6491,23 +6480,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ),
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
-            yield* Ref.update(additionalContextByThread, (current) => {
-              const next = new Map(current);
-              if (turnStartParams.additionalContext)
-                next.set(threadId, turnStartParams.additionalContext);
-              else next.delete(threadId);
-              return next;
-            });
-            if (validatedMemory) yield* retainMemory(threadId, memoryContext!, turnInput);
+            const prepareMemory = memoryDelivery.prepare(
+              threadId,
+              turnInput,
+              turnStartParams.additionalContext,
+            );
             if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
             const dispatched = yield* turnStartGuard.dispatch({
               threadId,
               codexInput,
-              additionalContext: turnStartParams.additionalContext,
+              additionalContext: prepareMemory.pipe(
+                Effect.map((prepared) => prepared.additionalContext),
+              ),
               steer,
-              beforeSteer: validatedMemory
-                ? turnInput.onMemoryDeliveryUncertain?.(validatedMemory)
-                : undefined,
               reserve: () => threadStatuses.starting(threadId),
               adopt: (nativeTurnId) =>
                 Effect.flatMap(DateTime.now, (startedAt) =>
@@ -6525,8 +6510,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return void restartNotices.delete(threadId);
             }
             const start = dispatched.reservation;
-            if (validatedMemory)
-              yield* turnInput.onMemoryDeliveryUncertain?.(validatedMemory) ?? Effect.void;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
               new Map(current).set(threadId, MemoryContext.withoutMemoryBody(turnInput)),
@@ -6545,11 +6528,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   Effect.logDebug("Codex config read failed.").pipe(Effect.as(undefined)),
                 ),
               );
+            const { additionalContext, receipt } = yield* prepareMemory.pipe(
+              Effect.onError(() => Effect.sync(start.failed)),
+            );
             const started = yield* client
               .requestTurnStart(
-                configuredReasoningSummary === undefined
-                  ? turnStartParams
-                  : { ...turnStartParams, summary: configuredReasoningSummary },
+                {
+                  ...turnStartParams,
+                  ...(additionalContext && { additionalContext }),
+                  ...(configuredReasoningSummary && { summary: configuredReasoningSummary }),
+                },
                 (turnId) =>
                   Effect.gen(function* () {
                     const owner =
@@ -6601,7 +6589,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ? owner
                   : undefined;
             if (context === undefined) return;
-            const receipt = MemoryContext.deliveryReceipt(turnInput, validatedMemory);
             if (
               started.turn.startedAt !== null ||
               threadStatuses.lastStarted(threadId) === started.turn.id

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  admitSelected,
   MEMORY_BRIEFING,
   MEMORY_BRIEFING_V4,
   memoryContextFits,
@@ -37,6 +39,24 @@ const input = (items: ReadonlyArray<M.MemoryContextCandidate>) => ({
 });
 
 describe("memory native data framing", () => {
+  it.effect("drops a snapshot revoked while its delivery attempt was recorded", () =>
+    Effect.gen(function* () {
+      const snapshot = packMemoryContext(input([item(1, "private fact")]))!;
+      let allowed = true;
+      const result = yield* admitSelected(
+        {
+          onMemoryDeliveryUncertain: () =>
+            Effect.sync(() => {
+              allowed = false;
+            }),
+          canDeliverMemory: () => Effect.sync(() => allowed),
+        },
+        snapshot,
+      );
+      expect(result).toBeUndefined();
+    }),
+  );
+
   it("escapes data and locators while preserving original fact text", () => {
     const original = `& <instructions> 'quoted' "text" 😀 é`;
     const snapshot = packMemoryContext(input([item(1, original)]))!;
