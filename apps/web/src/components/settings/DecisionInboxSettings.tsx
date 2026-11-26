@@ -122,11 +122,17 @@ function EnvironmentDecisions({
 }
 
 const DECISION_STATUSES = {
-  open: msg("Open"),
+  open: msg("Awaiting answer"),
   answered: msg("Answered"),
   expired: msg("Expired"),
   withdrawn: msg("Withdrawn"),
 } satisfies Record<DecisionItem["status"], string>;
+
+const PROFILE_LABELS = new Map([
+  ["maintainer", msg("Maintainer")],
+  ["owner", msg("Owner")],
+  ["worker", msg("Worker")],
+]);
 
 function DecisionRow({
   item,
@@ -188,6 +194,7 @@ function DecisionRow({
     }
   };
   const disabled = saving || !allowed;
+  const profileLabel = PROFILE_LABELS.get(item.requiredProfile);
   const reasonId = `decision-reason-${encodeURIComponent(JSON.stringify([item.from.environmentId ?? environmentId, item.from.host, item.id]))}`;
   return (
     <li className="space-y-2 px-4 py-3">
@@ -201,7 +208,7 @@ function DecisionRow({
         {item.context}
       </p>
       <p className="text-xs text-muted-foreground">
-        {item.requiredProfile}
+        {profileLabel ? m(profileLabel) : item.requiredProfile}
         {item.humanRequired ? ` · ${gt("Human response required")}` : ""}
         {item.from.host ? ` · ${item.from.host}` : ""}
         {item.expiresAt
