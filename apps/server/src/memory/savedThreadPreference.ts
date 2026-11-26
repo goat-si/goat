@@ -8,15 +8,18 @@ export const promotionMemoryId = (
   stableUuid: (text: string) => string,
 ) => M.MemoryId.make(stableUuid(`${thread.environmentId}:${thread.threadId}:promotion:${key}`));
 
+/** `conversationMemoryEnabled` is the live pause policy; a paused environment shows no saved preference. */
 export const makeSavedPreferenceReader = (
   environmentId: M.EnvironmentId,
   stableUuid: (text: string) => string,
   read: MemoryService["Service"]["read"],
+  conversationMemoryEnabled: Effect.Effect<boolean>,
 ) =>
   Effect.fn("MemoryService.savedThreadPreference")(function* (
     input: M.ThreadMemoryInput,
     permit: Parameters<typeof read>[1],
   ) {
+    if (!(yield* conversationMemoryEnabled)) return null;
     const { memorySpaceId, threadId } = input;
     const memoryId = promotionMemoryId({ environmentId, threadId }, "user", stableUuid);
     const item = yield* read({ memorySpaceId, memoryId, includeMarks: true }, permit).pipe(
@@ -34,7 +37,7 @@ export const makeSavedPreferenceReader = (
     )
       return null;
     const origin = item.revision.provenance.sourceThread;
-    return origin?.environmentId === environmentId && origin.threadId === threadId
-      ? { memorySpaceId, memoryId }
-      : null;
+    if (origin?.environmentId !== environmentId || origin.threadId !== threadId) return null;
+    // A pause that committed during the read withdraws the answer.
+    return (yield* conversationMemoryEnabled) ? { memorySpaceId, memoryId } : null;
   });
