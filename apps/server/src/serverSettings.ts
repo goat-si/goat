@@ -1293,22 +1293,24 @@ const make = Effect.gen(function* () {
         Exit.isFailure(legacy) ||
         (projection.value.memoryHubVersion === undefined && hasCommittedHubEpoch(current))
       ) {
-        // A rejected Hub change must still honor an explicit memory opt-out.
-        if (Exit.isSuccess(decodeConversationMemoryPause(raw))) {
-          yield* conversationMemory.reconcile(false);
+        yield* retainCommittedHub("invalid_settings");
+        const pauseMemory = Exit.isSuccess(decodeConversationMemoryPause(raw));
+        if (pauseMemory) {
           yield* providerPolicy.publish({
             ...(yield* providerPolicy.configured),
             conversationMemoryEnabled: false,
           });
         }
-        // Withdrawing Connect hub access never waits on the memory-hub projection.
-        if (
+        // Each opt-out must take effect even if persisting the other one fails.
+        const withdrawConnect =
           publishConnectPolicy &&
           Exit.isSuccess(decoded) &&
           !(decoded.value.hub.enabled && decoded.value.hub.connectDevicesHubProxy)
-        )
-          yield* connectAccess.commit(decoded.value.hub, Effect.void);
-        yield* retainCommittedHub("invalid_settings");
+            ? connectAccess.commit(decoded.value.hub, Effect.void)
+            : Effect.void;
+        yield* withdrawConnect.pipe(
+          Effect.onExit(() => (pauseMemory ? conversationMemory.reconcile(false) : Effect.void)),
+        );
         yield* Effect.logWarning(
           "invalid external settings projection, retaining committed memory hub",
           {

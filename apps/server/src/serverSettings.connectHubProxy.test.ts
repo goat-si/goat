@@ -21,6 +21,7 @@ import * as Environment from "./environment/ServerEnvironment.ts";
 import * as Config from "./config.ts";
 import * as Sqlite from "./persistence/Sqlite.ts";
 import * as Settings from "./serverSettings.ts";
+import { readConversationMemoryEnabled } from "./memory/conversationMemoryPolicy.ts";
 import { MAIN_LISTENER } from "./auth/connectionContext.testkit.ts";
 
 const app = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
@@ -233,4 +234,51 @@ it.effect(
         expect((yield* access.current).allowed).toBe(false);
       }).pipe(Effect.provide(app), Effect.provideService(FileSystem.FileSystem, controlled));
     }).pipe(Effect.scoped, Effect.provide(storage)),
+);
+
+it.effect.each(["memory", "connect"] as const)(
+  "a failed %s withdrawal still applies the other opt-out on an invalid Hub edit",
+  (failure) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* Config.ServerConfig;
+      const sql = yield* SqlClient.SqlClient;
+      const settings = yield* Settings.ServerSettingsService;
+      const access = yield* Access.HubConnectAccess;
+      const policy = yield* Settings.MemoryProviderCommittedPolicy;
+      const memoryHub = { mode: "hub", memorySpaceId: "00000000-0000-4000-8000-000000000092" };
+      const refresh = settings.withSettingsSnapshot(Effect.succeed, { refreshFromDisk: true });
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          memoryHub,
+          memoryHubVersion: 7,
+          enableAgentMemoryAccess: true,
+          hub: { enabled: true, connectDevicesHubProxy: true },
+        }),
+      );
+      yield* refresh;
+      expect((yield* access.current).allowed).toBe(true);
+      expect((yield* policy.read).enableAgentMemoryAccess).toBe(true);
+      if (failure === "memory") {
+        yield* sql`CREATE TRIGGER fail_opt_out BEFORE INSERT ON conversation_memory_policy WHEN NEW.enabled = 0 BEGIN SELECT RAISE(FAIL, 'injected pause failure'); END`;
+      } else {
+        yield* sql`CREATE TRIGGER fail_opt_out BEFORE UPDATE ON hub_connect_access WHEN NEW.allowed = 0 BEGIN SELECT RAISE(FAIL, 'injected withdrawal failure'); END`;
+      }
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          memoryHub,
+          conversationMemoryEnabled: false,
+          hub: { enabled: true, connectDevicesHubProxy: false },
+        }),
+      );
+      expect((yield* Effect.result(refresh))._tag).toBe("Failure");
+      expect((yield* access.current).allowed).toBe(false);
+      expect((yield* policy.read).enableAgentMemoryAccess).toBe(false);
+      expect(yield* readConversationMemoryEnabled(sql)).toBe(failure === "memory");
+      yield* sql`DROP TRIGGER fail_opt_out`;
+      yield* refresh;
+      expect(yield* readConversationMemoryEnabled(sql)).toBe(false);
+    }).pipe(Effect.provide(app), Effect.provide(storage)),
 );
