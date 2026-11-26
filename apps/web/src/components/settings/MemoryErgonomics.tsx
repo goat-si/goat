@@ -1,4 +1,5 @@
 import { msg, useGT, useMessages } from "gt-react";
+import { useMemoryStatusLabel } from "./useMemoryStatusLabel";
 import { MemoryMoveControl } from "./MemoryMoveControl";
 import type { MemorySyncStatus } from "@goat/contracts";
 import {
@@ -481,51 +482,10 @@ export function measureMemoryListRow(
   return { page, height, sizes };
 }
 
-const MEMORY_STATUS_MESSAGES = new Set<string>([
-  msg("Memory sharing off"),
-  msg("Receiving initial memories"),
-  msg("Hub connected"),
-  msg("Hub disconnected"),
-  msg("Memory sync error"),
-  msg("Connect a memory space"),
-  msg("Hub connection not confirmed"),
-  msg("Memory search unavailable"),
-  msg("Some memories are still being indexed"),
-  msg("Memory coverage unknown"),
-  msg("Memory search ready"),
-  msg("Originals retained for revert"),
-  msg("Waiting for active work"),
-  msg("Work pending"),
-  msg("Checkpoint retained"),
-  msg("Memory storage unavailable"),
-  msg("Search indexing paused"),
-  msg("Memory cleanup needs attention"),
-  msg("Reports waiting to be delivered"),
-  msg("Memory storage nearly full"),
-  msg("Memory storage getting full"),
-  msg("Memory storage usage unknown"),
-  msg("Memory storage available"),
-  msg("Search storage usage unknown"),
-  msg("Search indexing available"),
-  msg("Checking content"),
-  msg("Sensitive content on hold; forgetting is available"),
-  msg("Waiting for earlier memories"),
-  msg("Memory processing pending"),
-  msg("Cleaning up remaining content"),
-  msg("Sync progress unknown"),
-  msg("Receiving memories"),
-  msg("Memories received"),
-  msg("Some reports could not be delivered"),
-  msg("Some memory changes could not be accepted"),
-  msg("Memory storage limit reached"),
-]);
-
 /** Producer helpers keep raw storage fields and timestamps out of Settings. */
 export function MemoryStatusRows({ sync }: { sync: MemorySyncStatus }) {
   const gt = useGT();
-  const localize = useMessages();
-  const statusLabel = (source: string) =>
-    MEMORY_STATUS_MESSAGES.has(source) ? localize(source) : source;
+  const statusLabel = useMemoryStatusLabel();
   const storage = presentMemoryStorage(sync.storage);
   const processing = presentMemoryProcessing(sync.processing, sync.generationHold);
   const labels = [
