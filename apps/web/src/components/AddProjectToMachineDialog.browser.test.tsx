@@ -20,7 +20,9 @@ vi.mock(import("../lib/addProjectToMachine"), async (original) => ({
 }));
 vi.mock(import("../state/projectClones"), async (original) => ({
   ...(await original()),
-  useEnvironmentProjectClones: snapshots,
+  // Clones land on the target machine only.
+  useEnvironmentProjectClones: (environmentId) =>
+    environmentId === "environment-2" ? snapshots() : [],
 }));
 
 const project = vi.hoisted(() => {
@@ -128,6 +130,11 @@ import { ToastProvider } from "./ui/toast";
 const environmentId = EnvironmentId.make("environment-1");
 const projectRef = scopeProjectRef(environmentId, ProjectId.make("project-1"));
 const nextProjectRef = scopeProjectRef(environmentId, ProjectId.make("project-2"));
+// Only environment-3 can list ignored files.
+const searchableProjectRef = scopeProjectRef(
+  EnvironmentId.make("environment-3"),
+  ProjectId.make("project-3"),
+);
 const PROJECT = {
   environmentId,
   id: projectRef.projectId,
@@ -312,5 +319,82 @@ describe("AddProjectToMachineDialog", () => {
       .not.toBeInTheDocument();
     expect(project.listedInputs()).not.toHaveLength(0);
     expect(project.listedInputs()).toEqual(project.listedInputs().map(() => ({ cwd: "/repo" })));
+  });
+
+  it("clears the ignored file search on Escape before closing", async () => {
+    const targetEnvironmentId = EnvironmentId.make("environment-2");
+    project.setup(
+      [
+        {
+          ...PROJECT,
+          environmentId: searchableProjectRef.environmentId,
+          id: searchableProjectRef.projectId,
+        },
+      ],
+      [{ environmentId: targetEnvironmentId, label: "Remote machine", machine: "desktop" }],
+      {
+        environments: [
+          { environmentId: targetEnvironmentId },
+          {
+            environmentId: searchableProjectRef.environmentId,
+            serverConfig: {
+              environment: {
+                platform: { machine: "desktop" },
+                capabilities: { ignoredFileListing: true, ignoredFileSearch: true },
+              },
+            },
+          },
+        ],
+        ignoredListing: { files: [{ path: ".env", byteLength: 12 }], truncated: true },
+      },
+    );
+    await using screen = await render(<AddProjectToMachineDialogHost />);
+
+    await act(() =>
+      openAddProjectToMachine({ projectRef: searchableProjectRef, targetEnvironmentId: null }),
+    );
+    const file = screen.getByRole("checkbox", { name: /\.env/ });
+    await file.click();
+    await expect.element(file).not.toBeChecked();
+    const dialog = screen.getByRole("dialog", { name: "Add to another machine" });
+    const search = screen.getByRole("searchbox", { name: "Search ignored files" });
+    await search.fill("env");
+    for (const composition of [
+      { key: "Escape", isComposing: true, keyCode: 27 },
+      { key: "Escape", isComposing: false, keyCode: 229 },
+    ]) {
+      // Safari ends the composition just before the Escape keydown.
+      await act(() => {
+        search.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+        search
+          .element()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { ...composition, bubbles: true, cancelable: true }),
+          );
+      });
+      await expect.element(search).toHaveValue("env");
+      await expect.element(dialog).toHaveAttribute("data-open");
+    }
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(search).toHaveValue("");
+    await expect.element(search).toHaveFocus();
+    await expect.element(search).toHaveAttribute("type", "text");
+    await expect.element(file).not.toBeChecked();
+    // Holding Escape repeats the keydown, which must not also close the dialog.
+    await act(() => {
+      search.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect.element(dialog).toHaveAttribute("data-open");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(dialog).not.toBeInTheDocument();
   });
 });
