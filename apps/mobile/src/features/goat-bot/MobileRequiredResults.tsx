@@ -16,7 +16,7 @@ export function MobileRequiredResults({
     pending: gt("Not started"),
     running: gt("In progress"),
     awaiting_acceptance: gt("Awaiting acceptance"),
-    accepted: gt("Accepted"),
+    accepted: gt("Accepted", { $context: "A required worker result that passed review" }),
     failed: gt("Failed"),
   };
   return (
