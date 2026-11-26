@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "Client non pris en charge",
   "7b94c564f855783b": "Désactiver",
   "c10efd795708cd88": "Activer",
+  "26bd5e0c4918654d": "{count, plural, one {# route} other {# routes}}",
+  "5173c50b0a60847c": "Mise à jour disponible : {serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "Masquer les routes",
   "32f5a22aa78ece11": "Copier l’URL MCP",
   "29a4d835f0dfbb09": "Copier l’identifiant de trace",

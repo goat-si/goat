@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "非対応のクライアント",
   "7b94c564f855783b": "オフにする",
   "c10efd795708cd88": "オンにする",
+  "26bd5e0c4918654d": "{count, plural, other {# 件の経路}}",
+  "5173c50b0a60847c": "アップデートあり：{serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "経路を非表示",
   "32f5a22aa78ece11": "MCP URL をコピー",
   "29a4d835f0dfbb09": "トレース ID をコピー",

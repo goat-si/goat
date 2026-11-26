@@ -9,6 +9,8 @@
   "04c6c6e7bb48d53b": "Cliente não compatível",
   "7b94c564f855783b": "Desativar",
   "c10efd795708cd88": "Ativar",
+  "26bd5e0c4918654d": "{count, plural, one {# rota} other {# rotas}}",
+  "5173c50b0a60847c": "Atualização disponível: {serverVersion} → {clientVersion}",
   "15bce7dec2700d4d": "Ocultar rotas",
   "32f5a22aa78ece11": "Copiar URL do MCP",
   "29a4d835f0dfbb09": "Copiar ID do rastreamento",
