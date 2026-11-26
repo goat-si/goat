@@ -216,7 +216,6 @@ it.layer(layerTest)("delegated workspace retries", (it) => {
           ],
         });
         yield* orchestrator.recoverDelegatedTasks;
-        yield* orchestrator.recoverDelegatedTask(childThreadId, { sourceRunId: runId });
         const completed = yield* readResult;
         assert.equal(completed.task.status, outcome);
         assert.equal(
@@ -228,6 +227,8 @@ it.layer(layerTest)("delegated workspace retries", (it) => {
           completed.task.completionDelivery?.state,
           parentStatus === "stopped" ? "disposed" : "claimed",
         );
+        yield* orchestrator.recoverDelegatedTask(childThreadId, { sourceRunId: runId });
+        assert.deepEqual(yield* readResult, completed);
       }),
   );
 });
