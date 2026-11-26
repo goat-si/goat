@@ -131,13 +131,19 @@ export const pickAgent = <Agent extends { readonly id: string; readonly label: s
         }),
         broken.reject,
       );
+      // Closing input must abort a pending question.
+      const closed = new AbortController();
+      readline.once("close", () => closed.abort());
       try {
         const menu = agents
           .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
           .join("\n");
         for (;;) {
           const answer = (
-            await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken.promise])
+            await Promise.race([
+              readline.question(`Run triage with:\n${menu}\n> `, { signal: closed.signal }),
+              broken.promise,
+            ])
           ).trim();
           const picked = matchAgentAnswer(agents, answer);
           if (picked !== undefined) {
