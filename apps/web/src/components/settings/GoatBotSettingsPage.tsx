@@ -2,7 +2,7 @@ import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting
 import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
-import { accessDenied, goatBotRefusedText } from "@goat/client-runtime/goatBot";
+import { accessDenied } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -66,7 +66,7 @@ function GoatBotProfileSection() {
   }
   if (!supported) return null;
   const label = environment.label ?? "this computer";
-  const refusedLine = goatBotRefusedText(label);
+  const refusedLine = gt("GOAT on {device} did not accept this device", { device: label });
   const deniedLine = `GOAT on ${label} did not let this device read the bot's profile`;
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
@@ -238,15 +238,16 @@ export function GoatBotSettingsPanel() {
           title={gt("Set up in Terminal")}
           description={
             <>
-              On the Mac that runs GOAT Bot, give GOAT Full Disk Access, run{" "}
+              {gt(
+                "On the Mac that runs GOAT Bot, give GOAT Full Disk Access. Run this command, then restart GOAT.",
+              )}{" "}
               <code className="rounded bg-muted px-1 py-px text-2xs whitespace-nowrap">
                 goat imessage enable --allow &lt;phone or email&gt;
-              </code>
-              , and restart GOAT. Then text the code from{" "}
+              </code>{" "}
+              {gt("From that phone, send a text message with the code returned by this command.")}{" "}
               <code className="rounded bg-muted px-1 py-px text-2xs whitespace-nowrap">
                 goat imessage link-code
-              </code>{" "}
-              from that phone.
+              </code>
             </>
           }
         />
