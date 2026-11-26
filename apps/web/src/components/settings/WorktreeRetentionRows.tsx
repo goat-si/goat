@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { StorageCleanupSettings, WorktreeCleanupRules } from "@goat/contracts";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
@@ -19,18 +20,19 @@ export function WorktreeRetentionRows({
   ) => void;
   update: (patch: Partial<StorageCleanupSettings>, options?: { onFailed?: () => void }) => void;
 }) {
+  const gt = useGT();
   return (
     <>
       <SettingsRow
-        title="Keep the most recently used worktrees"
+        title={gt("Keep the most recently used worktrees")}
         status={status("worktreeKeepRecent")}
         serverScoped={!isProjectScope}
         control={
           <RetentionControl
-            label="Keep the most recently used worktrees"
+            label={gt("Keep the most recently used worktrees")}
             value={settings.worktreeKeepRecent}
             maximum={1000}
-            unit="worktrees"
+            unit={gt("worktrees")}
             onChange={(worktreeKeepRecent, onFailed) =>
               updateWorktree({ worktreeKeepRecent }, { onFailed })
             }
@@ -38,25 +40,25 @@ export function WorktreeRetentionRows({
         }
       />
       <SettingsRow
-        title="Clean up when a thread is archived"
+        title={gt("Clean up when a thread is archived")}
         status={status("worktreeOnArchive")}
         serverScoped={!isProjectScope}
         control={
           <Switch
-            aria-label="Clean up when a thread is archived"
+            aria-label={gt("Clean up when a thread is archived")}
             checked={settings.worktreeOnArchive}
             onCheckedChange={(worktreeOnArchive) => updateWorktree({ worktreeOnArchive })}
           />
         }
       />
       <SettingsRow
-        title="Clean up worktrees with uncommitted changes"
-        description="A snapshot of the changes is saved first."
+        title={gt("Clean up worktrees with uncommitted changes")}
+        description={gt("A snapshot of the changes is saved first.")}
         status={status("worktreeSnapshotChanges")}
         serverScoped={!isProjectScope}
         control={
           <Switch
-            aria-label="Clean up worktrees with uncommitted changes"
+            aria-label={gt("Clean up worktrees with uncommitted changes")}
             checked={settings.worktreeSnapshotChanges}
             onCheckedChange={(worktreeSnapshotChanges) =>
               updateWorktree({ worktreeSnapshotChanges })
@@ -66,14 +68,14 @@ export function WorktreeRetentionRows({
       />
       {!isProjectScope && (
         <SettingsRow
-          title="Keep snapshots for"
+          title={gt("Keep snapshots for")}
           status={status("worktreeSnapshotDays")}
           serverScoped
           control={
             <RetentionControl
-              label="Keep snapshots for"
+              label={gt("Keep snapshots for")}
               value={settings.worktreeSnapshotDays}
-              offLabel="Forever"
+              offLabel={gt("Forever")}
               onChange={(worktreeSnapshotDays, onFailed) =>
                 update({ worktreeSnapshotDays }, { onFailed })
               }
@@ -83,13 +85,13 @@ export function WorktreeRetentionRows({
       )}
       {!isProjectScope && (
         <SettingsRow
-          title="Preview before automatic cleanup"
-          description="Cleanup waits until you have seen what it would remove."
+          title={gt("Preview before automatic cleanup")}
+          description={gt("Cleanup waits until you have seen what it would remove.")}
           status={status("worktreeCleanupPreview")}
           serverScoped
           control={
             <Switch
-              aria-label="Preview before automatic cleanup"
+              aria-label={gt("Preview before automatic cleanup")}
               checked={settings.worktreeCleanupPreview}
               onCheckedChange={(worktreeCleanupPreview) => update({ worktreeCleanupPreview })}
             />
