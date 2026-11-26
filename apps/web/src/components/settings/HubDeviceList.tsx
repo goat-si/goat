@@ -1,17 +1,12 @@
+import { useHubChildSetupText } from "./useHubChildSetupText";
+import { msg, useGT, useLocale, useMessages } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   hubDeviceList,
   type ChildOptIn,
   type HubDeviceRow,
 } from "@goat/client-runtime/hub-devices";
-import {
-  HUB_TRANSPORT_LABEL,
-  hubParityLabel,
-  hubReachabilityLabel,
-  hubVersionLabel,
-  type HubDevice,
-  type HubSnapshot,
-} from "@goat/client-runtime/state/hub-fleet";
+import { type HubDevice, type HubSnapshot } from "@goat/client-runtime/state/hub-fleet";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { FLEET_LOCAL_HOST_KEY, type EnvironmentId, type HostStatusEntry } from "@goat/contracts";
 import { useContext, useState } from "react";
@@ -20,7 +15,6 @@ import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { fleetEnvironmentsAtom } from "~/state/fleet";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -52,6 +46,31 @@ const VERDICT_BADGE = {
   unproven: "outline",
 } as const;
 
+const TRANSPORT_LABEL = {
+  "remote-link": msg("Remote Link Child"),
+  "hub-client": msg("Hub client"),
+  standalone: msg("Standalone"),
+} satisfies Record<HubDevice["transport"], string>;
+const DEVICE_STATUS = {
+  ok: msg("ok"),
+  degraded: msg("degraded"),
+  broken: msg("broken"),
+  unproven: msg("unproven"),
+  compatible: msg("compatible"),
+  incompatible: msg("incompatible"),
+  connecting: msg("connecting"),
+  connected: msg("connected"),
+  reconnecting: msg("reconnecting"),
+  failed: msg("failed"),
+  idle: msg("idle"),
+  unknown: msg("unknown"),
+};
+const REACHABILITY = {
+  unreachable: msg("not answering"),
+  unsupported: msg("update GOAT there"),
+  "not-connected": msg("no GOAT connection"),
+};
+
 /**
  * Settings → Hub's one device list for the selected environment: the machines its hub reaches,
  * each with its OpenCodex link state, and the Home's progress making a cloud machine its Child.
@@ -66,9 +85,15 @@ export function HubDeviceListSection(props: {
   readonly actions: HubActions;
   readonly onRefresh: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const devicesSetting = searchableSetting("hub-devices");
+  const devicesLabel = m(devicesSetting.title);
   const nodes = useHubNodes(props.environmentId);
   const [adding, setAdding] = useState(false);
+  const childText = useHubChildSetupText();
   const rows = hubDeviceList({
+    childText,
     nodes: nodes.value?.nodes ?? null,
     snapshot: props.snapshot,
     hosts: props.hosts,
@@ -78,14 +103,17 @@ export function HubDeviceListSection(props: {
     rows.length > 0
       ? null
       : props.hostsState === "reading" || nodes.loading
-        ? "Reading devices…"
-        : "No devices yet. Add an SSH host or GOAT server below, or join a machine to OpenCodex with Add device to hub.";
+        ? gt("Reading devices…")
+        : gt(
+            "No devices yet. Add an SSH host or GOAT server below, or join a machine to OpenCodex with Add device to hub.",
+          );
   // A device that left the hub drops out of the list; its result stays readable here.
   const listed = new Set(props.snapshot?.devices.map((device) => device.alias) ?? []);
   const recent = props.actions.entries.filter((entry) => !listed.has(entry.alias));
   return (
     <SettingsSection
-      {...searchableSetting("hub-devices")}
+      id={devicesSetting.id}
+      title={devicesLabel}
       headerAction={
         <span className="flex items-center gap-1">
           <Button
@@ -94,7 +122,7 @@ export function HubDeviceListSection(props: {
             disabled={adding || !props.actions.allowed}
             onClick={() => setAdding(true)}
           >
-            Add device to hub
+            {gt("Add device to hub")}
           </Button>
           {nodes.unsupported ? null : (
             <Button
@@ -103,11 +131,11 @@ export function HubDeviceListSection(props: {
               disabled={!nodes.canCheck || nodes.busy !== null || nodes.value === null}
               onClick={() => void nodes.checkAll()}
             >
-              {nodes.busy === "check-all" ? "Checking…" : "Check all"}
+              {nodes.busy === "check-all" ? gt("Checking…") : gt("Check all")}
             </Button>
           )}
           <Button size="xs" variant="ghost" disabled={props.refreshing} onClick={props.onRefresh}>
-            Refresh
+            {gt("Refresh")}
           </Button>
         </span>
       }
@@ -124,7 +152,7 @@ export function HubDeviceListSection(props: {
         />
       ) : null}
       {message === null ? (
-        <ul aria-label="Hub devices" className="divide-y divide-border/50">
+        <ul aria-label={devicesLabel} className="divide-y divide-border/50">
           {rows.map((row) => (
             <HubDeviceListRow
               key={row.key}
@@ -142,12 +170,12 @@ export function HubDeviceListSection(props: {
       )}
       {props.hostsState === "failed" ? (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-          Could not read OpenCodex link state. Try Refresh.
+          {gt("Could not read OpenCodex link state. Try Refresh.")}
         </p>
       ) : null}
       {recent.length === 0 ? null : (
-        <section aria-label="Recent actions" className="space-y-2 px-3 py-3 sm:px-4">
-          <h3 className="text-xs font-medium text-muted-foreground">Recent actions</h3>
+        <section aria-label={gt("Recent actions")} className="space-y-2 px-3 py-3 sm:px-4">
+          <h3 className="text-xs font-medium text-muted-foreground">{gt("Recent actions")}</h3>
           {recent.map((entry) => (
             <HubActionResult key={entry.alias} entry={entry} actions={props.actions} />
           ))}
@@ -155,7 +183,7 @@ export function HubDeviceListSection(props: {
       )}
       {props.reachesHosts ? null : (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-          Device versions and checks show for sessions that can operate threads.
+          {gt("Device versions and checks show for sessions that can operate threads.")}
         </p>
       )}
       {/* Search and old links to "Devices on this hub" land on the forms that add one. The
@@ -191,6 +219,9 @@ function HubDeviceListRow({
   readonly linkKnown: boolean;
   readonly onVerified: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useLocale();
   const canVerify = useAtomValue(serverEnvironment.verifyHubDevice.permissionAtom(environmentId));
   const verify = useAtomCommand(serverEnvironment.verifyHubDevice, { reportFailure: false });
   const [verifying, setVerifying] = useState(false);
@@ -200,11 +231,11 @@ function HubDeviceListRow({
   const failing = parity?.checks.filter((check) => check.status === "failed") ?? [];
   const linkLabel =
     device !== null
-      ? HUB_TRANSPORT_LABEL[device.transport]
+      ? m(TRANSPORT_LABEL[device.transport])
       : row.childSetup?.state === "child"
-        ? "Linked to OpenCodex"
+        ? gt("Linked to OpenCodex")
         : linkKnown
-          ? "Not linked to OpenCodex"
+          ? gt("Not linked to OpenCodex")
           : null;
   const runVerify = async (alias: string) => {
     setVerifying(true);
@@ -227,7 +258,17 @@ function HubDeviceListRow({
         )}
         {device === null ? null : (
           <Badge size="sm" variant={parity === null ? "outline" : VERDICT_BADGE[parity.verdict]}>
-            Parity {hubParityLabel(parity)}
+            {gt("Parity {status}", {
+              status:
+                parity === null
+                  ? gt("not verified")
+                  : parity.failingCheckIds.length === 0
+                    ? m(DEVICE_STATUS[parity.verdict])
+                    : gt("{status} ({checks})", {
+                        status: m(DEVICE_STATUS[parity.verdict]),
+                        checks: parity.failingCheckIds.join(", "),
+                      }),
+            })}
           </Badge>
         )}
         <span className="ml-auto flex flex-wrap items-center gap-1">
@@ -240,7 +281,7 @@ function HubDeviceListRow({
                 disabled={verifying || !canVerify}
                 onClick={() => void runVerify(device.alias)}
               >
-                {verifying ? "Verifying…" : "Verify"}
+                {verifying ? gt("Verifying…") : gt("Verify")}
               </Button>
               <HubDeviceActionButtons device={device} actions={actions} />
             </>
@@ -251,12 +292,23 @@ function HubDeviceListRow({
       {device === null ? null : (
         <p className="text-xs text-muted-foreground">
           {[
-            hubVersionLabel(device),
-            device.tunnel === null ? null : `tunnel ${device.tunnel}`,
-            hubReachabilityLabel(device),
+            device.version === null
+              ? device.slow
+                ? gt("OpenCodex slow to answer")
+                : gt("OpenCodex not read")
+              : device.versionVerdict === null
+                ? `OpenCodex ${device.version}`
+                : gt("OpenCodex {version}, {status}", {
+                    version: device.version,
+                    status: m(DEVICE_STATUS[device.versionVerdict]),
+                  }),
+            device.tunnel === null
+              ? null
+              : gt("tunnel {status}", { status: m(DEVICE_STATUS[device.tunnel]) }),
+            device.reachability === "ok" ? null : m(REACHABILITY[device.reachability]),
             parity === null
-              ? "never verified"
-              : `verified ${formatRelativeTimeLabel(new Date(parity.checkedAt).toISOString())}`,
+              ? gt("never verified")
+              : gt("verified {time}", { time: new Date(parity.checkedAt).toLocaleString(locale) }),
           ]
             .filter((part) => part !== null)
             .join(" · ")}
@@ -272,7 +324,19 @@ function HubDeviceListRow({
       ) : null}
       {row.missingClis === null ? null : (
         <p className="text-xs text-warning-foreground">
-          {row.missingClis}. Install from Settings → Connections → Providers on your machines.
+          {row.missingClis.length === 1
+            ? gt(
+                "{provider} CLI missing. Install from Settings → Connections → Providers on your machines.",
+                { provider: row.missingClis[0] },
+              )
+            : gt(
+                "{providers} CLIs missing. Install from Settings → Connections → Providers on your machines.",
+                {
+                  providers: new Intl.ListFormat(locale, { type: "conjunction" }).format(
+                    row.missingClis,
+                  ),
+                },
+              )}
         </p>
       )}
       {row.childSetup === null ? null : (
@@ -334,6 +398,7 @@ function ChildOptInSwitch({
   readonly optIn: ChildOptIn;
   readonly onSaved: () => void;
 }) {
+  const gt = useGT();
   const allowed = useAtomValue(
     serverEnvironment.setHubDeviceChildOptIn.permissionAtom(environmentId),
   );
@@ -348,7 +413,7 @@ function ChildOptInSwitch({
     setPending(null);
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not save. Try again.");
+      setError(failure instanceof Error ? failure.message : gt("Could not save. Try again."));
       return;
     }
     onSaved();
@@ -356,10 +421,11 @@ function ChildOptInSwitch({
   return (
     <div className="flex items-center justify-between gap-3">
       <label htmlFor={id} className="min-w-0 text-xs">
-        Join as OpenCodex Child after each SSH setup
+        {gt("Join as OpenCodex Child after each SSH setup")}
         <span className="block text-muted-foreground">
-          GOAT installs OpenCodex and Codex there, links it with the host key it pinned, and
-          verifies one request through Home. Turning this off keeps an existing link.
+          {gt(
+            "GOAT installs OpenCodex and Codex there, links it with the host key it pinned, and verifies one request through Home. Turning this off keeps an existing link.",
+          )}
         </span>
         {error === null ? null : (
           <span role="alert" className="block text-destructive">
@@ -391,6 +457,8 @@ function DeviceFallback({
   readonly environmentId: EnvironmentId | null;
   readonly fallback: HubDevice["fallback"];
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const environments = useAtomValue(fleetEnvironmentsAtom);
   const device =
     environments.find((environment) => environment.environmentId === environmentId) ??
@@ -401,11 +469,13 @@ function DeviceFallback({
   return (
     <div className="flex items-center justify-between gap-3">
       <label htmlFor={id} className="min-w-0 text-xs">
-        Use this device's own sign-in when the hub is down
+        {gt("Use this device's own sign-in when the hub is down")}
         <span className="block text-muted-foreground">
           {device === undefined
-            ? `Connect to ${alias} in GOAT to change this; the setting lives on that device.`
-            : `OpenCodex allows it: ${FALLBACK_LABEL[fallback]}`}
+            ? gt("Connect to {device} in GOAT to change this; the setting lives on that device.", {
+                device: alias,
+              })
+            : gt("OpenCodex allows it: {setting}", { setting: m(FALLBACK_LABEL[fallback]) })}
         </span>
       </label>
       {device === undefined ? (
@@ -418,9 +488,9 @@ function DeviceFallback({
 }
 
 const FALLBACK_LABEL: Record<HubDevice["fallback"], string> = {
-  on: "yes",
-  off: "no",
-  unknown: "unknown",
+  on: msg("yes"),
+  off: msg("no"),
+  unknown: msg("unknown"),
 };
 
 function DeviceFallbackSwitch({
@@ -430,6 +500,7 @@ function DeviceFallbackSwitch({
   readonly id: string;
   readonly environmentId: EnvironmentId;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const devices = useEnvironmentSettings(environmentId, (value) => value.hub.devices);
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
@@ -453,7 +524,7 @@ function DeviceFallbackSwitch({
     <span className="flex items-center gap-2">
       {error ? (
         <span role="alert" className="text-xs text-destructive">
-          Could not save
+          {gt("Could not save")}
         </span>
       ) : null}
       <Switch

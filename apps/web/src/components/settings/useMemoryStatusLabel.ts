@@ -1,0 +1,50 @@
+import { msg, useMessages } from "gt-react";
+
+const MEMORY_STATUS_MESSAGES = new Set<string>([
+  msg("Memory sharing off"),
+  msg("Receiving initial memories"),
+  msg("Hub connected"),
+  msg("Last valid settings in use"),
+  msg("Results are incomplete; memories may still be available"),
+  msg("No matching memories on this page. Continue to the next page."),
+  msg("No memories found"),
+  msg("No memories yet."),
+  msg("Hub disconnected"),
+  msg("Memory sync error"),
+  msg("Connect a memory space"),
+  msg("Hub connection not confirmed"),
+  msg("Memory search unavailable"),
+  msg("Some memories are still being indexed"),
+  msg("Memory coverage unknown"),
+  msg("Memory search ready"),
+  msg("Originals retained for revert"),
+  msg("Waiting for active work"),
+  msg("Work pending"),
+  msg("Checkpoint retained"),
+  msg("Memory storage unavailable"),
+  msg("Search indexing paused"),
+  msg("Memory cleanup needs attention"),
+  msg("Reports waiting to be delivered"),
+  msg("Memory storage nearly full"),
+  msg("Memory storage getting full"),
+  msg("Memory storage usage unknown"),
+  msg("Memory storage available"),
+  msg("Search storage usage unknown"),
+  msg("Search indexing available"),
+  msg("Checking content"),
+  msg("Sensitive content on hold; forgetting is available"),
+  msg("Waiting for earlier memories"),
+  msg("Memory processing pending"),
+  msg("Cleaning up remaining content"),
+  msg("Sync progress unknown"),
+  msg("Receiving memories"),
+  msg("Memories received"),
+  msg("Some reports could not be delivered"),
+  msg("Some memory changes could not be accepted"),
+  msg("Memory storage limit reached"),
+]);
+
+export function useMemoryStatusLabel() {
+  const localize = useMessages();
+  return (source: string) => (MEMORY_STATUS_MESSAGES.has(source) ? localize(source) : source);
+}

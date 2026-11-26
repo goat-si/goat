@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
@@ -121,7 +122,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { EmptyRemoteEnvironments } from "./EmptyRemoteEnvironments";
 import { AnimatedHeight } from "../AnimatedHeight";
 
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
@@ -610,24 +611,6 @@ function SavedBackendListRow({
   );
 }
 
-function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnabled?: boolean }) {
-  return (
-    <Empty className="min-h-52">
-      <EmptyMedia variant="icon">
-        <ChevronsLeftRightEllipsisIcon />
-      </EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>No saved remote environments</EmptyTitle>
-        <EmptyDescription>
-          {cloudEnabled
-            ? "Click “Add device” to pair another environment, or connect one from GOAT Connect."
-            : "Click “Add device” to pair another environment."}
-        </EmptyDescription>
-      </EmptyHeader>
-    </Empty>
-  );
-}
-
 function CloudRemoteEnvironmentRows({
   primaryEnvironmentId,
   savedEnvironments,
@@ -662,6 +645,7 @@ export function ConnectionEnvironmentsSection({
   readonly searchable?: boolean;
   readonly headerAction?: ReactNode;
 }) {
+  const gt = useGT();
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -1713,15 +1697,15 @@ export function ConnectionEnvironmentsSection({
                   render={
                     <DialogTrigger
                       render={
-                        <Button size="xs" variant="ghost-muted" aria-label="Add device">
+                        <Button size="xs" variant="ghost-muted" aria-label={gt("Add device")}>
                           <PlusIcon className="size-3" />
-                          <span>Add device</span>
+                          <span>{gt("Add device")}</span>
                         </Button>
                       }
                     />
                   }
                 />
-                <TooltipPopup side="top">Add device</TooltipPopup>
+                <TooltipPopup side="top">{gt("Add device")}</TooltipPopup>
               </Tooltip>
               <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
                 <DialogHeader>

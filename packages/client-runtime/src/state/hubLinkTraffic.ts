@@ -6,6 +6,43 @@ import type {
   OpenCodexLinkTransport,
 } from "@goat/contracts";
 
+type TrafficPath = "relay" | "direct" | "unconfirmed";
+export interface HubLinkText {
+  readonly route: (name: string, via: OpenCodexLinkRoute["via"]) => string;
+  readonly traffic: (path: TrafficPath, hour: string, day: string) => string;
+  readonly duration: (value: number, unit: "minute" | "hour") => string;
+  readonly measured: (duration: string) => string;
+  readonly averaged: (duration: string) => string;
+  readonly uncounted: (count: number) => string;
+  readonly deviceWarning: (threshold: string) => string;
+  readonly relayWarning: (sent: string, threshold: string) => string;
+  readonly noTraffic: string;
+  readonly httpBodies: string;
+  readonly noLinkMeasurement: string;
+  readonly noRouteMeasurement: string;
+  readonly noTransportMeasurement: string;
+  readonly noTrafficMeasurement: string;
+}
+const ENGLISH_LINK_TEXT: HubLinkText = {
+  route: (name, via) =>
+    via === undefined ? `route ${name}` : via === "relay" ? `via relay ${name}` : `direct ${name}`,
+  traffic: (path, hour, day) =>
+    `${path === "unconfirmed" ? "route not confirmed" : path} ${hour} last hour · ${day} in 24 h`,
+  duration: (value, unit) => `${value} ${unit === "minute" ? "min" : "h"}`,
+  measured: (value) => `measured over ${value}`,
+  averaged: (value) => `averaged over ${value} without readings`,
+  uncounted: (count) =>
+    `↑ is at least: ${count} ${count === 1 ? "request" : "requests"} had no length`,
+  deviceWarning: (threshold) => `over ${threshold} through the relay in 24 h`,
+  relayWarning: (sent, threshold) =>
+    `Children sent ${sent} through the Pen relay in 24 h (warning at ${threshold}). Nothing is stopped.`,
+  noTraffic: "nothing sent in 24 h",
+  httpBodies: "HTTP bodies only: link WebSocket traffic not counted",
+  noLinkMeasurement: "link traffic not measured",
+  noRouteMeasurement: "route not measured",
+  noTransportMeasurement: "transport not measured",
+  noTrafficMeasurement: "traffic not measured",
+};
 /** What a Remote Link Child's link carried and how, as the Home measured it. */
 export interface HubLinkView {
   readonly traffic: OpenCodexLinkTraffic | null;
@@ -29,16 +66,22 @@ function formatLinkBytes(bytes: number): string {
 
 const eachWay = (to: number, from: number) => `↑${formatLinkBytes(to)} ↓${formatLinkBytes(from)}`;
 
-const duration = (ms: number) => {
+const duration = (ms: number, text: HubLinkText) => {
   const minutes = Math.max(1, Math.round(ms / 60_000));
-  return minutes < 120 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
+  return minutes < 120
+    ? text.duration(minutes, "minute")
+    : text.duration(Math.round(minutes / 60), "hour");
 };
 
-function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string | null {
+function measuredFor(
+  window: OpenCodexLinkTrafficWindow,
+  fullMs: number,
+  text: HubLinkText,
+): string | null {
   // Nothing measured: only averaged gaps, which say so themselves.
   return window.measuredMs >= fullMs * 0.95 || window.measuredMs === 0
     ? null
-    : duration(window.measuredMs);
+    : duration(window.measuredMs, text);
 }
 
 /**
@@ -48,6 +91,7 @@ function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string
 function hubLinkTrafficFacts(
   traffic: OpenCodexLinkTraffic,
   route: OpenCodexLinkRoute | null,
+  text: HubLinkText,
 ): ReadonlyArray<string> {
   const { hour, day } = traffic;
   const unconfirmed = (window: OpenCodexLinkTrafficWindow) => ({
@@ -57,40 +101,39 @@ function hubLinkTrafficFacts(
   const [hourUnconfirmed, dayUnconfirmed] = [unconfirmed(hour), unconfirmed(day)];
   const relay = day.relayToHomeBytes + day.relayFromHomeBytes > 0 || route?.via === "relay";
   const direct = day.directToHomeBytes + day.directFromHomeBytes > 0 || route?.via === "direct";
-  const measured = measuredFor(day, 24 * 3_600_000);
+  const measured = measuredFor(day, 24 * 3_600_000, text);
   const parts = [
     relay
-      ? `relay ${eachWay(hour.relayToHomeBytes, hour.relayFromHomeBytes)} last hour · ${eachWay(day.relayToHomeBytes, day.relayFromHomeBytes)} in 24 h`
+      ? text.traffic(
+          "relay",
+          eachWay(hour.relayToHomeBytes, hour.relayFromHomeBytes),
+          eachWay(day.relayToHomeBytes, day.relayFromHomeBytes),
+        )
       : null,
     direct
-      ? `direct ${eachWay(hour.directToHomeBytes, hour.directFromHomeBytes)} last hour · ${eachWay(day.directToHomeBytes, day.directFromHomeBytes)} in 24 h`
+      ? text.traffic(
+          "direct",
+          eachWay(hour.directToHomeBytes, hour.directFromHomeBytes),
+          eachWay(day.directToHomeBytes, day.directFromHomeBytes),
+        )
       : null,
     dayUnconfirmed.to + dayUnconfirmed.from > 0
-      ? `route not confirmed ${eachWay(hourUnconfirmed.to, hourUnconfirmed.from)} last hour · ${eachWay(dayUnconfirmed.to, dayUnconfirmed.from)} in 24 h`
+      ? text.traffic(
+          "unconfirmed",
+          eachWay(hourUnconfirmed.to, hourUnconfirmed.from),
+          eachWay(dayUnconfirmed.to, dayUnconfirmed.from),
+        )
       : null,
   ].filter((part) => part !== null);
   const averaged = day.averagedMs ?? 0;
   const uncounted = day.uncountedRequests ?? 0;
   return [
-    ...(parts.length === 0 ? ["nothing sent in 24 h"] : parts),
-    ...(measured === null ? [] : [`measured over ${measured}`]),
-    ...(averaged === 0 ? [] : [`averaged over ${duration(averaged)} without readings`]),
-    ...(uncounted === 0
-      ? []
-      : [`↑ is at least: ${uncounted} ${uncounted === 1 ? "request" : "requests"} had no length`]),
-    ...(traffic.httpBodiesOnly === true
-      ? ["HTTP bodies only: link WebSocket traffic not counted"]
-      : []),
+    ...(parts.length === 0 ? [text.noTraffic] : parts),
+    ...(measured === null ? [] : [text.measured(measured)]),
+    ...(averaged === 0 ? [] : [text.averaged(duration(averaged, text))]),
+    ...(uncounted === 0 ? [] : [text.uncounted(uncounted)]),
+    ...(traffic.httpBodiesOnly === true ? [text.httpBodies] : []),
   ];
-}
-
-/** "via relay pen-mac", "direct mac-ts", or the name alone when the Home could not tell. */
-function hubLinkRouteLabel(route: OpenCodexLinkRoute): string {
-  return route.via === undefined
-    ? `route ${route.name}`
-    : route.via === "relay"
-      ? `via relay ${route.name}`
-      : `direct ${route.name}`;
 }
 
 const TRANSPORT_LABEL: Record<OpenCodexLinkTransport, string> = {
@@ -99,31 +142,44 @@ const TRANSPORT_LABEL: Record<OpenCodexLinkTransport, string> = {
 };
 
 /** The link facts of a connected Remote Link Child; what the Home did not report reads as not measured. */
-export function hubLinkFacts(link: HubLinkView, connected: boolean): ReadonlyArray<string> {
+export function hubLinkFacts(
+  link: HubLinkView,
+  connected: boolean,
+  text: HubLinkText = ENGLISH_LINK_TEXT,
+): ReadonlyArray<string> {
   if (!connected) return [];
   if (link.traffic === null && link.route === null && link.linkTransport === null)
-    return ["link traffic not measured"];
+    return [text.noLinkMeasurement];
   return [
-    link.route === null ? "route not measured" : hubLinkRouteLabel(link.route),
-    link.linkTransport === null ? "transport not measured" : TRANSPORT_LABEL[link.linkTransport],
+    link.route === null ? text.noRouteMeasurement : text.route(link.route.name, link.route.via),
+    link.linkTransport === null ? text.noTransportMeasurement : TRANSPORT_LABEL[link.linkTransport],
     ...(link.traffic === null
-      ? ["traffic not measured"]
-      : hubLinkTrafficFacts(link.traffic, link.route)),
+      ? [text.noTrafficMeasurement]
+      : hubLinkTrafficFacts(link.traffic, link.route, text)),
   ].filter((part) => part !== null);
 }
 
 /** "over 5 GB through the relay in 24 h" for a Child past the Home's per-device threshold. */
-export function hubLinkWarningLabel(traffic: OpenCodexLinkTraffic | null): string | null {
+export function hubLinkWarningLabel(
+  traffic: OpenCodexLinkTraffic | null,
+  text: HubLinkText = ENGLISH_LINK_TEXT,
+): string | null {
   return traffic?.warning === undefined
     ? null
-    : `over ${formatLinkBytes(traffic.warning.thresholdBytes)} through the relay in 24 h`;
+    : text.deviceWarning(formatLinkBytes(traffic.warning.thresholdBytes));
 }
 
 /** The hub-wide warning: every Child together passed the Home's per-hub threshold. */
-export function hubRelayWarningLabel(warning: OpenCodexHubRelayWarning | null): string | null {
+export function hubRelayWarningLabel(
+  warning: OpenCodexHubRelayWarning | null,
+  text: HubLinkText = ENGLISH_LINK_TEXT,
+): string | null {
   return warning === null
     ? null
-    : `Children sent ${formatLinkBytes(warning.relayBytes)} through the Pen relay in 24 h (warning at ${formatLinkBytes(warning.thresholdBytes)}). Nothing is stopped.`;
+    : text.relayWarning(
+        formatLinkBytes(warning.relayBytes),
+        formatLinkBytes(warning.thresholdBytes),
+      );
 }
 
 /** The Remote Link Child a Fleet machine is: its dispatcher alias, any alias that named it, or its label. */

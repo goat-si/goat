@@ -1,3 +1,4 @@
+import { englishFleetText, type FleetText } from "./fleetText.ts";
 import type { EnvironmentId, HostStatusEntry, HostStatusMetrics } from "@goat/contracts";
 import { freshWindows, isWindowExhausted, verdictWindows } from "@goat/shared/quotaVerdict";
 
@@ -37,7 +38,8 @@ export interface FleetHeatSignals {
   /** The fullest quota window across the host's provider accounts. */
   /** usedPercent ranks the reading; a blocked pool ranks as full but has no percentage to show. */
   readonly quota: {
-    readonly label: string;
+    readonly account: string;
+    readonly windowLabel: string | null;
     readonly usedPercent: number;
     readonly blocked?: true;
   } | null;
@@ -71,8 +73,8 @@ export function fleetHeatSignals(
       const usedPercent = window.usedPercent ?? 100;
       if (quota !== null && usedPercent <= quota.usedPercent) continue;
       quota = blocked
-        ? { label: name + " all accounts blocked", usedPercent, blocked: true }
-        : { label: name + " " + window.label.toLowerCase(), usedPercent };
+        ? { account: name, windowLabel: null, usedPercent, blocked: true }
+        : { account: name, windowLabel: window.label, usedPercent };
     }
   }
   return {
@@ -122,22 +124,46 @@ export function fleetHeatTier(
   return FLEET_HEAT_TIERS[Math.max(rising, holding)]!;
 }
 
-const formatSignal = (signals: FleetHeatSignals, key: SignalKey): string | null => {
+// Provider-defined window names are data; only localize the standard display labels.
+const standardWindows = new Set([
+  "Weekly",
+  "Session",
+  "Monthly",
+  "Daily",
+  "Monthly credit limit",
+  "Monthly spend",
+  "Overall",
+]);
+
+const formatSignal = (signals: FleetHeatSignals, key: SignalKey, gt: FleetText): string | null => {
   const value = signalValue(signals, key);
   if (value === null) return null;
-  if (key === "cpu") return "CPU " + value + "%";
-  if (key === "load") return "load " + value.toFixed(1) + "/core";
-  if (key === "memory") return "memory " + value + "%";
-  if (signals.quota?.blocked === true) return signals.quota.label;
-  return signals.quota!.label + " " + Math.round(value) + "%";
+  if (key === "cpu") return gt("CPU {value}%", { value });
+  if (key === "load") return gt("load {value}/core", { value: value.toFixed(1) });
+  if (key === "memory") return gt("memory {value}%", { value });
+  const quota = signals.quota;
+  if (quota === null) return null;
+  if (quota.windowLabel === null)
+    return gt("{account} all accounts blocked", { account: quota.account });
+  const window = standardWindows.has(quota.windowLabel)
+    ? gt(quota.windowLabel.toLowerCase())
+    : quota.windowLabel;
+  return gt("{account} {window} {value}%", {
+    account: quota.account,
+    window,
+    value: Math.round(value),
+  });
 };
 
 /** Why a machine is warm or hotter, hottest signal first. Empty when nothing is. */
-export function fleetHeatReasons(signals: FleetHeatSignals): ReadonlyArray<string> {
+export function fleetHeatReasons(
+  signals: FleetHeatSignals,
+  gt: FleetText = englishFleetText,
+): ReadonlyArray<string> {
   return SIGNAL_KEYS.map((key) => ({ key, level: signalLevel(signals, key, 0) }))
     .filter((signal) => signal.level > 0)
     .sort((left, right) => right.level - left.level)
-    .flatMap((signal) => formatSignal(signals, signal.key) ?? []);
+    .flatMap((signal) => formatSignal(signals, signal.key, gt) ?? []);
 }
 
 /**
@@ -194,14 +220,29 @@ export function fleetMachineHeat(
   const signals = fleetHeatSignals(entry.metrics);
   const tier = fleetHeatTier(signals, previous);
   const reasons = fleetHeatReasons(signals);
-  const context = (["cpu", "load", "memory"] as const).flatMap(
-    (key) => formatSignal(signals, key) ?? [],
-  );
-  const summary =
-    tier === "normal"
-      ? context.join(" · ") || "No metrics"
-      : FLEET_HEAT_LABEL[tier] + ": " + (reasons.length > 0 ? reasons : context).join(" · ");
+  const summary = liveHeatSummary(signals, tier, reasons, englishFleetText);
   return { tier, status: "live", signals, reasons, summary };
+}
+
+function liveHeatSummary(
+  signals: FleetHeatSignals,
+  tier: FleetHeatTier,
+  reasons: ReadonlyArray<string>,
+  gt: FleetText,
+) {
+  const details =
+    tier !== "normal" && reasons.length > 0
+      ? reasons
+      : (["cpu", "load", "memory"] as const).flatMap((key) => formatSignal(signals, key, gt) ?? []);
+  const readings = details.join(" · ");
+  return tier === "normal"
+    ? readings || gt("No metrics")
+    : gt("{tier}: {readings}", { tier: gt(FLEET_HEAT_LABEL[tier]), readings });
+}
+
+export function formatFleetHeatSummary(heat: FleetMachineHeat, gt: FleetText): string {
+  if (heat.signals === null) return gt(heat.summary);
+  return liveHeatSummary(heat.signals, heat.tier, fleetHeatReasons(heat.signals, gt), gt);
 }
 
 const signalsEqual = (left: FleetHeatSignals | null, right: FleetHeatSignals | null) =>
@@ -211,7 +252,8 @@ const signalsEqual = (left: FleetHeatSignals | null, right: FleetHeatSignals | n
     left.cpuPercent === right.cpuPercent &&
     left.loadPerCore === right.loadPerCore &&
     left.memoryPercent === right.memoryPercent &&
-    left.quota?.label === right.quota?.label &&
+    left.quota?.account === right.quota?.account &&
+    left.quota?.windowLabel === right.quota?.windowLabel &&
     left.quota?.usedPercent === right.quota?.usedPercent &&
     left.quota?.blocked === right.quota?.blocked);
 

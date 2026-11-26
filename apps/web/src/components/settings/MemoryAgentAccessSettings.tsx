@@ -57,8 +57,8 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
                   setBusy(false);
                   setMessage(
                     result._tag === "Success"
-                      ? gt("Memory settings updated.")
-                      : gt("Could not update memory settings."),
+                      ? gt("Agent memory access updated.")
+                      : gt("Could not update agent memory access."),
                   );
                 });
               }}

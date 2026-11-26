@@ -1,3 +1,4 @@
+import { englishFleetText, type FleetText } from "./fleetText.ts";
 import { BOAT_MACHINE_STATUS_LABEL } from "../cloudMachines.ts";
 import type { FleetMachine } from "./fleet.ts";
 import type { EnvironmentMachineKind, ExecutionEnvironmentPlatformOs } from "@goat/contracts";
@@ -32,42 +33,50 @@ const OS_NAMES: Partial<Record<ExecutionEnvironmentPlatformOs, string>> = {
 function describeMachine(
   os: ExecutionEnvironmentPlatformOs | null,
   kind: EnvironmentMachineKind | null,
+  gt: FleetText,
 ): string | null {
   if (os === "darwin") return (kind && MAC_MODELS[kind]) ?? "Mac";
   const osName = os === null ? null : (OS_NAMES[os] ?? null);
   const noun = kind === null ? null : KIND_NOUNS[kind];
-  if (osName !== null && noun !== null) return osName + " " + noun;
+  if (osName !== null && noun !== null) return gt("{os} {kind}", { os: osName, kind: gt(noun) });
   if (osName !== null) return osName;
   if (kind === "linux") return "Linux";
-  return noun === null ? null : noun.charAt(0).toUpperCase() + noun.slice(1);
+  if (noun === null) return null;
+  const label = gt(noun);
+  return label.charAt(0).toLocaleUpperCase() + label.slice(1);
 }
 
 /** "Boat · Stopped · via Mac", "MacBook", or null when nothing is known about the host. */
 export function fleetMachineSubtitle(
-  machine: Pick<FleetMachine, "os" | "machineKind" | "subtitle" | "boat">,
+  machine: Pick<FleetMachine, "os" | "machineKind" | "subtitle" | "boat" | "viaLabel">,
+  gt: FleetText = englishFleetText,
 ): string | null {
   const boat =
     machine.boat === null
       ? null
       : machine.boat.status === "unknown"
         ? "Boat"
-        : "Boat · " + BOAT_MACHINE_STATUS_LABEL[machine.boat.status];
-  const parts = [boat, describeMachine(machine.os, machine.machineKind), machine.subtitle].filter(
-    (part) => part !== null,
-  );
+        : "Boat · " + gt(BOAT_MACHINE_STATUS_LABEL[machine.boat.status]);
+  const parts = [
+    boat,
+    describeMachine(machine.os, machine.machineKind, gt),
+    machine.viaLabel == null ? machine.subtitle : gt("via {host}", { host: machine.viaLabel }),
+  ].filter((part) => part !== null);
   return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /** "2 running · 1 need you", or "Idle" when nothing runs there. */
 export function fleetMachineWork(
   machine: Pick<FleetMachine, "running" | "attention" | "reported">,
+  gt: FleetText = englishFleetText,
+  separator = " · ",
 ): string {
   const parts = [
-    machine.running > 0 ? machine.running + " running" : null,
-    machine.attention > 0 ? machine.attention + " need you" : null,
-    machine.reported > 0 ? machine.reported + " reported" : null,
+    machine.running > 0 ? gt("{count} running", { count: machine.running }) : null,
+    machine.attention > 0 ? gt("{count} need you", { count: machine.attention }) : null,
+    machine.reported > 0 ? gt("{count} reported", { count: machine.reported }) : null,
   ].filter((part) => part !== null);
-  return parts.length === 0 ? "Idle" : parts.join(" · ");
+  return parts.length === 0 ? gt("Idle") : parts.join(separator);
 }
 
 export const isFleetMachineBusy = (

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { webhookAddress } from "@goat/client-runtime/webhook-address";
 import {
@@ -25,6 +26,7 @@ export function WebhookEndpointField({
   readonly environmentId: EnvironmentId;
   readonly task: Pick<ScheduledTask, "id" | "webhook"> | null;
 }) {
+  const gt = useGT();
   const canRotate = useAtomValue(
     serverEnvironment.rotateScheduledTaskWebhookToken.permissionAtom(environmentId),
   );
@@ -36,14 +38,29 @@ export function WebhookEndpointField({
   const [rotating, setRotating] = useState(false);
   const endpoint = task?.webhook;
   if (!task || !endpoint) {
-    return <p className="text-sm text-muted-foreground">The URL appears after you save.</p>;
+    return <p className="text-sm text-muted-foreground">{gt("The URL appears after you save.")}</p>;
   }
-  const { address: url, copyable, note } = webhookAddress(endpoint, httpBaseUrl);
+  const {
+    address: url,
+    copyable,
+    note,
+  } = webhookAddress(endpoint, httpBaseUrl, {
+    connect: gt("Link GOAT Connect for a public URL."),
+    linkEnvironment: gt("Link this environment to GOAT Connect for a public URL."),
+    comingSoon: (name) => gt("Public URLs arrive with {name} (coming soon).", { name }),
+    local: (hint) => gt("Only this computer can call this address. {hint}", { hint }),
+    reachable: (hint) =>
+      gt(
+        "Works wherever this environment's address is reachable, for example over Tailscale or your own proxy. {hint}",
+        { hint },
+      ),
+  });
   const rotateUrl = async () => {
+    const question = gt("Rotate this webhook URL? The current URL stops working.");
     const confirmed =
-      (await requestConfirmDialog("Rotate this webhook URL?\nThe current URL stops working.", {
+      (await requestConfirmDialog(question, {
         variant: "destructive",
-      })) ?? window.confirm("Rotate this webhook URL? The current URL stops working.");
+      })) ?? window.confirm(question);
     if (!confirmed) return;
     setRotating(true);
     const result = await rotate({ environmentId, input: { id: task.id } });
@@ -52,7 +69,7 @@ export function WebhookEndpointField({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not rotate webhook URL",
+          title: gt("Could not rotate webhook URL"),
           description: String(squashAtomCommandFailure(result)),
         }),
       );
@@ -63,7 +80,7 @@ export function WebhookEndpointField({
       <div className="flex items-center gap-2">
         <Input
           readOnly
-          aria-label="Webhook URL"
+          aria-label={gt("Webhook URL")}
           value={url}
           onFocus={(event) => event.currentTarget.select()}
         />
@@ -75,7 +92,7 @@ export function WebhookEndpointField({
           onClick={() => copyToClipboard(url, undefined)}
         >
           <CopyIcon />
-          {isCopied ? "Copied" : "Copy"}
+          {isCopied ? gt("Copied") : gt("Copy")}
         </Button>
         <Button
           size="sm"
@@ -84,7 +101,7 @@ export function WebhookEndpointField({
           disabled={rotating || !canRotate}
           onClick={() => void rotateUrl()}
         >
-          Rotate
+          {gt("Regenerate webhook URL")}
         </Button>
       </div>
       {note !== null ? <p className="text-xs text-muted-foreground">{note}</p> : null}
@@ -94,15 +111,16 @@ export function WebhookEndpointField({
 }
 
 function WebhookDeliveryMode({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
   const cloudLink = usePrimaryCloudLinkState();
   if (cloudLink.target?.environmentId !== environmentId || cloudLink.data === null) return null;
   return (
     <p className="text-xs text-muted-foreground">
       {cloudLink.data.holdWebhooksWhileOffline
-        ? "Held for up to 24 hours while this environment is offline. "
-        : "Forwarded live. Requests fail while this environment is offline. "}
+        ? gt("Held for up to 24 hours while this environment is offline.")
+        : gt("Forwarded live. Requests fail while this environment is offline.")}{" "}
       <Link to="/settings/connections" className="underline underline-offset-2">
-        Change in Connections
+        {gt("Change in Connections")}
       </Link>
     </p>
   );

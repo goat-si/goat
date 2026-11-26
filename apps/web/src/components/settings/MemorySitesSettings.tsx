@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, SiteNoteListEntry } from "@goat/contracts";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -34,6 +35,7 @@ const loadNotes = (
 
 /** Site notes agents receive the first time a thread opens each site. */
 export function MemorySitesSettings({ environmentId }: { environmentId: EnvironmentId }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const canRead = useAtomValue(memoryEnvironment.siteNotesList.permissionAtom(environmentId));
   const canWrite = useAtomValue(memoryEnvironment.siteNotesWrite.permissionAtom(environmentId));
@@ -98,7 +100,7 @@ export function MemorySitesSettings({ environmentId }: { environmentId: Environm
     await reload();
   };
   return (
-    <SettingsSection title="Site notes">
+    <SettingsSection title={gt("Site notes")}>
       {error ? <SettingsRow title={<span role="alert">{error}</span>} /> : null}
       {notes.map((note) => (
         <SiteNoteRow
@@ -110,18 +112,20 @@ export function MemorySitesSettings({ environmentId }: { environmentId: Environm
         />
       ))}
       <SettingsRow
-        title="Add a site note"
-        description="Agents receive a site's note the first time a conversation opens that site."
+        title={gt("Add a site note")}
+        description={gt(
+          "Agents receive a site's note the first time a conversation opens that site.",
+        )}
       >
         <div className="space-y-2">
           <Input
-            aria-label="Site address"
+            aria-label={gt("Site address")}
             value={origin}
             onChange={(event) => setOrigin(event.target.value)}
             placeholder="https://example.com"
           />
           <Textarea
-            aria-label="Site note"
+            aria-label={gt("Site note")}
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
@@ -137,7 +141,7 @@ export function MemorySitesSettings({ environmentId }: { environmentId: Environm
                 })
               }
             >
-              Save
+              {gt("Save")}
             </Button>
           </NoteFormFooter>
         </div>
@@ -157,23 +161,29 @@ function SiteNoteRow({
   readonly save: (origin: string, text: string) => Promise<boolean>;
   readonly change: (kind: "delete" | "restore", origin: string) => Promise<void>;
 }) {
+  const gt = useGT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.text);
+  const author = { seed: gt("Built-in note"), agent: gt("Agent note"), person: gt("User note") }[
+    note.author
+  ];
   const description = note.hidden
-    ? "Default hidden"
-    : `${note.author}${note.seed ? " · default available" : ""}`;
+    ? gt("Default hidden")
+    : note.seed
+      ? gt("{author} · default available", { author })
+      : author;
   if (editing)
     return (
       <SettingsRow title={note.origin} description={description}>
         <div className="space-y-2">
           <Textarea
-            aria-label={`Note for ${note.origin}`}
+            aria-label={gt("Note for {origin}", { origin: note.origin })}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
           <NoteFormFooter bytes={size(draft)}>
             <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
-              Cancel
+              {gt("Cancel")}
             </Button>
             <Button
               size="sm"
@@ -184,7 +194,7 @@ function SiteNoteRow({
                 })
               }
             >
-              Save
+              {gt("Save")}
             </Button>
           </NoteFormFooter>
         </div>
@@ -208,7 +218,7 @@ function SiteNoteRow({
                   setEditing(true);
                 }}
               >
-                Edit
+                {gt("Edit")}
               </Button>
               <Button
                 size="sm"
@@ -216,7 +226,7 @@ function SiteNoteRow({
                 disabled={disabled}
                 onClick={() => void change("delete", note.origin)}
               >
-                Delete
+                {gt("Delete")}
               </Button>
             </>
           )}
@@ -227,7 +237,7 @@ function SiteNoteRow({
               disabled={disabled}
               onClick={() => void change("restore", note.origin)}
             >
-              Restore default
+              {gt("Restore default")}
             </Button>
           ) : null}
         </div>
@@ -250,6 +260,7 @@ function NoteFormFooter({
   readonly bytes: number;
   readonly children: ReactNode;
 }) {
+  const gt = useGT();
   return (
     <div className="flex items-center justify-between gap-2">
       <span
@@ -258,7 +269,7 @@ function NoteFormFooter({
           bytes > NOTE_LIMIT_BYTES ? "text-destructive" : "text-muted-foreground",
         )}
       >
-        {bytes} / {NOTE_LIMIT_BYTES} bytes
+        {gt("{used} / {limit} bytes", { used: bytes, limit: NOTE_LIMIT_BYTES })}
       </span>
       <div className="flex items-center gap-2">{children}</div>
     </div>
