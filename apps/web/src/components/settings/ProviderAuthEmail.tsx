@@ -16,7 +16,7 @@ export function ProviderAuthEmail(props: {
       ariaLabel={gt("Toggle account email visibility")}
       revealTooltip={gt("Click to reveal email")}
       hideTooltip={gt("Click to hide email")}
-      className={props.className}
+      {...(props.className === undefined ? {} : { className: props.className })}
     />
   );
 }
