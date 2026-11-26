@@ -67,18 +67,19 @@ function ConversationControls({ environmentId }: { environmentId: EnvironmentId 
     pending.current = true;
     setBusy(true);
     setNotice(null);
-    try {
-      const result = await update({ environmentId, input: { patch: { [key]: value } } });
-      if (live())
-        setNotice(
-          result._tag === "Success"
-            ? gt("Memory settings updated.")
-            : gt("Could not update memory settings."),
-        );
-    } finally {
-      pending.current = false;
-      if (live()) setBusy(false);
-    }
+    await update({ environmentId, input: { patch: { [key]: value } } })
+      .then((result) => {
+        if (live())
+          setNotice(
+            result._tag === "Success"
+              ? gt("Memory settings updated.")
+              : gt("Could not update memory settings."),
+          );
+      })
+      .finally(() => {
+        pending.current = false;
+        if (live()) setBusy(false);
+      });
   }
   return (
     <>
