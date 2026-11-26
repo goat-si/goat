@@ -276,7 +276,7 @@
   "b922f4a5b6f53dff": "URL del webhook",
   "b80f965a578b8557": "Copiado",
   "4d9a7f5bf6e64c38": "Copiar",
-  "540174ed793b8c37": "Renovar",
+  "af0e0a287f5988af": "Regenerar URL del webhook",
   "481588eefa6f1acf": "Las solicitudes se guardan hasta 24 horas mientras el entorno está desconectado.",
   "352a1300bbc01a42": "Las solicitudes se reenvían en directo. Fallan si el entorno está desconectado.",
   "8d80ffc69c46c74d": "Cambiar en Conexiones",

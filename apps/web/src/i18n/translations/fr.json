@@ -276,7 +276,7 @@
   "b922f4a5b6f53dff": "URL du webhook",
   "b80f965a578b8557": "Copié",
   "4d9a7f5bf6e64c38": "Copier",
-  "540174ed793b8c37": "Renouveler",
+  "af0e0a287f5988af": "Régénérer l’URL du webhook",
   "481588eefa6f1acf": "Les requêtes sont conservées jusqu’à 24 heures si l’environnement est hors ligne.",
   "352a1300bbc01a42": "Les requêtes sont transmises en direct. Elles échouent si l’environnement est hors ligne.",
   "8d80ffc69c46c74d": "Modifier dans Connexions",
