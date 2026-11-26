@@ -133,6 +133,13 @@ describe("buildCodexAdditionalContext", () => {
         value: context[key]!.value.replaceAll("tools.mcp__goat__", ""),
       }));
 
+    const rendered = Object.entries(context)
+      .filter(([key]) => key.startsWith("goat_code_orchestration_"))
+      .map(([, entry]) => entry.value)
+      .join("\n\n");
+    NodeAssert.match(rendered, /`tools\.mcp__goat__goat_describe`/);
+    NodeAssert.match(rendered, /`tools\.mcp__goat__goat_call`/);
+
     NodeAssert.deepEqual(
       sections,
       GOAT_ORCHESTRATION_SECTIONS.map((value) => ({ kind: "application", value })),
