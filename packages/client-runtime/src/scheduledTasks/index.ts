@@ -6,7 +6,7 @@ export {
   findCheckInRoutine,
   type CheckInRoutineSource,
 } from "./checkInPreset.ts";
-export { formatTimeUntil, scheduleLabel, WEEKDAY_LABELS } from "./scheduleLabel.ts";
+export { scheduleLabel, WEEKDAY_LABELS } from "./scheduleLabel.ts";
 export {
   botRoutineRuns,
   routineRunFinished,

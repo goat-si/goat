@@ -28,7 +28,7 @@ function relativeAge(since: string, now: number, locale?: string): string | null
   const elapsed = Math.max(0, now - Date.parse(since));
   if (!Number.isFinite(elapsed)) return null;
   const minutes = Math.floor(elapsed / 60_000);
-  if (locale && minutes > 0) {
+  if (locale && !/^en(?:-|$)/i.test(locale) && minutes > 0) {
     const unit = minutes < 60 ? "minute" : minutes < 1440 ? "hour" : "day";
     const count =
       minutes < 60
