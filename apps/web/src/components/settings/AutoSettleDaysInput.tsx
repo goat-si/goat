@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useState } from "react";
 import {
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
@@ -20,6 +21,7 @@ export function AutoSettleDaysInput({
   value: number;
   onCommit: (days: number, options: { onFailed: () => void }) => void;
 }) {
+  const gt = useGT();
   const [stored, setField] = useState(() => autoSettleDaysField(value));
   const field = syncAutoSettleDaysField(stored, value);
   if (field !== stored) setField(field);
@@ -54,7 +56,7 @@ export function AutoSettleDaysInput({
           setField(cancelAutoSettleDaysField(field));
         }
       }}
-      aria-label="Days of inactivity before auto-settle"
+      aria-label={gt("Days of inactivity before auto-settle")}
     />
   );
 }
