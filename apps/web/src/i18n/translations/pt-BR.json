@@ -3481,5 +3481,15 @@
   "0158b772ab348c18": "Última atualização",
   "b949b3f1ed6bb373": "Relatório do agente recebido",
   "a7a2c522026264c0": "Relatório do agente ausente",
-  "07246e498374788d": "E mais {count}"
+  "07246e498374788d": "E mais {count}",
+  "1f6b058fb5000ba2": "Os próximos blocos foram interrompidos. Uma importação já enviada ainda pode ser aplicada.",
+  "de73827690f29421": "Alguns itens podem ter sido aplicados. Verifique o resultado da importação.",
+  "fed20b9eea7642bd": "A importação de memória está indisponível",
+  "291f9186e43260c6": "Reconecte-se e verifique o resultado da importação.",
+  "1c8ebc37bff986c9": "Não foi possível salvar o progresso da importação. Nada foi importado deste lote.",
+  "d95d6adf5aa437ff": "Verifique o resultado salvo antes de importar mais itens.",
+  "bb122f1d94960037": "O resultado é desconhecido. Reconecte-se e verifique o resultado da importação.",
+  "4e506a7c2f37a858": "A seleção mudou. Visualize novamente antes de importar.",
+  "68a5236a421d0f4c": "Verifique o resultado e visualize novamente antes de importar mais itens.",
+  "95cec271a3e79153": "O resultado salvo está indisponível. Itens anteriores podem ter sido aplicados. Visualize novamente."
 }
