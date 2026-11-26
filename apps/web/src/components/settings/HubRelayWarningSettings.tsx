@@ -1,3 +1,4 @@
+import { useGT, useLocale } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   HUB_RELAY_WARNING_MAX_GB,
@@ -13,7 +14,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Input } from "../ui/input";
 import { HubRelayWarning } from "./HubLinkLines";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 
 type ThresholdKey = "hubRelayWarningDeviceGbPerDay" | "hubRelayWarningHubGbPerDay";
 
@@ -67,6 +68,9 @@ export function HubRelayWarningRow({
   readonly environmentId: EnvironmentId;
   readonly warning: OpenCodexHubRelayWarning | null;
 }) {
+  const gt = useGT();
+  const locale = useLocale();
+  const setting = useTranslatedSearchableSetting();
   const device = useEnvironmentSettings(
     environmentId,
     (value) => value.hubRelayWarningDeviceGbPerDay,
@@ -81,16 +85,20 @@ export function HubRelayWarningRow({
     setError(null);
     const result = await update({ environmentId, input: { patch: { [key]: value } } });
     setSaving(false);
-    if (result._tag === "Failure") setError("Could not save the threshold. Try again.");
+    if (result._tag === "Failure") setError(gt("Could not save the threshold. Try again."));
     else if (result.value[key] !== value)
-      setError("This machine runs an older GOAT without relay warnings. Update GOAT there first.");
+      setError(
+        gt("This machine runs an older GOAT without relay warnings. Update GOAT there first."),
+      );
   };
   return (
     <SettingsRow
-      {...searchableSetting("hub-relay-warning")}
+      {...setting("hub-relay-warning")}
       serverScoped
       settingKeys={["hubRelayWarningDeviceGbPerDay", "hubRelayWarningHubGbPerDay"]}
-      description="Warn in Hub and Fleet when one OpenCodex Child, or all of them together, send this many gigabytes through a Pen relay in 24 hours. 0 turns a warning off. A warning never stops a turn or a link."
+      description={gt(
+        "Warn in Hub and Fleet when one OpenCodex Child, or all of them together, send this many gigabytes through a Pen relay in 24 hours. 0 turns a warning off. A warning never stops a turn or a link.",
+      )}
       status={
         error ? (
           <span role="alert" className="text-destructive">
@@ -103,24 +111,28 @@ export function HubRelayWarningRow({
       control={
         <span className="flex flex-wrap items-center gap-3">
           <GbInput
-            label="GB per device"
+            label={gt("GB per device")}
             value={device}
             disabled={saving || !canConfigure}
             onCommit={(value) => void save("hubRelayWarningDeviceGbPerDay", value)}
             onInvalid={() =>
               setError(
-                `Enter a number from 0 to ${HUB_RELAY_WARNING_MAX_GB.toLocaleString("en-US")} GB.`,
+                gt("Enter a number from 0 to {limit} GB.", {
+                  limit: HUB_RELAY_WARNING_MAX_GB.toLocaleString(locale),
+                }),
               )
             }
           />
           <GbInput
-            label="GB per hub"
+            label={gt("GB per hub")}
             value={hub}
             disabled={saving || !canConfigure}
             onCommit={(value) => void save("hubRelayWarningHubGbPerDay", value)}
             onInvalid={() =>
               setError(
-                `Enter a number from 0 to ${HUB_RELAY_WARNING_MAX_GB.toLocaleString("en-US")} GB.`,
+                gt("Enter a number from 0 to {limit} GB.", {
+                  limit: HUB_RELAY_WARNING_MAX_GB.toLocaleString(locale),
+                }),
               )
             }
           />

@@ -24,10 +24,22 @@ export function hubNodeLastSeenLabel(lastSeenAt: string | null, now: number): st
     : `last seen ${relative === "now" ? "just now" : `${relative} ago`}`;
 }
 
-function relativeAge(since: string, now: number): string | null {
+function relativeAge(since: string, now: number, locale?: string): string | null {
   const elapsed = Math.max(0, now - Date.parse(since));
   if (!Number.isFinite(elapsed)) return null;
   const minutes = Math.floor(elapsed / 60_000);
+  if (locale && minutes > 0) {
+    const unit = minutes < 60 ? "minute" : minutes < 1440 ? "hour" : "day";
+    const count =
+      minutes < 60
+        ? minutes
+        : minutes < 1440
+          ? Math.floor(minutes / 60)
+          : Math.floor(minutes / 1440);
+    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "short" }).format(
+      count,
+    );
+  }
   return minutes < 1
     ? "now"
     : minutes < 60
@@ -66,6 +78,14 @@ const inWords = (words: Readonly<Record<string, string>>, value: string) =>
 export function hubNodeClassView(
   machineClass: HubNodeMachineClass | undefined,
   now: number,
+  messages?: {
+    readonly locale: string;
+    readonly word: (word: string) => string;
+    readonly attached: (person: boolean) => string;
+    readonly newly: (state: string) => string;
+    readonly since: (state: string, age: string) => string;
+    readonly conflict: (reason: string) => string;
+  },
 ):
   | {
       readonly badges: ReadonlyArray<{
@@ -76,23 +96,35 @@ export function hubNodeClassView(
     }
   | undefined {
   if (machineClass === undefined) return undefined;
-  const age = relativeAge(machineClass.stateSince, now);
+  const word = messages?.word ?? ((value: string) => value);
+  const age = relativeAge(machineClass.stateSince, now, messages?.locale);
+  const state = word(inWords(STATE_WORDS, machineClass.state));
+  const reason = machineClass.conflicts
+    .map((code) => word(inWords(CONFLICT_WORDS, code)))
+    .join("; ");
+  const person = machineClass.provisioner.kind === "person";
   return {
     badges: [
       machineClass.class === "disposable"
-        ? { label: "Disposable", tone: "info" }
-        : { label: "Conflict", tone: "warning" },
-      ...(machineClass.penMember ? [{ label: "Still in Pen", tone: "secondary" as const }] : []),
+        ? { label: word("Disposable"), tone: "info" }
+        : { label: word("Conflict"), tone: "warning" },
+      ...(machineClass.penMember
+        ? [{ label: word("Still in Pen"), tone: "secondary" as const }]
+        : []),
     ],
-    detail:
-      "Attached by " +
-      (machineClass.provisioner.kind === "person" ? "a person" : "an agent thread") +
-      ` · ${inWords(STATE_WORDS, machineClass.state)}` +
-      (age === null ? "" : age === "now" ? " just now" : ` for ${age}`) +
-      (machineClass.class === "disposable" || machineClass.conflicts.length === 0
-        ? ""
-        : " · Conflict: " +
-          machineClass.conflicts.map((reason) => inWords(CONFLICT_WORDS, reason)).join("; ")),
+    detail: [
+      messages?.attached(person) ?? "Attached by " + (person ? "a person" : "an agent thread"),
+      age === null
+        ? state
+        : age === "now"
+          ? (messages?.newly(state) ?? `${state} just now`)
+          : (messages?.since(state, age) ?? `${state} for ${age}`),
+      machineClass.class !== "disposable" && reason !== ""
+        ? (messages?.conflict(reason) ?? `Conflict: ${reason}`)
+        : null,
+    ]
+      .filter((part) => part !== null)
+      .join(" · "),
   };
 }
 
