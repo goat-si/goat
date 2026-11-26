@@ -199,14 +199,14 @@ Only 55% of input parameters carry a description. 107 tools describe none of the
 
 77 of 312 tools show a worked call, in their description or as examples `goat_describe` serves (69 tools). 176 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                        | Characters | Declared at                                           |
-| --------------------------- | ---------- | ----------------------------------------------------- |
-| `goat_call`                 | 1828       | packages/contracts/src/agentSurface/surfaceEntries.ts |
-| `goat_thread_report_result` | 404        | packages/contracts/src/agentSurface/entries/thread.ts |
-| `goat_describe`             | 399        | packages/contracts/src/agentSurface/surfaceEntries.ts |
-| `goat_thread_read`          | 395        | packages/contracts/src/agentSurface/entries/thread.ts |
-| `goat_hub_device_move`      | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
-| `goat_ssh_thread_launch`    | 393        | packages/contracts/src/agentSurface/entries/ssh.ts    |
+| Tool                     | Characters | Declared at                                           |
+| ------------------------ | ---------- | ----------------------------------------------------- |
+| `goat_call`              | 1828       | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `goat_describe`          | 399        | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `goat_thread_read`       | 395        | packages/contracts/src/agentSurface/entries/thread.ts |
+| `goat_hub_device_move`   | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
+| `goat_ssh_thread_launch` | 393        | packages/contracts/src/agentSurface/entries/ssh.ts    |
+| `task_cancel`            | 393        | packages/contracts/src/agentSurface/entries/task.ts   |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
