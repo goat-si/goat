@@ -28,6 +28,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_attachment_discard",
   "goat_attachment_pending_list",
   "goat_attachment_prepare_upload",
+  "goat_attachment_video_metadata",
   "goat_background_wait",
   "goat_browser_claim_list",
   "goat_browser_claim_request",

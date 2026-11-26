@@ -1,6 +1,21 @@
 import { entry } from "../entry.ts";
 
 export const attachmentEntries = {
+  "attachment.video_metadata": entry({
+    resource: "attachment",
+    verb: "video_metadata",
+    name: "goat_attachment_video_metadata",
+    toolkit: "attachment",
+    summary: "Inspect a video attached to the current thread.",
+    description:
+      "Read a video attachment's duration in milliseconds and display dimensions in pixels. Pass its messageId and attachmentId from this thread. A missing measurement is null. Supports MP4, MOV, WebM and Matroska.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "attachment.prepare_upload": entry({
     resource: "attachment",
     verb: "prepare_upload",

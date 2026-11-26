@@ -1,9 +1,13 @@
+import * as DateTime from "effect/DateTime";
+import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   AttachmentCreateUploadUrlResult,
   EnvironmentId,
+  MessageId,
+  type OrchestrationV2ConversationMessage,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -134,6 +138,40 @@ const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
         })),
     }),
     Layer.mock(Threads.ThreadManagementService)({
+      getMessagesById: (id, ids) =>
+        Effect.succeed(
+          new Map(
+            id === callerId && ids.includes(MessageId.make("video-message"))
+              ? [
+                  [
+                    MessageId.make("video-message"),
+                    {
+                      id: MessageId.make("video-message"),
+                      threadId: callerId,
+                      runId: null,
+                      nodeId: null,
+                      createdBy: "user",
+                      creationSource: "web",
+                      role: "user",
+                      text: "",
+                      streaming: false,
+                      createdAt: DateTime.makeUnsafe(0),
+                      updatedAt: DateTime.makeUnsafe(0),
+                      attachments: [
+                        {
+                          type: "file",
+                          id: "video-clip",
+                          name: "clip.webm",
+                          mimeType: "video/webm",
+                          sizeBytes: 600,
+                        },
+                      ],
+                    } satisfies OrchestrationV2ConversationMessage,
+                  ],
+                ]
+              : [],
+          ),
+        ),
       getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
       getProjectThreadRecords: ({ threadId }) =>
         Effect.succeed(idleThreadProjection(liveThreadShell(threadId))),
@@ -503,5 +541,32 @@ it.effect("goat_attachment_pending_list fails when it cannot tell whether bytes 
     );
     expect(listed.isError).toBe(true);
     expect(JSON.stringify(listed.content)).toContain("orchestration_error");
+  }).pipe(Effect.provide(served));
+});
+
+it.effect("inspects only video bytes attached to the caller's message", () => {
+  const { served, invocation } = fixture();
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+    yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+    const file = attachmentsDir + "/video-clip.webm";
+    const bytes = yield* fs.readFile(
+      NodeURL.fileURLToPath(new URL("./attachment/fixtures/one-second.webm", import.meta.url)),
+    );
+    yield* fs.writeFile(file, bytes);
+    const args = { messageId: "video-message", attachmentId: "video-clip" };
+    const name = "goat_attachment_video_metadata";
+    expect((yield* call(name, args)).structuredContent).toEqual({
+      durationMs: 1000,
+      width: 32,
+      height: 24,
+    });
+    invocation.thread = { ...scope.thread!, threadId: ThreadId.make("other") };
+    expect((yield* call(name, args)).isError).toBe(true);
+    invocation.thread = scope.thread;
+    expect((yield* call(name, { ...args, messageId: "missing" })).isError).toBe(true);
+    yield* fs.writeFileString(file, "not a video");
+    expect((yield* call(name, args)).isError).toBe(true);
   }).pipe(Effect.provide(served));
 });

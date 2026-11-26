@@ -1,3 +1,4 @@
+import { attachmentToolDefinitions } from "./goatMcpAttachmentToolPresentation.ts";
 import { pullRequestToolDefinitions } from "./goatMcpPullRequestToolPresentation.ts";
 import { lifecycleToolDefinitions } from "./goatMcpLifecycleToolPresentation.ts";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
@@ -672,19 +673,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_project_update: tool(["Update", "Updating", "Updated", "a project"], "project-update"),
   goat_project_delete: tool(["Delete", "Deleting", "Deleted", "a project"], "project-delete"),
   goat_project_clone: tool(["Clone", "Cloning", "Cloned", "a repository"], "project-clone"),
-  goat_attachment_prepare_upload: tool(
-    ["Prepare", "Preparing", "Prepared", "an attachment upload"],
-    "attachment-prepare",
-  ),
-  goat_attachment_pending_list: tool(
-    ["List", "Listing", "Listed", "pending attachment uploads"],
-    "attachment-list",
-  ),
-  goat_attachment_discard: tool(
-    ["Discard", "Discarding", "Discarded", "a pending attachment"],
-    "attachment-discard",
-  ),
-  goat_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
+  ...attachmentToolDefinitions,
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   goat_html_list: tool(["List", "Listing", "Listed", "saved HTML pages"], "html-list"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),

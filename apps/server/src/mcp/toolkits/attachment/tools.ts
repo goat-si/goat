@@ -3,6 +3,9 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { McpAttachmentInput } from "./input.ts";
 import {
+  ChatAttachmentId,
+  NonNegativeInt,
+  PositiveInt,
   AttachmentCreateUploadUrlInput,
   AttachmentCreateUploadUrlResult,
   AttachmentDeleteInput,
@@ -38,6 +41,16 @@ const shared = {
     PendingAttachmentSweep.PendingAttachmentSweep,
   ],
 };
+const VideoMetadataTool = Tool.make(agentSurfaceRegistry["attachment.video_metadata"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["attachment.video_metadata"].description,
+  parameters: Schema.Struct({ messageId: MessageId, attachmentId: ChatAttachmentId }),
+  success: Schema.Struct({
+    durationMs: Schema.NullOr(NonNegativeInt),
+    width: Schema.NullOr(PositiveInt),
+    height: Schema.NullOr(PositiveInt),
+  }),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["attachment.video_metadata"]));
 const AttachmentUploadTool = Tool.make(agentSurfaceRegistry["attachment.prepare_upload"].name, {
   ...shared,
   description: agentSurfaceRegistry["attachment.prepare_upload"].description,
@@ -92,6 +105,7 @@ const AttachmentSendTool = Tool.make(agentSurfaceRegistry["thread.send_attachmen
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.send_attachments"]));
 export const AttachmentToolkit = Toolkit.make(
+  VideoMetadataTool,
   AttachmentUploadTool,
   AttachmentPendingListTool,
   AttachmentDiscardTool,

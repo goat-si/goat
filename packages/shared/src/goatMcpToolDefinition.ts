@@ -71,6 +71,7 @@ export type GoatMcpToolSummaryAction =
   | "connection-add"
   | "connection-remove"
   | "attachment-prepare"
+  | "attachment-video-metadata"
   | "attachment-list"
   | "attachment-discard"
   | "attachment-send"

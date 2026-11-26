@@ -445,6 +445,13 @@ export function summarizeGoatToolCalls(
         quantity(countEntities(entityIds("attachmentId")), "attachment upload"),
       );
       break;
+    case "attachment-video-metadata":
+      label = phrase(
+        "Inspected",
+        "inspect",
+        quantity(countEntities(entityIds("attachmentId")), "video attachment"),
+      );
+      break;
     case "attachment-list":
       label = phrase("Listed", "list", `pending attachment uploads ${times}`);
       break;

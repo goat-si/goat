@@ -10,9 +10,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as FileSystem from "effect/FileSystem";
-import { attachmentPathCandidatesById } from "../../../attachmentStore.ts";
+import { attachmentPathCandidatesById, resolveAttachmentPath } from "../../../attachmentStore.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { readAttachmentVideoMetadata } from "../../../assets/attachmentVideoMetadata.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Upload from "../../../assets/AttachmentUpload.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
@@ -128,6 +130,32 @@ export const layer = McpToolAccess.toLayer(
       unavailable,
     );
     return {
+      goat_attachment_video_metadata: McpToolAccess.reads(({ messageId, attachmentId }) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const caller = yield* McpInvocationContext.requireThreadScope(
+            scope,
+            "goat_attachment_video_metadata",
+          );
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const messages = yield* threads
+            .getMessagesById(caller.thread.threadId, [messageId])
+            .pipe(Effect.mapError(unavailable));
+          const attachment = messages
+            .get(messageId)
+            ?.attachments.find((item) => item.id === attachmentId && item.type === "file");
+          const config = yield* ServerConfig.ServerConfig;
+          const path =
+            attachment &&
+            resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
+          if (!path)
+            return yield* new OrchestratorMcpFailure({
+              code: "not_found",
+              message: "No such file attachment on this message in the calling thread.",
+            });
+          return yield* readAttachmentVideoMetadata(path);
+        }),
+      ),
       goat_attachment_prepare_upload: McpToolAccess.destructive(
         McpToolAccess.writes((input) =>
           Effect.gen(function* () {
