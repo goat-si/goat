@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useEffectEvent,
   type RefObject,
@@ -7,6 +8,7 @@ import {
 } from "react";
 import type { ResolvedKeybindingsConfig } from "@goat/contracts";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
+import { BackgroundThreadContext } from "./chat/backgroundThread";
 
 // Closed keepMounted popups must stop blocking shortcuts once their exit transition ends.
 export const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
@@ -32,6 +34,7 @@ export function useRightPanelNewShortcut(
   setAddSurfaceMenuOpen: Dispatch<SetStateAction<boolean>>,
   addSurfaceTriggerRef: RefObject<HTMLButtonElement | null>,
 ) {
+  const background = useContext(BackgroundThreadContext);
   const addSurfaceMenuBlocked = () =>
     !addSurfaceMenuOpen && document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS) !== null;
   const onNewSurfaceKeyDown = useEffectEvent((event: KeyboardEvent) => {
@@ -57,12 +60,12 @@ export function useRightPanelNewShortcut(
   });
   // oxlint-disable-next-line goat/react-effect-budget -- Subscribe to keyboard and desktop menu events while the panel is open.
   useEffect(() => {
-    if (props.open === false) return;
+    if (props.open === false || background) return;
     document.addEventListener("keydown", onNewSurfaceKeyDown, true);
     const unsubscribe = window.desktopBridge?.onMenuAction(onMenuAction);
     return () => {
       document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
       unsubscribe?.();
     };
-  }, [props.open]);
+  }, [props.open, background]);
 }

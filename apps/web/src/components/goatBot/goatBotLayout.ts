@@ -48,6 +48,11 @@ export const GoatBotHomeDockedRegistry = createContext<
   (aside: HTMLElement | null) => void | (() => void)
 >(() => {});
 
+/** Where Home's sheet tells the bot thread's right panel that it covers the panel's controls. */
+export const GoatBotHomeSheetRegistry = createContext<(popup: HTMLElement | null) => void>(
+  () => {},
+);
+
 /** Open state for a popup the chat owns: a task replacing the chat closes it, as unmounting did. */
 export function useGoatBotChatPopupOpen() {
   const hidden = useContext(GoatBotChatHidden);
