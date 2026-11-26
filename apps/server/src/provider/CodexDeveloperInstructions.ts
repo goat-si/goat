@@ -7,12 +7,14 @@ import {
 
 import {
   goatBrowserInstructions,
-  GOAT_ORCHESTRATION_SECTIONS,
+  goatOrchestrationSections,
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
+
+const CODEX_ORCHESTRATION_SECTIONS = goatOrchestrationSections("tools.mcp__goat__");
 
 const GOAT_DEVICE_TOOL_INSTRUCTIONS = `## GOAT devices
 
@@ -32,10 +34,6 @@ const normalizeAvailability = (
 ): GoatToolAvailability =>
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
-/** Code mode defers nested MCP tools (openai/codex#32101), so it needs the two names spelled out. */
-const CODEX_CODE_MODE_TOOLS =
-  "In code mode, find GOAT tools with `tools.mcp__goat__goat_describe` and call them with `tools.mcp__goat__goat_call`.";
-
 /**
  * Describing `preview_*` or `device_*` tools that aren't in the turn's tool list would be worse
  * than saying nothing: the instructions actively steer the model away from Playwright,
@@ -44,11 +42,7 @@ const CODEX_CODE_MODE_TOOLS =
  */
 const toolInstructions = (availability: boolean | GoatToolAvailability): string => {
   const tools = normalizeAvailability(availability);
-  return [
-    CODEX_CODE_MODE_TOOLS,
-    goatBrowserInstructions(tools.browser),
-    tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : "",
-  ]
+  return [goatBrowserInstructions(tools.browser), tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : ""]
     .filter(Boolean)
     .join("\n\n");
 };
@@ -77,7 +71,7 @@ export function buildCodexAdditionalContext(
   return {
     ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(
-      GOAT_ORCHESTRATION_SECTIONS.map((section, index) => [
+      CODEX_ORCHESTRATION_SECTIONS.map((section, index) => [
         `goat_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),
@@ -110,6 +104,6 @@ export function buildCodexAdditionalContext(
           ]),
         )
       : {}),
-    ...(tools ? { goat_code_tools: { kind: "application", value: tools } } : {}),
+    goat_code_tools: { kind: "application", value: tools },
   };
 }

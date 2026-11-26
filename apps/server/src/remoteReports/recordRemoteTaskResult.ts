@@ -11,6 +11,7 @@ import {
   type RemoteObservedRun,
   type RemoteKnownRun,
   type RemoteReport,
+  type ThreadResult,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -41,6 +42,7 @@ export const recordRemoteTaskResult = Effect.fn("remoteReports.recordRemoteTaskR
     readonly correlationId: string;
     readonly status: "completed" | "failed" | "cancelled" | "interrupted";
     readonly summary: string;
+    readonly attachments?: ThreadResult["attachments"];
   }) {
     const threads = yield* ThreadManagementService.ThreadManagementService;
     yield* threads
@@ -52,6 +54,7 @@ export const recordRemoteTaskResult = Effect.fn("remoteReports.recordRemoteTaskR
         correlationId: input.correlationId,
         status: input.status,
         summary: input.summary.slice(0, 4_000),
+        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
       })
       .pipe(Effect.mapError((cause) => new RemoteTaskError({ stage: "delivery", cause })));
   },
@@ -151,7 +154,21 @@ export const waitForRemoteTask = Effect.fn("remoteReports.waitForRemoteTask")(fu
     observedRun:
       answer.runId === null || answer.status === "idle"
         ? null
-        : { runId: answer.runId, status: answer.status, summary: answer.result?.summary ?? null },
+        : {
+            runId: answer.runId,
+            status: answer.status,
+            summary: answer.result?.summary ?? null,
+            ...(answer.result?.outcome == null
+              ? {}
+              : {
+                  reported: {
+                    outcome: answer.result.outcome,
+                    ...(answer.result.attachments === undefined
+                      ? {}
+                      : { attachments: answer.result.attachments }),
+                  },
+                }),
+          },
     timedOut: answer.timedOut,
   } satisfies RemoteOriginReportsWaitResult;
 });
@@ -176,6 +193,7 @@ export const observeRemoteTask = Effect.fn("remoteReports.observeRemoteTask")(fu
     ...row,
     status: resultStatus,
     summary: run.summary ?? `The launched remote run ended with status ${run.status}.`,
+    ...(run.reported?.attachments === undefined ? {} : { attachments: run.reported.attachments }),
   });
   return resultStatus === "cancelled" ? ("cancelled" as const) : ("settled" as const);
 });

@@ -9,7 +9,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
-import { ThreadResultOutcome } from "./threadResult.ts";
+import { ThreadResultAttachments, ThreadResultOutcome } from "./threadResult.ts";
 import { TurnCapability } from "./composerContext.ts";
 import { ChannelWorkerObservation } from "./channelWorkerObservation.ts";
 
@@ -118,6 +118,7 @@ export type RemoteRunHolds = typeof RemoteRunHolds.Type;
 export const RemoteReportedOutcome = Schema.Struct({
   outcome: ThreadResultOutcome,
   summary: Schema.optional(Summary),
+  attachments: Schema.optional(ThreadResultAttachments),
   /** When the worker reported, so the origin can tell it from a question asked later. An older GOAT omits it. */
   reportedAt: Schema.optional(IsoDateTime),
 });
