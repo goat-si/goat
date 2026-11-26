@@ -1048,6 +1048,7 @@
   "a8d6b69e67c6015e": "Mantém a branch padrão atualizada quando o checkout não tem alterações nem commits locais. Cada projeto pode substituir esta configuração.",
   "8ae95350a8a0186f": "Local e limpeza das árvores de trabalho, além de artefatos e logs.",
   "dc45ce3ddca31273": "atualização automática padrão",
+  "4681c4c9541539a4": "Entrar",
   "4f2a1d5aef3f73a5": "Desativar atualização automática",
   "0c8037e10e1354fa": "Atualização automática padrão",
   "acdeb0c1b0567098": "localização das árvores de trabalho",
@@ -1134,11 +1135,6 @@
   "e67b8003fc258bdc": "{attention} precisam da sua atenção",
   "aba8bd149805a261": "{running} em andamento, {attention} precisam da sua atenção",
   "42cd309036d953cf": "{title}, {activity}",
-  "4330af138d6af90d": "{title}: {activity}",
-  "700d035b4e934d1f": "{name}: {activity}",
-  "ae87266a748db24b": "Frota: nenhuma tarefa em andamento",
-  "e8d0653cf49cd57e": "e mais {count}",
-  "7d5ab92b06b67598": "Decisões, {count} pendentes",
   "aead644e2cf1233f": "Mostrar todas",
   "f001fa7b329c8fbf": "Ocultar chamadas bem-sucedidas",
   "ad208e3e32c85029": "Ocultar todas",
@@ -1146,7 +1142,11 @@
   "0e3eebdc9ad239b4": "Oculte comandos, edições e buscas dos agentes para ler a conversa com mais facilidade. Ao ocultar chamadas bem-sucedidas, as falhas continuam visíveis. O modo zen também oculta mensagens intermediárias e mostra apenas as respostas finais. Aprovações, perguntas e erros sempre aparecem.",
   "c4044f008123f399": "Compartilhe a conversa com um convidado que pode acompanhá-la ao vivo no navegador e enviar mensagens que você aprova.",
   "d74cae03e5184cb7": "Entre no GOAT Connect para usar links de convidados.",
-  "4681c4c9541539a4": "Entrar",
   "f239f97357fdcb0f": "Para usar links de convidados, entre no GOAT Connect e vincule esta máquina. Desativar esta opção desativa todos os links de convidados.",
-  "88f6bae5adcdb0ec": "Abrir conexões"
+  "88f6bae5adcdb0ec": "Abrir conexões",
+  "4330af138d6af90d": "{title}: {activity}",
+  "700d035b4e934d1f": "{name}: {activity}",
+  "ae87266a748db24b": "Frota: nenhuma tarefa em andamento",
+  "e8d0653cf49cd57e": "e mais {count}",
+  "7d5ab92b06b67598": "Decisões, {count} pendentes"
 }
