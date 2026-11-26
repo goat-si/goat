@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { MemoryForgetControl } from "./MemoryForgetControl";
 import { MemoryMoveControl } from "./MemoryMoveControl";
 import { MemoryRecordsError, MemorySearchControls } from "./MemorySearchControls";
@@ -235,6 +236,7 @@ function MemoryDestinationContent({
   environmentId: EnvironmentId;
   canRead: boolean;
 }) {
+  const gt = useGT();
   const canAdmin = useAtomValue(memoryEnvironment.hubSettingsGet.permissionAtom(environmentId));
   const canSync = useAtomValue(memoryEnvironment.syncStatus.permissionAtom(environmentId));
   const getSync = useAtomCommand(memoryEnvironment.syncStatus, { reportFailure: false });
@@ -322,21 +324,21 @@ function MemoryDestinationContent({
           sync={sync}
         />
       ) : (
-        <SettingsSection title="Sharing">
+        <SettingsSection title={gt("Sharing")}>
           <SettingsRow
-            title="Sharing unavailable"
-            description="Settings write permission is required to manage sharing."
+            title={gt("Sharing unavailable")}
+            description={gt("Settings write permission is required to manage sharing.")}
           />
         </SettingsSection>
       )}
       {syncError ? (
-        <SettingsSection title="Memory status">
+        <SettingsSection title={gt("Memory status")}>
           <SettingsRow
-            title="Could not load memory status"
+            title={gt("Could not load memory status")}
             description={<span role="alert">{syncError}</span>}
             control={
               <Button size="sm" variant="outline" onClick={refreshSync}>
-                Retry
+                {gt("Retry")}
               </Button>
             }
           />
@@ -350,12 +352,12 @@ function MemoryDestinationContent({
         />
       ) : null}
       {!memorySpaceId ? (
-        <SettingsSection title="Memories" id="memory-records">
+        <SettingsSection title={gt("Memories")} id="memory-records">
           <SettingsRow
             title={
               sync?.state === "disabled"
-                ? "Turn on memory to see and save memories."
-                : "Memory is getting ready."
+                ? gt("Turn on memory to see and save memories.")
+                : gt("Memory is getting ready.")
             }
             description={
               sync && sync.state !== "disabled" ? presentMemorySync(sync).label : undefined
@@ -373,10 +375,12 @@ function MemoryDestinationContent({
           }
         />
       ) : (
-        <SettingsSection title="Memories">
+        <SettingsSection title={gt("Memories")}>
           <SettingsRow
-            title="Memory read permission required"
-            description="Memory read permission is required to view records. Write permission does not grant read access."
+            title={gt("Memory read permission required")}
+            description={gt(
+              "Memory read permission is required to view records. Write permission does not grant read access.",
+            )}
           />
         </SettingsSection>
       )}
@@ -554,6 +558,7 @@ function ScopedMemoryRecords({
   scope: MemoryScope;
   scopeLabel?: string;
 }) {
+  const gt = useGT();
   const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities.memory;
   const linkedOrigin = target.originThreadId
     ? { environmentId, threadId: target.originThreadId }
@@ -629,7 +634,7 @@ function ScopedMemoryRecords({
           onSaved={page.refresh}
         />
       ) : null}
-      <SettingsSection title="Memories" id="memory-records">
+      <SettingsSection title={gt("Memories")} id="memory-records">
         <SettingsRow
           title="Save a memory"
           description={
