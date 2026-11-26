@@ -1,4 +1,11 @@
 {
+  "0f146ec243d0ec2b": "Mientras esté en pausa, los agentes no podrán leer ni guardar recuerdos de GOAT en este entorno. Los mensajes de ese período se excluirán de los resúmenes posteriores.",
+  "bff6d8d7d2ebfda1": "Se ha actualizado la configuración de memoria.",
+  "fc747df3adbcb304": "Usar la memoria de GOAT en las conversaciones",
+  "18e223f1dde7235c": "No se pudo actualizar la configuración de memoria.",
+  "8a795e9e7df9e275": "Acceso de los agentes",
+  "9739b2af01240c7a": "Permitir que los agentes accedan a la memoria",
+  "c150c9eff751195c": "Permite que los agentes de este dispositivo usen la memoria según sus permisos. La memoria compartida entre dispositivos se configura por separado.",
   "e7da5d0a1531c174": "Gráfico de la flota",
   "9af7459395572c84": "Selecciona un equipo para ver solo sus conversaciones.",
   "e8251ed279135275": "En ejecución",
