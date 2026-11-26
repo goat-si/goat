@@ -15,12 +15,10 @@ import {
   MemoryStickIcon,
 } from "~/components/solar";
 import type {
-  BackgroundBooleanState,
   EnvironmentId,
   ResourceAttributionEntry,
   ResourceTelemetryAggregate,
   ResourceTelemetryHistoryBucket,
-  ResourceTelemetryIoSemantics,
   ResourceTelemetryProcess,
   ResourceTelemetryProcessCategory,
   ResourceTelemetryProcessSummary,
@@ -55,7 +53,10 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  booleanStateLabel,
+  formatDurationMicros,
   formatSampleInterval,
+  ioSemanticsLabel,
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
@@ -73,12 +74,6 @@ const HISTORY_WINDOWS = [
 
 function formatRate(value: number): string {
   return `${formatBytes(value)}/s`;
-}
-
-function formatDurationMicros(value: number): string {
-  if (value < 1_000) return `${Math.round(value)} µs`;
-  if (value < 1_000_000) return `${(value / 1_000).toFixed(2)} ms`;
-  return `${(value / 1_000_000).toFixed(2)} s`;
 }
 
 function processIdentityKey(process: ResourceTelemetryProcess): string {
@@ -101,28 +96,6 @@ function categoryDotClass(category: ResourceTelemetryProcessCategory): string {
   if (category.startsWith("electron-")) return "bg-info";
   if (category === "server") return "bg-violet-500";
   return "bg-success";
-}
-
-function ioSemanticsLabel(semantics: ResourceTelemetryIoSemantics): string {
-  switch (semantics) {
-    case "storage":
-      return "Storage bytes";
-    case "logical":
-      return "Logical bytes";
-    case "all-io":
-      return "All I/O bytes";
-    case "unavailable":
-      return "Unavailable";
-  }
-}
-
-function booleanStateLabel(
-  value: BackgroundBooleanState,
-  labels: { readonly true: string; readonly false: string },
-): string {
-  if (value === "true") return labels.true;
-  if (value === "false") return labels.false;
-  return "Unknown";
 }
 
 function sourceStatusTone(status: ResourceTelemetrySourceStatus): "default" | "warning" | "danger" {
@@ -795,6 +768,7 @@ function ResourceTelemetryDiagnosticsBody({
 }: {
   environmentId: EnvironmentId | null;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const [windowMs, setWindowMs] = useState(15 * 60_000);
   const selectedWindow =
@@ -1024,13 +998,21 @@ function ResourceTelemetryDiagnosticsBody({
               icon={<HardDriveIcon className="size-3.5" />}
               label="Read throughput"
               value={allT3 ? formatRate(allT3.ioReadBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioReadBytes)} observed` : undefined}
+              detail={
+                allT3
+                  ? gt("{bytes} observed", { bytes: formatBytes(allT3.ioReadBytes) })
+                  : undefined
+              }
             />
             <IconStat
               icon={<DatabaseIcon className="size-3.5" />}
               label="Write throughput"
               value={allT3 ? formatRate(allT3.ioWriteBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioWriteBytes)} observed` : undefined}
+              detail={
+                allT3
+                  ? gt("{bytes} observed", { bytes: formatBytes(allT3.ioWriteBytes) })
+                  : undefined
+              }
               tone={
                 allT3 && allT3.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
                   ? "danger"
@@ -1175,7 +1157,10 @@ function ResourceTelemetryDiagnosticsBody({
                 />
                 <DetailRow
                   label="Process scan"
-                  value={`${snapshot.health.retainedProcessCount}/${snapshot.health.scannedProcessCount} retained`}
+                  value={gt("{retained}/{scanned} retained", {
+                    retained: snapshot.health.retainedProcessCount,
+                    scanned: snapshot.health.scannedProcessCount,
+                  })}
                 />
                 <DetailRow
                   label="Inaccessible"

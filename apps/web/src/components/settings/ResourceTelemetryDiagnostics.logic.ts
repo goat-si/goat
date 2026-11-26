@@ -1,4 +1,9 @@
-import type { ResourceTelemetryProcess, ResourceTelemetrySourceStatus } from "@goat/contracts";
+import type {
+  BackgroundBooleanState,
+  ResourceTelemetryIoSemantics,
+  ResourceTelemetryProcess,
+  ResourceTelemetrySourceStatus,
+} from "@goat/contracts";
 
 function processIdentityKey(process: ResourceTelemetryProcess): string {
   return `${process.identity.pid}:${process.identity.startTimeMs}`;
@@ -68,4 +73,32 @@ export function formatSampleInterval(valueMs: number): string {
   return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${
     seconds === 1 ? "second" : "seconds"
   }`;
+}
+
+export function formatDurationMicros(value: number): string {
+  if (value < 1_000) return `${Math.round(value)} µs`;
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(2)} ms`;
+  return `${(value / 1_000_000).toFixed(2)} s`;
+}
+
+export function ioSemanticsLabel(semantics: ResourceTelemetryIoSemantics): string {
+  switch (semantics) {
+    case "storage":
+      return "Storage bytes";
+    case "logical":
+      return "Logical bytes";
+    case "all-io":
+      return "All I/O bytes";
+    case "unavailable":
+      return "Unavailable";
+  }
+}
+
+export function booleanStateLabel(
+  value: BackgroundBooleanState,
+  labels: { readonly true: string; readonly false: string },
+): string {
+  if (value === "true") return labels.true;
+  if (value === "false") return labels.false;
+  return "Unknown";
 }
