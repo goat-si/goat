@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Snapshot from "./MemorySnapshot.ts";
+import { setConversationMemoryEnabled } from "./conversationMemoryPolicy.ts";
 import {
   id,
   space,
@@ -23,6 +24,34 @@ import {
 } from "./MemorySnapshot.testkit.ts";
 
 const encodeSnapshotJson = Schema.encodeEffect(Schema.fromJsonString(M.MemoryContextSnapshot));
+it.effect(
+  "fences a selected snapshot across pause and excludes a paused steer after resume",
+  () => {
+    const f = fixture();
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const snapshots = yield* Snapshot.MemorySnapshot;
+      yield* project;
+      const event = (n: number, type: string, payload: Record<string, string>) =>
+        sql`INSERT INTO orchestration_events (event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json,application_event_version)
+          VALUES (${id(n)},'thread',${threadId},${n},${type},'2026-01-01','server',${JSON.stringify(payload)},'{}',2)`;
+      yield* event(1, "message.updated", { id: "first", role: "user", runId });
+      yield* event(2, "run.created", { id: runId, userMessageId: "first" });
+      const initial = yield* snapshots.forThread(threadId, f.policy(), f.currentPolicy);
+      assert.isDefined(initial);
+      assert.isTrue(yield* snapshots.canDeliver!(initial!));
+      yield* setConversationMemoryEnabled(sql, false);
+      yield* event(3, "message.updated", { id: "steer", role: "user", runId });
+      yield* setConversationMemoryEnabled(sql, true);
+      assert.isFalse(yield* snapshots.canDeliver!(initial!));
+      assert.isUndefined(
+        yield* snapshots.revalidate(initial!, { threadId, runId }, f.currentPolicy),
+      );
+      assert.isUndefined(yield* snapshots.forThread(threadId, f.policy(), f.currentPolicy));
+    }).pipe(Effect.provide(f.live));
+  },
+);
+
 it.effect(
   "selects thread/project/user in order, restores only survivors, and fences policy/identity/TTL",
   () => {

@@ -43,6 +43,7 @@ export const SETTINGS_ACCESS = {
   worktreeCleanup: agent,
   storageCleanup: agent,
   worktreesDirectory: agent,
+  conversationMemoryEnabled: person(GRANTS_AGENTS),
   enableAgentMemoryAccess: person(GRANTS_AGENTS),
   agentMemoryLimitGiB: person(
     "It is this machine's memory safety limit for agents; a person sets it.",

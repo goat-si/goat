@@ -70,6 +70,12 @@ export const forwardLocalWorkerAnswer = Effect.fn("channel.forwardLocalWorkerAns
         : Ref.set(permissionRefused, current).pipe(Effect.as(false)),
     ),
   );
+  yield* ledger.preserveInputMemoryPause(
+    threadId,
+    ids.messageId,
+    stored.task.originInputId,
+    senderInputId,
+  );
   if (carriesNotes && senderInputId !== undefined)
     yield* ledger.bindWorkerFollowUpSender(threadId, ids.messageId, senderInputId);
   const sent = yield* threads

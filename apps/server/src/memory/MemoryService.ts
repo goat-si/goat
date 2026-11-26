@@ -1,3 +1,4 @@
+import { issueConversationRunCheck } from "./conversationRunEligibility.ts";
 import { makeSavedPreferenceReader } from "./savedThreadPreference.ts";
 import { makeTurnMemoryReader } from "./TurnMemoryReceipts.ts";
 import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
@@ -110,6 +111,10 @@ export type MemoryOwnerCommittedReader = {
 export class MemoryService extends Context.Service<
   MemoryService,
   {
+    readonly issueConversationRunPermit: (thread: {
+      readonly threadId: M.ThreadId;
+      readonly runId?: M.RunId;
+    }) => Effect.Effect<Permit, MemoryAccessError>;
     readonly consumeReturned: (
       space: M.MemorySpaceId,
       thread: M.ScopedThreadRef | undefined,
@@ -2523,6 +2528,18 @@ const make = Effect.fnUntraced(function* (
       settleMemorySuggestion(sql, space, receipt, "acknowledgement"),
   });
   return MemoryService.of({
+    issueConversationRunPermit: (thread) => {
+      const denied = () => new MemoryAccessError({ code: "unavailable" });
+      return issueConversationRunCheck(sql, thread).pipe(
+        Effect.mapError(denied),
+        Effect.map((check) =>
+          check.pipe(
+            Effect.mapError(denied),
+            Effect.flatMap((allowed) => (allowed ? Effect.void : Effect.fail(denied()))),
+          ),
+        ),
+      );
+    },
     consumeReturned: (space, thread, pairs) =>
       Effect.gen(function* () {
         yield* StoreTransaction;

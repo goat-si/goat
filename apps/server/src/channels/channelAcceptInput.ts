@@ -17,6 +17,27 @@ import { deliveryIdFor } from "./channelIds.ts";
 import { insertOutboxRows } from "./channelProgressMessages.ts";
 import { routeSlackInput } from "./slack/slackBotRouting.ts";
 
+export interface ChannelInboxRow {
+  readonly conversation_memory_enabled: number;
+  readonly input_id: string;
+  readonly owner_id: string;
+  readonly conversation_id: string;
+  readonly binding_id: string;
+  readonly content_hash: string;
+  readonly message_json: string;
+  readonly requester_json: string | null;
+  readonly state: string;
+  readonly accepted_at: string;
+  readonly read_at: string | null;
+  readonly reception_id: string | null;
+  readonly decision_json: string | null;
+  readonly reply_json: string | null;
+  readonly failure_json: string | null;
+  readonly task_ids_json: string;
+  readonly timeline_sequence: number | null;
+  readonly bot_id: string;
+}
+
 type AcceptInput = Parameters<ChannelLedger["Service"]["acceptInput"]>[0];
 
 const encodeInbound = Schema.encodeSync(Schema.fromJsonString(ChannelInboundMessage));
@@ -129,14 +150,15 @@ export const acceptChannelInput = Effect.fn("ChannelLedger.acceptInput")(functio
       yield* sql`
             INSERT INTO channel_inbox (
               input_id, owner_id, kind, connection_id, idempotency_key, content_hash,
-              conversation_id, binding_id, message_json, requester_json, state, accepted_at, bot_id, auth_session_id
+              conversation_id, binding_id, message_json, requester_json, state, accepted_at, bot_id, auth_session_id, conversation_memory_enabled
             ) VALUES (
               ${input.inputId}, ${input.ownerId}, ${input.message.kind},
               ${input.message.connectionId}, ${input.message.idempotencyKey}, ${input.contentHash},
               ${input.conversationId}, ${input.bindingId}, ${encodeInbound(message)},
               ${requester === undefined ? null : encodeRequester(requester)},
               ${requester === undefined ? "rejected" : "accepted"}, ${input.acceptedAt},
-              ${botId}, ${input.authSessionId ?? null}
+              ${botId}, ${input.authSessionId ?? null},
+              COALESCE((SELECT enabled FROM conversation_memory_policy ORDER BY generation DESC LIMIT 1), 1)
             )
           `;
       const notice = refused === undefined ? input.rejectNotice : privateNotice(input, refused);

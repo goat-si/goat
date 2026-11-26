@@ -77,7 +77,7 @@ export const live = (
   failure: boolean | (() => string | M.TextGenerationError | undefined) = false,
   onInput?: (input: M.GenerateMemorySummaryInput) => void,
   local = false,
-  elapsedPerCallMs = 0,
+  modelDelay: number | Effect.Effect<void> = 0,
   unconfigured = false,
   // Inputs the model answers with nothing durable.
   empty?: (input: M.GenerateMemorySummaryInput) => boolean,
@@ -154,9 +154,9 @@ export const live = (
                   },
                   ...(input.promote && promotions ? { promotions: promotions(input) } : {}),
                 });
-          return elapsedPerCallMs
-            ? TestClock.adjust(elapsedPerCallMs).pipe(Effect.andThen(result))
-            : result;
+          if (!modelDelay) return result;
+          const delay = typeof modelDelay === "number" ? TestClock.adjust(modelDelay) : modelDelay;
+          return delay.pipe(Effect.andThen(result));
         },
       }),
     ),

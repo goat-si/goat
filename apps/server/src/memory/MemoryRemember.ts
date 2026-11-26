@@ -154,10 +154,17 @@ export const makeRemember = (deps: {
       return yield* new Store.MemoryStoreConflict({ code: "not_found" });
     const rows = sourceThread
       ? yield* sql<{ first: string | null; last: string | null; through: number | null }>`
+          WITH evidence AS NOT MATERIALIZED (
+            SELECT event_id, sequence FROM orchestration_events
+            WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${sourceThread.threadId}
+              AND sequence > coalesce((
+                SELECT after_sequence FROM conversation_memory_policy ORDER BY generation DESC LIMIT 1
+              ),0)
+          )
           SELECT
-            (SELECT event_id FROM orchestration_events WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${sourceThread.threadId} ORDER BY sequence LIMIT 1) AS first,
-            (SELECT event_id FROM orchestration_events WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${sourceThread.threadId} ORDER BY sequence DESC LIMIT 1) AS last,
-            (SELECT max(sequence) FROM orchestration_events WHERE application_event_version=2 AND aggregate_kind='thread' AND stream_id=${sourceThread.threadId}) AS through`.pipe(
+            (SELECT event_id FROM evidence ORDER BY sequence LIMIT 1) AS first,
+            (SELECT event_id FROM evidence ORDER BY sequence DESC LIMIT 1) AS last,
+            (SELECT max(sequence) FROM evidence) AS through`.pipe(
           Effect.catchTags({ SqlError: storageFailure }),
         )
       : [];

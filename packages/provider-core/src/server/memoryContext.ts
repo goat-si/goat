@@ -10,23 +10,47 @@ import * as Schema from "effect/Schema";
 export const refreshSnapshot = (input: ProviderAdapterV2TurnInput | undefined) =>
   input?.refreshMemoryContext ? input.refreshMemoryContext() : Effect.succeed(input?.memoryContext);
 
-export const promptMemory = Effect.fnUntraced(function* (
+export const selectSnapshot = Effect.fnUntraced(function* (
   input: ProviderAdapterV2TurnInput | undefined,
   driver: M.ProviderDriverKind,
 ) {
   const snapshot = yield* refreshSnapshot(input);
-  if (!snapshot) return { text: undefined, receipt: Effect.void, uncertain: Effect.void };
-  const text = yield* Effect.try({
-    try: () => memoryContextText(snapshot),
-    catch: () =>
-      new ProviderAdapterProtocolError({ driver, detail: "Invalid memory context frame" }),
-  });
-  return {
-    text,
-    receipt: deliveryReceipt(input, snapshot),
-    uncertain: input?.onMemoryDeliveryUncertain?.(snapshot) ?? Effect.void,
-  };
+  if (snapshot)
+    yield* Effect.try({
+      try: () => validateMemoryContext(snapshot),
+      catch: () =>
+        new ProviderAdapterProtocolError({ driver, detail: "Invalid memory context frame" }),
+    });
+  return snapshot;
 });
+
+export const recheckSnapshot = (
+  input: Pick<ProviderAdapterV2TurnInput, "canDeliverMemory"> | undefined,
+  snapshot: M.MemoryContextSnapshot | undefined,
+) =>
+  snapshot && input?.canDeliverMemory
+    ? input
+        .canDeliverMemory(snapshot)
+        .pipe(Effect.map((allowed) => (allowed ? snapshot : undefined)))
+    : Effect.succeed(snapshot);
+
+/** Mark the attempt before sending, then fence any revocation during that asynchronous write. */
+export const admitSelected = Effect.fnUntraced(function* (
+  input:
+    | Pick<ProviderAdapterV2TurnInput, "onMemoryDeliveryUncertain" | "canDeliverMemory">
+    | undefined,
+  snapshot: M.MemoryContextSnapshot | undefined,
+) {
+  if (!snapshot) return undefined;
+  yield* input?.onMemoryDeliveryUncertain?.(snapshot) ?? Effect.void;
+  return yield* recheckSnapshot(input, snapshot);
+});
+
+export const admitSnapshot = (
+  input: ProviderAdapterV2TurnInput | undefined,
+  driver: M.ProviderDriverKind,
+) =>
+  selectSnapshot(input, driver).pipe(Effect.flatMap((snapshot) => admitSelected(input, snapshot)));
 
 export const withoutMemoryBody = (input: ProviderAdapterV2TurnInput) => {
   const { memoryContext: _body, ...rest } = input;

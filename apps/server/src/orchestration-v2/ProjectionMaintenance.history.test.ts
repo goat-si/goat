@@ -1,3 +1,6 @@
+import { issueConversationRunCheck } from "../memory/conversationRunEligibility.ts";
+import { setConversationMemoryEnabled } from "../memory/conversationMemoryPolicy.ts";
+import { eligibleSourceMessages, scanWholeSource } from "../memory/memorySourceScan.ts";
 import {
   EventId,
   NodeId,
@@ -483,5 +486,45 @@ it.effect("recomputes inline output after trimming removes its marker", () =>
       SELECT payload_json, inline_work_output FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'trim-inline'`;
     assert.isFalse(row!.payload_json.includes("htmlRender"));
     assert.equal(row!.inline_work_output, 0);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("compacting an intermediate edit preserves its conversation memory opt-out", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const threadId = "thread:paused-edit";
+    let version = 0;
+    const append = (type: string, payload: Record<string, unknown>) => {
+      version += 1;
+      return sql`INSERT INTO orchestration_events
+        (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+         actor_kind, payload_json, metadata_json, application_event_version)
+        VALUES (${"edit-" + version}, 'thread', ${threadId}, ${version}, ${type}, '2026-11-01',
+          'user', ${JSON.stringify(payload)}, '{}', 2)`;
+    };
+    const edit = (text: string) => append("message.updated", { id: "prompt", role: "user", text });
+    yield* edit("Check the package manager");
+    yield* setConversationMemoryEnabled(sql, false);
+    yield* edit("Use yarn");
+    yield* setConversationMemoryEnabled(sql, true);
+    yield* edit("Use yarn.");
+    yield* append("run.created", { id: "r", userMessageId: "prompt", status: "completed" });
+    yield* append("message.updated", {
+      id: "reply",
+      role: "assistant",
+      text: "Understood",
+      runId: "r",
+    });
+    const inspect = Effect.gen(function* () {
+      const permitted = yield* issueConversationRunCheck(sql, { threadId, runId: "r" });
+      return {
+        allowed: yield* permitted,
+        messages: eligibleSourceMessages(yield* scanWholeSource(sql, threadId), {}),
+      };
+    });
+    assert.deepEqual(yield* inspect, { allowed: false, messages: [] });
+    assert.equal((yield* maintenance.compactEventStore()).deletedEventCount, 1);
+    assert.deepEqual(yield* inspect, { allowed: false, messages: [] });
   }).pipe(Effect.provide(layer)),
 );

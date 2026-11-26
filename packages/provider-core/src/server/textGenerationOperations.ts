@@ -15,7 +15,11 @@ import {
 import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@goat/shared/git";
 import { extractJsonObject } from "@goat/shared/schemaJson";
 
-import { buildChannelReceptionPrompt, toChannelReceptionResult } from "./channelReceptionPrompt.ts";
+import {
+  buildChannelReceptionPrompt,
+  ChannelReceptionModelOutput,
+  toChannelReceptionResult,
+} from "./channelReceptionPrompt.ts";
 import {
   buildMemoryConflictPrompt,
   buildMemorySummaryPrompt,
@@ -70,10 +74,10 @@ const decodeMemoryConflictExecution = Schema.decodeUnknownEffect(
   ResolveMemoryConflictExecutionResult,
 );
 
-export interface Request<S extends Schema.Top> {
+export interface Request<S extends Schema.Top, Prompt = string> {
   readonly operation: Operation;
   readonly cwd: string;
-  readonly prompt: string;
+  readonly prompt: Prompt;
   readonly outputSchema: S;
   readonly modelSelection: ModelSelection;
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
@@ -89,8 +93,8 @@ export const investigationUnsupported = (operation: Operation, provider: string)
     detail: `${provider} cannot investigate a checkout read-only. Choose another review guide model, or source control writer model when none is set.`,
   });
 
-export type Runner = <S extends Schema.Top>(
-  request: Request<S>,
+export type Runner<Prompt = string> = <S extends Schema.Top>(
+  request: Request<S, Prompt>,
 ) => Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]>;
 
 export const withoutInvestigation =
@@ -141,7 +145,7 @@ export interface FromRunnerOptions {
    * Also offer channel reception. Only providers whose runner has been checked to run it with
    * tools off and in an empty directory turn this on.
    */
-  readonly channelReception?: boolean;
+  readonly channelReception?: Runner<Effect.Effect<string>>;
 }
 
 function memoryOperations(name: string, runMemory: MemoryRunner) {
@@ -336,13 +340,20 @@ export function fromRunner(
     };
   });
 
-  const generateChannelReception: NonNullable<ProviderTextGeneration["generateChannelReception"]> =
+  const runReception = options.channelReception;
+  const generateChannelReception: ProviderTextGeneration["generateChannelReception"] =
+    runReception &&
     Effect.fn(`${name}.generateChannelReception`)(function* (input) {
-      const generated = yield* run({
+      // Each attempt renders the prompt when the provider is ready to consume stdin.
+      const prompt = Effect.suspend(() =>
+        input.recheckInput ? input.recheckInput(input.input) : Effect.succeed(input.input),
+      ).pipe(Effect.map((authorized) => buildChannelReceptionPrompt(authorized).prompt));
+      const generated = yield* runReception({
         operation: "generateChannelReception",
         cwd: input.cwd,
         modelSelection: input.modelSelection,
-        ...buildChannelReceptionPrompt(input.input),
+        prompt,
+        outputSchema: ChannelReceptionModelOutput,
       });
       const result = toChannelReceptionResult(generated);
       if (Option.isNone(result)) {
@@ -377,7 +388,7 @@ export function fromRunner(
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
-    ...(options.channelReception === true ? { generateChannelReception } : {}),
+    ...(generateChannelReception ? { generateChannelReception } : {}),
     generateReviewGuide,
   } satisfies ProviderTextGeneration;
 }

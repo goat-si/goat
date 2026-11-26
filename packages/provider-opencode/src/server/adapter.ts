@@ -402,18 +402,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           providerSessionId: input.providerSessionId,
           threadId: input.threadId,
         });
-        const sdkCall = <A>(
-          method: string,
-          payload: unknown,
-          call: (signal: AbortSignal) => Promise<A>,
-        ): Effect.Effect<A, OpenCodeRuntime.OpenCodeRuntimeError> =>
-          logProtocolEvent({
-            direction: "outgoing",
-            messageKind: "request",
-            method,
-            payload,
-          }).pipe(
-            Effect.andThen(OpenCodeRuntime.runOpenCodeSdk(method, call)),
+        const logSdkRequest = (method: string, payload: unknown) =>
+          logProtocolEvent({ direction: "outgoing", messageKind: "request", method, payload });
+        const sendSdkCall = <A>(method: string, call: (signal: AbortSignal) => Promise<A>) =>
+          OpenCodeRuntime.runOpenCodeSdk(method, call).pipe(
             Effect.tap((response) =>
               logProtocolEvent({
                 direction: "incoming",
@@ -423,6 +415,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               }),
             ),
           );
+        const sdkCall = <A>(
+          method: string,
+          payload: unknown,
+          call: (signal: AbortSignal) => Promise<A>,
+        ) => logSdkRequest(method, payload).pipe(Effect.andThen(sendSdkCall(method, call)));
 
         const abortDescendants = Effect.fn("OpencodeAdapter.abortDescendants")(function* (
           rootId: string,
@@ -2704,11 +2701,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           // Native workspace commands accept file parts only, so snapshots stay on prompts.
           if (!command) {
-            const {
-              text: memory,
-              receipt,
-              uncertain,
-            } = yield* MemoryContext.promptMemory(memoryInput, OPENCODE_PROVIDER);
+            if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
+            yield* logSdkRequest("session.promptAsync", payload);
+            const snapshot = yield* MemoryContext.admitSnapshot(memoryInput, OPENCODE_PROVIDER);
+            const memory = snapshot && MemoryContext.memoryContextText(snapshot);
             const availability = McpProviderSession.memoryToolAvailability(
               !connection.external &&
                 currentMcp?.authorizationHeader === installedMcpSession?.authorizationHeader &&
@@ -2735,10 +2731,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .filter((part) => part !== undefined)
                       .join("\n\n"),
                   };
-            if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
-            yield* uncertain;
-            turn.pendingMemoryReceipt = { id: payload.messageID, receipt };
-            return yield* sdkCall("session.promptAsync", prepared, (signal) =>
+            if (abortController.signal.aborted || turn.finalized)
+              return yield* delivery?.skipped() ?? Effect.void;
+            turn.pendingMemoryReceipt = {
+              id: payload.messageID,
+              receipt: MemoryContext.deliveryReceipt(memoryInput, snapshot),
+            };
+            return yield* sendSdkCall("session.promptAsync", (signal) =>
               client.session.promptAsync(prepared, {
                 signal: AbortSignal.any([signal, abortController.signal]),
               }),

@@ -1,5 +1,5 @@
-import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { useGT } from "gt-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useRef, useState } from "react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -15,6 +15,10 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
   const enabled = useEnvironmentSettings(
     environmentId,
     (settings) => settings.enableAgentMemoryAccess,
+  );
+  const paused = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.conversationMemoryEnabled === false,
   );
   const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -33,13 +37,13 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
         <SettingsRow
           title={gt("Allow agent memory access")}
           description={gt(
-            "Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices.",
+            "Allow agents in this environment to use memory within their granted scope. This is separate from sharing memories between devices.",
           )}
           control={
             <Switch
               aria-label={gt("Allow agent memory access")}
               checked={enabled}
-              disabled={!canUpdate || busy}
+              disabled={!canUpdate || busy || paused}
               onCheckedChange={(value) => {
                 if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
                   return;

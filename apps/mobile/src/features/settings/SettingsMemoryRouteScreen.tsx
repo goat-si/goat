@@ -1,5 +1,5 @@
 import { MobileMemoryMoveControl } from "./MemoryMoveControl";
-import { MemoryGeneration, MemoryAgentAccess, useMemoryLifetime } from "./MemoryGenerationSettings";
+import { MemoryConversationSettings, useMemoryLifetime } from "./MemoryGenerationSettings";
 import {
   MobileMemoryOriginPicker,
   MemoryProvenanceBadge,
@@ -371,8 +371,7 @@ function MemoryConnected({
         />
       ) : (
         <ScreenScrollView>
-          <MemoryGeneration environmentId={environmentId} />
-          <MemoryAgentAccess environmentId={environmentId} />
+          <MemoryConversationSettings environmentId={environmentId} />
           {status ? <MemoryStatusRows status={status} /> : null}
           <MemorySyncDiagnostics environmentId={environmentId} status={status} onRefresh={load} />
           <MemoryAdministration
@@ -756,13 +755,12 @@ function ScopedMemoryBrowser({
       contentInsetAdjustmentBehavior="automatic"
       ListHeaderComponent={
         <>
+          <MemoryConversationSettings environmentId={params.environmentId} />
           <MemoryAdministration
             environmentId={params.environmentId}
             onSharingRefresh={() => void onSyncRefresh()}
             sync={status}
           />
-          <MemoryGeneration environmentId={params.environmentId} />
-          <MemoryAgentAccess environmentId={params.environmentId} />
           {status ? <MemoryStatusRows status={status} /> : null}
           <MemorySyncDiagnostics
             environmentId={params.environmentId}

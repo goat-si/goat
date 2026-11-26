@@ -173,6 +173,8 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "SlackConversationBot",
   "ChannelInputSessionAuthority",
   "TurnMemoryReceipts",
+  "ConversationMemoryPolicy",
+  "ConversationMemoryExcludedMessages",
 ]);
 
 type MigrationEntry<E> = readonly [
