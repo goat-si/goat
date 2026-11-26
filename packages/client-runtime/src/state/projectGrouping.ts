@@ -9,7 +9,7 @@ import {
 import type { ClientSettings } from "@goat/contracts/settings";
 
 import type { EnvironmentProject } from "./models.ts";
-import { normalizeProjectPathForComparison } from "./projects.ts";
+import { normalizeProjectPathForComparison, preferredPathSeparator } from "./projects.ts";
 
 const SCRATCH_PROJECT_SCOPE_KEY = "\0no-project";
 
@@ -59,8 +59,11 @@ function deriveRepositoryRelativeProjectPath(
     return "";
   }
 
-  const separator = normalizedRootPath.includes("\\") ? "\\" : "/";
-  const rootPrefix = `${normalizedRootPath}${separator}`;
+  const separator = preferredPathSeparator(normalizedRootPath);
+  // A volume root such as `/` or `d:\` already ends with its separator.
+  const rootPrefix = normalizedRootPath.endsWith(separator)
+    ? normalizedRootPath
+    : `${normalizedRootPath}${separator}`;
   if (!normalizedProjectPath.startsWith(rootPrefix)) {
     return null;
   }
