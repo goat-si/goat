@@ -41,14 +41,15 @@ const TOOL_LISTING_LABELS: Readonly<Record<AgentToolListing, string>> = {
 };
 
 export function AgentToolsSettings() {
+  const gt = useGT();
   return (
-    <SettingsSection id="agent-tools" title="Agent tools">
+    <SettingsSection id="agent-tools" title={gt("Agent tools")}>
       <AgentToolListingSetting />
       <AgentThemeWritesSetting />
       <AgentWorkspaceTerminalSettings />
       <BuiltInSkillSetting
         name="goat-discipline"
-        label="Development discipline"
+        label={gt("Development discipline")}
         searchId="goat-discipline-skill"
         projectDescription="Built in. Off keeps $goat-discipline out of this project's $ menu and turns. Inherit follows the environment."
         environmentDescription="Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns."
@@ -65,6 +66,7 @@ export function AgentToolsSettings() {
 }
 
 function AgentThemeWritesSetting() {
+  const gt = useGT();
   const { scope } = useSettingsScope();
   const settings = useScopedSettings();
   const update = useUpdateScopedSettings();
@@ -72,14 +74,14 @@ function AgentThemeWritesSetting() {
   const projectScope = scope.kind === "project" || scope.kind === "checkout";
   return (
     <SettingsRow
-      title="Agent theme changes"
+      title={gt("Agent theme changes")}
       serverScoped
       settingKeys={["enableAgentThemeWrites"]}
-      description="Allow agents with settings access to publish environment themes."
+      description={gt("Allow agents with settings access to publish environment themes.")}
       control={
         <ScopedSwitch
           settingKeys={["enableAgentThemeWrites"]}
-          aria-label="Agent theme changes"
+          aria-label={gt("Agent theme changes")}
           checked={settings.enableAgentThemeWrites}
           disabled={!allowed || projectScope}
           onCheckedChange={(checked) => update({ enableAgentThemeWrites: Boolean(checked) })}
@@ -96,6 +98,7 @@ function BuiltInSkillSetting(props: {
   readonly projectDescription: string;
   readonly environmentDescription: string;
 }) {
+  const gt = useGT();
   const { scope, connectedEnvironments, targets } = useSettingsScope();
   const canWrite = useScopedSettingsWriteAllowed();
   const persistServer = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -174,8 +177,8 @@ function BuiltInSkillSetting(props: {
         type: "error",
         title:
           result.savedEnvironmentCount > 0
-            ? "Setting saved on some environments"
-            : "Setting not saved",
+            ? gt("Setting saved on some environments")
+            : gt("Setting not saved"),
         description: result.failedEnvironments
           .map(({ label, message }) => `${label}: ${message}`)
           .join("\n"),
@@ -200,18 +203,18 @@ function BuiltInSkillSetting(props: {
             <SelectTrigger size="sm" aria-label={props.label}>
               <SelectValue>
                 {mixed
-                  ? "Mixed"
+                  ? gt("Mixed")
                   : choice === "inherit"
                     ? `Inherit (${reference?.enabled ? "On" : "Off"})`
                     : choice === "on"
-                      ? "On"
-                      : "Off"}
+                      ? gt("On")
+                      : gt("Off")}
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              <SelectItem value="inherit">Inherit</SelectItem>
-              <SelectItem value="on">On</SelectItem>
-              <SelectItem value="off">Off</SelectItem>
+              <SelectItem value="inherit">{gt("Inherit")}</SelectItem>
+              <SelectItem value="on">{gt("On")}</SelectItem>
+              <SelectItem value="off">{gt("Off")}</SelectItem>
             </SelectPopup>
           </Select>
         ) : (
@@ -233,6 +236,8 @@ function BuiltInSkillSetting(props: {
  * change reaches running agents through tools/list_changed.
  */
 export function AgentToolListingSetting() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const mixed = useScopedSettingsMixed(["agentToolListing"]);
   const updateSettings = useUpdateScopedSettings();
@@ -243,12 +248,14 @@ export function AgentToolListingSetting() {
     <SettingsRow
       serverScoped
       settingKeys={["agentToolListing"]}
-      {...searchableSetting("agent-tool-listing")}
-      description="Core shows agents two GOAT tools that look up and run the rest. All tools lists every tool up front, which can make each agent's first prompt much larger. Core + goat_eval also lists goat_eval, which runs several GOAT calls as one program; it is opt-in while it is measured."
+      {...localizedSetting("agent-tool-listing")}
+      description={gt(
+        "Core shows agents two GOAT tools that look up and run the rest. All tools lists every tool up front, which can make each agent's first prompt much larger. Core + goat_eval also lists goat_eval, which runs several GOAT calls as one program; it is opt-in while it is measured.",
+      )}
       resetAction={
         mixed || settings.agentToolListing !== shippedDefault ? (
           <SettingResetButton
-            label="GOAT tools agents see"
+            label={gt("GOAT tools agents see")}
             onClick={() => updateSettings({ agentToolListing: shippedDefault })}
           />
         ) : null
@@ -261,9 +268,13 @@ export function AgentToolListingSetting() {
             if (next !== undefined) updateSettings({ agentToolListing: next });
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="GOAT tools agents see">
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-40"
+            aria-label={gt("GOAT tools agents see")}
+          >
             <SelectValue>
-              {mixed ? "Mixed" : TOOL_LISTING_LABELS[settings.agentToolListing]}
+              {mixed ? gt("Mixed") : TOOL_LISTING_LABELS[settings.agentToolListing]}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -272,7 +283,7 @@ export function AgentToolListingSetting() {
                 <span className="flex w-full items-center justify-between gap-5">
                   <span>{TOOL_LISTING_LABELS[listing]}</span>
                   {listing === shippedDefault ? (
-                    <span className="text-xs text-muted-foreground">Default</span>
+                    <span className="text-xs text-muted-foreground">{gt("Default")}</span>
                   ) : null}
                 </span>
               </SelectItem>

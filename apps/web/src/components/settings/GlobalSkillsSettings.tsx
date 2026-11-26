@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { GOAT_SKILL_SCOPE, type EnvironmentId, type ServerProviderSkill } from "@goat/contracts";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -22,11 +23,12 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 export function GlobalSkillsSettings() {
+  const gt = useGT();
   const { environment, scope } = useSettingsScope();
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
   return (
-    <SettingsSection id="goat-skills" title="GOAT skills">
+    <SettingsSection id="goat-skills" title={gt("GOAT skills")}>
       {connected && environment ? (
         <SkillList
           key={environment.environmentId}
@@ -35,8 +37,8 @@ export function GlobalSkillsSettings() {
         />
       ) : (
         <SettingsRow
-          title="GOAT skills"
-          description="Connect an environment to manage its GOAT skills."
+          title={gt("GOAT skills")}
+          description={gt("Connect an environment to manage its GOAT skills.")}
         />
       )}
     </SettingsSection>
@@ -64,6 +66,7 @@ function SkillList({
   environmentId: EnvironmentId;
   projectScoped: boolean;
 }) {
+  const gt = useGT();
   const disabled = useEnvironmentSettings(
     environmentId,
     (settings) => settings.disabledGlobalSkills,
@@ -115,13 +118,13 @@ function SkillList({
   return (
     <>
       <SettingsRow
-        title="Skills folder"
+        title={gt("Skills folder")}
         description={
           <span>
             Put a skill folder with a SKILL.md in this environment's skills folder, then rescan.
             Call it in a message with $goat:&lt;folder-name&gt;.
             <br />
-            {folder ? <code>{folder}</code> : "Rescan to show the folder path."}
+            {folder ? <code>{folder}</code> : gt("Rescan to show the folder path.")}
           </span>
         }
         control={
@@ -132,7 +135,7 @@ function SkillList({
               disabled={!folder}
               onClick={() => folder && copyToClipboard(folder, undefined)}
             >
-              {isCopied ? "Copied" : "Copy path"}
+              {isCopied ? gt("Copied") : gt("Copy path")}
             </Button>
             <Button
               size="sm"
@@ -140,13 +143,16 @@ function SkillList({
               disabled={!canManage || pending}
               onClick={() => void run(() => rescan({ environmentId, input: {} }))}
             >
-              Rescan
+              {gt("Rescan")}
             </Button>
           </div>
         }
       />
       {published.length === 0 ? (
-        <SettingsRow title="No GOAT skills yet" description="Add a skill folder, then rescan." />
+        <SettingsRow
+          title={gt("No GOAT skills yet")}
+          description={gt("Add a skill folder, then rescan.")}
+        />
       ) : null}
       {published.map((skill) => (
         <SettingsRow
@@ -167,7 +173,7 @@ function SkillList({
                 disabled={!canManage || pending}
                 onClick={() => setRemoving(skill)}
               >
-                Remove
+                {gt("Remove")}
               </Button>
             </div>
           }
@@ -175,7 +181,7 @@ function SkillList({
       ))}
       {projectScoped ? (
         <p className="px-4 pt-3 text-xs text-muted-foreground">
-          Environment-wide setting. Select an environment to turn skills on or off.
+          {gt("Environment-wide setting. Select an environment to turn skills on or off.")}
         </p>
       ) : null}
       {error ? (
@@ -193,12 +199,15 @@ function SkillList({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This deletes the skill folder from this environment. A linked folder is unlinked and
-              its target stays.
+              {gt(
+                "This deletes the skill folder from this environment. A linked folder is unlinked and its target stays.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               variant="destructive"
               disabled={pending}
@@ -212,7 +221,7 @@ function SkillList({
                   );
               }}
             >
-              Remove
+              {gt("Remove")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

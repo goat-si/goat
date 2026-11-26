@@ -1,3 +1,5 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useEffectEvent, useState } from "react";
@@ -11,7 +13,6 @@ import { ComputerUsePanel, type ComputerUseSettingsPatch } from "./ComputerUsePa
 import { CuaSetupDialog } from "./CuaSetupDialog";
 import { readCuaGrants, type CuaPermission } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { Button } from "../ui/button";
 
@@ -147,11 +148,13 @@ export function ComputerUseSetup({
 }
 
 export function ComputerUseSettings() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { environment, search } = useSettingsScope();
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
   return (
-    <SettingsSection id="computer" title="Computer">
+    <SettingsSection id="computer" title={gt("Computer")}>
       {connected && environment ? (
         <ComputerUseControls
           key={`${environment.environmentId}:${JSON.stringify(search)}`}
@@ -161,8 +164,8 @@ export function ComputerUseSettings() {
         />
       ) : (
         <SettingsRow
-          {...searchableSetting("computer-use")}
-          description="Connect an environment to turn on computer use for its computer."
+          {...localizedSetting("computer-use")}
+          description={gt("Connect an environment to turn on computer use for its computer.")}
         />
       )}
     </SettingsSection>
@@ -178,6 +181,7 @@ function ComputerUseControls({
   hostLabel: string;
   local: boolean;
 }) {
+  const gt = useGT();
   const host = useComputerUseHost(environmentId, local);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -210,9 +214,12 @@ function ComputerUseControls({
           reveal: bridge?.revealCuaGrantTarget,
         }}
       />
-      <SettingsRow title="Allowed apps" description="Apps always allowed on this environment.">
+      <SettingsRow
+        title={gt("Allowed apps")}
+        description={gt("Apps always allowed on this environment.")}
+      >
         {host.allowedApps.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No apps always allowed.</p>
+          <p className="text-sm text-muted-foreground">{gt("No apps always allowed.")}</p>
         ) : (
           host.allowedApps.map((app) => (
             <div key={app} className="flex items-center justify-between gap-3">
@@ -229,7 +236,7 @@ function ComputerUseControls({
                     .finally(() => setRemoving(false));
                 }}
               >
-                Remove
+                {gt("Remove")}
               </Button>
             </div>
           ))
