@@ -62,6 +62,7 @@ vi.mock("./GoatBotWorkDetails", () => ({
   GoatBotWorkDetails: () => null,
   GoatBotUnavailableWork: () => null,
 }));
+vi.mock("./useGoatBotTaskChanges", () => ({ useGoatBotTaskChanges: () => "visit:0" }));
 vi.mock("~/hooks/useResizableWidth", () => ({
   RESIZABLE_WIDTH_PROPERTY: "--resizable-width",
   useResizableWidth: () => ({ width: 480, handlers: {} }),
