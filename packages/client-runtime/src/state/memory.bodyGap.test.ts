@@ -1,6 +1,8 @@
 import {
   EnvironmentId,
   MemoryChangeSignal,
+  type SavedThreadPreference,
+  ThreadId,
   MemoryId,
   MemoryItem,
   MemoryRpcError,
@@ -176,6 +178,7 @@ const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages
   const registry = AtomRegistry.make();
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   const signals = yield* Queue.unbounded<MemoryChangeSignal>();
+  const preferences = yield* Queue.unbounded<Deferred.Deferred<SavedThreadPreference>>();
   const reads = yield* Queue.unbounded<Deferred.Deferred<MemoryItem>>();
   // With holdPages, history and source requests wait for the test to answer them.
   const historyReplies = yield* Queue.unbounded<Deferred.Deferred<MemoryHistoryPage>>();
@@ -189,6 +192,8 @@ const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages
   let historyRequests = 0;
   const client = {
     [WS_METHODS.memoryChanges]: () => Stream.fromQueue(signals),
+    [WS_METHODS.memorySyncStatus]: () => Effect.succeed({ state: "online", memorySpaceId: space }),
+    [WS_METHODS.memoryThreadPreference]: () => held(preferences),
     [WS_METHODS.memoryRead]: () =>
       Effect.gen(function* () {
         const reply = yield* Deferred.make<MemoryItem>();
@@ -204,7 +209,10 @@ const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages
       holdPages ? held(sourceReplies) : Effect.succeed(sourcePage),
   };
   const active = yield* SubscriptionRef.make(
-    Option.some({ client, initialConfig: Effect.succeed(config) } as unknown as RpcSession),
+    Option.some({
+      client,
+      initialConfig: Effect.sync(() => registry.get(configs(env)) ?? config),
+    } as unknown as RpcSession),
   );
   const supervisor = {
     target: { environmentId: env },
@@ -261,6 +269,7 @@ const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages
     reads,
     historyReplies,
     sourceReplies,
+    preferences,
     active,
     historyRequests: () => historyRequests,
   };
@@ -800,4 +809,44 @@ it.effect(
         );
       }),
     ),
+);
+
+it.effect("updates the saved preference on admission and fences a stale reply on forget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const receipt = h.memory.savedThreadPreference({
+        environmentId: env,
+        threadId: ThreadId.make("thread"),
+      });
+      h.registry.mount(receipt);
+      expect(h.registry.get(receipt)).toBeNull();
+      expect(yield* Queue.size(h.preferences)).toBe(0);
+      h.registry.set(configs(env), {
+        ...config,
+        environment: {
+          ...config.environment,
+          capabilities: {
+            ...config.environment.capabilities,
+            memory: { protocolVersion: 1, savedThreadPreference: true },
+          },
+        },
+      });
+      yield* Queue.offer(h.signals, signal("reset"));
+      yield* waitFor(h.registry, h.exposure, (state) => state.ready);
+      yield* Deferred.succeed(yield* Queue.take(h.preferences), null);
+      yield* Queue.offer(h.signals, signal("upsert"));
+      const ref = { memoryId: id, memorySpaceId: space };
+      yield* Deferred.succeed(yield* Queue.take(h.preferences), ref);
+      yield* waitFor(h.registry, receipt, (value) => value?.memoryId === id);
+      yield* TestClock.adjust("2 minutes");
+      expect(h.registry.get(receipt)).toEqual(ref);
+      yield* Queue.offer(h.signals, signal("forget"));
+      const stale = yield* Queue.take(h.preferences);
+      yield* Deferred.succeed(stale, ref);
+      expect(h.registry.get(receipt)).toBeNull();
+      h.registry.set(grants(env), AsyncResult.initial());
+      expect(h.registry.get(receipt)).toBeNull();
+    }),
+  ),
 );
