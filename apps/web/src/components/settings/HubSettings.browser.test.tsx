@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import zh from "../../i18n/translations/zh.json";
 import { RegistryContext } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -997,4 +999,19 @@ it("keeps setup readable but not startable without permission on the selected Ho
     .element(row.getByText("Managing this device needs permission on the selected Home."))
     .toBeVisible();
   expect(state.completeChild).not.toHaveBeenCalled();
+});
+
+it("uses the localized device section title for both the heading and list", async () => {
+  using fixture = setup();
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh }}>
+      <RegistryContext value={fixture.registry}>
+        <HubSettings />
+      </RegistryContext>
+    </GTProvider>,
+  );
+  await expect
+    .element(screen.getByRole("heading", { name: "枢纽设备", exact: true }))
+    .toBeVisible();
+  await expect.element(screen.getByRole("list", { name: "枢纽设备", exact: true })).toBeVisible();
 });

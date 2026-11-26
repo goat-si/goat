@@ -86,6 +86,9 @@ export function HubDeviceListSection(props: {
   readonly onRefresh: () => void;
 }) {
   const gt = useGT();
+  const m = useMessages();
+  const devicesSetting = searchableSetting("hub-devices");
+  const devicesLabel = m(devicesSetting.title);
   const nodes = useHubNodes(props.environmentId);
   const [adding, setAdding] = useState(false);
   const childText = useHubChildSetupText();
@@ -109,7 +112,8 @@ export function HubDeviceListSection(props: {
   const recent = props.actions.entries.filter((entry) => !listed.has(entry.alias));
   return (
     <SettingsSection
-      {...searchableSetting("hub-devices")}
+      id={devicesSetting.id}
+      title={devicesLabel}
       headerAction={
         <span className="flex items-center gap-1">
           <Button
@@ -148,7 +152,7 @@ export function HubDeviceListSection(props: {
         />
       ) : null}
       {message === null ? (
-        <ul aria-label={gt("Hub devices")} className="divide-y divide-border/50">
+        <ul aria-label={devicesLabel} className="divide-y divide-border/50">
           {rows.map((row) => (
             <HubDeviceListRow
               key={row.key}
