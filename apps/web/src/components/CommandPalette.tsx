@@ -8,6 +8,7 @@ import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { resolvePastedPath } from "@goat/shared/path";
 import { browserClaimPaletteItem } from "./preview/browserClaimPaletteItem";
+import { rightPanelPaletteItems } from "./commandPaletteRightPanelItem";
 import { validateMemorySettingsSearch } from "./settings/MemorySettings.logic";
 import { threadPullRequestLinkMode } from "@goat/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
@@ -1216,6 +1217,7 @@ function OpenCommandPaletteDialog(props: {
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
     browserClaimPaletteItem(),
+    ...rightPanelPaletteItems(routeThreadRef !== null),
   ];
   actionItems.push({
     kind: "action",

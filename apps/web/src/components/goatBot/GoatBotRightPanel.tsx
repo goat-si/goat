@@ -25,6 +25,11 @@ import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useRightPanelSurfaceClose } from "~/hooks/useRightPanelSurfaceClose";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
 import { isEditableFocused } from "~/lib/editableFocus";
+import { isTerminalCloseConfirmPending } from "~/lib/terminalCloseConfirm";
+import {
+  preventRepeatedTerminalCloseShortcut,
+  preventTerminalCloseShortcut,
+} from "~/lib/terminalCloseShortcut";
 import { cn } from "~/lib/utils";
 import { isPreviewFocused } from "~/lib/previewFocus";
 import { getTerminalFocusOwner } from "~/lib/terminalFocus";
@@ -209,6 +214,14 @@ export function GoatBotRightPanelFrame({
     }),
   };
   const onShortcut = useEffectEvent((event: KeyboardEvent) => {
+    // As in a thread: a held or repeated close chord never stacks terminal close confirmations.
+    if (
+      preventRepeatedTerminalCloseShortcut(event, keybindings) ||
+      (isTerminalCloseConfirmPending() && preventTerminalCloseShortcut(event, keybindings))
+    ) {
+      event.stopPropagation();
+      return;
+    }
     if (isCommandPaletteOpen()) return;
     const terminalFocusOwner = getTerminalFocusOwner();
     if (event.defaultPrevented && terminalFocusOwner === null) return;

@@ -8,6 +8,8 @@ import { act, render } from "../../test/render";
 import { focusPanelTerminalAfterClose, registerTerminalFocusTarget } from "~/lib/terminalFocus";
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
+import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
+import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { RightPanelTabs, type RightPanelTabsProps } from "./RightPanelTabs";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 
@@ -29,6 +31,7 @@ function Fixture(props: {
   close?: (surface: RightPanelSurface, finish: () => void) => void;
   rename?: (surfaceId: string, title: string) => void;
   offered?: RightPanelTabsProps["offeredSurfaces"];
+  keybindings?: RightPanelTabsProps["keybindings"];
 }) {
   const [surfaces, setSurfaces] = useState(props.initial);
   const [active, setActive] = useState(props.initial[0]?.id ?? null);
@@ -38,7 +41,7 @@ function Fixture(props: {
       <RightPanelTabs
         mode="embedded"
         open={props.open ?? true}
-        keybindings={[]}
+        keybindings={props.keybindings ?? []}
         getShortcutContext={() => ({
           terminalFocus: false,
           terminalOpen: false,
@@ -159,6 +162,27 @@ it("a page that offers some surfaces lists only those, in the empty panel and th
     return popup;
   });
   expect(listed(menu)).toEqual(["Browser", "Terminal", "Device"]);
+});
+
+it("a panel kept in the background under Settings ignores the new-surface shortcut", async () => {
+  const keybindings = compileResolvedKeybindingsConfig([{ key: "f8", command: "rightPanel.new" }]);
+  const menuOpen = () => document.querySelector('[role="menu"]') !== null;
+  {
+    await using _front = await render(<Fixture initial={files(1)} keybindings={keybindings} />);
+    await userEvent.keyboard("{F8}");
+    await vi.waitFor(() => expect(menuOpen()).toBe(true));
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(menuOpen()).toBe(false));
+  }
+
+  await using _behind = await render(
+    <BackgroundThreadContext value>
+      <Fixture initial={files(1)} keybindings={keybindings} />
+    </BackgroundThreadContext>,
+  );
+  await userEvent.keyboard("{F8}");
+  await act(async () => {});
+  expect(menuOpen()).toBe(false);
 });
 
 it("reserves the replacement add button when a mounted panel closes and reopens", async () => {
