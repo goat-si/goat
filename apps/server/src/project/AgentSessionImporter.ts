@@ -252,12 +252,12 @@ const make = Effect.gen(function* () {
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources, input);
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
-    let skippedCount = 0;
+    const skippedThreads: Array<{ thread: string; reason: string }> = [];
 
     yield* Stream.runForEach(outcomes, (outcome) =>
       Effect.gen(function* () {
         if (outcome._tag === "Skipped") {
-          skippedCount += 1;
+          skippedThreads.push({ thread: outcome.thread, reason: outcome.reason });
           return;
         }
         const source = outcome.source;
@@ -331,7 +331,7 @@ const make = Effect.gen(function* () {
               return yield* new AgentSessionThreadModifiedError({ threadId });
             }
             if (!matchesImportedMessages(threadId, existing.value.messages, thread.messages)) {
-              return false;
+              return "Saved messages differ from the source transcript.";
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
@@ -470,19 +470,38 @@ const make = Effect.gen(function* () {
               provider: outcome.thread.source,
               sessionId: outcome.thread.providerSessionId,
               cause,
-            }).pipe(Effect.as(false)),
+            }).pipe(
+              Effect.as(
+                cause._tag === "AgentSessionUnresumableSessionError"
+                  ? "Invalid provider session identifier."
+                  : cause._tag === "AgentSessionThreadProjectConflictError"
+                    ? "This thread already belongs to another project."
+                    : cause._tag === "AgentSessionThreadModifiedError"
+                      ? "This thread already contains activity in GOAT."
+                      : "Could not save the imported conversation.",
+              ),
+            ),
           ),
         );
         if (imported === true) {
           importedThreadIds.add(threadId);
           importedCount += 1;
-        } else if (imported === false) {
-          skippedCount += 1;
+        } else if (typeof imported === "string") {
+          skippedThreads.push({
+            thread:
+              outcome.thread.title.trim().split("\n", 1)[0]?.slice(0, 100) ||
+              source.providerSessionId,
+            reason: imported,
+          });
         }
       }),
     );
 
-    return { importedCount, skippedCount } satisfies AgentSessionImportResult;
+    return {
+      importedCount,
+      skippedCount: skippedThreads.length,
+      ...(skippedThreads.length ? { skippedThreads } : {}),
+    } satisfies AgentSessionImportResult;
   });
 
   const importNativeHistory = Effect.fn("AgentSessionImporter.importNativeHistory")(

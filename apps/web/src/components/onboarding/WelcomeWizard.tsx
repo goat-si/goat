@@ -96,6 +96,7 @@ import { Spinner } from "../ui/spinner";
 import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "./OnboardingWizard";
 import { Dialog } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
+import { useGT } from "gt-react";
 import { cn } from "../../lib/utils";
 
 type WizardStep = "connection" | "agents" | "memory" | "import";
@@ -165,6 +166,7 @@ export function WelcomeWizard({
     projectRef?: ScopedProjectRef,
     importWarning?: string,
     importedThreadCount = 0,
+    importDetails?: React.ReactNode,
   ) => {
     if (finishingPromiseRef.current !== null) return finishingPromiseRef.current;
     if (completionErrorToastIdRef.current !== null) {
@@ -184,6 +186,7 @@ export function WelcomeWizard({
             type: "warning",
             title: "Some history was not imported",
             description: importWarning,
+            data: { expandableContent: importDetails },
             timeout: 0,
           });
         } else if (importedThreadCount > 0) {
@@ -1217,13 +1220,17 @@ function ImportStep({
     projectRef?: ScopedProjectRef,
     importWarning?: string,
     importedThreadCount?: number,
+    importDetails?: React.ReactNode,
   ) => Promise<boolean>;
 }) {
+  const gt = useGT();
   const { environments } = useEnvironments();
   const writableEnvironments = useEnvironmentsWithScope(scans, AuthOrchestrationOperateScope);
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const importThreads = useAtomCommand(agentSessionImport, { reportFailure: false });
   const importWarningRef = useRef("");
+  const importDetailsRef = useRef<React.ReactNode>(null);
+  const [progress, setProgress] = useState({ processed: 0, total: 0 });
   const importedThreadCountRef = useRef(0);
   const importedProjectsRef = useRef(new Map<string, ScopedProjectRef>());
   const projectsWithImportedHistoryRef = useRef(new Map<string, ScopedProjectRef>());
@@ -1286,7 +1293,12 @@ function ImportStep({
       importedProjectsRef.current,
     );
     if (projectRef === undefined) {
-      void onDone(undefined, importWarningRef.current, importedThreadCountRef.current);
+      void onDone(
+        undefined,
+        importWarningRef.current,
+        importedThreadCountRef.current,
+        importDetailsRef.current,
+      );
       return;
     }
     setIsImporting(true);
@@ -1304,6 +1316,7 @@ function ImportStep({
           landing,
           importWarningRef.current,
           importedThreadCountRef.current,
+          importDetailsRef.current,
         );
         if (!completed) setIsImporting(false);
       });
@@ -1329,6 +1342,7 @@ function ImportStep({
     }
     setIsImporting(true);
     importWarningRef.current = "";
+    importDetailsRef.current = null;
     importedThreadCountRef.current = 0;
     lastImportSelectionRef.current = selection.map((candidate) => candidate.key);
     const importGeneration = importGenerationRef.current;
@@ -1341,7 +1355,9 @@ function ImportStep({
     let importedThreadCount = 0;
     let skippedThreadCount = 0;
     const refreshEnvironments = new Set<EnvironmentId>();
-    for (const candidate of selection) {
+    const skipped: Array<{ project: string; thread: string; reason: string }> = [];
+    for (const [index, candidate] of selection.entries()) {
+      setProgress({ processed: index, total: selection.length });
       const { environmentId } = candidate;
       if (
         importGeneration !== importGenerationRef.current ||
@@ -1414,6 +1430,9 @@ function ImportStep({
       if (threadImportResult._tag === "Success") {
         importedThreadCount += threadImportResult.value.importedCount;
         skippedThreadCount += threadImportResult.value.skippedCount;
+        for (const entry of threadImportResult.value.skippedThreads ?? []) {
+          skipped.push({ project: candidate.title, ...entry });
+        }
         if (threadImportResult.value.importedCount > 0) {
           projectsWithImportedHistoryRef.current.set(
             candidate.key,
@@ -1429,6 +1448,7 @@ function ImportStep({
         refreshEnvironments.add(environmentId);
       }
     }
+    setProgress({ processed: selection.length, total: selection.length });
     for (const scan of scans) {
       if (refreshEnvironments.has(scan.environmentId)) scan.refresh();
     }
@@ -1444,6 +1464,15 @@ function ImportStep({
       } else {
         importWarningRef.current = "Could not import thread history.";
       }
+    }
+    if (skipped.length > 0) {
+      importDetailsRef.current = (
+        <div className="max-h-52 overflow-y-auto whitespace-pre-line break-words">
+          {skipped
+            .map(({ project, thread, reason }) => `${project} · ${thread}: ${gt(reason)}`)
+            .join("\n\n")}
+        </div>
+      );
     }
     finishAfterImport();
   };
@@ -1593,7 +1622,10 @@ function ImportStep({
           onClick={() => void runImport(selected)}
         >
           {isImporting
-            ? "Importing…"
+            ? gt("Importing… {processed} of {total} projects processed", {
+                processed: progress.processed,
+                total: progress.total,
+              })
             : `Import ${selected.length} ${selected.length === 1 ? "project" : "projects"}`}
         </Button>
       </div>
