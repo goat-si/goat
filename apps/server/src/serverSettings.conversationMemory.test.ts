@@ -19,33 +19,31 @@ const dependencies = Layer.mergeAll(
 
 const settingsLayer = Settings.layer.pipe(Layer.provide(Secrets.layer));
 
-for (const replacement of ["missing", "legacy"] as const) {
-  it.effect(
-    `a paused environment stays paused across a restart with a ${replacement} settings file`,
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const sql = yield* SqlClient.SqlClient;
-        const config = yield* Config.ServerConfig;
-        yield* Effect.gen(function* () {
-          const settings = yield* Settings.ServerSettingsService;
-          expect((yield* settings.getSettings).conversationMemoryEnabled).toBe(true);
-          yield* settings.updateSettings({ conversationMemoryEnabled: false });
-          expect(yield* readConversationMemoryEnabled(sql)).toBe(false);
-        }).pipe(Effect.provide(Layer.fresh(settingsLayer)));
-        if (replacement === "missing") yield* fs.remove(config.settingsPath);
-        else yield* fs.writeFileString(config.settingsPath, "{}");
-        yield* Effect.gen(function* () {
-          const settings = yield* Settings.ServerSettingsService;
-          expect((yield* settings.getSettings).conversationMemoryEnabled).toBe(false);
-          const policy = yield* Settings.MemoryProviderCommittedPolicy;
-          expect((yield* policy.read).enableAgentMemoryAccess).toBe(false);
-          yield* settings.updateSettings({ conversationMemoryEnabled: true });
-          expect(yield* readConversationMemoryEnabled(sql)).toBe(true);
-        }).pipe(Effect.provide(Layer.fresh(settingsLayer)));
-      }).pipe(Effect.provide(dependencies)),
-  );
-}
+it.effect.each(["missing", "legacy"] as const)(
+  "a paused environment stays paused across a restart with a %s settings file",
+  (replacement) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const config = yield* Config.ServerConfig;
+      yield* Effect.gen(function* () {
+        const settings = yield* Settings.ServerSettingsService;
+        expect((yield* settings.getSettings).conversationMemoryEnabled).toBe(true);
+        yield* settings.updateSettings({ conversationMemoryEnabled: false });
+        expect(yield* readConversationMemoryEnabled(sql)).toBe(false);
+      }).pipe(Effect.provide(Layer.fresh(settingsLayer)));
+      if (replacement === "missing") yield* fs.remove(config.settingsPath);
+      else yield* fs.writeFileString(config.settingsPath, "{}");
+      yield* Effect.gen(function* () {
+        const settings = yield* Settings.ServerSettingsService;
+        expect((yield* settings.getSettings).conversationMemoryEnabled).toBe(false);
+        const policy = yield* Settings.MemoryProviderCommittedPolicy;
+        expect((yield* policy.read).enableAgentMemoryAccess).toBe(false);
+        yield* settings.updateSettings({ conversationMemoryEnabled: true });
+        expect(yield* readConversationMemoryEnabled(sql)).toBe(true);
+      }).pipe(Effect.provide(Layer.fresh(settingsLayer)));
+    }).pipe(Effect.provide(dependencies)),
+);
 
 it.effect("a failed settings rename rolls back the conversation memory transition", () =>
   Effect.gen(function* () {
