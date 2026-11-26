@@ -231,36 +231,58 @@ export function canRevokeOtherClients(
 export function revokeOthersToast(
   { revokedCount, kept }: AuthOtherClientSessionsRevokeResult,
   { listShown }: { readonly listShown: boolean },
+  gt: (source: string, variables?: Record<string, string | number>) => string,
 ) {
-  const title = revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`;
-  const asker = "Ask someone who can see the authorized clients on this computer";
+  const title =
+    revokedCount === 1
+      ? gt("Revoked 1 other client")
+      : gt("Revoked {count} clients", { count: revokedCount });
   if (kept === undefined)
     return {
       type: "success" as const,
       title,
-      description: `Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. ${listShown ? "Check the list below for" : asker} what is still signed in.`,
+      description: listShown
+        ? gt(
+            "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Check the list below for what is still signed in.",
+          )
+        : gt(
+            "Revoke others may keep sessions signed in with the desktop app's built-in credential and Pen members' sessions. Ask someone who can see the authorized clients on this computer what is still signed in.",
+          ),
     };
-  const parts = [
-    ...(kept.desktop === 0
-      ? []
-      : [
-          `${kept.desktop} ${kept.desktop === 1 ? "session" : "sessions"} signed in with the desktop app's built-in credential`,
-        ]),
-    ...(kept.pen === 0 ? [] : [`${kept.pen} Pen ${kept.pen === 1 ? "session" : "sessions"}`]),
-  ];
+  const desktop =
+    kept.desktop === 0
+      ? null
+      : kept.desktop === 1
+        ? gt("1 session signed in with the desktop app's built-in credential")
+        : gt("{count} sessions signed in with the desktop app's built-in credential", {
+            count: kept.desktop,
+          });
+  const pen =
+    kept.pen === 0
+      ? null
+      : kept.pen === 1
+        ? gt("1 Pen session")
+        : gt("{count} Pen sessions", { count: kept.pen });
   const one = kept.desktop + kept.pen === 1;
   const hint = listShown
     ? one
-      ? "Revoke it below if you do not recognise it."
-      : "Revoke them one by one below if you do not recognise them."
-    : `${asker} to revoke ${one ? "it" : "them"} if you do not recognise ${one ? "it" : "them"}.`;
+      ? gt("Revoke it below if you do not recognise it.")
+      : gt("Revoke them one by one below if you do not recognise them.")
+    : one
+      ? gt(
+          "Ask someone who can see the authorized clients on this computer to revoke it if you do not recognise it.",
+        )
+      : gt(
+          "Ask someone who can see the authorized clients on this computer to revoke them if you do not recognise them.",
+        );
+  const details = desktop && pen ? gt("{desktop} and {pen}", { desktop, pen }) : (desktop ?? pen);
   return {
     type: "success" as const,
     title,
     description:
-      parts.length === 0
-        ? "Other paired clients will need a new pairing link before reconnecting."
-        : `Kept ${parts.join(" and ")}. ${hint}`,
+      details === null
+        ? gt("Other paired clients will need a new pairing link before reconnecting.")
+        : gt("Kept {details}. {hint}", { details, hint }),
   };
 }
 

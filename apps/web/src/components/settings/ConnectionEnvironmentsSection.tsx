@@ -3,7 +3,6 @@ import { useGT } from "gt-react";
 import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
 import { disposableRouteRefusal, isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
-import { sshHostProbeErrorText } from "@goat/client-runtime/state/sshHost";
 import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
 import { desktopOwnsSshHostConfig } from "~/connection/platform";
@@ -174,6 +173,31 @@ const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
 const NO_SSH_RUNTIME_STATUS = Atom.make(null);
 const isSshHostAlias = Schema.is(SshHostAlias);
 const isSshHostProbeError = Schema.is(SshHostProbeError);
+
+function sshHostProbeErrorText(
+  error: typeof SshHostProbeError.Type,
+  port: number,
+  gt: ReturnType<typeof useGT>,
+) {
+  switch (error.reason) {
+    case "unreachable":
+      return gt("Can't reach {host}. Check the address and that SSH is running, then try again.", {
+        host: error.host,
+      });
+    case "connection_refused":
+      return gt(
+        "{host} refused the connection on port {port}. Check the SSH port, then try again.",
+        { host: error.host, port },
+      );
+    case "alias_conflict":
+      return gt("{host} is already used by another SSH host. Pick a different name.", {
+        host: error.host,
+      });
+    case "invalid_request":
+    case "operation_failed":
+      return error.message;
+  }
+}
 
 function sshSetupError(result: SshHostResult, host: string, gt: ReturnType<typeof useGT>) {
   return result.kind === "error"
@@ -898,7 +922,7 @@ export function ConnectionEnvironmentsSection({
     setIsAddingSavedBackend(false);
     const message =
       result._tag === "Failure"
-        ? "Could not forget this host. Check your permissions and try again."
+        ? gt("Could not forget this host. Check your permissions and try again.")
         : sshSetupError(result.value, alias, gt);
     if (message) {
       setSavedBackendError(message);
@@ -914,11 +938,11 @@ export function ConnectionEnvironmentsSection({
   const checkSavedBackendSshTarget = async (target: DesktopSshEnvironmentTarget) => {
     if (sshAddInFlight.current) return;
     if (!ownsSshConfig || primaryEnvironmentId === null) {
-      setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
+      setSavedBackendError(gt("Add new SSH hosts from the machine that runs this environment."));
       return;
     }
     if (!canPreflightSsh) {
-      setSavedBackendError("Manage settings permission is required to check an SSH host.");
+      setSavedBackendError(gt("Manage settings permission is required to check an SSH host."));
       return;
     }
     const generation = ++sshReviewGeneration.current;
@@ -969,8 +993,8 @@ export function ConnectionEnvironmentsSection({
           const error = squashAtomCommandFailure(probe);
           setSavedBackendError(
             isSshHostProbeError(error)
-              ? sshHostProbeErrorText(error, destination.port)
-              : "Could not review this SSH host. Try checking it again.",
+              ? sshHostProbeErrorText(error, destination.port, gt)
+              : gt("Could not review this SSH host. Try checking it again."),
           );
         }
       }
@@ -978,10 +1002,10 @@ export function ConnectionEnvironmentsSection({
       const error = squashAtomCommandFailure(result);
       setSavedBackendError(
         isSshHostProbeError(error)
-          ? sshHostProbeErrorText(error, target.port ?? 22)
+          ? sshHostProbeErrorText(error, target.port ?? 22, gt)
           : error instanceof Error
             ? error.message
-            : "Could not check this SSH host. Try again.",
+            : gt("Could not check this SSH host. Try again."),
       );
     }
     sshAddInFlight.current = false;
@@ -992,7 +1016,7 @@ export function ConnectionEnvironmentsSection({
     if (sshProbe === null || primaryEnvironmentId === null || sshAddInFlight.current) return;
     if (!ownsSshConfig) {
       setSshProbe(null);
-      setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
+      setSavedBackendError(gt("Add new SSH hosts from the machine that runs this environment."));
       return;
     }
     const probe = sshProbe;
@@ -1012,7 +1036,7 @@ export function ConnectionEnvironmentsSection({
       return;
     }
     if (result._tag === "Failure") {
-      setSavedBackendError("Could not approve this host. Try checking it again.");
+      setSavedBackendError(gt("Could not approve this host. Try checking it again."));
       return;
     }
     const message = sshSetupError(result.value, probe.host, gt);
@@ -1276,7 +1300,7 @@ export function ConnectionEnvironmentsSection({
         input: { host: target.alias, stopRuntime: "if_idle" },
       });
       if (result._tag === "Failure") {
-        setForgetError("Could not forget this host. Check your permissions and try again.");
+        setForgetError(gt("Could not forget this host. Check your permissions and try again."));
         return;
       }
       const message = sshSetupError(result.value, target.alias, gt);
@@ -1598,7 +1622,7 @@ export function ConnectionEnvironmentsSection({
         ) : null}
         {!ownsSshConfig ? (
           <p className="text-sm text-muted-foreground">
-            {gt("Add new SSH hosts from the machine that runs this environment.")}
+            {gt(gt("Add new SSH hosts from the machine that runs this environment."))}
           </p>
         ) : null}
         {isCheckingSsh || sshPreflight ? (
