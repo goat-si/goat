@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { EnvironmentId, SourceControlProviderAuth } from "@goat/contracts";
 import { EyeIcon, EyeOffIcon } from "~/components/solar";
 import { useState } from "react";
@@ -49,6 +50,7 @@ export function SourceControlAccountSettings({
   readonly auth: SourceControlProviderAuth;
   readonly onSaved: () => void;
 }) {
+  const gt = useGT();
   const { hosts } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
@@ -120,7 +122,7 @@ export function SourceControlAccountSettings({
                 <span className="text-xs font-medium text-foreground">{group.host}</span>
                 {group.selectable.length === 1 && group.selectable[0] !== undefined ? (
                   <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-                    <span>Signed in as</span>
+                    <span>{gt("Signed in as")}</span>
                     <RedactedLogin revealed={revealed} account={group.selectable[0]} />
                   </p>
                 ) : null}
@@ -134,7 +136,7 @@ export function SourceControlAccountSettings({
             </div>
             {group.selectable.length > 1 ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-xs text-muted-foreground">Account</span>
+                <span className="text-xs text-muted-foreground">{gt("Account")}</span>
                 <div className="w-64 max-w-full">
                   <Select
                     value={pinned}
@@ -205,7 +207,7 @@ export function SourceControlAccountSettings({
                   disabled={saving}
                   onClick={() => void save(group.host, { account: null })}
                 >
-                  Use active login
+                  {gt("Use active login")}
                 </Button>
               </div>
             ) : null}

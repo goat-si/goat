@@ -1,3 +1,4 @@
+import { useGT, useLocale, useMessages } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -9,7 +10,7 @@ import { useContext, useState } from "react";
 import { formatBytes } from "../../lib/formatBytes";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { formatRelativeTimeLabel } from "../../timestampFormat";
+
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -33,6 +34,7 @@ import {
   STORAGE_KIND_LABELS,
   STORAGE_STATE_LABELS,
   storageTotals,
+  storageRelativeTime,
 } from "./DiskUsageSettings.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -46,13 +48,14 @@ const failureText = (failure: unknown) =>
  * person confirms item by item. Machines whose server predates it show nothing here.
  */
 export function DiskUsageSection() {
+  const gt = useGT();
   const { connectedEnvironments } = useSettingsScope();
   const supported = connectedEnvironments.filter(
     (environment) => environment.serverConfig?.environment.capabilities.storageUsage === true,
   );
   if (supported.length === 0) return null;
   return (
-    <SettingsSection id="storage-disk-usage" title="Disk usage">
+    <SettingsSection id="storage-disk-usage" title={gt("Disk usage")}>
       {supported.map((environment) => (
         <EnvironmentDiskUsage
           key={environment.environmentId}
@@ -74,6 +77,9 @@ function EnvironmentDiskUsage(props: {
   readonly environmentId: EnvironmentId;
   readonly label: string | null;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useLocale();
   const target = { environmentId: props.environmentId, input: {} };
   const usage = useAtomValue(serverEnvironment.storageUsage(target));
   const pressure = useAtomValue(serverEnvironment.diskPressure(target));
@@ -101,41 +107,46 @@ function EnvironmentDiskUsage(props: {
   const prefix = props.label === null ? "" : props.label + ": ";
   const totals = report === null ? [] : storageTotals(report.items);
   const removable = report?.items.filter((item) => item.state === "removable") ?? [];
-  const badge = disk.level === null ? null : LEVEL_BADGE[disk.level];
+  const badge = disk?.level == null ? null : LEVEL_BADGE[disk.level];
   return (
     <>
       <SettingsRow
-        title={prefix + "Free space"}
+        title={prefix + gt("Free space")}
         description={
           <span className="flex flex-wrap items-center gap-1.5">
-            {disk.text}
+            {disk
+              ? gt("{free} free of {total} ({percent}%)", {
+                  free: disk.free,
+                  total: disk.total,
+                  percent: disk.percent,
+                })
+              : gt("Free space not reported")}
             {badge !== null && (
               <Badge variant={badge} size="sm">
-                {disk.level === "critical" ? "Almost full" : "Running low"}
+                {disk?.level === "critical" ? gt("Almost full") : gt("Running low")}
               </Badge>
             )}
           </span>
         }
         control={
           <Button variant="outline" size="xs" disabled={scanning} onClick={() => void rescan()}>
-            {scanning ? "Scanning…" : "Scan again"}
+            {scanning ? gt("Scanning…") : gt("Scan again")}
           </Button>
         }
       />
       <SettingsRow
-        title={prefix + "GOAT folders"}
+        title={prefix + gt("GOAT folders")}
         description={
           scanError !== null
-            ? "Could not scan: " + scanError
+            ? gt("Could not scan: {error}", { error: scanError })
             : usage._tag === "Failure"
-              ? "Could not load the last scan."
+              ? gt("Could not load the last scan.")
               : report === null
-                ? "Scanning GOAT's folders…"
-                : "Scanned " +
-                  formatRelativeTimeLabel(report.scannedAt) +
-                  ". " +
-                  formatBytes(removable.reduce((sum, item) => sum + (item.bytes ?? 0), 0)) +
-                  " can be removed."
+                ? gt("Scanning GOAT's folders…")
+                : gt("Scanned {time}. {size} can be removed.", {
+                    time: storageRelativeTime(report.scannedAt, locale),
+                    size: formatBytes(removable.reduce((sum, item) => sum + (item.bytes ?? 0), 0)),
+                  })
         }
         control={
           <Button
@@ -144,7 +155,7 @@ function EnvironmentDiskUsage(props: {
             disabled={report === null || removable.length === 0 || !allowed}
             onClick={() => setCleaning(true)}
           >
-            Clean up…
+            {gt("Clean up…")}
           </Button>
         }
       >
@@ -154,7 +165,7 @@ function EnvironmentDiskUsage(props: {
               {totals.map((total) => (
                 <li key={total.kind} className="contents">
                   <span className="text-muted-foreground">
-                    {total.label} ({total.count})
+                    {m(total.label)} ({total.count})
                   </span>
                   <span className="tabular-nums">{formatBytes(total.bytes)}</span>
                 </li>
@@ -166,7 +177,7 @@ function EnvironmentDiskUsage(props: {
                   <li key={item.id} className="flex min-w-0 items-center gap-2">
                     <span className="min-w-0 flex-1 truncate">{item.label}</span>
                     <span className="shrink-0 text-muted-foreground">
-                      {STORAGE_STATE_LABELS[item.state]}
+                      {m(STORAGE_STATE_LABELS[item.state])}
                     </span>
                     <span className="w-16 shrink-0 text-right tabular-nums">
                       {item.bytes === null ? "–" : formatBytes(item.bytes)}
@@ -203,12 +214,15 @@ function StorageCleanupDialog(props: {
   readonly items: ReadonlyArray<StorageItem>;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const [selected, setSelected] = useState(() => initialSelection(props.items));
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<StorageCleanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const clean = useAtomCommand(serverEnvironment.cleanUpStorageItems, { reportFailure: false });
   const summary = selectionSummary(props.items, selected);
+  const selectedSize = formatBytes(summary.bytes) + (summary.unmeasured > 0 ? "+" : "");
   const toggle = (id: string, on: boolean) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -231,9 +245,10 @@ function StorageCleanupDialog(props: {
       // A request that failed may still have removed the item the server was working on.
       if (!isAtomCommandInterrupted(outcome))
         setError(
-          "The cleanup stopped: " +
-            failureText(squashAtomCommandFailure(outcome)) +
-            ". Items in that request may already be gone, and later ones were not tried. Closing scans again.",
+          gt(
+            "The cleanup stopped: {error}. Items in that request may already be gone, and later ones were not tried. Closing scans again.",
+            { error: failureText(squashAtomCommandFailure(outcome)) },
+          ),
         );
       break;
     }
@@ -245,29 +260,30 @@ function StorageCleanupDialog(props: {
     <Dialog open onOpenChange={(open) => !open && !pending && props.onClose()}>
       <DialogPopup className="max-h-[85dvh] sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Clean up GOAT storage</DialogTitle>
+          <DialogTitle>{gt("Clean up GOAT storage")}</DialogTitle>
           <DialogDescription>
-            Deleting cannot be undone. Worktrees qualify only with no uncommitted changes, every
-            commit on a remote and no thread using them, and each item is checked again right before
-            it goes. GOAT servers share no lock, so a write another GOAT server makes to a checkout
-            during its removal is not protected.
+            {gt(
+              "Deleting cannot be undone. Worktrees qualify only with no uncommitted changes, every commit on a remote and no thread using them, and each item is checked again right before it goes. GOAT servers share no lock, so a write another GOAT server makes to a checkout during its removal is not protected.",
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           {result !== null ? (
             <ul className="flex flex-col gap-1 text-xs">
               <li className="font-medium">
-                Freed {formatBytes(result.freedBytes)}. Every deletion is logged in {result.logPath}
-                .
+                {gt("Freed {size}. Every deletion is logged in {path}.", {
+                  size: formatBytes(result.freedBytes),
+                  path: result.logPath,
+                })}
               </li>
               {result.results.map((entry) => (
                 <li key={entry.id} className="flex gap-2">
                   <span className={entry.outcome === "removed" ? "" : "text-muted-foreground"}>
                     {entry.outcome === "removed"
-                      ? "Removed"
+                      ? gt("Removed")
                       : entry.outcome === "skipped"
-                        ? "Kept"
-                        : "Failed"}
+                        ? gt("Kept")
+                        : gt("Failed")}
                   </span>
                   <span className="min-w-0 flex-1 break-all">{entry.path}</span>
                   {entry.outcome !== "removed" && (
@@ -285,13 +301,13 @@ function StorageCleanupDialog(props: {
             <div className="flex flex-col gap-4 text-xs">
               {kinds.map((kind) => (
                 <section key={kind} className="flex flex-col gap-1">
-                  <h3 className="font-medium text-sm">{STORAGE_KIND_LABELS[kind]}</h3>
+                  <h3 className="font-medium text-sm">{m(STORAGE_KIND_LABELS[kind])}</h3>
                   {props.items
                     .filter((item) => item.kind === kind)
                     .map((item) => (
                       <label key={item.id} className="flex min-w-0 items-start gap-2">
                         <Checkbox
-                          aria-label={"Delete " + item.path}
+                          aria-label={gt("Delete {path}", { path: item.path })}
                           disabled={item.state !== "removable" || pending}
                           checked={item.state === "removable" && selected.has(item.id)}
                           onCheckedChange={(checked) => toggle(item.id, checked === true)}
@@ -299,7 +315,7 @@ function StorageCleanupDialog(props: {
                         <span className="flex min-w-0 flex-1 flex-col">
                           <span className="break-all">{item.path}</span>
                           <span className="text-muted-foreground">
-                            {STORAGE_STATE_LABELS[item.state]} · {item.reason}
+                            {m(STORAGE_STATE_LABELS[item.state])} · {item.reason}
                             {item.detail === undefined ? "" : " · " + item.detail}
                           </span>
                           {confirmationFiles(item).length > 0 && (
@@ -330,11 +346,11 @@ function StorageCleanupDialog(props: {
         </DialogPanel>
         <DialogFooter>
           {result !== null ? (
-            <Button onClick={props.onClose}>Done</Button>
+            <Button onClick={props.onClose}>{gt("Done")}</Button>
           ) : (
             <>
               <Button variant="ghost" disabled={pending} onClick={props.onClose}>
-                Cancel
+                {gt("Cancel")}
               </Button>
               <Button
                 variant="destructive"
@@ -342,13 +358,13 @@ function StorageCleanupDialog(props: {
                 onClick={() => void run()}
               >
                 {pending
-                  ? "Deleting…"
-                  : "Delete " +
-                    summary.count +
-                    (summary.count === 1 ? " item" : " items") +
-                    " · " +
-                    formatBytes(summary.bytes) +
-                    (summary.unmeasured > 0 ? "+" : "")}
+                  ? gt("Deleting…")
+                  : summary.count === 1
+                    ? gt("Delete 1 item · {size}", { size: selectedSize })
+                    : gt("Delete {count} items · {size}", {
+                        count: summary.count,
+                        size: selectedSize,
+                      })}
               </Button>
             </>
           )}

@@ -108,7 +108,9 @@ describe("storage cleanup selection", () => {
     expect(
       diskSummary({ path: "/", availableBytes: 100 * GB, totalBytes: 1000 * GB }, null),
     ).toEqual({
-      text: "100 GB free of 1000 GB (10%)",
+      free: "100 GB",
+      total: "1000 GB",
+      percent: 10,
       level: null,
     });
     expect(
@@ -119,7 +121,7 @@ describe("storage cleanup selection", () => {
         level: "elevated",
         since: "2026-10-25T00:00:00.000Z",
       }),
-    ).toEqual({ text: "40.0 GB free of 1.95 TB (2%)", level: "elevated" });
-    expect(diskSummary(null, null).level).toBeNull();
+    ).toEqual({ free: "40.0 GB", total: "1.95 TB", percent: 2, level: "elevated" });
+    expect(diskSummary(null, null)).toBeNull();
   });
 });
