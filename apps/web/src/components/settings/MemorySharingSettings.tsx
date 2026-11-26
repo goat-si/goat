@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   type EnvironmentId,
@@ -57,6 +58,7 @@ export function MemoryAdministration({
   onSharingRefresh?: () => void;
   sync?: MemorySyncStatus | null;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const { environments } = useEnvironments();
   const connection = Option.getOrNull(usePreparedConnection(environmentId));
@@ -377,7 +379,9 @@ export function MemoryAdministration({
     return (
       <Select value={value} onValueChange={onChange} disabled={busy || pending !== null}>
         <SelectTrigger size="sm" aria-label={label}>
-          <SelectValue placeholder="Choose a device">{value ? name(value) : undefined}</SelectValue>
+          <SelectValue placeholder={gt("Choose a device")}>
+            {value ? name(value) : undefined}
+          </SelectValue>
         </SelectTrigger>
         <SelectPopup>
           {ids.map((e) => (
@@ -580,22 +584,22 @@ export function MemoryAdministration({
               );
             })}
           <SettingsRow
-            title="Add device"
-            description="Choose a connected device that supports memory."
+            title={gt("Add device")}
+            description={gt("Choose a connected device that supports memory.")}
             control={
               <div className="flex flex-wrap gap-2">
                 {picker(
                   device,
                   setDevice,
                   candidates.filter((e) => !knownMembers.has(e.environmentId)),
-                  "Device",
+                  gt("Device"),
                 )}
                 <Button
                   size="sm"
                   disabled={blocked || !device || knownMembers.has(device)}
                   onClick={() => setConfirm("add")}
                 >
-                  Add
+                  {gt("Add")}
                 </Button>
               </div>
             }
@@ -683,10 +687,12 @@ export function MemoryAdministration({
         </SettingsSection>
       ) : null}
       {hub && hub.settings.mode !== "disabled" ? (
-        <SettingsSection title="Original conversations" id="memory-owner-policy">
+        <SettingsSection title={gt("Original conversations")} id="memory-owner-policy">
           <SettingsRow
-            title="Conversation access"
-            description="When a memory points to a conversation on this device, these devices can open the original. Removing a device applies to later requests and to results still on the hub."
+            title={gt("Conversation access")}
+            description={gt(
+              "When a memory points to a conversation on this device, these devices can open the original. Removing a device applies to later requests and to results still on the hub.",
+            )}
           />
           {policy?.desiredRequesterEnvironmentIds.map((id) => (
             <SettingsRow
@@ -719,7 +725,7 @@ export function MemoryAdministration({
               />
             ))}
           <SettingsRow
-            title="Allow device"
+            title={gt("Allow device")}
             description={!canOwner ? "Settings write permission is required." : undefined}
             control={
               <div className="flex gap-2">
@@ -729,7 +735,7 @@ export function MemoryAdministration({
                   candidates.filter(
                     (e) => !policy?.desiredRequesterEnvironmentIds.includes(e.environmentId),
                   ),
-                  "Conversation access device",
+                  gt("Conversation access device"),
                 )}
                 <Button
                   size="sm"
@@ -738,7 +744,7 @@ export function MemoryAdministration({
                   }
                   onClick={() => requester && void saveOwner(requester, true)}
                 >
-                  Allow
+                  {gt("Allow")}
                 </Button>
               </div>
             }

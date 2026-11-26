@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   MemoryOperationId,
@@ -33,6 +34,7 @@ export function MemoryScopeSettings({
   bindingControls?: boolean;
   onChange: (selection: MemoryScopeSelection | null) => void;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const projects = useProjects().filter((p) => p.environmentId === environmentId);
   const [kind, setKind] = useState<MemoryScope["kind"] | null>(null);
@@ -166,13 +168,17 @@ export function MemoryScopeSettings({
           setConfirm(null);
         }}
       >
-        <SelectTrigger aria-label="Memory scope">
-          <SelectValue placeholder="Choose memory scope" />
+        <SelectTrigger aria-label={gt("Memory scope")}>
+          <SelectValue placeholder={gt("Choose memory scope")} />
         </SelectTrigger>
         <SelectPopup>
           {(["user", "project", "thread"] as const).map((value) => (
             <SelectItem key={value} value={value}>
-              {value === "user" ? "All projects" : value === "project" ? "Project" : "Thread"}
+              {value === "user"
+                ? gt("All projects")
+                : value === "project"
+                  ? gt("Project")
+                  : gt("Thread")}
             </SelectItem>
           ))}
         </SelectPopup>
