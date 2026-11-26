@@ -65,9 +65,17 @@ function GoatBotProfileSection() {
     setSeen({ environmentId, refused, hold: nextHold });
   }
   if (!supported) return null;
-  const label = environment.label ?? "this computer";
+  // The primary environment's generic fallback name is English data; show it in the user's language.
+  const label =
+    environment.label == null
+      ? gt("this computer")
+      : environment.label === "This device"
+        ? gt("this device")
+        : environment.label;
   const refusedLine = gt("GOAT on {device} did not accept this device", { device: label });
-  const deniedLine = `GOAT on ${label} did not let this device read the bot's profile`;
+  const deniedLine = gt("GOAT on {device} did not let this device read the bot's profile", {
+    device: label,
+  });
   // A refusal swaps the row out, which drops an open dialog and the profile it was read from.
   return (
     <SettingsSection id="goat-bot-profile" title={gt("Profile")}>
