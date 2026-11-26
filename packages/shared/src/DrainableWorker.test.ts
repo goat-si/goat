@@ -159,4 +159,28 @@ describe("makeDrainableWorker", () => {
       }),
     ),
   );
+
+  it.effect("processes each item in its own trace, not the creating span's", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const traceIds: string[] = [];
+        const span = yield* Effect.makeSpan("owner");
+        const worker = yield* makeDrainableWorker((_: number) =>
+          Effect.currentSpan.pipe(
+            Effect.flatMap((current) => Effect.sync(() => traceIds.push(current.traceId))),
+            Effect.withSpan("item"),
+            Effect.orDie,
+          ),
+        ).pipe(Effect.withParentSpan(span));
+
+        yield* worker.enqueue(1);
+        yield* worker.enqueue(2);
+        yield* worker.drain;
+
+        expect(traceIds).toHaveLength(2);
+        expect(traceIds).not.toContain(span.traceId);
+        expect(traceIds[0]).not.toEqual(traceIds[1]);
+      }),
+    ),
+  );
 });

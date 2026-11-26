@@ -48,7 +48,8 @@ const prepareWorkingDirectory = Effect.fn("server.prepareWorkingDirectory")(func
   return result.original;
 });
 
-const runServerCommand = Effect.fn("server.runServerCommand")(function* (
+// Untraced: the server outlives the command span.
+const runServerCommand = Effect.fnUntraced(function* (
   flags: CliServerFlags,
   options?: {
     readonly startupPresentation?: ServerConfig.StartupPresentation;
@@ -170,9 +171,7 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   );
 });
 
-export const runDefaultServerCommand = Effect.fn("server.runDefaultServerCommand")(function* (
-  flags: CliServerFlags,
-) {
+export const runDefaultServerCommand = Effect.fnUntraced(function* (flags: CliServerFlags) {
   const originalCwd = yield* prepareWorkingDirectory();
   if (Option.isSome(flags.cwd)) {
     const cwd = flags.cwd.value.trim();
