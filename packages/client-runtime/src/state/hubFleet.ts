@@ -152,14 +152,14 @@ export function hubRelayWarnings(
 }
 
 /** "degraded (P5, P6)", "not verified", or "unproven". */
-export function hubParityLabel(parity: HubParityResult | null): string {
+function hubParityLabel(parity: HubParityResult | null): string {
   if (parity === null) return "not verified";
   return parity.failingCheckIds.length === 0
     ? parity.verdict
     : `${parity.verdict} (${parity.failingCheckIds.join(", ")})`;
 }
 
-export function hubVersionLabel(device: HubDevice): string {
+function hubVersionLabel(device: HubDevice): string {
   if (device.version === null)
     return device.slow ? "OpenCodex slow to answer" : "OpenCodex not read";
   return device.versionVerdict === null
@@ -175,7 +175,7 @@ const REACHABILITY_LABEL: Record<HubDevice["reachability"], string | null> = {
 };
 
 /** Null while the device answers. */
-export const hubReachabilityLabel = (device: HubDevice) => REACHABILITY_LABEL[device.reachability];
+const hubReachabilityLabel = (device: HubDevice) => REACHABILITY_LABEL[device.reachability];
 
 /** What a device's row says after its alias and transport. */
 export function hubDeviceFacts(device: HubDevice): ReadonlyArray<string> {

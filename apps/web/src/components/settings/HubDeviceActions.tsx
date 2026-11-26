@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { HubDevice } from "@goat/client-runtime/state/hub-fleet";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
@@ -68,7 +69,12 @@ const OUTCOME_TEXT = {
   waiting: "text-info-foreground",
 } as const;
 
-const OUTCOME_LABEL = { ok: "ok", failed: "failed", deferred: "deferred", waiting: "waiting" };
+const OUTCOME_LABEL = {
+  ok: msg("ok"),
+  failed: msg("failed"),
+  deferred: msg("deferred"),
+  waiting: msg("waiting"),
+};
 
 export function useHubActions(environmentId: EnvironmentId, onDone: () => void) {
   const registry = useContext(RegistryContext);
@@ -119,6 +125,8 @@ export function HubDeviceActionButtons({
   readonly device: HubDevice;
   readonly actions: HubActions;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const [confirming, setConfirming] = useState(false);
   const busy = actions.entry(device.alias)?.status === "running";
   return (
@@ -133,21 +141,26 @@ export function HubDeviceActionButtons({
             action === "leave" ? setConfirming(true) : void actions.run(action, device.alias)
           }
         >
-          {HUB_ACTION_LABEL[action]}
+          {m(HUB_ACTION_LABEL[action])}
         </Button>
       ))}
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {device.alias} from the hub?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {gt("Remove {device} from the hub?", { device: device.alias })}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              GOAT disconnects {device.alias} from this Home and restarts its OpenCodex, then
-              revokes the link here. Its model traffic stops going through the hub, so instances
-              there that use Home need their own sign-in or another route.
+              {gt(
+                "GOAT disconnects {device} from this Home and restarts its OpenCodex, then revokes the link here. Its model traffic stops going through the hub, so instances there that use Home need their own sign-in or another route.",
+                { device: device.alias },
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               variant="destructive"
               onClick={() => {
@@ -155,7 +168,7 @@ export function HubDeviceActionButtons({
                 void actions.run("leave", device.alias);
               }}
             >
-              Disconnect and remove
+              {gt("Disconnect and remove")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -172,20 +185,25 @@ export function HubActionResult({
   readonly entry: HubActionEntry | undefined;
   readonly actions: HubActions;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   if (entry === undefined) return null;
-  const title = `${HUB_ACTION_LABEL[entry.action]} ${entry.alias}`;
+  const title = gt("{action} {device}", {
+    action: m(HUB_ACTION_LABEL[entry.action]),
+    device: entry.alias,
+  });
   if (entry.status === "running")
     return (
       <div role="status" className="rounded-md bg-muted/40 px-3 py-2 text-xs">
         <p className="font-medium">{title}…</p>
-        <p className="text-muted-foreground">{HUB_ACTION_PLAN[entry.action]}</p>
+        <p className="text-muted-foreground">{m(HUB_ACTION_PLAN[entry.action])}</p>
       </div>
     );
   if (entry.status === "error")
     return (
       <div className="space-y-1.5 rounded-md bg-muted/40 px-3 py-2 text-xs">
         <p role="alert" className="text-destructive">
-          {title} stopped: {entry.error}
+          {gt("{action} stopped: {error}", { action: title, error: entry.error ?? "" })}
         </p>
         {entry.decisionId === undefined ? null : (
           <Button
@@ -194,7 +212,7 @@ export function HubActionResult({
             disabled={!actions.allowed}
             onClick={() => void actions.run(entry.action, entry.alias)}
           >
-            Start again
+            {gt("Start again")}
           </Button>
         )}
       </div>
@@ -203,23 +221,23 @@ export function HubActionResult({
   const decisionId = result.state === "needs_human" ? result.decisionId : undefined;
   return (
     <section
-      aria-label={`${title} result`}
+      aria-label={gt("{action} result", { action: title })}
       className="space-y-1.5 rounded-md bg-muted/40 px-3 py-2 text-xs"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{title}</span>
         <Badge size="sm" variant={STATE_BADGE[result.state]}>
-          {HUB_STATE_LABEL[result.state]}
+          {m(HUB_STATE_LABEL[result.state])}
         </Badge>
       </div>
       <p>{result.message}</p>
       {result.steps.length === 0 && result.parity === undefined ? null : (
         <ol className="space-y-0.5">
-          {hubStepRows(result, entry.decisionId).map((row) => (
+          {hubStepRows(result, entry.decisionId, m).map((row) => (
             <li key={row.key} className="flex flex-wrap gap-x-2">
-              <span className="font-medium">{row.label}</span>
+              <span className="font-medium">{m(row.label)}</span>
               <span className={cn("font-mono", OUTCOME_TEXT[row.outcome])}>
-                {OUTCOME_LABEL[row.outcome]}
+                {m(OUTCOME_LABEL[row.outcome])}
               </span>
               {row.detail === undefined ? null : (
                 <span className="text-muted-foreground wrap-anywhere">{row.detail}</span>
@@ -231,12 +249,13 @@ export function HubActionResult({
       {decisionId === undefined ? null : (
         <div className="space-y-1.5">
           <p className="text-muted-foreground">
-            A person who can change this hub's settings answers it in the decision inbox. Then
-            continue here.
+            {gt(
+              "A person who can change this hub's settings answers it in the decision inbox. Then continue here.",
+            )}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button size="xs" variant="outline" render={<Link to="/settings/decision-inbox" />}>
-              Open decision
+              {gt("Open decision")}
             </Button>
             <Button
               size="xs"
@@ -244,7 +263,7 @@ export function HubActionResult({
               disabled={!actions.allowed}
               onClick={() => void actions.run(entry.action, entry.alias, decisionId)}
             >
-              Continue
+              {gt("Continue")}
             </Button>
           </div>
         </div>
@@ -263,6 +282,7 @@ export function AddHubDevice({
   readonly suggestions: ReadonlyArray<string>;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
   const [alias, setAlias] = useState("");
   const [submitted, setSubmitted] = useState<string | null>(null);
   const inputId = useId();
@@ -282,7 +302,7 @@ export function AddHubDevice({
       >
         <div className="min-w-48 flex-1 space-y-1">
           <label htmlFor={inputId} className="text-xs text-muted-foreground">
-            SSH alias of the device
+            {gt("SSH alias of the device")}
           </label>
           <Input
             id={inputId}
@@ -298,16 +318,16 @@ export function AddHubDevice({
           </datalist>
         </div>
         <Button type="submit" size="sm" disabled={trimmed === "" || running || !actions.allowed}>
-          Join
+          {gt("Join")}
         </Button>
         <Button type="button" size="sm" variant="ghost" onClick={onClose}>
-          Close
+          {gt("Close")}
         </Button>
       </form>
       <p className="text-xs text-muted-foreground">
-        The device needs OpenCodex and a direct SSH alias on this machine. GOAT checks its host key
-        against the key it pinned for that alias before linking. Linking alone does not verify Codex
-        there; the device shows Ready after a request through Home succeeds.
+        {gt(
+          "The device needs OpenCodex and a direct SSH alias on this machine. GOAT checks its host key against the key it pinned for that alias before linking. Linking alone does not verify Codex there; the device shows Ready after a request through Home succeeds.",
+        )}
       </p>
       {submitted === null ? null : (
         <HubActionResult entry={actions.entry(submitted)} actions={actions} />

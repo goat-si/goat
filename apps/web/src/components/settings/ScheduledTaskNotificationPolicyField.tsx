@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import type { ReactNode } from "react";
 import { Label } from "../ui/label";
 import { Button } from "../ui/button";
@@ -29,9 +30,9 @@ export function Field({
 }
 
 const choices = [
-  { value: "all_runs", label: "All runs" },
-  { value: "failed_runs_only", label: "Failed runs only" },
-  { value: "important_updates", label: "Important updates" },
+  { value: "all_runs", label: msg("All runs") },
+  { value: "failed_runs_only", label: msg("Failed runs only") },
+  { value: "important_updates", label: msg("Important updates") },
 ];
 export function ScheduledTaskNotificationPolicyField({
   draft,
@@ -40,9 +41,11 @@ export function ScheduledTaskNotificationPolicyField({
   draft: DraftState;
   onChange: (patch: Partial<DraftState>) => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const known = choices.find((choice) => choice.value === draft.notificationPolicy);
   return (
-    <Field label="Notifications" htmlFor="scheduled-task-notifications">
+    <Field label={gt("Notifications")} htmlFor="scheduled-task-notifications">
       <Select
         value={draft.notificationPolicy}
         onValueChange={(value) => {
@@ -50,7 +53,7 @@ export function ScheduledTaskNotificationPolicyField({
         }}
       >
         <SelectTrigger id="scheduled-task-notifications" size="sm">
-          <SelectValue>{known?.label ?? "Unsupported policy (kept)"}</SelectValue>
+          <SelectValue>{known ? m(known.label) : gt("Unsupported policy (kept)")}</SelectValue>
         </SelectTrigger>
         <SelectPopup>
           {choices
@@ -61,14 +64,16 @@ export function ScheduledTaskNotificationPolicyField({
             )
             .map((choice) => (
               <SelectItem key={choice.value} value={choice.value}>
-                {choice.label}
+                {m(choice.label)}
               </SelectItem>
             ))}
         </SelectPopup>
       </Select>
       {known === undefined ? (
         <p className="text-sm text-muted-foreground">
-          This environment uses a newer policy. It stays saved unless you choose another option.
+          {gt(
+            "This environment uses a newer policy. It stays saved unless you choose another option.",
+          )}
         </p>
       ) : null}
       {draft.threadId && draft.threadMode !== "new_thread" ? (
@@ -86,12 +91,14 @@ export function ScheduledTaskNotificationPolicyField({
             });
           }}
         >
-          Run in new threads
+          {gt("Run in new threads")}
         </Button>
       ) : null}
       {draft.notificationPolicyReset ? (
         <p role="status" className="text-sm text-muted-foreground">
-          Notifications changed to All runs because Important updates requires an existing thread.
+          {gt(
+            "Notifications changed to All runs because Important updates requires an existing thread.",
+          )}
         </p>
       ) : null}
     </Field>

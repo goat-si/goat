@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { webhookDeliveryLabel } from "./scheduledTasksSettings.logic";
 import type {
   EnvironmentId,
@@ -46,6 +47,7 @@ export function WebhookDeliveriesDialog({
   readonly task: Pick<ScheduledTask, "id" | "title" | "routineMode">;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
   const deliveriesQuery = useEnvironmentQuery(
     serverEnvironment.scheduledTaskWebhookDeliveries({
       environmentId,
@@ -76,14 +78,14 @@ export function WebhookDeliveriesDialog({
     >
       <DialogPopup className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Deliveries · {task.title}</DialogTitle>
-          <DialogDescription>Recent requests to this task's webhook URL.</DialogDescription>
+          <DialogTitle>{gt("Deliveries · {title}", { title: task.title })}</DialogTitle>
+          <DialogDescription>{gt("Recent requests to this task's webhook URL.")}</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {error !== null ? null : selectedId !== null && selected === null ? (
             <p className="text-sm text-muted-foreground" role="status">
-              Loading delivery…
+              {gt("Loading delivery…")}
             </p>
           ) : selected ? (
             <div className="space-y-4">
@@ -93,13 +95,13 @@ export function WebhookDeliveriesDialog({
                     selected.pendingWindow ? "coalesced" : selected.outcome,
                   )}
                 >
-                  {webhookDeliveryLabel(selected, task.routineMode)}
+                  {webhookDeliveryLabel(selected, task.routineMode, gt)}
                 </Badge>
                 <span>
                   {selected.method} · <ScheduledRelativeLabel value={selected.receivedAt} />
                 </span>
                 {selected.signatureVerified ? (
-                  <span className="text-muted-foreground">Signature verified</span>
+                  <span className="text-muted-foreground">{gt("Signature verified")}</span>
                 ) : null}
               </div>
               {selected.error ? (
@@ -116,40 +118,42 @@ export function WebhookDeliveriesDialog({
               <DeliveryBlock
                 title={
                   selected.pendingWindow
-                    ? "Scheduled run"
+                    ? gt("Scheduled run")
                     : task.routineMode === "work" && selected.firingAccepted !== true
-                      ? "Webhook prompt"
-                      : "Prompt sent to the agent"
+                      ? gt("Webhook prompt")
+                      : gt("Prompt sent to the agent")
                 }
               >
                 {selected.renderedPrompt ??
                   (selected.pendingWindow
-                    ? "Run scheduled when the window closes; no run started yet."
-                    : "No run was started for this request.")}
+                    ? gt("Run scheduled when the window closes; no run started yet.")
+                    : gt("No run was started for this request."))}
               </DeliveryBlock>
               {selected.missingFields.length > 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Empty placeholders: {selected.missingFields.join(", ")}
+                  {gt("Empty placeholders: {fields}", {
+                    fields: selected.missingFields.join(", "),
+                  })}
                 </p>
               ) : null}
-              <DeliveryBlock title="Headers">
+              <DeliveryBlock title={gt("Headers")}>
                 {Object.entries(selected.headers)
                   .map(([name, value]) => `${name}: ${value}`)
                   .join("\n")}
               </DeliveryBlock>
               {selected.query ? (
-                <DeliveryBlock title="Query">{selected.query}</DeliveryBlock>
+                <DeliveryBlock title={gt("Query")}>{selected.query}</DeliveryBlock>
               ) : null}
-              <DeliveryBlock title={selected.bodyTruncated ? "Body (truncated)" : "Body"}>
+              <DeliveryBlock title={selected.bodyTruncated ? gt("Body (truncated)") : gt("Body")}>
                 {selected.body || "(empty)"}
               </DeliveryBlock>
             </div>
           ) : selectedId !== null ? null : deliveries === null ? (
             <p className="text-sm text-muted-foreground" role="status">
-              Loading deliveries…
+              {gt("Loading deliveries…")}
             </p>
           ) : deliveries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No requests yet.</p>
+            <p className="text-sm text-muted-foreground">{gt("No requests yet.")}</p>
           ) : (
             <ul className="divide-y divide-border">
               {deliveries.map((delivery) => (
@@ -164,7 +168,7 @@ export function WebhookDeliveriesDialog({
                         delivery.pendingWindow ? "coalesced" : delivery.outcome,
                       )}
                     >
-                      {webhookDeliveryLabel(delivery, task.routineMode)}
+                      {webhookDeliveryLabel(delivery, task.routineMode, gt)}
                     </Badge>
                     <span>{delivery.method}</span>
                     <span className="text-muted-foreground">
@@ -176,8 +180,11 @@ export function WebhookDeliveriesDialog({
                     ) : null}
                     {delivery.missingFields.length > 0 ? (
                       <span className="text-muted-foreground">
-                        {delivery.missingFields.length} empty placeholder
-                        {delivery.missingFields.length === 1 ? "" : "s"}
+                        {delivery.missingFields.length === 1
+                          ? gt("1 empty placeholder")
+                          : gt("{count} empty placeholders", {
+                              count: delivery.missingFields.length,
+                            })}
                       </span>
                     ) : null}
                   </button>
@@ -189,7 +196,7 @@ export function WebhookDeliveriesDialog({
         <DialogFooter>
           {selectedId !== null ? (
             <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>
-              Back
+              {gt("Back")}
             </Button>
           ) : (
             <Button
@@ -198,10 +205,10 @@ export function WebhookDeliveriesDialog({
               disabled={deliveriesQuery.isPending}
               onClick={deliveriesQuery.refresh}
             >
-              Refresh
+              {gt("Refresh")}
             </Button>
           )}
-          <DialogClose render={<Button size="sm" />}>Done</DialogClose>
+          <DialogClose render={<Button size="sm" />}>{gt("Done")}</DialogClose>
         </DialogFooter>
       </DialogPopup>
     </Dialog>

@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import zh from "../../i18n/translations/zh.json";
 import { RegistryContext } from "@effect/atom-react";
 import { EnvironmentId, type HubDeviceRoutesResult } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -486,4 +488,24 @@ it("an answer to an earlier edit that arrives after another change started waiti
   await expect.poll(() => state.list.mock.calls.length).toBe(3);
   await expect.element(screen.getByRole("button", { name: "Continue" })).toBeVisible();
   registry.dispose();
+});
+
+it("renders SSH route actions with a localized accessible name", async () => {
+  state.list.mockReset().mockResolvedValue(listed(["mini", "pen-mini"]));
+  const registry = AtomRegistry.make();
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh }}>
+      <RegistryContext value={registry}>
+        <HubDeviceRoutes
+          environmentId={EnvironmentId.make("hub-zh")}
+          alias="mini"
+          direction="hub-initiated"
+        />
+      </RegistryContext>
+    </GTProvider>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "路由" }));
+  await expect.element(screen.getByRole("button", { name: "上移 pen-mini" })).toBeEnabled();
+  await expect.element(screen.getByRole("button", { name: "移除 mini" })).toBeDisabled();
 });

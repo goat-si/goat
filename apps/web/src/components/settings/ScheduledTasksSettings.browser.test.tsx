@@ -2,6 +2,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import {
   DEFAULT_UNIFIED_SETTINGS,
+  DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -15,6 +16,10 @@ import { page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { act, render } from "../../../test/render";
 import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
+import { WebhookEndpointField } from "./WebhookEndpointField";
+import { __setClientSettingsForTests, persistClientSettingsPatch } from "../../hooks/useSettings";
+import { I18nProvider } from "../../i18n/I18nProvider";
+import { startI18n, whenLocaleReady } from "../../i18n/runtime";
 
 const environmentId = EnvironmentId.make("laptop");
 const projectId = ProjectId.make("project");
@@ -163,6 +168,34 @@ vi.mock(import("../../hooks/useSettings"), async (original) => ({
 }));
 
 describe("ScheduledTasksSettings", () => {
+  it("names the URL being regenerated when switching the webhook editor language", async () => {
+    setup();
+    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    startI18n();
+    const endpoint = { path: "/webhook/example", url: null, hasSecret: false };
+    await using screen = await render(
+      <I18nProvider>
+        <WebhookEndpointField
+          environmentId={environmentId}
+          task={{ id: task.id, webhook: endpoint }}
+        />
+      </I18nProvider>,
+    );
+    await expect
+      .element(screen.getByRole("button", { name: "Regenerate webhook URL" }))
+      .toBeVisible();
+    try {
+      await persistClientSettingsPatch({ language: "zh" }, async () => {});
+      await whenLocaleReady();
+      await expect
+        .element(screen.getByRole("button", { name: "重新生成 Webhook 地址" }))
+        .toBeVisible();
+    } finally {
+      await persistClientSettingsPatch({ language: "en" }, async () => {});
+      await whenLocaleReady();
+    }
+  });
+
   it("creates on a permitted secondary and reacts to permission changes", async () => {
     setup();
     state.secondary = true;

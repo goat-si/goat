@@ -8,23 +8,40 @@ export function scheduleLabel(
   timeZone?: string,
   runAt?: string | null,
   formatTime: (value: string) => string = (value) => value,
+  labels?: {
+    readonly webhook: string;
+    readonly minutes: (count: number) => string;
+    readonly seconds: (count: number) => string;
+    readonly daily: string;
+    readonly weekdays: string;
+    readonly locale: string;
+    readonly at: (days: string, time: string) => string;
+  },
 ): string {
-  if (schedule.type === "webhook") return "On webhook";
+  if (schedule.type === "webhook") return labels?.webhook ?? "On webhook";
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
-    return Number.isInteger(minutes)
-      ? `Every ${minutes} min`
-      : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
+    if (Number.isInteger(minutes)) return labels?.minutes(minutes) ?? `Every ${minutes} min`;
+    const seconds = Math.round(schedule.everyMs / 1000);
+    return labels?.seconds(seconds) ?? `Every ${seconds} sec`;
   }
   const weekdays = schedule.weekdays ?? [];
+  const weekday = labels
+    ? new Intl.DateTimeFormat(labels.locale, { weekday: "short", timeZone: "UTC" })
+    : null;
   const days =
     weekdays.length === 0
-      ? "Daily"
+      ? (labels?.daily ?? "Daily")
       : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
-        ? "Weekdays"
-        : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
-  const zone = scheduleTimeZoneLabel(timeZone, runAt);
-  return `${days} at ${formatTime(schedule.timeOfDay)}${zone === undefined ? "" : ` ${zone}`}`;
+        ? (labels?.weekdays ?? "Weekdays")
+        : labels && weekday
+          ? new Intl.ListFormat(labels.locale, { type: "unit", style: "short" }).format(
+              weekdays.map((day) => weekday.format(Date.UTC(2023, 0, 1 + day))),
+            )
+          : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
+  const zone = scheduleTimeZoneLabel(timeZone, runAt, labels?.locale);
+  const time = [formatTime(schedule.timeOfDay), zone].filter(Boolean).join(" ");
+  return labels?.at(days, time) ?? `${days} at ${time}`;
 }
 
 /** Label for a positive delay until an upcoming run, such as "in 3h". */

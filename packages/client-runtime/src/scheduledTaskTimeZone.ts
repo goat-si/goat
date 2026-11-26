@@ -7,11 +7,12 @@ import * as DateTime from "effect/DateTime";
 export function scheduleTimeZoneLabel(
   timeZone: string | undefined,
   runAt?: string | null,
+  locale = "en-US",
 ): string | undefined {
   if (timeZone === undefined) return undefined;
   if (timeZone === "Etc/UTC" || timeZone === "UTC" || timeZone === "GMT") return "UTC";
   try {
-    return new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat(locale, {
       timeZone,
       timeZoneName: runAt ? "short" : "shortGeneric",
     })

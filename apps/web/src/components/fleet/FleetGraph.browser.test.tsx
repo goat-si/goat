@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import chinese from "../../i18n/translations/zh.json";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -37,18 +39,20 @@ function measured() {
   });
 }
 
-async function renderDemo() {
+async function renderDemo(locale: "en" | "zh" = "en") {
   const demo = fleetHeatDemo();
   await act(async () => {
     root.render(
-      <FleetGraph
-        snapshot={demo.snapshot}
-        connections={demo.connections}
-        currentMachineId={demo.currentMachineId}
-        selectedMachineId={null}
-        onSelectMachine={() => {}}
-        heat={demo.heat}
-      />,
+      <GTProvider locale={locale} translations={{ en: {}, zh: chinese }}>
+        <FleetGraph
+          snapshot={demo.snapshot}
+          connections={demo.connections}
+          currentMachineId={demo.currentMachineId}
+          selectedMachineId={null}
+          onSelectMachine={() => {}}
+          heat={demo.heat}
+        />
+      </GTProvider>,
     );
   });
   await act(measured);
@@ -92,6 +96,19 @@ describe("FleetGraph heat", () => {
     expect(node("clisu-oracle").querySelector("title")!.textContent).toContain("Metrics not live");
     expect(node("box").dataset.heat).toBe("normal");
     expect(node("box").getAttribute("aria-label")).not.toContain("CPU");
+  });
+
+  it("describes machine work and heat in Chinese in both the tooltip and accessible name", async () => {
+    const node = await renderDemo("zh");
+    const machine = node("macmini");
+    for (const text of [
+      machine.getAttribute("aria-label"),
+      machine.querySelector("title")?.textContent,
+    ]) {
+      expect(text).toContain("2 个运行中");
+      expect(text).toContain("每核负载 1.7");
+    }
+    expect(node("lidge-ai").getAttribute("aria-label")).toContain("Codex 每周 82%");
   });
 
   it("keeps the tier color but drops fire and motion under reduced motion", async () => {
