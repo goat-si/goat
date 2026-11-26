@@ -193,6 +193,30 @@ it("falls back to text when a notebook declares a blank or non-ASCII language na
   }
 });
 
+it("shows notebook outputs that carry only text/markdown while preferring text/plain", () => {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      nbformat: 4,
+      cells: [
+        {
+          cell_type: "code",
+          source: "",
+          outputs: [
+            { output_type: "display_data", data: { "text/markdown": ["| a |\n", "|---|"] } },
+            { data: { "text/plain": "plain wins", "text/markdown": "**markdown**" } },
+          ],
+        },
+      ],
+    }),
+  );
+  const result = openNotebook(bytes.buffer as ArrayBuffer);
+  if (result.type !== "notebook") throw new Error("Expected notebook");
+  expect(result.cells[0]?.outputs).toEqual([
+    { kind: "text", text: "| a |\n|---|" },
+    { kind: "text", text: "plain wins" },
+  ]);
+});
+
 it("shows notebook error outputs saved without a traceback", () => {
   const bytes = new TextEncoder().encode(
     JSON.stringify({

@@ -512,7 +512,9 @@ export function openNotebook(bytes: ArrayBuffer): OfficeWorkerResult {
           const html = notebookText(data["text/html"]);
           if (html.trim() && htmlImagesFit(html)) return { kind: "html" as const, text: html };
           const plain = terminalOutputPlainText(
-            notebookText(output.text ?? data["text/plain"] ?? output.traceback),
+            notebookText(
+              output.text ?? data["text/plain"] ?? data["text/markdown"] ?? output.traceback,
+            ),
           );
           const text =
             output.output_type === "stream" && /\r(?!\n)/.test(plain)
