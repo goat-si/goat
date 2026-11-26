@@ -32,3 +32,15 @@ Read the evidence and the ticket together:
 | Ticket uses the new code without that revision in the evidence | Report as unsupported, even though the value matches.                           |
 
 This is a controlled model replay. It measures how a model uses supplied recall results. The runner invokes recall at known index boundaries and supplies those results explicitly. It does not measure whether a GOAT provider would autonomously call recall or when a production indexer would finish. Keep unqualified runs, invalid tickets and abstentions visible when comparing models.
+
+## Ask a real GOAT thread
+
+To observe a provider answering an everyday project question, run with an installed, authenticated provider instance and an available model. For example:
+
+```sh
+node apps/server/scripts/evaluate-memory-natural.ts --provider codex --model gpt-6-luna
+```
+
+This opt-in run makes three live provider turns. It starts a temporary local GOAT with an empty project and a new memory database. A reader asks “How do I install this project's dependencies?” before and after a user in a second thread changes the package manager from npm to pnpm. Both reader turns use the same prompt. The fixture persists the edit against the original head with the writer's message as evidence, so the measurement focuses on what the reader receives and answers. It does not force a recall call, supply recall results, or wait for indexing. In supervised mode the fixture can confirm an identifiable GOAT recall call once. Other tool approvals end the run with an error.
+
+The JSON includes both answers, the expected revision on each turn, revisions delivered automatically (`automatic`), revisions returned by active recall (`recalled`), recall tool calls and receipt event counts. These observations are scoped to the reader's exact run and the fixture memory. A correct answer with the current revision in either channel is `grounded-current`, including a turn with zero lookups. A correct answer with no recorded current revision is `unsupported-current` or, if evidence is incomplete, `evidence-incomplete`. A follow-up that still says npm is `stale`. The raw answer is retained even when it is not a single install command. Only compare qualified rows when asking how an agent that demonstrably had the original revision responds to the edit.
