@@ -524,6 +524,27 @@ it.effect("counts only new threads when re-importing cached and recovered transc
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
+it.effect("bounds skipped detail count and strings while counting every skip", () =>
+  Effect.gen(function* () {
+    const importer = yield* makeImporter(
+      Array.from({ length: 25 }, () => ({
+        _tag: "Skipped" as const,
+        thread: "t".repeat(500),
+        reason: "r".repeat(500),
+      })),
+    );
+    const result = yield* importer.run;
+    expect(result.skippedCount).toBe(25);
+    expect(result.skippedThreads).toHaveLength(20);
+    expect(
+      result.skippedThreads?.every(
+        ({ thread, reason }) => thread.length <= 100 && reason.length <= 200,
+      ),
+    ).toBe(true);
+    expect(result).toMatchObject({ skippedDetailsOmitted: 5 });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
 it.effect("does not certify new native history after a partial import retry", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

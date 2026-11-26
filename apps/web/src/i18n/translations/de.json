@@ -283,6 +283,8 @@
   "5ad8edcecdc5f4ca": "Verbinden Sie eine Umgebung, um Ihr Smartphone zu koppeln.",
   "dcc867bd5a952f40": "Der QR-Code für das Smartphone benötigt Zugriff auf die Netzwerkeinstellungen dieses Geräts. Erstellen Sie unter „Autorisierte Clients“ einen Link.",
   "76dd7bb3d869cba4": "Scannen Sie einen QR-Code mit Ihrem Smartphone, um die GOAT-App zu koppeln.",
+  "bab6c6086011b5f2": "Eine Präferenz aus dieser Unterhaltung wurde gespeichert",
+  "902890ab306f0338": "Ansehen",
   "e7da5d0a1531c174": "Flottendiagramm",
   "9af7459395572c84": "Wähle einen Rechner aus, um nur dessen Threads anzuzeigen.",
   "e8251ed279135275": "Aktiv",
@@ -2734,5 +2736,6 @@
   "ddf27fad1b4a1c0e": "Zum Überprüfen eines SSH-Hosts ist die Berechtigung „Einstellungen verwalten“ erforderlich.",
   "43fa6ec9c6ecca7d": "Dieser SSH-Host konnte nicht überprüft werden. Versuchen Sie, ihn erneut zu überprüfen.",
   "45d9700e2e542245": "Dieser SSH-Host konnte nicht überprüft werden. Versuchen Sie es erneut.",
-  "1fc85fcf9dbe17bf": "Dieser Host konnte nicht genehmigt werden. Versuchen Sie, ihn erneut zu überprüfen."
+  "1fc85fcf9dbe17bf": "Dieser Host konnte nicht genehmigt werden. Versuchen Sie, ihn erneut zu überprüfen.",
+  "07246e498374788d": "Und {count} weitere"
 }

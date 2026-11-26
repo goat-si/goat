@@ -283,6 +283,8 @@
   "5ad8edcecdc5f4ca": "Connect an environment to pair your phone.",
   "dcc867bd5a952f40": "Phone QR needs access to this device’s network settings. Create a link under Authorized clients.",
   "76dd7bb3d869cba4": "Scan a QR with your phone to pair the GOAT app.",
+  "bab6c6086011b5f2": "Preference saved from this conversation",
+  "902890ab306f0338": "View",
   "e7da5d0a1531c174": "Fleet graph",
   "9af7459395572c84": "Select a machine to show only its threads.",
   "e8251ed279135275": "Running",
@@ -2734,5 +2736,6 @@
   "ddf27fad1b4a1c0e": "Manage settings permission is required to check an SSH host.",
   "43fa6ec9c6ecca7d": "Could not review this SSH host. Try checking it again.",
   "45d9700e2e542245": "Could not check this SSH host. Try again.",
-  "1fc85fcf9dbe17bf": "Could not approve this host. Try checking it again."
+  "1fc85fcf9dbe17bf": "Could not approve this host. Try checking it again.",
+  "07246e498374788d": "And {count} more"
 }

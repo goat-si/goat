@@ -283,6 +283,8 @@
   "5ad8edcecdc5f4ca": "Conecta un entorno para emparejar tu teléfono.",
   "dcc867bd5a952f40": "El código QR del teléfono requiere acceso a los ajustes de red de este dispositivo. Crea un enlace en «Clientes autorizados».",
   "76dd7bb3d869cba4": "Escanea un código QR con tu teléfono para emparejar la aplicación GOAT.",
+  "bab6c6086011b5f2": "Se ha guardado una preferencia de esta conversación",
+  "902890ab306f0338": "Ver",
   "e7da5d0a1531c174": "Gráfico de la flota",
   "9af7459395572c84": "Selecciona un equipo para ver solo sus conversaciones.",
   "e8251ed279135275": "En ejecución",
@@ -2734,5 +2736,6 @@
   "a865ba87ea6e7fe1": "No se puede acceder a {host}. Compruebe la dirección y que SSH esté en ejecución, y luego inténtelo de nuevo.",
   "437204eec77a2d2a": "{host} ha rechazado la conexión en el puerto {port}. Compruebe el puerto SSH y vuelva a intentarlo.",
   "a02601ee26430ec4": "{host} ya está siendo utilizado por otro host SSH. Elija un nombre diferente.",
-  "9117614b480952cd": "No se ha podido olvidar este host. Compruebe sus permisos e inténtelo de nuevo."
+  "9117614b480952cd": "No se ha podido olvidar este host. Compruebe sus permisos e inténtelo de nuevo.",
+  "07246e498374788d": "Y {count} más"
 }

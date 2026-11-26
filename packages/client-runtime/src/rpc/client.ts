@@ -404,6 +404,8 @@ export const requestInSession = Effect.fn("EnvironmentRpc.request")(function* <
       ((tag === WS_METHODS.memoryHubDiagnostics || tag === WS_METHODS.memoryHubReconcile) &&
         config.environment.capabilities.memory?.hubDiagnostics !== true) ||
       (tag === WS_METHODS.memoryMove && memoryCapabilities?.scopeMoves !== true) ||
+      (tag === WS_METHODS.memoryThreadPreference &&
+        memoryCapabilities?.savedThreadPreference !== true) ||
       (tag.startsWith("memory.suggestions.") && memoryCapabilities?.saveSuggestions !== true) ||
       (tag === WS_METHODS.memoryImportProvider &&
         config.environment.capabilities.memory?.importProvider !== true) ||
@@ -920,6 +922,7 @@ export type MemoryBodyRpcTag =
   | typeof WS_METHODS.memoryList
   | typeof WS_METHODS.memorySearch
   | typeof WS_METHODS.memoryRead
+  | typeof WS_METHODS.memoryThreadPreference
   | typeof WS_METHODS.memoryTurnInspect
   | typeof WS_METHODS.memoryHistory
   | typeof WS_METHODS.memoryReadSource

@@ -283,6 +283,8 @@
   "5ad8edcecdc5f4ca": "Conecte um ambiente para parear seu telefone.",
   "dcc867bd5a952f40": "O código QR para o telefone precisa de acesso às configurações de rede deste dispositivo. Crie um link em “Clientes autorizados”.",
   "76dd7bb3d869cba4": "Leia um código QR com o telefone para parear o aplicativo GOAT.",
+  "bab6c6086011b5f2": "Uma preferência desta conversa foi salva",
+  "902890ab306f0338": "Ver",
   "e7da5d0a1531c174": "Gráfico da frota",
   "9af7459395572c84": "Selecione uma máquina para ver apenas as conversas dela.",
   "e8251ed279135275": "Em execução",
@@ -2734,5 +2736,6 @@
   "ddf27fad1b4a1c0e": "É necessária permissão para gerenciar configurações para verificar um host SSH.",
   "43fa6ec9c6ecca7d": "Não foi possível revisar este host SSH. Tente verificá-lo novamente.",
   "45d9700e2e542245": "Não foi possível verificar este host SSH. Tente novamente.",
-  "1fc85fcf9dbe17bf": "Não foi possível aprovar este host. Tente verificá-lo novamente."
+  "1fc85fcf9dbe17bf": "Não foi possível aprovar este host. Tente verificá-lo novamente.",
+  "07246e498374788d": "E mais {count}"
 }

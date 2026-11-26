@@ -97,6 +97,7 @@ import { WizardPanel, WizardSteps, WizardPopup, WizardHeader } from "./Onboardin
 import { Dialog } from "../ui/dialog";
 import { toastManager } from "../ui/toast";
 import { useGT } from "gt-react";
+import { SkippedImportDetails } from "./SkippedImportDetails";
 import { cn } from "../../lib/utils";
 
 type WizardStep = "connection" | "agents" | "memory" | "import";
@@ -1354,6 +1355,7 @@ function ImportStep({
         : 0;
     let importedThreadCount = 0;
     let skippedThreadCount = 0;
+    let omittedDetails = 0;
     const refreshEnvironments = new Set<EnvironmentId>();
     const skipped: Array<{ project: string; thread: string; reason: string }> = [];
     for (const [index, candidate] of selection.entries()) {
@@ -1430,6 +1432,7 @@ function ImportStep({
       if (threadImportResult._tag === "Success") {
         importedThreadCount += threadImportResult.value.importedCount;
         skippedThreadCount += threadImportResult.value.skippedCount;
+        omittedDetails += threadImportResult.value.skippedDetailsOmitted ?? 0;
         for (const entry of threadImportResult.value.skippedThreads ?? []) {
           skipped.push({ project: candidate.title, ...entry });
         }
@@ -1467,11 +1470,7 @@ function ImportStep({
     }
     if (skipped.length > 0) {
       importDetailsRef.current = (
-        <div className="max-h-52 overflow-y-auto whitespace-pre-line break-words">
-          {skipped
-            .map(({ project, thread, reason }) => `${project} · ${thread}: ${gt(reason)}`)
-            .join("\n\n")}
-        </div>
+        <SkippedImportDetails skipped={skipped} omitted={omittedDetails} />
       );
     }
     finishAfterImport();
