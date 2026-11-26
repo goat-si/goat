@@ -114,7 +114,6 @@ describe("CodexTurnStartGuard admission", () => {
         const result = yield* guard.dispatch({
           threadId: "thread",
           codexInput: [],
-          additionalContext: undefined,
           steer: true,
           reserve: () => ({ failed: () => {}, answered: () => {} }),
           adopt: (nativeTurnId) =>
@@ -152,7 +151,6 @@ describe("CodexTurnStartGuard admission", () => {
         .dispatch({
           threadId: "thread",
           codexInput: [],
-          additionalContext: undefined,
           steer: true,
           reserve: () => ({ failed: () => {}, answered: () => {} }),
           adopt: (nativeTurnId) => root(nativeTurnId),

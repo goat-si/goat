@@ -69,7 +69,7 @@ vi.mock("./sdk.ts", () => {
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
 describe("Cursor memory recovery admission", () => {
-  it.effect.each(["removed", "replaced", "tampered"] as const)(
+  it.effect.each(["removed", "replaced", "tampered", "paused-before-dispatch"] as const)(
     "WP4 Cursor recovery refreshes %s memory before native resend",
     (change) =>
       Effect.gen(function* () {
@@ -86,6 +86,8 @@ describe("Cursor memory recovery admission", () => {
         const snapshot = wp4Snapshot();
         let memory: typeof snapshot | undefined = snapshot;
         let refreshes = 0;
+        let allowed = true;
+        const delivered: unknown[] = [];
         const cancelling = Promise.withResolvers<void>();
         const continueCancel = Promise.withResolvers<void>();
         const messages: Array<string | SDKUserMessage> = [];
@@ -129,7 +131,21 @@ describe("Cursor memory recovery admission", () => {
               Layer.provide(CursorSdk.layer),
               Layer.provide(
                 Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
-                  native: undefined,
+                  native: {
+                    filePath: "cursor-recovery.log",
+                    write: (record: unknown) =>
+                      Effect.sync(() => {
+                        if (
+                          change === "paused-before-dispatch" &&
+                          refreshes === 2 &&
+                          typeof record === "object" &&
+                          record !== null &&
+                          Reflect.get(Reflect.get(record, "event"), "payload")?.type === "run.start"
+                        )
+                          allowed = false;
+                      }),
+                    close: () => Effect.void,
+                  },
                   canonical: undefined,
                 }),
               ),
@@ -185,6 +201,11 @@ describe("Cursor memory recovery admission", () => {
           modelSelection,
           runtimePolicy,
           memoryContext: snapshot,
+          canDeliverMemory: () => Effect.sync(() => allowed),
+          onMemoryDelivered: (value) =>
+            Effect.sync(() => {
+              delivered.push(value);
+            }),
           refreshMemoryContext: () =>
             Effect.sync(() => {
               refreshes++;
@@ -227,7 +248,7 @@ describe("Cursor memory recovery admission", () => {
         memory =
           change === "removed"
             ? undefined
-            : change === "replaced"
+            : change !== "tampered"
               ? replacement
               : { ...snapshot, renderedText: "forged-frame" };
         continueCancel.resolve();
@@ -255,8 +276,10 @@ describe("Cursor memory recovery admission", () => {
             assert.lengthOf(second.images!, 1);
             assert.include(second.text, "continue");
             assert.notInclude(second.text, "&lt;instruction&gt;");
-            if (change === "removed") assert.notInclude(second.text, "external_goat_memory");
-            else {
+            if (change === "removed" || change === "paused-before-dispatch") {
+              assert.notInclude(second.text, "external_goat_memory");
+              assert.isEmpty(delivered);
+            } else {
               assert.include(second.text, "replacement &amp; &lt;safe&gt;");
               assert.include(second.text, "external_goat_memory");
             }

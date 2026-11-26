@@ -17,11 +17,13 @@ import {
   turnInput,
 } from "./OpenCode2AdapterV2.fixtures.testkit.ts";
 
-export const testInboxMemoryDelivery = () =>
+export const testInboxMemoryDelivery = (pauseDuringInstructionWrite = false) =>
   Effect.gen(function* () {
     const gate = makeProviderReplayGate(["deliver-memory"]);
     const attempt = turnInput(providerThread(yield* DateTime.now)).attemptId;
     const inboxID = `msg_t3_turn_${SESSION}:${attempt}`;
+    let allowed = true;
+    const values: string[] = [];
     const { runtime, thread } = yield* resumed(
       [
         out("session.prompt", { sessionID: SESSION, text: "hi" }),
@@ -29,7 +31,14 @@ export const testInboxMemoryDelivery = () =>
         event("session.inbox.delivered", { sessionID: SESSION, inboxID }, "deliver-memory"),
         event("session.execution.succeeded", { sessionID: SESSION }),
       ],
-      { replayGate: gate, memoryInstructions: () => new Response(null, { status: 204 }) },
+      {
+        replayGate: gate,
+        memoryInstructions: (value) => {
+          values.push(value);
+          if (pauseDuringInstructionWrite) allowed = false;
+          return new Response(null, { status: 204 });
+        },
+      },
     );
     const delivered: Array<unknown> = [];
     const uncertain: Array<unknown> = [];
@@ -37,6 +46,7 @@ export const testInboxMemoryDelivery = () =>
     yield* runtime.startTurn({
       ...turnInput(thread),
       memoryContext: memoryFixture(),
+      canDeliverMemory: () => Effect.sync(() => allowed),
       onMemoryDelivered: (snapshot) =>
         Effect.sync(() => {
           delivered.push(snapshot);
@@ -51,7 +61,9 @@ export const testInboxMemoryDelivery = () =>
     assert.lengthOf(uncertain, 1);
     gate.release("deliver-memory");
     yield* Fiber.join(terminal);
-    assert.lengthOf(delivered, 1);
+    assert.lengthOf(delivered, pauseDuringInstructionWrite ? 0 : 1);
+    assert.equal(values.length, pauseDuringInstructionWrite ? 2 : 1);
+    if (pauseDuringInstructionWrite) assert.equal(values[1], "");
   }).pipe(Effect.scoped);
 
 export const testCommandMemoryDelivery = () =>

@@ -574,6 +574,8 @@ export interface TurnMemoryHooks {
   /** Called only after a provider transport accepts a prompt carrying this snapshot. */
   readonly onMemoryDelivered?: (snapshot: MemoryContextSnapshot) => Effect.Effect<void>;
   readonly onMemoryDeliveryUncertain?: (snapshot: MemoryContextSnapshot) => Effect.Effect<void>;
+  /** Rechecks the authority that selected this snapshot after delivery bookkeeping. */
+  readonly canDeliverMemory?: (snapshot: MemoryContextSnapshot) => Effect.Effect<boolean>;
   /** Process-local admission callback; never persisted or sent to a provider. */
   readonly refreshMemoryContext?: () => Effect.Effect<
     MemoryContextSnapshot | undefined,
@@ -594,6 +596,9 @@ export const turnMemoryHooks = (
         ...(input.onMemoryDeliveryUncertain === undefined
           ? {}
           : { onMemoryDeliveryUncertain: input.onMemoryDeliveryUncertain }),
+        ...(input.canDeliverMemory === undefined
+          ? {}
+          : { canDeliverMemory: input.canDeliverMemory }),
         ...(input.refreshMemoryContext === undefined
           ? {}
           : { refreshMemoryContext: input.refreshMemoryContext }),

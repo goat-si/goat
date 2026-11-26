@@ -2064,7 +2064,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   );
 
   it.effect(
-    "refreshes memory on first and second actual native sends and clears an omitted snapshot",
+    "clears the previous memory snapshot at turn/start when memory was paused during the next config/read",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -2127,6 +2127,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ],
           });
           const secondDone = yield* Deferred.make<void>();
+          const readingConfig = yield* Deferred.make<void>();
+          const releaseConfig = yield* Deferred.make<void>();
+          let paused = false;
           let completedTurns = 0;
           const delivered: unknown[] = [];
           const harness = yield* makeCodexReplayHarness(
@@ -2137,7 +2140,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   yield* Deferred.succeed(secondDone, undefined);
               }),
             (method, params) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
+                if (method === "config/read" && delivered.length === 1) {
+                  yield* Deferred.succeed(readingConfig, undefined);
+                  yield* Deferred.await(releaseConfig);
+                }
                 if (method === "turn/start") delivered.push(params);
               }),
           );
@@ -2160,19 +2167,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               }),
           });
           yield* harness.firstTerminal;
-          yield* harness.runtime.startTurn({
-            ...base,
-            runId: RunId.make("wp4-memory-run-2"),
-            attemptId: RunAttemptId.make("wp4-memory-2"),
-            providerTurnOrdinal: 2,
-            message: { ...base.message, text: "second" },
-            memoryContext: snapshot,
-            refreshMemoryContext: () =>
-              Effect.sync(() => {
-                refreshes++;
-                return undefined;
-              }),
-          });
+          const second = yield* harness.runtime
+            .startTurn({
+              ...base,
+              runId: RunId.make("wp4-memory-run-2"),
+              attemptId: RunAttemptId.make("wp4-memory-2"),
+              providerTurnOrdinal: 2,
+              message: { ...base.message, text: "second" },
+              memoryContext: snapshot,
+              refreshMemoryContext: () =>
+                Effect.sync(() => {
+                  refreshes++;
+                  return paused ? undefined : snapshot;
+                }),
+              onMemoryDelivered: () => Effect.die("Paused memory cannot be acknowledged"),
+            })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(readingConfig);
+          paused = true;
+          yield* Deferred.succeed(releaseConfig, undefined);
+          yield* Fiber.join(second);
           yield* Deferred.await(secondDone);
           assert.equal(refreshes, 2);
           assert.equal(delivered.length, 2);
