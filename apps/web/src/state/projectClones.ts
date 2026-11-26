@@ -3,6 +3,7 @@ import { parseScopedProjectKey, scopedProjectKey } from "@goat/client-runtime/en
 import type { EnvironmentId, ProjectCloneSnapshot, ScopedProjectRef } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { create } from "zustand";
 
 import { environmentServerConfigsAtom } from "./server";
 import { sourceControlEnvironment } from "./sourceControl";
@@ -40,6 +41,19 @@ export function useEnvironmentProjectClones(
   environmentId: EnvironmentId,
 ): ReadonlyArray<ProjectCloneSnapshot> {
   return useAtomValue(environmentProjectClonesAtom(environmentId));
+}
+
+export const useProjectCloneToastHolds = create<ReadonlySet<string>>(() => new Set());
+
+/** Defers toasts for a newly requested project until its start reply is handled. */
+export function holdProjectCloneToasts(ref: ScopedProjectRef) {
+  const key = scopedProjectKey(ref);
+  useProjectCloneToastHolds.setState((held) => new Set(held).add(key), true);
+  return () => {
+    const held = new Set(useProjectCloneToastHolds.getState());
+    held.delete(key);
+    useProjectCloneToastHolds.setState(held, true);
+  };
 }
 
 export {

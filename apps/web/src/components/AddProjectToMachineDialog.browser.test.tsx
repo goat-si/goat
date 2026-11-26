@@ -1,10 +1,27 @@
-import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type ProjectCloneSnapshot,
+  type ScopedProjectRef,
+} from "@goat/contracts";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import type { AddProjectTarget } from "../hooks/useAddProjectTargets";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
+
+const clone = vi.hoisted(() => vi.fn());
+const snapshots = vi.hoisted(() => vi.fn<() => ReadonlyArray<ProjectCloneSnapshot>>());
+
+vi.mock(import("../lib/addProjectToMachine"), async (original) => ({
+  ...(await original()),
+  addProjectToMachine: clone,
+}));
+vi.mock(import("../state/projectClones"), async (original) => ({
+  ...(await original()),
+  useEnvironmentProjectClones: snapshots,
+}));
 
 const project = vi.hoisted(() => {
   const values = new Map<string, unknown>();
@@ -105,9 +122,12 @@ import {
   AddProjectToMachineDialogHost,
   openAddProjectToMachine,
 } from "./AddProjectToMachineDialog";
+import { ProjectCloneToastCoordinator } from "./ProjectCloneToastCoordinator";
+import { ToastProvider } from "./ui/toast";
 
 const environmentId = EnvironmentId.make("environment-1");
 const projectRef = scopeProjectRef(environmentId, ProjectId.make("project-1"));
+const nextProjectRef = scopeProjectRef(environmentId, ProjectId.make("project-2"));
 const PROJECT = {
   environmentId,
   id: projectRef.projectId,
@@ -116,7 +136,72 @@ const PROJECT = {
   repositoryIdentity: null,
 };
 
+function CloneDialogWithToasts() {
+  return (
+    <ToastProvider>
+      <ProjectCloneToastCoordinator />
+      <AddProjectToMachineDialogHost />
+    </ToastProvider>
+  );
+}
+
 describe("AddProjectToMachineDialog", () => {
+  it("keeps the replacement open after the dismissed clone finishes starting", async () => {
+    const targetEnvironmentId = EnvironmentId.make("environment-2");
+    project.setup(
+      [PROJECT],
+      [{ environmentId: targetEnvironmentId, label: "Remote machine", machine: "desktop" }],
+      {
+        environments: [{ environmentId: targetEnvironmentId }],
+        ignoredListing: { files: [], truncated: false },
+      },
+    );
+    const reply = Promise.withResolvers<ProjectId>();
+    const requested = Promise.withResolvers<ProjectId>();
+    clone.mockImplementationOnce(({ projectId }: { projectId: ProjectId }) => {
+      requested.resolve(projectId);
+      return reply.promise;
+    });
+    snapshots.mockReturnValue([]);
+    await using screen = await render(<CloneDialogWithToasts />);
+
+    await act(() => openAddProjectToMachine({ projectRef, targetEnvironmentId: null }));
+    const folder = screen.getByRole("textbox", { name: /^Folder on/ });
+    await folder.fill("/checkout");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(screen.getByRole("button", { name: "Starting…" })).toBeDisabled();
+    const projectId = await requested.promise;
+    snapshots.mockReturnValue([
+      {
+        projectId,
+        remoteUrl: "https://example.com/repo.git",
+        destinationPath: "/checkout",
+        repository: null,
+        phase: "running",
+        stage: "connecting",
+        percent: null,
+        detail: null,
+        error: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        endedAt: null,
+        sequence: 1,
+      },
+    ]);
+    await screen.rerender(<CloneDialogWithToasts />);
+    await userEvent.keyboard("{Escape}");
+
+    await act(() => {
+      project.set(nextProjectRef, { ...PROJECT, id: nextProjectRef.projectId, title: "Next repo" });
+      openAddProjectToMachine({ projectRef: nextProjectRef, targetEnvironmentId: null });
+    });
+    await expect.element(screen.getByText(/Clone Next repo/)).toBeVisible();
+    const progress = page.getByText("Cloning checkout", { exact: true });
+    await expect.element(progress).not.toBeInTheDocument();
+    reply.resolve(projectId);
+    await expect.element(progress).toBeVisible();
+    await expect.element(screen.getByText(/Clone Next repo/)).toBeVisible();
+  });
+
   it("ignores requests for a project that is already absent", async () => {
     project.setup([]);
     await using _screen = await render(<AddProjectToMachineDialogHost />);
