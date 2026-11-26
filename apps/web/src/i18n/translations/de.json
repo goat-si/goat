@@ -1473,7 +1473,7 @@
   "14a6aadfae3f994f": "Schriftgröße für Code",
   "72a22e6ddcc788ac": "Schriftgröße des Terminals",
   "eb72dbf46620a039": "Schriftfamilie für {title}",
-  "0149bf0de1e7a33c": "Nutze {skill}, um den instabilen Test in {test} zu korrigieren und die Kopfzeile vor der Veröffentlichung an {component} anzupassen.",
+  "0149bf0de1e7a33c": "Korrigiere mit {skill} den instabilen Test in {test} und passe die Kopfzeile vor der Veröffentlichung an {component} an.",
   "b2cf8f129e8f4ef4": "Schriftvorschau der Eingabe",
   "8382185ec8f04bb0": "Schriftvorschau des Terminals",
   "cc22ed5bb29ef87d": "Wähle eine Bilddatei aus.",
