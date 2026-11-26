@@ -69,6 +69,7 @@ describe("ChannelBotThreads history", () => {
         const known = yield* service.getBotTask(input, owner);
         assert.strictEqual(known.task.state, "known");
         if (known.task.state === "known") {
+          assert.strictEqual(known.task.row.task.version, 1);
           assert.strictEqual(known.task.row.task.title, "a".repeat(199));
           assert.strictEqual(known.task.row.task.titleTruncated, true);
         }
@@ -91,6 +92,7 @@ describe("ChannelBotThreads history", () => {
         const unavailable = yield* service.getBotTask(input, owner);
         assert.strictEqual(unavailable.task.state, "unavailable");
         if (unavailable.task.state === "unavailable") {
+          assert.strictEqual(unavailable.task.task.version, 1);
           assert.strictEqual(unavailable.task.task.title, "a".repeat(199));
           assert.strictEqual(unavailable.task.task.titleTruncated, true);
         }

@@ -516,6 +516,7 @@ export const BotThreadRow = Schema.Union([
       doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
       title: TrimmedNonEmptyString,
       status: ChannelTaskStatus,
+      version: Schema.optionalKey(PositiveInt),
       updatedAt: IsoDateTime,
       completedAt: Schema.optional(IsoDateTime),
       /** The attempt this row shows; absent means the first. */
@@ -567,6 +568,7 @@ export const BotTaskSummary = Schema.Struct({
   doneMeans: Schema.optionalKey(ChannelTaskDoneMeans),
   titleTruncated: Schema.optionalKey(Schema.Boolean),
   status: ChannelTaskStatus,
+  version: Schema.optionalKey(PositiveInt),
   updatedAt: IsoDateTime,
   completedAt: Schema.optional(IsoDateTime),
   generation: Schema.optional(PositiveInt),

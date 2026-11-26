@@ -21,6 +21,8 @@ export function newestBotTaskSummary(
   if (!work || !listed) return listed;
   const found = work.task.state === "known" ? work.task.row.task : work.task.task;
   if (listed.taskId !== found.taskId) return listed;
+  if (found.version !== undefined && listed.version !== undefined)
+    return found.version > listed.version ? found : listed;
   const generation = (found.generation ?? 1) - (listed.generation ?? 1);
   return generation > 0 ||
     (generation === 0 && Date.parse(found.updatedAt) > Date.parse(listed.updatedAt))
@@ -39,7 +41,9 @@ export function botTaskAttemptEvidence(
     found.taskId !== task.taskId ||
     (found.generation ?? 1) !== (task.generation ?? 1) ||
     found.status !== task.status ||
-    found.updatedAt !== task.updatedAt
+    (found.version !== undefined && task.version !== undefined
+      ? found.version !== task.version
+      : found.updatedAt !== task.updatedAt)
   )
     return null;
   return { ...work.attemptEvidence, worker: work.approvalObservation?.worker };

@@ -9,6 +9,7 @@ import {
   type ChannelTaskChip,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import { currentRequiredResults } from "./requiredResults.ts";
 import {
   botTaskAttemptEvidence,
   botHomeWork,
@@ -317,4 +318,32 @@ it("only presents the matching task and attempt, even while an older lookup is h
   const { attemptEvidence: _evidence, ...legacy } = work;
   expect(botTaskAttemptEvidence(legacy, entry.task)).toBeNull();
   expect(botTaskAttemptEvidence(undefined, entry.task)).toBeNull();
+});
+
+it("orders task evidence by version when timestamps collide or go backwards", () => {
+  const entry = task("release", null);
+  if (entry.kind !== "task") throw new Error("expected a task");
+  const base = decodeWork({
+    task: { state: "known", row: entry },
+    attemptEvidence: { summary: "New evidence" },
+    requiredDeliverables: [
+      { id: "build", criterion: "Build passes", attempt: 1, state: "accepted" },
+    ],
+    codingRows: [],
+    remoteWork: [],
+    launchesTruncated: false,
+    partial: false,
+  });
+  const found = { ...entry.task, version: 2 };
+  const work = { ...base, task: { state: "known" as const, row: { ...entry, task: found } } };
+  const old = { ...entry.task, version: 1 };
+  expect(newestBotTaskSummary(old, work)).toEqual(found);
+  expect(botTaskAttemptEvidence(work, old)).toBeNull();
+  expect(currentRequiredResults(work, old)).toBeNull();
+  const laterClock = { ...old, updatedAt: "2026-11-06T00:00:00.000Z" };
+  expect(newestBotTaskSummary(laterClock, work)).toEqual(found);
+  const newerList = { ...laterClock, version: 3 };
+  expect(newestBotTaskSummary(newerList, work)).toEqual(newerList);
+  expect(currentRequiredResults(work, newerList)).toBeNull();
+  expect(currentRequiredResults(work, found)?.accepted).toBe(1);
 });

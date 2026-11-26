@@ -10,7 +10,9 @@ export function currentRequiredResults(
   if (
     observed.taskId !== task.taskId ||
     (observed.generation ?? 1) !== (task.generation ?? 1) ||
-    observed.updatedAt !== task.updatedAt ||
+    (observed.version !== undefined && task.version !== undefined
+      ? observed.version !== task.version
+      : observed.updatedAt !== task.updatedAt) ||
     observed.status !== task.status
   )
     return null;
