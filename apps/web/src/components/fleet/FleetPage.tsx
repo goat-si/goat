@@ -182,20 +182,20 @@ export function FleetPage() {
             {selectedMachine ? (
               <div className="flex items-center gap-2 text-sm">
                 <span className="inline-flex items-center gap-1.5">
-                  Showing <span className="font-medium">{selectedMachine.label}</span>
+                  {gt("Showing {machine}", { machine: selectedMachine.label })}
                   {selectedMachine.boat !== null ? (
                     <BoatIcon role="img" aria-label="Boat" className="size-3.5" />
                   ) : null}
                 </span>
                 <Button size="compact" variant="ghost" onClick={() => setSelected(null)}>
-                  Show all
+                  {gt("Show all")}
                 </Button>
               </div>
             ) : null}
             {selectedMachine ? <FleetMachineLink machine={selectedMachine} /> : null}
 
             {listed.map((machine) => {
-              const subtitle = fleetMachineSubtitle(machine);
+              const subtitle = fleetMachineSubtitle(machine, gt);
               return (
                 <section
                   key={machine.id}
@@ -216,7 +216,7 @@ export function FleetPage() {
                       <span className="text-xs text-muted-foreground">{subtitle}</span>
                     ) : null}
                     <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                      {fleetMachineWork(machine)}
+                      {fleetMachineWork(machine, gt)}
                     </span>
                   </button>
                   <FleetThreadList threads={threadsByMachine.get(machine.id) ?? []} />
@@ -226,18 +226,22 @@ export function FleetPage() {
 
             {idle.length > 0 ? (
               <p className="text-xs text-muted-foreground">
-                Idle: {idle.map((machine) => machine.label).join(", ")}
+                {gt("Idle: {machines}", {
+                  machines: idle.map((machine) => machine.label).join(", "),
+                })}
               </p>
             ) : null}
             {selectedMachine && listed.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing running on this machine.</p>
+              <p className="text-sm text-muted-foreground">
+                {gt("Nothing running on this machine.")}
+              </p>
             ) : null}
 
             {selectedMachine ? null : <FleetCloudAgents groups={cloudAgents} />}
 
             <ConnectionCatalogUnreadableAlert />
             <ConnectionEnvironmentsSection
-              title="Connections"
+              title={gt("Connections")}
               searchable={false}
               headerAction={
                 <Tooltip>
@@ -246,14 +250,14 @@ export function FleetPage() {
                       <Button
                         size="icon-xs"
                         variant="ghost-muted"
-                        aria-label="Connection settings"
+                        aria-label={gt("Connection settings")}
                         render={<Link to="/settings/connections" />}
                       />
                     }
                   >
                     <SettingsIcon className="size-3.5" />
                   </TooltipTrigger>
-                  <TooltipPopup side="top">Connection settings</TooltipPopup>
+                  <TooltipPopup side="top">{gt("Connection settings")}</TooltipPopup>
                 </Tooltip>
               }
             />

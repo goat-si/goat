@@ -1,3 +1,5 @@
+import { useMemoryStatusLabel } from "./useMemoryStatusLabel";
+import { msg, useGT, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { presentMemorySync } from "@goat/client-runtime/memory-presentation";
 import type {
@@ -49,6 +51,9 @@ function Diagnostics({
   onRefresh: () => void;
   capabilities: ExecutionEnvironmentCapabilities;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const statusLabel = useMemoryStatusLabel();
   const canRead = useAtomValue(memoryEnvironment.hubDiagnostics.permissionAtom(environmentId));
   const getDiagnostics = useAtomCommand(memoryEnvironment.hubDiagnostics, { reportFailure: false });
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -128,26 +133,31 @@ function Diagnostics({
     if (!permission.current.canRead || !permission.current.allowed) return;
     setMessage(
       result._tag === "Success"
-        ? "Reconcile accepted. Synchronization may still be in progress."
-        : "Could not reconcile. Reload diagnostics before trying again.",
+        ? msg("Reconcile accepted. Synchronization may still be in progress.")
+        : msg("Could not reconcile. Reload diagnostics before trying again."),
     );
     setDiagnostics(null);
     setReload((n) => n + 1);
     onRefresh();
   }
   return (
-    <SettingsSection title="Hub diagnostics">
-      <SettingsRow title={view.label} description={view.publicationLabel ?? undefined} />
+    <SettingsSection title={gt("Hub diagnostics")}>
+      <SettingsRow
+        title={statusLabel(view.label)}
+        description={view.publicationLabel ? statusLabel(view.publicationLabel) : undefined}
+      />
       {view.recoverableHolds.length ? (
         <SettingsRow
-          title="Recoverable sync hold"
-          description="Compatibility or availability needs attention. Reconcile can rearm eligible work."
+          title={gt("Recoverable sync hold")}
+          description={gt(
+            "Compatibility or availability needs attention. Reconcile can rearm eligible work.",
+          )}
         />
       ) : null}
       {view.permanentHolds.length ? (
         <SettingsRow
-          title="Device access needs attention"
-          description="Review device identity and authorization in Sharing settings."
+          title={gt("Device access needs attention")}
+          description={gt("Review device identity and authorization in Sharing settings.")}
         />
       ) : null}
       {canRead && diagnostics ? (
@@ -157,22 +167,22 @@ function Diagnostics({
               aria-hidden
               className={detailsOpen ? "size-4 shrink-0 rotate-90" : "size-4 shrink-0"}
             />
-            Settings details
+            {gt("Settings details")}
           </CollapsibleTrigger>
           <CollapsiblePanel animate={false}>
             <div className="px-3 py-3 text-xs leading-normal text-muted-foreground/80 sm:px-4">
-              Settings version {diagnostics.version}
+              {gt("Settings version {version}", { version: diagnostics.version })}
             </div>
           </CollapsiblePanel>
         </Collapsible>
       ) : null}
       {error ? (
-        <SettingsRow title={<span role="alert">Could not load hub diagnostics.</span>} />
+        <SettingsRow title={<span role="alert">{gt("Could not load hub diagnostics.")}</span>} />
       ) : null}
-      {message ? <SettingsRow title={<span role="status">{message}</span>} /> : null}
+      {message ? <SettingsRow title={<span role="status">{m(message)}</span>} /> : null}
       <SettingsRow
-        title="Reconcile sync"
-        description="Rearm eligible held work on this device."
+        title={gt("Reconcile sync")}
+        description={gt("Rearm eligible held work on this device.")}
         control={
           <div className="flex flex-wrap gap-2">
             <Button
@@ -181,7 +191,7 @@ function Diagnostics({
               disabled={busy || !allowed || !view.canReconcileInSettings || !sync.memorySpaceId}
               onClick={() => void submit()}
             >
-              Reconcile
+              {gt("Reconcile")}
             </Button>
             <Button
               size="sm"
@@ -193,7 +203,7 @@ function Diagnostics({
                 setReload((n) => n + 1);
               }}
             >
-              Reload diagnostics
+              {gt("Reload diagnostics")}
             </Button>
           </div>
         }

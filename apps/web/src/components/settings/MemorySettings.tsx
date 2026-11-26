@@ -1,3 +1,5 @@
+import { useMemoryStatusLabel } from "./useMemoryStatusLabel";
+import { msg, useGT, useMessages } from "gt-react";
 import { MemoryForgetControl } from "./MemoryForgetControl";
 import { MemoryMoveControl } from "./MemoryMoveControl";
 import { MemoryRecordsError, MemorySearchControls } from "./MemorySearchControls";
@@ -235,6 +237,7 @@ function MemoryDestinationContent({
   environmentId: EnvironmentId;
   canRead: boolean;
 }) {
+  const gt = useGT();
   const canAdmin = useAtomValue(memoryEnvironment.hubSettingsGet.permissionAtom(environmentId));
   const canSync = useAtomValue(memoryEnvironment.syncStatus.permissionAtom(environmentId));
   const getSync = useAtomCommand(memoryEnvironment.syncStatus, { reportFailure: false });
@@ -322,21 +325,21 @@ function MemoryDestinationContent({
           sync={sync}
         />
       ) : (
-        <SettingsSection title="Sharing">
+        <SettingsSection title={gt("Sharing")}>
           <SettingsRow
-            title="Sharing unavailable"
-            description="Settings write permission is required to manage sharing."
+            title={gt("Sharing unavailable")}
+            description={gt("Settings write permission is required to manage sharing.")}
           />
         </SettingsSection>
       )}
       {syncError ? (
-        <SettingsSection title="Memory status">
+        <SettingsSection title={gt("Memory status")}>
           <SettingsRow
-            title="Could not load memory status"
+            title={gt("Could not load memory status")}
             description={<span role="alert">{syncError}</span>}
             control={
               <Button size="sm" variant="outline" onClick={refreshSync}>
-                Retry
+                {gt("Retry")}
               </Button>
             }
           />
@@ -350,12 +353,12 @@ function MemoryDestinationContent({
         />
       ) : null}
       {!memorySpaceId ? (
-        <SettingsSection title="Memories" id="memory-records">
+        <SettingsSection title={gt("Memories")} id="memory-records">
           <SettingsRow
             title={
               sync?.state === "disabled"
-                ? "Turn on memory to see and save memories."
-                : "Memory is getting ready."
+                ? gt("Turn on memory to see and save memories.")
+                : gt("Memory is getting ready.")
             }
             description={
               sync && sync.state !== "disabled" ? presentMemorySync(sync).label : undefined
@@ -373,10 +376,12 @@ function MemoryDestinationContent({
           }
         />
       ) : (
-        <SettingsSection title="Memories">
+        <SettingsSection title={gt("Memories")}>
           <SettingsRow
-            title="Memory read permission required"
-            description="Memory read permission is required to view records. Write permission does not grant read access."
+            title={gt("Memory read permission required")}
+            description={gt(
+              "Memory read permission is required to view records. Write permission does not grant read access.",
+            )}
           />
         </SettingsSection>
       )}
@@ -414,6 +419,8 @@ function MemoryRecords({
   memorySpaceId: MemorySpaceId;
   memoryEnabled: boolean;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const projectStatus = useEnvironmentShellStatus(environmentId);
   const navigate = useNavigate();
@@ -467,30 +474,30 @@ function MemoryRecords({
     if (generation.current !== attempt) return;
     if (result._tag !== "Success") {
       setSelection(null);
-      setError("Could not load project memory scope. Choose the project again to retry.");
+      setError(msg("Could not load project memory scope. Choose the project again to retry."));
       return;
     }
     const next = memoryProjectScope(result.value, project.repositoryIdentity);
     setScope(next);
     if (!next) {
       setSelection(null);
-      setError("This project needs a repository or an explicit shared memory key.");
+      setError(msg("This project needs a repository or an explicit shared memory key."));
     }
   }
   return (
     <>
-      <SettingsSection title="Memory scope" id="memory-browse-scope">
+      <SettingsSection title={gt("Memory scope")} id="memory-browse-scope">
         <SettingsRow
-          title="Scope"
+          title={gt("Scope")}
           description={
             error ? (
-              <span role="alert">{error}</span>
+              <span role="alert">{m(error)}</span>
             ) : projectRemoved ? (
-              "The selected project is no longer available. Choose a memory scope."
+              gt("The selected project is no longer available. Choose a memory scope.")
             ) : !scope ? (
-              "Loading project memory scope"
+              gt("Loading project memory scope")
             ) : !canGetBinding && projects.length > 0 ? (
-              "Project scope requires memory write permission to look up its shared key."
+              gt("Project scope requires memory write permission to look up its shared key.")
             ) : undefined
           }
           control={
@@ -504,13 +511,13 @@ function MemoryRecords({
                 }
               }}
             >
-              <SelectTrigger aria-label="Memory scope">
-                <SelectValue placeholder="Choose memory scope">
-                  {selection === "user" ? "User" : scopeTitle}
+              <SelectTrigger aria-label={gt("Memory scope")}>
+                <SelectValue placeholder={gt("Choose memory scope")}>
+                  {selection === "user" ? gt("User") : scopeTitle}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup>
-                <SelectItem value="user">User</SelectItem>
+                <SelectItem value="user">{gt("User")}</SelectItem>
                 {projects.map((project) => (
                   <SelectItem
                     key={project.id}
@@ -532,7 +539,9 @@ function MemoryRecords({
           environmentId={environmentId}
           memorySpaceId={memorySpaceId}
           scope={browseScope}
-          scopeLabel={scopeTitle ?? memoryScopeLabel(browseScope)}
+          scopeLabel={
+            scopeTitle ?? (browseScope.kind === "user" ? gt("User") : memoryScopeLabel(browseScope))
+          }
         />
       ) : null}
     </>
@@ -554,6 +563,8 @@ function ScopedMemoryRecords({
   scope: MemoryScope;
   scopeLabel?: string;
 }) {
+  const gt = useGT();
+  const statusLabel = useMemoryStatusLabel();
   const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities.memory;
   const linkedOrigin = target.originThreadId
     ? { environmentId, threadId: target.originThreadId }
@@ -588,6 +599,7 @@ function ScopedMemoryRecords({
   const page = useEnvironmentQuery(atom);
   const value = page.data ? Option.getOrNull(page.data) : null;
   const items = value?.items ?? EMPTY_MEMORY_LIST;
+  const pageLabel = value && items.length === 0 ? presentMemoryPage(value, searching) : null;
   const coverage = value?.indexCoverage
     ? presentMemoryCoverage(value.indexCoverage, items.length)
     : null;
@@ -629,13 +641,13 @@ function ScopedMemoryRecords({
           onSaved={page.refresh}
         />
       ) : null}
-      <SettingsSection title="Memories" id="memory-records">
+      <SettingsSection title={gt("Memories")} id="memory-records">
         <SettingsRow
-          title="Save a memory"
+          title={gt("Save a memory")}
           description={
             memoryEnabled
-              ? "Add something you want this device to remember."
-              : "Saved memories stay. Turn on memory to save new memories."
+              ? gt("Add something you want this device to remember.")
+              : gt("Saved memories stay. Turn on memory to save new memories.")
           }
           control={
             <Button
@@ -644,12 +656,12 @@ function ScopedMemoryRecords({
               disabled={!canWrite}
               onClick={() => setAdding(true)}
             >
-              Remember something
+              {gt("Remember something")}
             </Button>
           }
         />
         {adding && canWrite ? (
-          <SettingsRow title="New memory">
+          <SettingsRow title={gt("New memory")}>
             <MemoryEditor
               scope={scope}
               scopeLabel={scopeLabel ?? memoryScopeLabel(scope)}
@@ -707,22 +719,22 @@ function ScopedMemoryRecords({
           />
         ) : null}
         {items.length > 0 && coverage && coverage.status !== "available" ? (
-          <SettingsRow title={coverage.label} />
+          <SettingsRow title={statusLabel(coverage.label)} />
         ) : null}
         {notice ? <SettingsRow title={<span role="status">{notice}</span>} /> : null}
         {!value && !page.error ? (
           <SettingsRow
-            title="Loading memories"
-            description="Reconnect this device if records do not appear."
+            title={gt("Loading memories")}
+            description={gt("Reconnect this device if records do not appear.")}
           />
         ) : !value ? null : items.length === 0 ? (
           <SettingsRow
-            title={presentMemoryPage(value, Boolean(query))}
+            title={pageLabel && statusLabel(pageLabel)}
             description={
               coverage?.status === "unavailable"
-                ? coverage.label
+                ? statusLabel(coverage.label)
                 : !query
-                  ? "Memories saved on this device will appear here."
+                  ? gt("Memories saved on this device will appear here.")
                   : undefined
             }
           />
@@ -749,14 +761,16 @@ function ScopedMemoryRecords({
                   ) : item.status === "active" ? (
                     memoryPreview(item.payload.text)
                   ) : item.status === "forgotten" ? (
-                    <span className="text-muted-foreground">Forgotten memory</span>
+                    <span className="text-muted-foreground">{gt("Forgotten memory")}</span>
                   ) : (
                     presentMemoryItem(item).label
                   )
                 }
                 description={
                   item.status === "forgotten" ? (
-                    `Forgotten ${formatTimestamp(item.tombstone.deletedAtUtc, "locale")}. Content has been removed.`
+                    gt("Forgotten {date}. Content has been removed.", {
+                      date: formatTimestamp(item.tombstone.deletedAtUtc, "locale"),
+                    })
                   ) : (
                     <>
                       {presentMemoryItem(item).syncLabel}
@@ -771,7 +785,7 @@ function ScopedMemoryRecords({
                     batch.row(item)
                   ) : (
                     <Button size="sm" variant="ghost" onClick={() => select(item)}>
-                      Open
+                      {gt("Open")}
                     </Button>
                   )
                 }
@@ -782,7 +796,7 @@ function ScopedMemoryRecords({
         {batch.hiddenRows}
         {cursor || value?.nextCursor ? (
           <SettingsRow
-            title="Browse memories"
+            title={gt("Browse memories")}
             control={
               <div className="flex gap-2">
                 <Button
@@ -791,7 +805,7 @@ function ScopedMemoryRecords({
                   disabled={cursor === undefined}
                   onClick={() => setCursor(undefined)}
                 >
-                  First page
+                  {gt("First page")}
                 </Button>
                 <Button
                   size="sm"
@@ -801,7 +815,7 @@ function ScopedMemoryRecords({
                     if (value?.nextCursor) setCursor(value.nextCursor);
                   }}
                 >
-                  Next page
+                  {gt("Next page")}
                 </Button>
               </div>
             }
@@ -844,6 +858,7 @@ export function MemoryDetails({
   scopeMoves?: boolean;
   memoryEnabled: boolean;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const { environments } = useEnvironments();
   const deviceName = (id: EnvironmentId) =>
@@ -936,7 +951,7 @@ export function MemoryDetails({
             <MemoryForgetControl
               environmentId={environmentId}
               item={item}
-              label="Forget"
+              label={gt("Forget")}
               onForgotten={(message) => {
                 onForgotten(message);
                 void navigate({

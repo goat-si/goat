@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { resolveProjectSetupScriptConfiguration } from "@goat/shared/projectScripts";
 import type { GoatProjectFileState } from "../../hooks/useGoatProjectFileScripts";
 import { Button } from "../ui/button";
@@ -18,41 +19,44 @@ export function ProjectFileActions({
   onDisable: () => void;
   onRestore: () => void;
 }) {
+  const gt = useGT();
   if (optedOut)
     return (
       <SettingsRow
-        title="Repository actions are disabled for this project."
-        description="Repository setup and inherited actions will not run for this project."
+        title={gt("Repository actions are disabled for this project.")}
+        description={gt("Repository setup and inherited actions will not run for this project.")}
         control={
           <Button size="xs" variant="outline" disabled={disabled} onClick={onRestore}>
-            Use inherited actions
+            {gt("Use inherited actions")}
           </Button>
         }
       />
     );
-  if (file.status === "loading") return <SettingsRow title="Loading repository actions…" />;
+  if (file.status === "loading") return <SettingsRow title={gt("Loading repository actions…")} />;
   if (file.status === "missing")
-    return <SettingsRow title="No goat.json or t3.json found in this checkout." />;
+    return <SettingsRow title={gt("No goat.json or t3.json found in this checkout.")} />;
   if (file.status === "invalid")
     return (
       <SettingsRow
-        title={`${file.relativePath} is invalid`}
-        description="Repository actions are ignored. Check the JSON syntax and icon values."
+        title={gt("{file} is invalid", { file: file.relativePath })}
+        description={gt("Repository actions are ignored. Check the JSON syntax and icon values.")}
         className="text-warning"
       />
     );
   if (configuration.source !== "project-file")
-    return <SettingsRow title={`No worktree setup action in ${file.relativePath}.`} />;
+    return (
+      <SettingsRow title={gt("No worktree setup action in {file}.", { file: file.relativePath })} />
+    );
   return (
     <>
       <SettingsRow
-        title="Repository actions"
-        description={
-          <>Read-only setup from this checkout. Edit {file.relativePath} to change it.</>
-        }
+        title={gt("Repository actions")}
+        description={gt("Read-only setup from this checkout. Edit {file} to change it.", {
+          file: file.relativePath,
+        })}
         control={
           <Button size="xs" variant="outline" disabled={disabled} onClick={onDisable}>
-            Disable repository actions for this project
+            {gt("Disable repository actions for this project")}
           </Button>
         }
       />
@@ -63,7 +67,7 @@ export function ProjectFileActions({
             <span className="flex flex-wrap items-center gap-2">
               <span>{script.name}</span>
               <span className="text-xs font-normal text-muted-foreground">
-                from {file.relativePath}
+                {gt("from {file}", { file: file.relativePath })}
               </span>
             </span>
           }
@@ -75,8 +79,8 @@ export function ProjectFileActions({
               <span className="flex flex-wrap gap-2 text-xs">
                 <span>runOnWorktreeCreate</span>
                 <span>async: {String(script.async !== false)}</span>
-                {script.runAsCheck ? <span>check</span> : null}
-                {script.runOnSettle ? <span>on settle</span> : null}
+                {script.runAsCheck ? <span>{gt("check")}</span> : null}
+                {script.runOnSettle ? <span>{gt("on settle")}</span> : null}
               </span>
             </span>
           }

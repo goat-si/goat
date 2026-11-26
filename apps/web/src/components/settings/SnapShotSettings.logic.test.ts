@@ -63,7 +63,7 @@ it("distinguishes saved shortcuts from observed delivery without making users re
       ...state,
       gnomeExtension: { status: "disabled", message: "Enable the extension" },
     }),
-  ).toBe("Set up GNOME capture");
+  ).toBe("Set up {desktop} capture");
   expect(snapShotSetupSummary({ ...state, shortcutVerified: true }, false)).toContain(
     "Enable capture",
   );

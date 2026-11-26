@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
@@ -39,16 +39,16 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { useSettingsScope } from "./SettingsScopeContext";
 
 const CLOUD_HOLDER_LABEL: Record<HubSettingsValue["cloudHolder"], string> = {
-  hub: "On this hub",
-  auto: "Wherever signed in",
+  hub: msg("On this hub"),
+  auto: msg("Wherever signed in"),
 };
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 const GOATCLAW_HOST_STATE: Record<GoatclawHostSyncState, string> = {
-  applied: "applied",
-  pending: "waiting",
-  outdated: "needs a GOAT update",
+  applied: msg("applied"),
+  pending: msg("waiting"),
+  outdated: msg("needs a GOAT update"),
 };
 const GOATCLAW_HOST_ORDER: ReadonlyArray<GoatclawHostSyncState> = [
   "outdated",
@@ -58,7 +58,10 @@ const GOATCLAW_HOST_ORDER: ReadonlyArray<GoatclawHostSyncState> = [
 const GOATCLAW_HOSTS_SHOWN = 2;
 
 /** Where the policy has not landed comes first; the rest folds into +N, the full list into the tooltip. */
-function goatclawFleetStatus(hosts: ReadonlyArray<HostStatusEntry>) {
+function goatclawFleetStatus(
+  m: ReturnType<typeof useMessages>,
+  hosts: ReadonlyArray<HostStatusEntry>,
+) {
   const rows = hosts
     .flatMap((entry) =>
       entry.host === null || entry.goatclaw === undefined
@@ -69,7 +72,7 @@ function goatclawFleetStatus(hosts: ReadonlyArray<HostStatusEntry>) {
       (left, right) =>
         GOATCLAW_HOST_ORDER.indexOf(left.state) - GOATCLAW_HOST_ORDER.indexOf(right.state),
     )
-    .map((row) => `${row.host} ${GOATCLAW_HOST_STATE[row.state]}`);
+    .map((row) => `${row.host} ${m(GOATCLAW_HOST_STATE[row.state])}`);
   if (rows.length === 0) return null;
   const rest = rows.length - GOATCLAW_HOSTS_SHOWN;
   return {
@@ -81,24 +84,27 @@ function goatclawFleetStatus(hosts: ReadonlyArray<HostStatusEntry>) {
 }
 
 function homeStatusText(
+  gt: ReturnType<typeof useGT>,
   reading: boolean,
   snapshot: HubSnapshot | null,
   home: OpenCodexInventorySnapshot | undefined,
 ) {
-  if (reading) return "Reading OpenCodex…";
+  if (reading) return gt("Reading OpenCodex…");
   const version = (value: string | null | undefined) =>
     value ? `OpenCodex ${value}` : "OpenCodex";
   if (snapshot !== null)
     return [
-      `${version(snapshot.homeVersion)} Home`,
+      gt("{version} Home", { version: version(snapshot.homeVersion) }),
       snapshot.homeName,
-      snapshot.homeHealthy ? null : "not answering",
+      snapshot.homeHealthy ? null : gt("not answering"),
     ]
       .filter((part) => part !== null)
       .join(" · ");
   return home?.installed
-    ? `${version(home.runtime.version)} here is not a Home yet: it has no linked devices.`
-    : "OpenCodex is not installed on this machine.";
+    ? gt("{version} here is not a Home yet: it has no linked devices.", {
+        version: version(home.runtime.version),
+      })
+    : gt("OpenCodex is not installed on this machine.");
 }
 
 export function HubSettings() {
@@ -120,7 +126,9 @@ export function HubSettings() {
         <SettingsSection id="hub" title={gt("Hub")}>
           <SettingsRow
             {...setting("hub-enabled")}
-            description="Connect an environment to choose whether it runs your fleet as the hub."
+            description={gt(
+              "Connect an environment to choose whether it runs your fleet as the hub.",
+            )}
           />
         </SettingsSection>
       )}
@@ -129,6 +137,7 @@ export function HubSettings() {
 }
 
 function useHubSettings(environmentId: EnvironmentId) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const settings = useEnvironmentSettings(environmentId, (value) => value.hub);
   const goatclaw = useEnvironmentSettings(environmentId, (value) => value.goatclaw);
@@ -148,7 +157,7 @@ function useHubSettings(environmentId: EnvironmentId) {
     const result = await update({ environmentId, input: { patch } });
     setSaving(false);
     if (result._tag === "Failure") {
-      setError("Could not save the setting. Try again.");
+      setError(gt("Could not save the setting. Try again."));
       return null;
     }
     return result.value;
@@ -191,6 +200,7 @@ function HubControls({
   readonly local: boolean;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const setting = useTranslatedSearchableSetting();
   const registry = useContext(RegistryContext);
   const hub = useHubSettings(environmentId);
@@ -207,8 +217,22 @@ function HubControls({
     hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
   );
   const home = hosts.find((entry) => entry.host === null)?.metrics?.opencodex;
-  const homeStatus = homeStatusText(result._tag === "Initial", snapshot, home);
-  const fleetGoatclaw = goatclawFleetStatus(hosts);
+  const profileName = (id: string) => {
+    switch (id) {
+      case "owner":
+        return gt("Owner");
+      case "worker":
+        return gt("Worker");
+      case "manager":
+        return gt("Manager");
+      case "observer":
+        return gt("Observer");
+      default:
+        return profileLabel(id);
+    }
+  };
+  const homeStatus = homeStatusText(gt, result._tag === "Initial", snapshot, home);
+  const fleetGoatclaw = goatclawFleetStatus(m, hosts);
   const dashboard =
     local && home?.installed && (isElectron || LOOPBACK.has(window.location.hostname))
       ? `http://127.0.0.1:${home.runtime.port}/`
@@ -221,7 +245,10 @@ function HubControls({
           {...setting("hub-enabled")}
           serverScoped
           settingKeys={["hub"]}
-          description={`${label} checks every linked device's parity every 30 minutes and holds cloud runs. When a device cannot reach it, goal work there pauses and you get a decision. Devices and OpenCodex settings stay as they are.`}
+          description={gt(
+            "{machine} checks every linked device's parity every 30 minutes and holds cloud runs. When a device cannot reach it, goal work there pauses and you get a decision. Devices and OpenCodex settings stay as they are.",
+            { machine: label },
+          )}
           status={
             hub.error ? (
               <span role="alert" className="text-destructive">
@@ -245,7 +272,9 @@ function HubControls({
             {...setting("hub-connect-access")}
             serverScoped
             settingKeys={["hub"]}
-            description="Standing consent for every trusted device signed in to the linked GOAT Connect account to reach hub devices. After enabling, sign out of GOAT Connect and sign back in. Turning this off ends privileged Connect sessions, including direct hub access. The preference stays saved while the hub is off."
+            description={gt(
+              "Standing consent for every trusted device signed in to the linked GOAT Connect account to reach hub devices. After enabling, sign out of GOAT Connect and sign back in. Turning this off ends privileged Connect sessions, including direct hub access. The preference stays saved while the hub is off.",
+            )}
             control={
               <Switch
                 aria-label={setting("hub-connect-access").title}
@@ -262,7 +291,9 @@ function HubControls({
           {...setting("hub-cloud-holder")}
           serverScoped
           settingKeys={["hub"]}
-          description="Where Claude Cloud, Cursor Cloud and Devin Cloud runs start by default."
+          description={gt(
+            "Where Claude Cloud, Cursor Cloud and Devin Cloud runs start by default.",
+          )}
           control={
             <Select
               value={hub.settings.cloudHolder}
@@ -273,13 +304,13 @@ function HubControls({
             >
               <SelectTrigger size="sm" aria-label={setting("hub-cloud-holder").title}>
                 <SelectValue>
-                  {(value: HubSettingsValue["cloudHolder"]) => CLOUD_HOLDER_LABEL[value]}
+                  {(value: HubSettingsValue["cloudHolder"]) => m(CLOUD_HOLDER_LABEL[value])}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 {HubCloudHolder.literals.map((value) => (
                   <SelectItem key={value} value={value}>
-                    {CLOUD_HOLDER_LABEL[value]}
+                    {m(CLOUD_HOLDER_LABEL[value])}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -290,7 +321,9 @@ function HubControls({
           {...setting("hub-cloud-auto-join")}
           serverScoped
           settingKeys={["hub"]}
-          description="A cloud machine this hub creates joins as a Child the first time it is used: GOAT installs OpenCodex and Codex, links it, and verifies one request through Home, so it needs no sign-in there. Off: new machines stay standalone, and linked ones stay linked."
+          description={gt(
+            "A cloud machine this hub creates joins as a Child the first time it is used: GOAT installs OpenCodex and Codex, links it, and verifies one request through Home, so it needs no sign-in there. Off: new machines stay standalone, and linked ones stay linked.",
+          )}
           status={
             hub.joinError ? (
               <span role="alert" className="text-destructive">
@@ -316,7 +349,9 @@ function HubControls({
           {...setting("hub-permission-profiles")}
           serverScoped
           settingKeys={["goatclaw"]}
-          description="Agents can launch, merge or change settings only as far as their profile allows. Agents without one get the default profile. Applies to every connected host: switching it here switches it there too."
+          description={gt(
+            "Agents can launch, merge or change settings only as far as their profile allows. Agents without one get the default profile. Applies to every connected host: switching it here switches it there too.",
+          )}
           status={
             fleetGoatclaw === null ? undefined : (
               <Tooltip>
@@ -342,7 +377,7 @@ function HubControls({
           {...setting("hub-default-profile")}
           serverScoped
           settingKeys={["goatclaw"]}
-          description="The profile for agents launched without one."
+          description={gt("The profile for agents launched without one.")}
           control={
             <Select
               value={hub.goatclaw.defaultProfile}
@@ -352,12 +387,12 @@ function HubControls({
               }}
             >
               <SelectTrigger size="sm" aria-label={setting("hub-default-profile").title}>
-                <SelectValue>{(value: string) => profileLabel(value)}</SelectValue>
+                <SelectValue>{(value: string) => profileName(value)}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 {Object.keys(hub.goatclaw.profiles).map((id) => (
                   <SelectItem key={id} value={id}>
-                    {profileLabel(id)}
+                    {profileName(id)}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -366,23 +401,25 @@ function HubControls({
         />
         {dashboard === null ? null : (
           <SettingsRow
-            title="Accounts and keys"
-            description="OpenCodex keeps every sign-in and key. GOAT never shows them."
+            title={gt("Accounts and keys")}
+            description={gt("OpenCodex keeps every sign-in and key. GOAT never shows them.")}
             control={
               <Button
                 size="xs"
                 variant="outline"
                 render={<a href={dashboard} target="_blank" rel="noreferrer" />}
               >
-                Open OpenCodex
+                {gt("Open OpenCodex")}
               </Button>
             }
           />
         )}
         {home?.installed ? (
           <SettingsRow
-            title="OpenCodex models"
-            description="Load OpenCodex's current models into Codex here, then on each linked Child. Children take this Home's models and settings. GOAT also syncs after every managed OpenCodex update."
+            title={gt("OpenCodex models")}
+            description={gt(
+              "Load OpenCodex's current models into Codex here, then on each linked Child. Children take this Home's models and settings. GOAT also syncs after every managed OpenCodex update.",
+            )}
             control={<OpenCodexSyncButton environmentId={environmentId} homeLabel={label} />}
           />
         ) : null}
