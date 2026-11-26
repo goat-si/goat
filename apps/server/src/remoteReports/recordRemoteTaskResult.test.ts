@@ -1,5 +1,12 @@
 import { assert, it } from "@effect/vitest";
-import { NodeId, RunId, ThreadId, type OrchestrationV2ServerCommand } from "@goat/contracts";
+import {
+  MessageId,
+  NodeId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2ServerCommand,
+} from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -42,6 +49,28 @@ const row: TaskDispatch = {
   cancelRequestedAt: null,
   cancelCeiling: null,
 };
+
+it.effect("passes remote attachment evidence into the settled task command", () =>
+  withFixture((commands) =>
+    Effect.gen(function* () {
+      const attachments = [
+        {
+          messageId: MessageId.make("message"),
+          attachmentId: "attachment",
+          attemptId: RunAttemptId.make("attempt"),
+          name: "evidence.xml",
+        },
+      ];
+      yield* observeRemoteTask(row, {
+        runId: RunId.make("run-A"),
+        status: "completed",
+        summary: "Done",
+        reported: { outcome: "succeeded", attachments },
+      });
+      assert.deepStrictEqual(remoteResults(yield* Ref.get(commands))[0]?.attachments, attachments);
+    }),
+  ),
+);
 const withFixture = <A, E>(
   test: (
     commands: Ref.Ref<Array<OrchestrationV2ServerCommand>>,
@@ -318,6 +347,52 @@ it.effect.each([true, false])("reconnects to A after B starts using %s", (suppor
         result?.summary,
         supported ? "A done" : "The launched remote run ended with status completed.",
       );
+    }),
+  ),
+);
+it.effect("preserves attachments when a remote only supports thread.wait", () =>
+  withFixture((commands) =>
+    Effect.gen(function* () {
+      const attachments = [
+        {
+          messageId: MessageId.make("message"),
+          attachmentId: "attachment",
+          attemptId: RunAttemptId.make("attempt"),
+          name: "evidence.xml",
+        },
+      ];
+      const answer = yield* waitForRemoteTask({
+        row,
+        reportsSupported: false,
+        readKey: "0".repeat(64),
+        afterSequence: 0,
+        knownRun: null,
+      }).pipe(
+        Effect.provide(
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+            callHostTool: () =>
+              Effect.succeed({
+                host: "build-box",
+                threadId: "remote",
+                runId: "run-A",
+                status: "completed",
+                timedOut: false,
+                result: {
+                  runId: "run-A",
+                  runStatus: "completed",
+                  outcome: "succeeded",
+                  reportedAt: null,
+                  pullRequests: [],
+                  commits: [],
+                  branch: null,
+                  attachments,
+                },
+              }),
+          }),
+        ),
+      );
+      yield* observeRemoteTask(row, answer.observedRun);
+      assert.deepStrictEqual(remoteResults(yield* Ref.get(commands))[0]?.attachments, attachments);
     }),
   ),
 );

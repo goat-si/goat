@@ -797,6 +797,7 @@ const make = Effect.gen(function* () {
                 reported = {
                   outcome: result.outcome,
                   reportedAt: result.reportedAt,
+                  ...(result.attachments === undefined ? {} : { attachments: result.attachments }),
                   ...(reportedSummary === undefined || reportedSummary === ""
                     ? {}
                     : { summary: reportedSummary.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) }),

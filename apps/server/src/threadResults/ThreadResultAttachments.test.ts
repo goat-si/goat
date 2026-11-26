@@ -23,13 +23,15 @@ it.effect("reopens both attempts' evidence by run ID and rejects foreign referen
     const runId = RunId.make("release-check");
     const messageId = MessageId.make("worker-message");
     const ids = ["first-attachment", "second-attachment"] as const;
-    const attachments = ids.map((id) => ({
-      id,
-      name: "junit.xml",
-      type: "file" as const,
-      mimeType: "application/xml",
-      sizeBytes: 42,
-    }));
+    const attachments = [...ids, ...Array.from({ length: 129 }, (_, i) => `overflow-${i}`)].map(
+      (id) => ({
+        id,
+        name: "junit.xml",
+        type: "file" as const,
+        mimeType: "application/xml",
+        sizeBytes: 42,
+      }),
+    );
     const open = (attemptId: RunAttemptId) =>
       layer.pipe(
         Layer.provide(
@@ -99,5 +101,34 @@ it.effect("reopens both attempts' evidence by run ID and rejects foreign referen
       { messageId, attachmentId: ids[0], attemptId: first, name: "junit.xml" },
       { messageId, attachmentId: ids[1], attemptId: second, name: "junit.xml" },
     ]);
+    yield* Effect.gen(function* () {
+      const service = yield* ThreadResultService;
+      for (let i = 0; i < 126; i += 8) {
+        yield* service.report(worker, {
+          runId,
+          expectedAttemptId: second,
+          outcome: "succeeded",
+          summary: "before overflow",
+          attachmentRefs: Array.from({ length: Math.min(8, 126 - i) }, (_, j) => ({
+            messageId,
+            attachmentId: `overflow-${i + j}`,
+          })),
+        });
+      }
+      const before = yield* service.forRun(worker, runId);
+      assert.lengthOf(before?.attachments ?? [], 128);
+      const error = yield* service
+        .report(worker, {
+          runId,
+          expectedAttemptId: second,
+          outcome: "failed",
+          summary: "must not persist",
+          attachmentRefs: [{ messageId, attachmentId: "overflow-126" }],
+        })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "attachment_limit");
+      assert.include(error.message, "128");
+      assert.deepStrictEqual(yield* service.forRun(worker, runId), before);
+    }).pipe(Effect.provide(open(second)));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

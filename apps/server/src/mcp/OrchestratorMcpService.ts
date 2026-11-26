@@ -1084,6 +1084,7 @@ const make = Effect.gen(function* () {
         options: task.modelSelection?.options ?? [],
         pendingApproval: null,
         summary: task.result,
+        ...(task.resultAttachments === undefined ? {} : { attachments: task.resultAttachments }),
         resultContextTransferId: null,
         latestTerminalRunId: null,
         latestTerminalStatus: terminal ? status : null,

@@ -298,6 +298,9 @@ export const makeRemoteDelegatedTasks = (deps: RemoteDelegatedTaskDeps) => {
               ...task,
               status: command.status,
               result: command.summary,
+              ...(command.attachments === undefined
+                ? {}
+                : { resultAttachments: command.attachments }),
               completedAt: now,
               updatedAt: now,
             }
