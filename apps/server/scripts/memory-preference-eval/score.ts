@@ -30,7 +30,9 @@ function wording(text: string, expected: string): Verdict {
   if (
     mentions.size > 1 ||
     !/\b(?:use|using|uses|prefer|prefers|default|chosen)\b/i.test(text) ||
-    /\b(?:not|never|avoid|don't|formerly|previously|no longer)\b/i.test(text)
+    /\b(?:not|never|avoid|don't|formerly|previously|no longer|other than|instead|except|rather than|besides|apart from|unless)\b/i.test(
+      text,
+    )
   )
     return "needs_review";
   return "pass";

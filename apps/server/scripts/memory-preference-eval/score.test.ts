@@ -68,4 +68,10 @@ describe("package manager preference correction", () => {
   it("rejects a reply with no stored preference", () => {
     expect(score([at([]), at([]), at([])]).verdict).toBe("fail");
   });
+  it("does not pass a memory that names the expected manager only to exclude it", () => {
+    const excluded = { ...pnpm, text: "Use a package manager other than pnpm." };
+    expect(score([seed, at([excluded], [npm, excluded]), local]).checks.correctedGlobal).toBe(
+      "needs_review",
+    );
+  });
 });
