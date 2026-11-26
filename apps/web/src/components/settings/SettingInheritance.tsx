@@ -199,6 +199,7 @@ export function SettingInheritance({
           count: overridingProjects.length,
         })
       : summary;
+  const displayedValue = (value: string) => (key === "pullRequestMergeMethod" ? m(value) : value);
   const chains = targets.flatMap((target) => {
     const environment = environments.find(
       (candidate) => candidate.environmentId === target.environmentId,
@@ -316,7 +317,7 @@ export function SettingInheritance({
                       )}
                     >
                       <span className="max-w-32 truncate">
-                        {layer.set ? layer.value : gt("Inherits")}
+                        {layer.set ? displayedValue(layer.value) : gt("Inherits")}
                       </span>
                       {layer.effective ? (
                         <CheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
@@ -354,7 +355,7 @@ export function SettingInheritance({
                       <span className="flex w-full min-w-0 flex-col">
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="min-w-0 flex-1 truncate text-sm text-foreground tabular-nums">
-                            {winningLayer?.value}
+                            {winningLayer && displayedValue(winningLayer.value)}
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {winningLayer?.key === "environment"
@@ -450,12 +451,14 @@ export function SettingInheritance({
                           </span>
                           <span className="max-w-32 truncate text-muted-foreground tabular-nums">
                             {isProjectScopedSettingKey(key)
-                              ? formatValue(
-                                  key,
-                                  members.find(
-                                    (member) =>
-                                      member.target.environmentId === project.environmentId,
-                                  )?.overrides[project.projectId]?.[key],
+                              ? displayedValue(
+                                  formatValue(
+                                    key,
+                                    members.find(
+                                      (member) =>
+                                        member.target.environmentId === project.environmentId,
+                                    )?.overrides[project.projectId]?.[key],
+                                  ),
                                 )
                               : null}
                           </span>
