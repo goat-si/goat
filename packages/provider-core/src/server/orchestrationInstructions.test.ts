@@ -113,6 +113,11 @@ describe("GOAT provider instructions", () => {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Do not create ad-hoc worktrees or clones");
   });
 
+  it("keeps bounded child work on another machine a subagent of this thread", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "also on another host (target.host)");
+    assert.notInclude(GOAT_ORCHESTRATION_INSTRUCTIONS, "Remote agents: `ssh.thread_launch`");
+  });
+
   it("tells agents how to settle their own thread", () => {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "settle any thread, including this one");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`thread.organize`");

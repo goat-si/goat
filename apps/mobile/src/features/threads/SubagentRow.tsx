@@ -44,6 +44,8 @@ export function SubagentRow(props: {
   readonly environmentId: EnvironmentId;
   readonly subagent: SubagentRowSubagent;
   readonly elapsed: ReactNode;
+  /** Whether the row opens a thread; a remote child's depends on this app's connections. */
+  readonly openable?: boolean;
 }) {
   const presentation = resolveSubagentRowPresentation(props.subagent);
   const detail = subagentCardDetail(presentation.detail);
@@ -78,7 +80,7 @@ export function SubagentRow(props: {
             </Text>
           </View>
           {props.elapsed}
-          {presentation.canOpenThread ? (
+          {(props.openable ?? presentation.canOpenThread) ? (
             <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />
           ) : null}
         </View>

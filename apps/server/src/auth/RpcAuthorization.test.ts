@@ -774,6 +774,7 @@ it.effect(
         WS_METHODS.memoryOwnerSourceReadPolicyGet,
         WS_METHODS.memoryOwnerSourceReadPolicyUpdate,
       ];
+      const { memoryReadSource, memoryTurnInspect, memoryThreadPreference } = WS_METHODS;
       const cases = [
         {
           method: WS_METHODS.memoryImportProvider,
@@ -782,7 +783,7 @@ it.effect(
         ...reads.map((method) => ({ method, scopes: ["memory:read"] as const })),
         ...writes.map((method) => ({ method, scopes: ["memory:write"] as const })),
         ...settings.map((method) => ({ method, scopes: ["settings:write"] as const })),
-        ...[WS_METHODS.memoryReadSource, WS_METHODS.memoryTurnInspect].map((method) => ({
+        ...[memoryReadSource, memoryTurnInspect, memoryThreadPreference].map((method) => ({
           method,
           scopes: ["memory:read", "orchestration:read"] as const,
         })),

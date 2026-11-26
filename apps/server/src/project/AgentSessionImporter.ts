@@ -253,11 +253,18 @@ const make = Effect.gen(function* () {
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
     let skippedCount = 0;
+    const skippedThreads: Array<{ thread: string; reason: string }> = [];
+    const recordSkip = (thread: string, reason: string) => {
+      skippedCount += 1;
+      if (skippedThreads.length < 20) {
+        skippedThreads.push({ thread: thread.slice(0, 100), reason: reason.slice(0, 200) });
+      }
+    };
 
     yield* Stream.runForEach(outcomes, (outcome) =>
       Effect.gen(function* () {
         if (outcome._tag === "Skipped") {
-          skippedCount += 1;
+          recordSkip(outcome.thread, outcome.reason);
           return;
         }
         const source = outcome.source;
@@ -331,7 +338,7 @@ const make = Effect.gen(function* () {
               return yield* new AgentSessionThreadModifiedError({ threadId });
             }
             if (!matchesImportedMessages(threadId, existing.value.messages, thread.messages)) {
-              return false;
+              return "Saved messages differ from the source transcript.";
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
@@ -470,19 +477,40 @@ const make = Effect.gen(function* () {
               provider: outcome.thread.source,
               sessionId: outcome.thread.providerSessionId,
               cause,
-            }).pipe(Effect.as(false)),
+            }).pipe(
+              Effect.as(
+                cause._tag === "AgentSessionUnresumableSessionError"
+                  ? "Invalid provider session identifier."
+                  : cause._tag === "AgentSessionThreadProjectConflictError"
+                    ? "This thread already belongs to another project."
+                    : cause._tag === "AgentSessionThreadModifiedError"
+                      ? "This thread already contains activity in GOAT."
+                      : "Could not save the imported conversation.",
+              ),
+            ),
           ),
         );
         if (imported === true) {
           importedThreadIds.add(threadId);
           importedCount += 1;
-        } else if (imported === false) {
-          skippedCount += 1;
+        } else if (typeof imported === "string") {
+          recordSkip(
+            outcome.thread.title.trim().split("\n", 1)[0]?.slice(0, 100) ||
+              source.providerSessionId,
+            imported,
+          );
         }
       }),
     );
 
-    return { importedCount, skippedCount } satisfies AgentSessionImportResult;
+    return {
+      importedCount,
+      skippedCount,
+      ...(skippedThreads.length ? { skippedThreads } : {}),
+      ...(skippedCount > skippedThreads.length
+        ? { skippedDetailsOmitted: skippedCount - skippedThreads.length }
+        : {}),
+    } satisfies AgentSessionImportResult;
   });
 
   const importNativeHistory = Effect.fn("AgentSessionImporter.importNativeHistory")(

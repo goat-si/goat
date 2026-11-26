@@ -2,13 +2,13 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
-  MessageId,
   PositiveInt,
   RunAttemptId,
   RunId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChatAttachmentId } from "./chatAttachment.ts";
+import { ThreadResultAttachmentRef, ThreadResultAttachments } from "./threadResultAttachments.ts";
+export { ThreadResultAttachments } from "./threadResultAttachments.ts";
 import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 export { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 
@@ -33,21 +33,12 @@ export type ThreadResultPullRequest = typeof ThreadResultPullRequest.Type;
 
 const CommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{7,64}$/i));
 
-const AttachmentRef = Schema.Struct({ messageId: MessageId, attachmentId: ChatAttachmentId });
-export const ThreadResultAttachments = Schema.Array(
-  Schema.Struct({
-    ...AttachmentRef.fields,
-    attemptId: RunAttemptId,
-    name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
-  }),
-).check(Schema.isMaxLength(128));
-
 /** What an agent reports about its own run with goat_thread_report_result. */
 export const ThreadResultReport = Schema.Struct({
   runId: Schema.optional(RunId),
   expectedAttemptId: Schema.optional(RunAttemptId),
   attachmentRefs: Schema.optional(
-    Schema.Array(AttachmentRef).check(Schema.isMaxLength(8)),
+    Schema.Array(ThreadResultAttachmentRef).check(Schema.isMaxLength(8)),
   ).annotate({
     description:
       "Existing attachments on messages in this thread. Supply runId and expectedAttemptId from the current run. References from earlier attempts remain available.",

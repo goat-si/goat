@@ -2,6 +2,7 @@ import { expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import { ThreadResult, ThreadResultReport } from "./threadResult.ts";
+import { RemoteReportedOutcome } from "./remoteReports.ts";
 
 it("retains explicit run and attempt relevance while rejecting unknown relevance and outcomes", () => {
   const decode = Schema.decodeUnknownSync(ThreadResultReport);
@@ -15,6 +16,27 @@ it("retains explicit run and attempt relevance while rejecting unknown relevance
   expect(decode({ outcome: "succeeded" })).toEqual({ outcome: "succeeded" });
   expect(() => decode({ ...report, notificationRelevance: "future" })).toThrow();
   expect(() => decode({ outcome: "no_update" })).toThrow();
+});
+
+it("decodes remote settlement across versions with and without attachment references", () => {
+  const old = RemoteReportedOutcome.mapFields(Struct.omit(["attachments"]));
+  const decodeNew = Schema.decodeUnknownSync(RemoteReportedOutcome);
+  const decodeOld = Schema.decodeUnknownSync(old);
+  const legacy = { outcome: "succeeded", summary: "Done" };
+  const current = {
+    ...legacy,
+    attachments: [
+      {
+        messageId: "message",
+        attachmentId: "attachment",
+        attemptId: "attempt",
+        name: "evidence.xml",
+      },
+    ],
+  };
+  expect(decodeNew(legacy)).toEqual(legacy);
+  expect(decodeNew(current)).toEqual(current);
+  expect(decodeOld(current)).toEqual(legacy);
 });
 
 it("keeps old results readable and bounds attachment references", () => {

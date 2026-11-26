@@ -432,7 +432,7 @@ it.effect(
       const threadId = importId(source);
       const importer = yield* makeImporter([source]);
       yield* sql`CREATE TEMP TRIGGER fail_import BEFORE INSERT ON orchestration_events WHEN NEW.event_type = 'message.updated' BEGIN SELECT RAISE(ABORT, 'test publication failure'); END`;
-      expect(yield* importer.run).toEqual({ importedCount: 0, skippedCount: 1 });
+      expect(yield* importer.run).toMatchObject({ importedCount: 0, skippedCount: 1 });
       expect(yield* events.read({ threadId }).pipe(Stream.runCollect)).toEqual([]);
       expect(yield* Effect.option(projections.getThread(threadId))).toEqual(Option.none());
       expect(yield* runtimes.list()).toEqual([]);
@@ -440,7 +440,7 @@ it.effect(
       yield* sql`DROP TRIGGER fail_import`;
 
       yield* sql`CREATE TEMP TRIGGER fail_runtime BEFORE INSERT ON provider_session_runtime BEGIN SELECT RAISE(ABORT, 'test runtime failure'); END`;
-      expect(yield* importer.run).toEqual({ importedCount: 0, skippedCount: 1 });
+      expect(yield* importer.run).toMatchObject({ importedCount: 0, skippedCount: 1 });
       const committed = yield* events.read({ threadId }).pipe(Stream.runCollect);
       expect(committed).toHaveLength(6);
       expect(importer.published).toHaveLength(6);
@@ -500,10 +500,14 @@ it.effect("counts only new threads when re-importing cached and recovered transc
         })),
       },
       fresh,
-      { _tag: "Skipped" },
+      { _tag: "Skipped", thread: "missing-parent", reason: "Parent history is unavailable." },
     ]);
 
-    expect(yield* repeated.run).toEqual({ importedCount: 1, skippedCount: 1 });
+    expect(yield* repeated.run).toEqual({
+      importedCount: 1,
+      skippedCount: 1,
+      skippedThreads: [{ thread: "missing-parent", reason: "Parent history is unavailable." }],
+    });
     expect(yield* events.read({ threadId: importId(recovered) }).pipe(Stream.runCollect)).toEqual(
       before,
     );
@@ -520,6 +524,27 @@ it.effect("counts only new threads when re-importing cached and recovered transc
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
+it.effect("bounds skipped detail count and strings while counting every skip", () =>
+  Effect.gen(function* () {
+    const importer = yield* makeImporter(
+      Array.from({ length: 25 }, () => ({
+        _tag: "Skipped" as const,
+        thread: "t".repeat(500),
+        reason: "r".repeat(500),
+      })),
+    );
+    const result = yield* importer.run;
+    expect(result.skippedCount).toBe(25);
+    expect(result.skippedThreads).toHaveLength(20);
+    expect(
+      result.skippedThreads?.every(
+        ({ thread, reason }) => thread.length <= 100 && reason.length <= 200,
+      ),
+    ).toBe(true);
+    expect(result).toMatchObject({ skippedDetailsOmitted: 5 });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
 it.effect("does not certify new native history after a partial import retry", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -529,7 +554,7 @@ it.effect("does not certify new native history after a partial import retry", ()
     const threadId = importId(original);
     const importer = yield* makeImporter([original]);
     yield* sql`CREATE TEMP TRIGGER fail_runtime BEFORE INSERT ON provider_session_runtime BEGIN SELECT RAISE(ABORT, 'test runtime failure'); END`;
-    expect(yield* importer.run).toEqual({ importedCount: 0, skippedCount: 1 });
+    expect(yield* importer.run).toMatchObject({ importedCount: 0, skippedCount: 1 });
     yield* sql`DROP TRIGGER fail_runtime`;
     expect(yield* runtimes.list()).toEqual([]);
     const continued = candidate(CODEX_MODEL_SELECTION, original.source.providerSessionId);
@@ -540,7 +565,7 @@ it.effect("does not certify new native history after a partial import retry", ()
       { role: "assistant", text: "Native continuation", createdAt: timestamp },
     );
     // The thread holds only the original messages, so the continued transcript stays unrecorded.
-    expect(yield* (yield* makeImporter([continued])).run).toEqual({
+    expect(yield* (yield* makeImporter([continued])).run).toMatchObject({
       importedCount: 0,
       skippedCount: 1,
     });
@@ -646,7 +671,7 @@ it.effect("repeated imports reach linked-worktree sessions behind the scan budge
       scanner: Context.get(scannerContext, AgentSessionScanner.AgentSessionScanner),
     });
 
-    expect(yield* importer.run).toEqual({ importedCount: 100, skippedCount: 1 });
+    expect(yield* importer.run).toMatchObject({ importedCount: 100, skippedCount: 1 });
     expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
     const oldest = yield* ProjectionStore.ProjectionStoreV2.pipe(
       Effect.flatMap((projections) =>

@@ -2,6 +2,15 @@ import * as Schema from "effect/Schema";
 import { RunId, ThreadId } from "./baseSchemas.ts";
 import { MemoryId, MemoryRevisionId, MemorySpaceId } from "./memory.ts";
 
+export const ThreadMemoryInput = Schema.Struct({
+  memorySpaceId: MemorySpaceId,
+  threadId: ThreadId,
+});
+export type ThreadMemoryInput = typeof ThreadMemoryInput.Type;
+export const SavedThreadPreference = Schema.NullOr(
+  Schema.Struct({ memorySpaceId: MemorySpaceId, memoryId: MemoryId }),
+);
+export type SavedThreadPreference = typeof SavedThreadPreference.Type;
 export const TurnMemoryInput = Schema.Struct({
   memorySpaceId: MemorySpaceId,
   threadId: ThreadId,

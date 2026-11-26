@@ -1,3 +1,4 @@
+import { promotionMemoryId } from "./savedThreadPreference.ts";
 import { closureCap, requireClosureCapacity } from "./MemoryDependencies.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -138,9 +139,7 @@ export const makeCommitSummary = (deps: {
         key = `project:${encodeProjectKey(projectKey)}`;
       }
       const thread = meta.sourceThread;
-      const memoryId = M.MemoryId.make(
-        deps.stableUuid(`${thread.environmentId}:${thread.threadId}:promotion:${key}`),
-      );
+      const memoryId = promotionMemoryId(thread, key, deps.stableUuid);
       const operationId = M.MemoryOperationId.make(
         deps.stableUuid(`${commit.work.id}:promotion:${key}:operation`),
       );
