@@ -2,9 +2,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { assert, it } from "@effect/vitest";
 import {
   OrchestratorMcpFailure,
+  MessageId,
   ProviderInstanceId,
   ProviderDriverKind,
   RunId,
+  RunAttemptId,
   RuntimeRequestId,
   type OrchestratorMcpDelegateTaskInput,
 } from "@goat/contracts";
@@ -194,12 +196,25 @@ it.effect(
         });
         const call = yield* Queue.take(f.calls);
         assert.equal(call.input.arguments.watchRunId, remoteRunId);
+        const attachments = [
+          {
+            messageId: MessageId.make("message"),
+            attachmentId: "attachment",
+            attemptId: RunAttemptId.make("attempt"),
+            name: "evidence.xml",
+          },
+        ];
         yield* Deferred.succeed(call.reply, {
           threadId: remoteThreadId,
           reports: [],
           hasMore: false,
           latestRunId: RunId.make("later-B"),
-          observedRun: { runId: remoteRunId, status: "completed", summary: "A finished" },
+          observedRun: {
+            runId: remoteRunId,
+            status: "completed",
+            summary: "A finished",
+            reported: { outcome: "succeeded", attachments },
+          },
           timedOut: false,
         });
         let result = yield* Queue.take(f.commands);
@@ -209,6 +224,7 @@ it.effect(
         assert.equal(status.link, handle.link);
         assert.equal(status.status, "completed");
         assert.equal(status.summary, "A finished");
+        assert.deepEqual(status.attachments, attachments);
         assert.equal(status.latestTerminalSummary, "A finished");
         assert.equal((yield* service.delegateTask(scope, input)).taskId, handle.taskId);
         assert.equal(f.launches.length, 1);
@@ -519,6 +535,33 @@ it.effect.each(["remote_refused", "invalid_request", "caller_changed"] as const)
         assert.notInclude(handle.summary ?? "", "outcome unknown");
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),
+);
+
+it.effect("keeps the remote's reason in a refused remote task's summary", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.refuse("remote_refused");
+    yield* Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const handle = yield* service.delegateTask(scope, input);
+      assert.equal(handle.status, "failed");
+      assert.include(handle.summary ?? "", "Launch refused or unanswered");
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
+);
+
+it.effect("never reports a refusal that may have started the child as nothing launched", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.refuse("remote_refused", { launchMayHaveStarted: true });
+    yield* Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const handle = yield* service.delegateTask(scope, input);
+      assert.equal(handle.status, "failed");
+      assert.notInclude(handle.summary ?? "", "nothing was launched");
+      assert.include(handle.summary ?? "", "launch outcome unknown");
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
 );
 
 it.effect("reports a later authority refusal as a definite unlaunched task", () =>

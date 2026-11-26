@@ -88,6 +88,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.siteNotesRestoreSeed]: AuthMemoryWriteScope,
   [WS_METHODS.memoryList]: AuthMemoryReadScope,
   [WS_METHODS.memoryRead]: AuthMemoryReadScope,
+  [WS_METHODS.memoryThreadPreference]: AuthMemoryReadScope,
   [WS_METHODS.memoryTurnInspect]: AuthMemoryReadScope,
   [WS_METHODS.memoryHistory]: AuthMemoryReadScope,
   [WS_METHODS.memoryResetReportAttempts]: AuthSettingsWriteScope,
@@ -311,7 +312,7 @@ export function clientRpcRequiredScopes(
     input.reloadSecrets === true
   )
     return [AuthOrchestrationReadScope, AuthProvidersManageScope];
-  if (method === WS_METHODS.memoryTurnInspect)
+  if (method === WS_METHODS.memoryTurnInspect || method === WS_METHODS.memoryThreadPreference)
     return [AuthMemoryReadScope, AuthOrchestrationReadScope];
   if (method === WS_METHODS.browserClaimsClaim)
     return [AuthOrchestrationOperateScope, AuthSettingsWriteScope];

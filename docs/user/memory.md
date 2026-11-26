@@ -92,6 +92,8 @@ In **Settings → Memory**, choose **Select memories**, mark the records, and ch
 
 ### Find memories saved from a conversation
 
+When GOAT saves a preference for all projects from your conversation, choose **View** in the conversation to open its current entry in Memory settings.
+
 Use **Saved from conversation** to choose a conversation, then browse or search within the selected memory scope. GOAT matches the conversation that originally saved the memory. Older memories with no recorded conversation do not appear in the filtered results.
 
 ## Agent access

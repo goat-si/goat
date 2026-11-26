@@ -107,6 +107,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       derivedCap: Schema.optionalKey(Schema.Literal(1000)),
       conversationMemoryControl: Schema.optionalKey(Schema.Boolean),
       turnMemory: Schema.optionalKey(Schema.Boolean),
+      savedThreadPreference: Schema.optionalKey(Schema.Boolean),
       scopeMoves: Schema.optionalKey(Schema.Boolean),
       scopeMoveReceipts: Schema.optionalKey(Schema.Boolean),
       provenanceProjection: Schema.optionalKey(Schema.Boolean),

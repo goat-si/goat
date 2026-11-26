@@ -1,6 +1,8 @@
 import { expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import { ThreadResultReport } from "./threadResult.ts";
+import * as Struct from "effect/Struct";
+import { ThreadResult, ThreadResultReport } from "./threadResult.ts";
+import { RemoteReportedOutcome } from "./remoteReports.ts";
 
 it("retains explicit run and attempt relevance while rejecting unknown relevance and outcomes", () => {
   const decode = Schema.decodeUnknownSync(ThreadResultReport);
@@ -14,4 +16,56 @@ it("retains explicit run and attempt relevance while rejecting unknown relevance
   expect(decode({ outcome: "succeeded" })).toEqual({ outcome: "succeeded" });
   expect(() => decode({ ...report, notificationRelevance: "future" })).toThrow();
   expect(() => decode({ outcome: "no_update" })).toThrow();
+});
+
+it("decodes remote settlement across versions with and without attachment references", () => {
+  const old = RemoteReportedOutcome.mapFields(Struct.omit(["attachments"]));
+  const decodeNew = Schema.decodeUnknownSync(RemoteReportedOutcome);
+  const decodeOld = Schema.decodeUnknownSync(old);
+  const legacy = { outcome: "succeeded", summary: "Done" };
+  const current = {
+    ...legacy,
+    attachments: [
+      {
+        messageId: "message",
+        attachmentId: "attachment",
+        attemptId: "attempt",
+        name: "evidence.xml",
+      },
+    ],
+  };
+  expect(decodeNew(legacy)).toEqual(legacy);
+  expect(decodeNew(current)).toEqual(current);
+  expect(decodeOld(current)).toEqual(legacy);
+});
+
+it("keeps old results readable and bounds attachment references", () => {
+  const decodeReport = Schema.decodeUnknownSync(ThreadResultReport);
+  const decodeResult = Schema.decodeUnknownSync(ThreadResult);
+  const ref = { messageId: "message", attachmentId: "attachment" };
+  const result = {
+    runId: "run",
+    runStatus: "completed",
+    outcome: "succeeded",
+    reportedAt: null,
+    pullRequests: [],
+    commits: [],
+    branch: null,
+  };
+  expect(decodeResult(result)).toEqual(result);
+  expect(
+    decodeReport({ outcome: "succeeded", attachmentRefs: Array(8).fill(ref) }).attachmentRefs,
+  ).toHaveLength(8);
+  expect(() =>
+    decodeReport({ outcome: "succeeded", attachmentRefs: Array(9).fill(ref) }),
+  ).toThrow();
+  const attachment = { ...ref, attemptId: "attempt", name: "result.xml" };
+  const oldResult = ThreadResult.mapFields(Struct.omit(["attachments"]));
+  expect(Schema.decodeUnknownSync(oldResult)({ ...result, attachments: [attachment] })).toEqual(
+    result,
+  );
+  expect(
+    decodeResult({ ...result, attachments: Array(128).fill(attachment) }).attachments,
+  ).toHaveLength(128);
+  expect(() => decodeResult({ ...result, attachments: Array(129).fill(attachment) })).toThrow();
 });

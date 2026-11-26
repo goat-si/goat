@@ -1,4 +1,4 @@
-import { useMessages } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import type { ServerProviderSkill } from "@goat/contracts";
 import { preloadPatchFile } from "@pierre/diffs/ssr";
 import { useAtomValue } from "@effect/atom-react";
@@ -18,18 +18,27 @@ const PREVIEW_SKILLS: ReadonlyArray<ServerProviderSkill> = [
   { name: "frontend-design", path: ".agents/skills/frontend-design/SKILL.md", enabled: true },
 ];
 
-const PROMPT_PREVIEW_TEXT =
-  "Use $frontend-design to fix the flaky test in " +
-  "[surface.test.ts](apps/web/src/terminal/ghostty/surface.test.ts) and align the header with " +
-  "[SettingsPanels.tsx](apps/web/src/components/settings/SettingsPanels.tsx) before shipping.";
-
 function noop() {}
 
 export function PromptFontPreview() {
+  const gt = useGT();
+  const example = gt(
+    "Use {skill} to fix the flaky test in {test} and align the header with {component} before shipping.",
+    {
+      skill: "$frontend-design",
+      test: "[surface.test.ts](apps/web/src/terminal/ghostty/surface.test.ts)",
+      component: "[SettingsPanels.tsx](apps/web/src/components/settings/SettingsPanels.tsx)",
+    },
+  );
+  return <EditablePromptPreview key={example} example={example} />;
+}
+
+function EditablePromptPreview({ example }: { example: string }) {
+  const gt = useGT();
   const m = useMessages();
   const editorRef = useRef<ComposerPromptEditorHandle>(null);
-  const [prompt, setPrompt] = useState(PROMPT_PREVIEW_TEXT);
-  const [cursor, setCursor] = useState(PROMPT_PREVIEW_TEXT.length);
+  const [prompt, setPrompt] = useState(example);
+  const [cursor, setCursor] = useState(example.length);
   const onChange = (nextValue: string, nextCursor: number) => {
     setPrompt(nextValue);
     setCursor(nextCursor);
@@ -37,7 +46,7 @@ export function PromptFontPreview() {
   return (
     <div className="mt-1 mb-2 rounded-lg border border-border bg-background px-3 py-2">
       <ComposerPromptEditor
-        ariaLabel="Prompt font preview"
+        ariaLabel={gt("Prompt font preview")}
         editorRef={editorRef}
         value={prompt}
         cursor={cursor}
@@ -151,6 +160,7 @@ function previewTerminalFont(family: string, size: number): { family?: string; s
 }
 
 export function TerminalFontPreview({ family, size }: { family: string; size: number }) {
+  const gt = useGT();
   const mountRef = useRef<HTMLDivElement>(null);
   const [surface, setSurface] = useState<GhosttyTerminalSurface | null>(null);
   const [initialFont] = useState(() => previewTerminalFont(family, size));
@@ -227,7 +237,7 @@ export function TerminalFontPreview({ family, size }: { family: string; size: nu
     <div
       ref={mountSurface}
       className="relative mt-1 mb-2 h-52 overflow-hidden rounded-lg border border-border"
-      aria-label="Terminal font preview"
+      aria-label={gt("Terminal font preview")}
     />
   );
 }

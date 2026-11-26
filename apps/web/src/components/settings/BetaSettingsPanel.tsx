@@ -89,6 +89,7 @@ export function BetaSettingsPanel() {
 
 /** Signed out of GOAT Connect, the row offers to sign in instead of its switch. */
 function GuestLinksRowWithSignIn() {
+  const gt = useGT();
   const setting = useTranslatedSearchableSetting();
   const { isSignedIn } = useAuth();
   const { openAuthPrompt } = useGoatConnectAuthPrompt();
@@ -97,10 +98,17 @@ function GuestLinksRowWithSignIn() {
   return (
     <SettingsRow
       {...setting("guest-links")}
-      description="Share a thread with a guest who watches it live in their browser and sends messages you approve. Sign in to GOAT Connect to use guest links."
+      description={
+        <>
+          {gt(
+            "Share a thread with a guest who watches it live in their browser and sends messages you approve.",
+          )}{" "}
+          {gt("Sign in to GOAT Connect to use guest links.")}
+        </>
+      }
       control={
         <Button size="sm" variant="outline" onClick={openAuthPrompt}>
-          Sign in
+          {gt("Sign in")}
         </Button>
       }
     />
@@ -108,6 +116,7 @@ function GuestLinksRowWithSignIn() {
 }
 
 function GuestLinksRow() {
+  const gt = useGT();
   const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
@@ -118,12 +127,15 @@ function GuestLinksRow() {
       settingKeys={["guestSharingEnabled"]}
       description={
         <>
-          Share a thread with a guest who watches it live in their browser and sends messages you
-          approve. Needs GOAT Connect: sign in and link this machine in{" "}
+          {gt(
+            "Share a thread with a guest who watches it live in their browser and sends messages you approve.",
+          )}{" "}
+          {gt(
+            "To use guest links, sign in to GOAT Connect and link this machine. Turning this off disables every guest link.",
+          )}{" "}
           <Link to="/settings/connections" className="underline underline-offset-2">
-            Connections
+            {gt("Open Connections")}
           </Link>
-          . While it is off, every guest link stops working.
         </>
       }
       control={

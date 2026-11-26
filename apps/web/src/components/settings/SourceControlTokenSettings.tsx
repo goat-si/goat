@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { sourceControlTokenPatch } from "@goat/shared/serverSettings";
 import { isSecretReference, type EnvironmentId, type SecretReference } from "@goat/contracts";
 import { ExternalLinkIcon } from "~/components/solar";
@@ -28,6 +29,7 @@ export function SourceControlTokenSettings({
   readonly credentials: SourceControlHostCredentials;
   readonly onSaved: () => void;
 }) {
+  const gt = useGT();
   const { tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
@@ -87,14 +89,14 @@ export function SourceControlTokenSettings({
                 />
               }
             >
-              Create a token
+              {gt("Create a token")}
               <ExternalLinkIcon aria-hidden className="size-3" />
             </InlineButton>
           ) : null}
         </p>
         <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
           <div className="grid gap-1.5">
-            <Label htmlFor={`${definition.kind}-token-host-${environmentId}`}>Host</Label>
+            <Label htmlFor={`${definition.kind}-token-host-${environmentId}`}>{gt("Host")}</Label>
             <Input
               id={`${definition.kind}-token-host-${environmentId}`}
               autoComplete="off"
@@ -105,7 +107,7 @@ export function SourceControlTokenSettings({
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor={`${definition.kind}-token-${environmentId}`}>Token</Label>
+            <Label htmlFor={`${definition.kind}-token-${environmentId}`}>{gt("Token")}</Label>
             {!isSecretReference(token) ? (
               <SecretInput
                 id={`${definition.kind}-token-${environmentId}`}
@@ -138,11 +140,11 @@ export function SourceControlTokenSettings({
                 disabled={saving}
                 onClick={() => void save(normalizedHost, "")}
               >
-                Remove
+                {gt("Remove")}
               </Button>
             ) : null}
             <Button type="submit" size="xs" disabled={!normalizedHost || !draft.trim() || saving}>
-              Save
+              {gt("Save")}
             </Button>
           </div>
         </div>

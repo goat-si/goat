@@ -9,6 +9,7 @@ export const moveFloorCapabilities = {
   derivedCap: 1000,
   conversationMemoryControl: true,
   turnMemory: true,
+  savedThreadPreference: true,
   originFilter: true,
   originUpdates: true,
   originCatchup: true,

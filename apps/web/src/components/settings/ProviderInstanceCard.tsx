@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { readProviderCustomModels, writeProviderCustomModels } from "./ProviderAcpCustomModels";
 import { useCustomModelSaves } from "./useCustomModelSaves";
 import {
@@ -68,7 +69,7 @@ import { deriveProviderSettingsFields, ProviderSettingsForm } from "./ProviderSe
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
-import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { ProviderAuthEmail } from "./ProviderAuthEmail";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -161,21 +162,6 @@ const CLOUD_VENDOR_NAMES: ReadonlyMap<string, string> = new Map([
   ["devinCloud", "Devin"],
 ]);
 
-function ProviderAuthEmail(props: { readonly email: string | undefined }) {
-  const email = props.email?.trim();
-  if (!email) return null;
-
-  return (
-    <RedactedSensitiveText
-      value={email}
-      ariaLabel="Toggle account email visibility"
-      revealTooltip="Click to reveal email"
-      hideTooltip="Click to hide email"
-      className="max-w-full truncate"
-    />
-  );
-}
-
 function readProviderEnvironmentVariable(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
   name: string,
@@ -234,6 +220,7 @@ function ProviderEnvironmentFieldRow(props: {
   readonly environmentId?: EnvironmentId | undefined;
   readonly onSecret: (field: ProviderEnvironmentField, secret: SecretReference | undefined) => void;
 }) {
+  const gt = useGT();
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
 
@@ -261,7 +248,7 @@ function ProviderEnvironmentFieldRow(props: {
               className="min-w-0 flex-1"
               value={value}
               onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder="Enter or re-enter secret"
+              placeholder={gt("Enter or re-enter secret")}
               configured={props.variable?.valueRedacted === true}
               spellCheck={false}
             />
@@ -279,7 +266,7 @@ function ProviderEnvironmentFieldRow(props: {
               size="icon-sm"
               variant="ghost-destructive"
               onClick={() => props.onRemove(props.field)}
-              aria-label={`Clear ${props.field.label}`}
+              aria-label={gt("Clear {label}", { label: props.field.label })}
             >
               <XIcon className="size-3.5" />
             </Button>
@@ -295,6 +282,7 @@ export function ProviderEnvironmentSection(props: {
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
   readonly environmentId?: EnvironmentId | undefined;
 }) {
+  const gt = useGT();
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
     props.environment.map(makeEnvironmentDraftRow),
   );
@@ -390,12 +378,12 @@ export function ProviderEnvironmentSection(props: {
 
   return (
     <SettingsRow
-      title="Variables"
-      description="API keys, base URLs, and other per-instance CLI settings."
+      title={gt("Variables")}
+      description={gt("API keys, base URLs, and other per-instance CLI settings.")}
       control={
         <Button type="button" size="sm" variant="outline" onClick={addVariable}>
           <PlusIcon className="size-3" />
-          Add variable
+          {gt("Add variable")}
         </Button>
       }
     >
@@ -424,7 +412,7 @@ export function ProviderEnvironmentSection(props: {
                   className="min-w-0 flex-1"
                   value={variable.valueRedacted ? "" : variable.value}
                   onCommit={(value) => updateVariable(variable.id, { value })}
-                  placeholder={variable.name ? "Enter or re-enter secret" : "value"}
+                  placeholder={variable.name ? gt("Enter or re-enter secret") : gt("value")}
                   configured={variable.valueRedacted === true}
                   spellCheck={false}
                   aria-label={`Environment variable value ${index + 1}`}
@@ -437,7 +425,7 @@ export function ProviderEnvironmentSection(props: {
                   value={variable.valueRedacted ? "" : variable.value}
                   onCommit={(value) => updateVariable(variable.id, { value })}
                   autoComplete="off"
-                  placeholder="value"
+                  placeholder={gt("value")}
                   spellCheck={false}
                   aria-label={`Environment variable value ${index + 1}`}
                 />
@@ -478,7 +466,7 @@ export function ProviderEnvironmentSection(props: {
                   }
                 />
                 <TooltipPopup side="top">
-                  {variable.sensitive ? "Sensitive, stored separately" : "Plain text"}
+                  {variable.sensitive ? gt("Sensitive, stored separately") : gt("Plain text")}
                 </TooltipPopup>
               </Tooltip>
               <Button
@@ -493,9 +481,9 @@ export function ProviderEnvironmentSection(props: {
             </div>
           ))}
           <p className="text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app.
+            {gt("Sensitive values are stored separately and never returned to the app.")}
             {rows.some((row) => row.valueRedacted === true)
-              ? " Enter a new value to rename a saved one or make it plain text."
+              ? gt(" Enter a new value to rename a saved one or make it plain text.")
               : null}
           </p>
         </div>
@@ -511,9 +499,10 @@ function ProjectOverrideInheritance({
   readonly projectEnabled: boolean;
   readonly deviceEnabled: boolean;
 }) {
+  const gt = useGT();
   const layers = [
-    { key: "project", label: "Project", enabled: projectEnabled, effective: true },
-    { key: "device", label: "Device", enabled: deviceEnabled, effective: false },
+    { key: "project", label: gt("Project"), enabled: projectEnabled, effective: true },
+    { key: "device", label: gt("Device"), enabled: deviceEnabled, effective: false },
   ];
   return (
     <Popover>
@@ -525,7 +514,7 @@ function ProjectOverrideInheritance({
                 <Button
                   size="icon-micro"
                   variant="ghost-muted"
-                  aria-label="Overridden for this project. Show where this value comes from"
+                  aria-label={gt("Overridden for this project. Show where this value comes from")}
                 />
               }
             />
@@ -533,7 +522,7 @@ function ProjectOverrideInheritance({
         >
           <LayersIcon className="size-3 text-primary" />
         </TooltipTrigger>
-        <TooltipPopup side="top">Overridden for this project</TooltipPopup>
+        <TooltipPopup side="top">{gt("Overridden for this project")}</TooltipPopup>
       </Tooltip>
       <PopoverPopup align="end" width="md" padding="none">
         <ol role="list" className="px-3 py-2.5 text-sm">
@@ -559,7 +548,7 @@ function ProjectOverrideInheritance({
                   layer.effective ? "text-foreground" : "text-muted-foreground",
                 )}
               >
-                {layer.enabled ? "On" : "Off"}
+                {layer.enabled ? gt("On") : gt("Off")}
                 {layer.effective ? (
                   <CheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
                 ) : (
@@ -659,6 +648,7 @@ export function ProviderInstanceCard({
   acpProjects = EMPTY_ACP_PROJECTS,
   projectOverride,
 }: ProviderInstanceCardProps) {
+  const gt = useGT();
   const deviceEnabled =
     settings &&
     isProviderDriverKind(instance.driver) &&
@@ -672,11 +662,13 @@ export function ProviderInstanceCard({
   const statusKey = enabled ? getProviderStatusKey(effectiveProvider) : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const summary = enabled
-    ? getProviderSummary(effectiveProvider)
-    : { headline: "Disabled", detail: null };
+    ? getProviderSummary(effectiveProvider, gt)
+    : { headline: gt("Disabled"), detail: null };
   const authEmail = liveProvider?.auth.email?.trim();
   const cloudVendor = CLOUD_VENDOR_NAMES.get(instance.driver);
-  const cloudSignInLabel = cloudVendor ? `Uses your ${cloudVendor} sign-in` : undefined;
+  const cloudSignInLabel = cloudVendor
+    ? gt("Uses your {provider} sign-in", { provider: cloudVendor })
+    : undefined;
   const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
   const authLabel =
     enabled && liveProvider?.auth.status === "authenticated"
@@ -731,22 +723,23 @@ export function ProviderInstanceCard({
     displayName: instance.displayName?.trim() || driverOption?.label || String(instance.driver),
     ...(codexRoute ? { codexRoute } : {}),
   });
-  const routeSummary = instance.driver === "codex" ? openCodexRouteSummary(codexRoute) : undefined;
+  const routeSummary =
+    instance.driver === "codex" ? openCodexRouteSummary(codexRoute, gt) : undefined;
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
   const redesign = useClientSettings((settings) => settings.redesignEnabled);
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
       toastManager.add({
         type: "success",
-        title: `${providerName} update command copied`,
-        description: "Run it in a terminal when you are ready to update.",
+        title: gt("{provider} update command copied", { provider: providerName }),
+        description: gt("Run it in a terminal when you are ready to update."),
       });
     },
     onError: (error, { providerName }) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Could not copy ${providerName} update command`,
+          title: gt("Could not copy {provider} update command", { provider: providerName }),
           description: error.message,
         }),
       );
@@ -912,8 +905,8 @@ export function ProviderInstanceCard({
     isAuthenticated && authEmail ? (
       <>
         {needsAttention ? statusDotNode : null}
-        <span>{cloudSignInLabel ?? "Authenticated as"}</span>
-        <ProviderAuthEmail email={authEmail} />
+        <span>{cloudSignInLabel ?? gt("Authenticated as")}</span>
+        <ProviderAuthEmail email={authEmail} className="max-w-full truncate" />
         {authLabel ? <span>· {authLabel}</span> : null}
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
@@ -964,7 +957,7 @@ export function ProviderInstanceCard({
           }
         />
         <TooltipPopup side="top">
-          {updateProgress ? "Updating" : versionAdvisory.title}
+          {updateProgress ? gt("Updating") : versionAdvisory.title}
         </TooltipPopup>
       </Tooltip>
       <PopoverPopup side="bottom" align="end" width="md" aria-label={versionAdvisory.title}>
@@ -993,10 +986,12 @@ export function ProviderInstanceCard({
             >
               {isUpdating ? <Spinner /> : <DownloadIcon />}
               {isUpdating
-                ? "Updating"
+                ? gt("Updating")
                 : versionAdvisory.targetVersion
-                  ? `Install ${getProviderVersionLabel(versionAdvisory.targetVersion)}`
-                  : "Update now"}
+                  ? gt("Install {version}", {
+                      version: getProviderVersionLabel(versionAdvisory.targetVersion),
+                    })
+                  : gt("Update now")}
             </Button>
           ) : null}
           {updateProgress || updateProblem ? (
@@ -1031,13 +1026,13 @@ export function ProviderInstanceCard({
                       variant="ghost-muted"
                       className="shrink-0"
                       onClick={() => copyToClipboard(updateCommand, { providerName: displayName })}
-                      aria-label="Copy update command"
+                      aria-label={gt("Copy update command")}
                     >
                       <CopyIcon className="size-3" />
                     </Button>
                   }
                 />
-                <TooltipPopup side="top">Copy command</TooltipPopup>
+                <TooltipPopup side="top">{gt("Copy command")}</TooltipPopup>
               </Tooltip>
             </div>
           ) : null}
@@ -1065,7 +1060,7 @@ export function ProviderInstanceCard({
             type="button"
             className="pointer-events-auto absolute inset-0 cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={onSelect}
-            aria-label={`Select ${displayName}`}
+            aria-label={gt("Select {provider}", { provider: displayName })}
             aria-pressed={selected}
           />
           {titleIconNode}
@@ -1110,8 +1105,8 @@ export function ProviderInstanceCard({
                 deviceEnabled={deviceEnabled}
               />
               <SettingResetButton
-                label={`${displayName} enablement`}
-                tooltip="Reset to the device setting"
+                label={gt("{provider} enablement", { provider: displayName })}
+                tooltip={gt("Reset to the device setting")}
                 disabled={readOnly || !canWriteSettings}
                 onClick={projectOverride.onReset}
               />
@@ -1121,7 +1116,7 @@ export function ProviderInstanceCard({
             checked={enabled}
             disabled={readOnly || (projectOverride !== undefined && !canWriteSettings)}
             onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-            aria-label={`Enable ${displayName}`}
+            aria-label={gt("Enable {provider}", { provider: displayName })}
           />
         </span>
       </div>
@@ -1160,7 +1155,6 @@ export function ProviderInstanceCard({
     </div>
   );
 
-  // The New design gives provider status its own row instead of hanging it under the name field.
   const statusContent = (
     <>
       <ProviderStatusDiagnostic detail={statusDiagnostic}>
@@ -1195,7 +1189,7 @@ export function ProviderInstanceCard({
             disabled={readOnly}
           >
             <ExternalLinkIcon />
-            Continue authentication
+            {gt("Continue authentication")}
           </Button>
         </div>
       ) : null}
@@ -1213,7 +1207,7 @@ export function ProviderInstanceCard({
     />
   ) : (
     <SettingsRow
-      title="Driver"
+      title={gt("Driver")}
       description={
         <span>
           This instance uses <code className="text-foreground">{String(instance.driver)}</code>,
@@ -1226,9 +1220,9 @@ export function ProviderInstanceCard({
   return (
     <>
       <SettingsSection title={displayName} icon={titleIconNode} headerAction={editorHeaderAction}>
-        {redesign ? <SettingsRow title="Status" status={statusContent} /> : null}
+        {redesign ? <SettingsRow title={gt("Status")} status={statusContent} /> : null}
         <SettingsRow
-          title="Display name"
+          title={gt("Display name")}
           {...(redesign ? {} : { status: statusContent })}
           control={
             <div
@@ -1263,7 +1257,7 @@ export function ProviderInstanceCard({
       {homeRoute}
 
       {setup || environmentFields.length > 0 ? (
-        <SettingsSection title="Setup">
+        <SettingsSection title={gt("Setup")}>
           {setup}
           {environmentFields.length > 0 ? (
             <div
@@ -1297,7 +1291,7 @@ export function ProviderInstanceCard({
           <FoldedSettingsSection
             key={instanceId}
             id={`provider-instance-${instanceId}-runtime`}
-            title="Runtime"
+            title={gt("Runtime")}
             headerPlacement="outside"
           >
             {runtime ?? runtimeFields}
@@ -1313,7 +1307,7 @@ export function ProviderInstanceCard({
           <FoldedSettingsSection
             key={instanceId}
             id={`provider-instance-${instanceId}-advanced`}
-            title="Advanced"
+            title={gt("Advanced")}
             headerPlacement="outside"
           >
             {runtimeFields}
@@ -1326,7 +1320,7 @@ export function ProviderInstanceCard({
         </div>
       ) : !driverOption || deriveProviderSettingsFields(driverOption).length > 0 ? (
         <SettingsSection
-          title="Runtime"
+          title={gt("Runtime")}
           inert={readOnly}
           aria-disabled={readOnly || undefined}
           className={readOnly ? "opacity-50 select-none" : undefined}
@@ -1337,7 +1331,7 @@ export function ProviderInstanceCard({
 
       {isCloudSiblingDriver(instance.driver) ? null : (
         <SettingsSection
-          title="Environment"
+          title={gt("Environment")}
           inert={readOnly}
           aria-disabled={readOnly || undefined}
           className={readOnly ? "opacity-50 select-none" : undefined}
@@ -1360,11 +1354,12 @@ export function ProviderInstanceCard({
       ) : null}
 
       {driverOption !== undefined ? (
-        <SettingsSection title="Models">
+        <SettingsSection title={gt("Models")}>
           <div className="px-3 py-3 sm:px-4">
             <p className="mb-3 text-xs text-muted-foreground">
-              Model preferences and custom models are saved on the selected environment and shared
-              across connected devices.
+              {gt(
+                "Model preferences and custom models are saved on the selected environment and shared across connected devices.",
+              )}
             </p>
             <ProviderModelsSection
               canManageCustomModels={!readOnly}

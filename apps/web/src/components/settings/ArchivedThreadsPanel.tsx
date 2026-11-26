@@ -1,4 +1,4 @@
-import { msg, useGT, useMessages } from "gt-react";
+import { msg, useGT, useLocale, useMessages } from "gt-react";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import { Spinner } from "~/components/ui/spinner";
 import { ArchiveIcon, ArchiveXIcon as ArchiveX, TrashIcon as Trash2Icon } from "~/components/solar";
@@ -14,7 +14,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { readLocalApi } from "../../localApi";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
-import { RelativeTime } from "../RelativeTime";
+import { useRelativeElapsedMs } from "../../hooks/useRelativeTimeState";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -29,6 +29,25 @@ const ARCHIVE_ACTIONS = [
   { action: "delete", label: msg("Delete"), Icon: Trash2Icon },
 ] as const;
 type ArchiveAction = (typeof ARCHIVE_ACTIONS)[number]["action"];
+
+function ArchivedThreadDates({ archivedAt, createdAt }: { archivedAt: string; createdAt: string }) {
+  const gt = useGT();
+  const locale = useLocale();
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const archived = useRelativeElapsedMs(archivedAt);
+  const created = useRelativeElapsedMs(createdAt);
+  const format = (elapsed: number | null) => {
+    if (elapsed === null) return "";
+    if (elapsed < 60_000) return formatter.format(0, "second");
+    if (elapsed < 3_600_000) return formatter.format(-Math.floor(elapsed / 60_000), "minute");
+    if (elapsed < 86_400_000) return formatter.format(-Math.floor(elapsed / 3_600_000), "hour");
+    return formatter.format(-Math.floor(elapsed / 86_400_000), "day");
+  };
+  return gt("Archived {archived} · Created {created}", {
+    archived: format(archived),
+    created: format(created),
+  });
+}
 
 export function ArchivedThreadsPanel() {
   const gt = useGT();
@@ -146,7 +165,7 @@ export function ArchivedThreadsPanel() {
       stackedThreadToast({
         type: "error",
         title,
-        description: error instanceof Error ? error.message : "An error occurred.",
+        description: error instanceof Error ? error.message : gt("An error occurred."),
       }),
     );
   };
@@ -169,7 +188,10 @@ export function ArchivedThreadsPanel() {
       pending.delete(key);
       setPendingKeys(new Set(pending));
     });
-    reportFailure(result._tag === "Failure" ? result : result.value, `Failed to ${action} thread`);
+    reportFailure(
+      result._tag === "Failure" ? result : result.value,
+      action === "unarchive" ? gt("Failed to unarchive thread") : gt("Failed to delete thread"),
+    );
   };
 
   const handleContextMenu = async (thread: ArchivedThread, position: { x: number; y: number }) => {
@@ -187,7 +209,7 @@ export function ArchivedThreadsPanel() {
       if (clicked === "unarchive" || clicked === "delete")
         await handleThreadAction(clicked, thread);
     });
-    reportFailure(result, "Archived thread action failed");
+    reportFailure(result, gt("Archived thread action failed"));
   };
 
   return (
@@ -240,9 +262,10 @@ export function ArchivedThreadsPanel() {
                   description={
                     <span className={hasMultipleEnvironments ? "block truncate" : undefined}>
                       {hasMultipleEnvironments ? `${thread.environmentLabel} · ` : null}
-                      Archived <RelativeTime timestamp={thread.archivedAt ?? thread.createdAt} />
-                      {" \u00b7 Created "}
-                      <RelativeTime timestamp={thread.createdAt} />
+                      <ArchivedThreadDates
+                        archivedAt={thread.archivedAt ?? thread.createdAt}
+                        createdAt={thread.createdAt}
+                      />
                     </span>
                   }
                   control={

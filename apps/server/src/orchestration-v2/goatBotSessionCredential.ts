@@ -19,16 +19,18 @@ export const driverOf = <D, E, R>(adapter: Effect.Effect<{ readonly driver: D },
   );
 
 /**
- * The MCP credential scope of one provider turn. A GOAT Bot session on a per-run driver gets a
- * credential per run, so a delayed tool call still names the run that made it.
+ * OpenCode refreshes its remote MCP configuration before each ordinary thread turn. Bind that
+ * credential to the run so recall receipts identify the requesting turn. Bot sessions follow
+ * their driver’s session-sharing policy.
  */
 export const sessionRunScope = (
   threadId: ThreadId,
   driver: ProviderDriverKind | undefined,
   runId: RunId | undefined,
 ) => {
-  const perRun =
-    isGoatBotSessionThreadId(threadId) && goatBotSessionSharingFor(driver) === "per_run";
+  const perRun = isGoatBotSessionThreadId(threadId)
+    ? goatBotSessionSharingFor(driver) === "per_run"
+    : driver === "opencode";
   return {
     /** Whether a credential issued for `credentialRun` may serve this turn. */
     serves: (credentialRun: RunId | undefined) => !perRun || credentialRun === runId,

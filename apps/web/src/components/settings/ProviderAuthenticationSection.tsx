@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -24,7 +25,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsRow } from "./settingsLayout";
-import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { ProviderAuthEmail } from "./ProviderAuthEmail";
 
 const ProviderAuthTerminal = lazy(() => import("./ProviderAuthTerminal"));
 
@@ -41,6 +42,7 @@ export function ProviderAuthenticationSection({
   readonly provider: ServerProvider;
   readonly readOnly: boolean;
 }) {
+  const gt = useGT();
   const target = { environmentId, input: { instanceId } };
   const query = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
   const commands = { reportFailure: false, reportDefect: false };
@@ -170,19 +172,12 @@ export function ProviderAuthenticationSection({
 
   return (
     <SettingsRow
-      title="Account"
+      title={gt("Account")}
       description={
         signedIn && !active && provider.auth.email?.trim() ? (
           <span>
-            Signed in as{" "}
-            <RedactedSensitiveText
-              key={provider.auth.email}
-              value={provider.auth.email}
-              ariaLabel="Toggle account email visibility"
-              revealTooltip="Click to reveal email"
-              hideTooltip="Click to hide email"
-              className="max-w-full truncate"
-            />
+            {gt("Signed in as")}{" "}
+            <ProviderAuthEmail email={provider.auth.email} className="max-w-full truncate" />
           </span>
         ) : (
           <span role="status">{accountDescription}</span>
@@ -203,14 +198,14 @@ export function ProviderAuthenticationSection({
               disabled={disabled}
               onValueChange={(value) => setMethodId(value ?? "")}
             >
-              <SelectTrigger size="sm" aria-label="Sign-in method" className="w-44">
+              <SelectTrigger size="sm" aria-label={gt("Sign-in method")} className="w-44">
                 <SelectValue>
                   {auth?.methods?.find((method) => method.id === methodId)?.name ??
                     "Provider default"}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup>
-                <SelectItem value="">Provider default</SelectItem>
+                <SelectItem value="">{gt("Provider default")}</SelectItem>
                 {auth?.methods?.map((method) => (
                   <SelectItem key={method.id} value={method.id}>
                     {method.name}
@@ -227,13 +222,13 @@ export function ProviderAuthenticationSection({
                 disabled={disabled}
                 onClick={() => void openBrowser()}
               >
-                Open browser
+                {gt("Open browser")}
               </Button>
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <Button
-                      aria-label="Copy sign-in link"
+                      aria-label={gt("Copy sign-in link")}
                       size="icon-sm"
                       variant="ghost-muted"
                       disabled={disabled}
@@ -252,7 +247,7 @@ export function ProviderAuthenticationSection({
                     </Button>
                   }
                 />
-                <TooltipPopup>Copy sign-in link</TooltipPopup>
+                <TooltipPopup>{gt("Copy sign-in link")}</TooltipPopup>
               </Tooltip>
             </>
           ) : null}
@@ -265,13 +260,13 @@ export function ProviderAuthenticationSection({
                   <a href={provider.setup.documentationUrl} target="_blank" rel="noreferrer" />
                 }
               >
-                Open docs
+                {gt("Open docs")}
               </Button>
             ) : active && auth?.flowId ? (
               <Button
                 size="sm"
                 variant="ghost-muted"
-                aria-label="Cancel sign-in"
+                aria-label={gt("Cancel sign-in")}
                 disabled={disabled}
                 onClick={() =>
                   void run(() =>
@@ -279,7 +274,7 @@ export function ProviderAuthenticationSection({
                   )
                 }
               >
-                Cancel
+                {gt("Cancel")}
               </Button>
             ) : !active && !needsExternalSetup && provider.setup?.canAuthenticate !== false ? (
               <Button
@@ -301,14 +296,14 @@ export function ProviderAuthenticationSection({
                 }
               >
                 {signedIn
-                  ? "Change account"
+                  ? gt("Change account")
                   : auth?.phase === "failed" || auth?.phase === "cancelled"
                     ? usesCredentials
-                      ? "Retry connection"
-                      : "Retry sign-in"
+                      ? gt("Retry connection")
+                      : gt("Retry sign-in")
                     : usesCredentials
-                      ? "Connect"
-                      : "Sign in"}
+                      ? gt("Connect")
+                      : gt("Sign in")}
               </Button>
             ) : null}
             {!active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate) ? (
@@ -326,7 +321,7 @@ export function ProviderAuthenticationSection({
                     });
                 }}
               >
-                Sign out
+                {gt("Sign out")}
               </Button>
             ) : null}
           </>
@@ -351,7 +346,7 @@ export function ProviderAuthenticationSection({
             <div className="py-2">
               <Suspense
                 fallback={
-                  <p className="text-xs text-muted-foreground">Loading sign-in terminal…</p>
+                  <p className="text-xs text-muted-foreground">{gt("Loading sign-in terminal…")}</p>
                 }
               >
                 <ProviderAuthTerminal
@@ -432,7 +427,7 @@ export function ProviderAuthenticationSection({
                 className="w-fit"
                 disabled={disabled}
               >
-                Connect
+                {gt("Connect")}
               </Button>
             </form>
           ) : null}
@@ -472,7 +467,7 @@ export function ProviderAuthenticationSection({
                 className="w-fit"
                 disabled={disabled || !values.callback?.trim()}
               >
-                Continue
+                {gt("Continue")}
               </Button>
             </form>
           ) : null}

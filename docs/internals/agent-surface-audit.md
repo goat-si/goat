@@ -15,7 +15,7 @@ Run `node scripts/agent-surface/inventory.ts` for the JSON inventory, including 
 | Mutating tools, by enforced handler access             | 195               |
 | Mutating tools that accept clientRequestId             | 80                |
 | Mutating tools whose clientRequestId GOAT deduplicates | 74                |
-| Input parameters with a description                    | 672 of 1223 (55%) |
+| Input parameters with a description                    | 673 of 1224 (55%) |
 | Tools with a worked example                            | 77 of 312         |
 | CLI commands, listed / unlisted                        | 62 / 23           |
 | CLI commands with usage examples                       | 0 of 85           |
@@ -199,14 +199,14 @@ Only 55% of input parameters carry a description. 107 tools describe none of the
 
 77 of 312 tools show a worked call, in their description or as examples `goat_describe` serves (69 tools). 176 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
-| Tool                     | Characters | Declared at                                           |
-| ------------------------ | ---------- | ----------------------------------------------------- |
-| `goat_call`              | 1828       | packages/contracts/src/agentSurface/surfaceEntries.ts |
-| `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts   |
-| `goat_describe`          | 399        | packages/contracts/src/agentSurface/surfaceEntries.ts |
-| `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts    |
-| `goat_thread_read`       | 395        | packages/contracts/src/agentSurface/entries/thread.ts |
-| `goat_hub_device_move`   | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
+| Tool                        | Characters | Declared at                                           |
+| --------------------------- | ---------- | ----------------------------------------------------- |
+| `goat_call`                 | 1828       | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `goat_thread_report_result` | 404        | packages/contracts/src/agentSurface/entries/thread.ts |
+| `goat_describe`             | 399        | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `goat_thread_read`          | 395        | packages/contracts/src/agentSurface/entries/thread.ts |
+| `goat_hub_device_move`      | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
+| `goat_ssh_thread_launch`    | 393        | packages/contracts/src/agentSurface/entries/ssh.ts    |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -271,7 +271,7 @@ The server's `/llms.txt` lists public registry paths with their summaries. `goat
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (266 `return`, 46 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Complete the on-demand tool reference.** 160 tools appear in no doc or prompt. `/llms.txt` filters its public index for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 69 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 551 of 1223 parameters have no description, and 107 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
+4. **Describe every parameter.** 551 of 1224 parameters have no description, and 107 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
 5. **Retry keys on every mutating tool.** 115 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 6. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 7. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.

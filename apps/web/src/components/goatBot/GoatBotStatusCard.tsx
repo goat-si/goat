@@ -1,3 +1,6 @@
+import { localizeEnvironmentLabel } from "../BranchToolbar.logic";
+import { useGoatBotDiagnosticMessages } from "./useGoatBotDiagnosticMessages";
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   diagnoseGoatBot,
@@ -73,6 +76,8 @@ export function GoatBotStatusCard({
   /** Show nothing while every line is fine, as the bot's home does. */
   readonly quietWhenReady?: boolean;
 }) {
+  const gt = useGT();
+  const messages = useGoatBotDiagnosticMessages();
   const openName = useGoatBotName();
   const mainBotName = useGoatBotMainName();
   const name = botName ?? openName;
@@ -115,38 +120,50 @@ export function GoatBotStatusCard({
     if (slackLive !== null) refreshSlack();
   }, [slackLive, refreshSlack]);
   const now = Date.parse(`${useNowMinute()}:00Z`);
-  const diagnostics = diagnoseGoatBot({
-    home: home.resolution,
-    homeLabel:
-      homeId === null
-        ? ""
-        : (home.environments.find((entry) => entry.environmentId === homeId)?.label ??
-          homeId.slice(0, 8)),
-    homeRefused,
-    moveTarget: home.moveTarget,
-    member: member !== null,
-    mainBotName,
-    model:
-      settings === null || providers === undefined
-        ? null
-        : goatBotModelStatus({
-            settings,
-            providers,
-            ...(member === null ? {} : { override: member.defaultModelSelection }),
-          }),
-    canChangeModel,
-    rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
-    turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : [],
-    slack:
-      member !== null || !slackSupported
-        ? "unavailable"
-        : slack.error
-          ? "failed"
-          : (slack.data ?? "loading"),
-    slackLive,
-    canConfigureSlack,
-    now,
-  });
+  const diagnostics = diagnoseGoatBot(
+    {
+      home: home.resolution,
+      homeLabel:
+        homeId === null
+          ? ""
+          : localizeEnvironmentLabel(
+              home.environments.find((entry) => entry.environmentId === homeId)?.label ??
+                homeId.slice(0, 8),
+              gt("this device"),
+            ),
+      homeRefused,
+      moveTarget:
+        home.moveTarget === null
+          ? null
+          : {
+              ...home.moveTarget,
+              label: localizeEnvironmentLabel(home.moveTarget.label, gt("this device")),
+            },
+      member: member !== null,
+      mainBotName,
+      model:
+        settings === null || providers === undefined
+          ? null
+          : goatBotModelStatus({
+              settings,
+              providers,
+              ...(member === null ? {} : { override: member.defaultModelSelection }),
+            }),
+      canChangeModel,
+      rows: homeId === null || homeId === callerEnvironmentId ? rows : "unavailable",
+      turnsWaiting: homeId === null || homeId === callerEnvironmentId ? turnsWaiting : [],
+      slack:
+        member !== null || !slackSupported
+          ? "unavailable"
+          : slack.error
+            ? "failed"
+            : (slack.data ?? "loading"),
+      slackLive,
+      canConfigureSlack,
+      now,
+    },
+    messages,
+  );
   const slackReachability =
     member === null ? null : slackReachabilityLabel(slackBoundChannelIds(member.botId, slack.data));
   if (
@@ -156,7 +173,10 @@ export function GoatBotStatusCard({
   )
     return null;
   const content = (
-    <section aria-label={`${name} status`} className={cn("space-y-2 text-sm", className)}>
+    <section
+      aria-label={gt("{name} status", { name })}
+      className={cn("space-y-2 text-sm", className)}
+    >
       <p className="font-semibold">{diagnostics.title}</p>
       <ul className="space-y-1.5">
         {diagnostics.lines.map((line) => (
@@ -185,7 +205,7 @@ export function GoatBotStatusCard({
     </section>
   );
   return quietWhenReady ? (
-    <GoatBotSectionCard title="Status">
+    <GoatBotSectionCard title={gt("Status")}>
       <div className="px-3 py-3">{content}</div>
     </GoatBotSectionCard>
   ) : (

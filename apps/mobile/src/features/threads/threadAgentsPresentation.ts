@@ -10,7 +10,12 @@ import {
   type RuntimeSubagent,
   type SubagentWorkflowGroup,
 } from "@goat/client-runtime/state/subagentRuntime";
-import type { OrchestrationV2Subagent, ServerProvider } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2Subagent,
+  ServerProvider,
+  ThreadId,
+} from "@goat/contracts";
 import { resolveSelectableModel } from "@goat/shared/model";
 
 const PROMPT_TITLE_LIMIT = 80;
@@ -81,6 +86,31 @@ export function resolveSubagentRowPresentation(
 }
 
 export type WorkflowRailTone = SubagentRowTone | "queued";
+
+export interface SubagentOpenTarget {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}
+
+/**
+ * The thread a subagent row opens, or null when it has none this app can show. A task.create
+ * child on another machine opens there, once this app is connected to that machine.
+ */
+export function resolveSubagentOpenTarget(
+  subagent: Pick<OrchestrationV2Subagent, "childThreadId" | "remote">,
+  environmentId: EnvironmentId,
+  resolveHost: (host: string) => EnvironmentId | undefined,
+): SubagentOpenTarget | null {
+  if (subagent.remote !== undefined) {
+    const remoteEnvironmentId = resolveHost(subagent.remote.host);
+    return remoteEnvironmentId === undefined || subagent.remote.threadId === null
+      ? null
+      : { environmentId: remoteEnvironmentId, threadId: subagent.remote.threadId };
+  }
+  return subagent.childThreadId === null
+    ? null
+    : { environmentId, threadId: subagent.childThreadId };
+}
 
 export interface WorkflowRailItem {
   readonly key: string;

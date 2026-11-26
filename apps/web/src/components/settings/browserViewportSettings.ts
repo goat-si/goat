@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import {
   PREVIEW_VIEWPORT_MIN_DIMENSION,
   PREVIEW_VIEWPORT_MAX_DIMENSION,
@@ -22,9 +23,9 @@ export const viewportSelectValue = (viewport: PreviewViewportSetting): string =>
 /** Inline options lack an items map; bare SelectValue would display the stored fill token. */
 export const viewportSelectLabel = (viewport: PreviewViewportSetting): string => {
   const value = viewportSelectValue(viewport);
-  if (value === FILL_VALUE) return "Fill panel";
-  if (value === RESPONSIVE_VALUE) return "Responsive";
-  return PREVIEW_VIEWPORT_PRESETS.find((preset) => preset.id === value)?.label ?? "Responsive";
+  if (value === FILL_VALUE) return msg("Fill panel");
+  if (value === RESPONSIVE_VALUE) return msg("Responsive");
+  return PREVIEW_VIEWPORT_PRESETS.find((preset) => preset.id === value)?.label ?? msg("Responsive");
 };
 
 export const isValidDimension = (value: number) =>

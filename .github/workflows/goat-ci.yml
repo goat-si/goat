@@ -115,7 +115,8 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
     runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || (matrix.runner == 'linux' && vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || (matrix.task == 'test-windows' || matrix.task == 'test-pen-windows') && 30 || 60 }}
+    # A full server shard takes 55-60 minutes on ubuntu-24.04, so off the lidge pool it gets 90.
+    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || (matrix.task == 'test-windows' || matrix.task == 'test-pen-windows') && 30 || matrix.task == 'test-server' && !(vars.LIDGE_RUNNERS == 'on' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)) && 90 || 60 }}
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-packages, test-ssh, test-desktop, test-contracts, test-client-runtime,

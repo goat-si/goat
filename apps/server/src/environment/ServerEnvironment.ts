@@ -273,6 +273,7 @@ export const make = Effect.gen(function* () {
         derivedCap: 1000,
         conversationMemoryControl: true,
         turnMemory: true,
+        savedThreadPreference: true,
         scopeMoves: true,
         scopeMoveReceipts: true,
         originFilter: true,

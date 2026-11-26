@@ -1,3 +1,4 @@
+import type { JsonObject } from "../agent-surface/eval/core.ts";
 // @effect-diagnostics nodeBuiltinImport:off - reads the committed task set.
 import * as NodeFS from "node:fs";
 
@@ -235,14 +236,32 @@ const oracle = (id: string, input: Partial<Parameters<(typeof ORACLES)[string]>[
 const at = (value: Record<string, unknown>, atMs = 0) => ({ atMs, value: value as never });
 
 describe("oracles", () => {
-  it("counts Calculator done when its display showed the product, and unverified when no sample saw it", () => {
-    expect(
-      oracle("calculator-multiply", { samples: [at({ display: "0" }), at({ display: "64,155" })] })
-        .actual,
-    ).toBe("done");
-    expect(oracle("calculator-multiply", { samples: [at({ display: "0" })] }).actual).toBe(
-      "unverified",
-    );
+  describe("Calculator result and reset", () => {
+    const score = (baseline: string, samples: ReadonlyArray<JsonObject>, final: JsonObject) =>
+      oracle("calculator-multiply", {
+        baseline: { display: baseline },
+        samples: samples.map((value) => at(value)),
+        final,
+      }).actual;
+    const product = { display: "987 × 65", texts: ["987 × 65", "64,155"] };
+    const reset = { display: "0" };
+    it("requires a newly observed product followed by a final zero", () => {
+      expect(score("0", [product], reset)).toBe("done");
+      expect(score("64155", [reset, product], reset)).toBe("done");
+      expect(score("0", [reset], reset)).toBe("unverified");
+    });
+    it("does not credit the previous run for a product already on screen", () => {
+      expect(
+        score("64155", [{ display: "0", witnessError: "timed out" }, {}, product], reset),
+      ).toBe("unverified");
+      expect(score("0", [product], { display: "64,155" })).toBe("failed");
+      expect(score("64155", [product], { display: "64155" })).toBe("failed");
+    });
+    it("distinguishes a closed Calculator from missing final evidence", () => {
+      expect(score("0", [product], { running: false })).toBe("failed");
+      expect(score("0", [product], { display: null })).toBe("unverified");
+      expect(score("0", [product], { display: "0", error: "read failed" })).toBe("unverified");
+    });
   });
 
   it("needs one new Finder window to show Downloads and then Recents, and flags a changed user window", () => {

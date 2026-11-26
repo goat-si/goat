@@ -1,4 +1,5 @@
 import { issueConversationRunCheck } from "./conversationRunEligibility.ts";
+import { makeSavedPreferenceReader } from "./savedThreadPreference.ts";
 import { makeTurnMemoryReader } from "./TurnMemoryReceipts.ts";
 import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeMoveMemory } from "./MemoryMove.ts";
@@ -273,6 +274,10 @@ export class MemoryService extends Context.Service<
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
     ) => Effect.Effect<M.MemoryPage, MemoryServiceError>;
+    readonly savedThreadPreference: (
+      input: M.ThreadMemoryInput,
+      permit: Permit,
+    ) => Effect.Effect<M.SavedThreadPreference, MemoryServiceError>;
     readonly inspectTurn: (
       input: M.TurnMemoryInput,
       permit: Permit,
@@ -2547,6 +2552,7 @@ const make = Effect.fnUntraced(function* (
         return yield* (yield* ProviderMemoryImportRuntime).run(input, permit);
       }),
     commitLocalIntent,
+    savedThreadPreference: makeSavedPreferenceReader(environmentId, memoryStableUuid, read),
     inspectTurn: makeTurnMemoryReader(sql, store, read),
     readSource,
     prepareSourceRead,

@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   BROWSER_IMPORT_FAILURE_COPY,
   BrowserImportFailureReason,
@@ -48,6 +49,7 @@ type Props = {
 };
 
 export function BrowserRefreshDialog({ profile, source, environmentId, bridge, onClose }: Props) {
+  const gt = useGT();
   const [suggestions, setSuggestions] = useState<ReadonlyArray<string>>([]);
   const [selected, setSelected] = useState<ReadonlyArray<string>>([]);
   const [origin, setOrigin] = useState("");
@@ -112,8 +114,9 @@ export function BrowserRefreshDialog({ profile, source, environmentId, bridge, o
         <DialogHeader>
           <DialogTitle>Refresh {profile.name}</DialogTitle>
           <DialogDescription>
-            Choose sites to refresh in this desktop browser profile. Shared cookies can also change
-            sign-ins on related sites.
+            {gt(
+              "Choose sites to refresh in this desktop browser profile. Shared cookies can also change sign-ins on related sites.",
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -149,13 +152,13 @@ export function BrowserRefreshDialog({ profile, source, environmentId, bridge, o
               <div className="flex gap-2">
                 <Input
                   nativeInput
-                  aria-label="Site address"
+                  aria-label={gt("Site address")}
                   placeholder="https://example.com"
                   value={origin}
                   onChange={(event) => setOrigin(event.target.value)}
                 />
                 <Button variant="outline" onClick={addOrigin}>
-                  Add site
+                  {gt("Add site")}
                 </Button>
               </div>
             </div>
@@ -168,11 +171,11 @@ export function BrowserRefreshDialog({ profile, source, environmentId, bridge, o
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>
-            {result ? "Done" : "Cancel"}
+            {result ? gt("Done") : gt("Cancel")}
           </Button>
           {!result ? (
             <Button disabled={busy || selected.length === 0} onClick={refresh}>
-              {busy ? "Refreshing…" : "Refresh"}
+              {busy ? gt("Refreshing…") : gt("Refresh")}
             </Button>
           ) : null}
         </DialogFooter>

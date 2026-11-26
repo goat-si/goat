@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { DeviceHostAvailability } from "../device/DeviceHostAvailability";
 import { useAtomValue } from "@effect/atom-react";
@@ -44,6 +45,7 @@ import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from ".
 import { DeviceHostDiagnostics } from "../device/DeviceSetup";
 
 export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null }) {
+  const gt = useGT();
   const { scope, environments, connectedEnvironments } = useSettingsScope();
   const canConfigure = useEnvironmentScope(props.environmentId, AuthSettingsWriteScope);
   const projectScope = scope.kind === "project" || scope.kind === "checkout";
@@ -100,7 +102,7 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
     } else {
       toastManager.add({
         type: "error",
-        title: "Device hosts not saved on all environments",
+        title: gt("Device hosts not saved on all environments"),
         description: `Could not update ${failed.map((environment) => environment.label).join(", ")}.`,
       });
     }
@@ -120,7 +122,7 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
           : `${host.label}: connection checks passed`,
         description: failed.length
           ? `Could not connect from ${failed.map((target) => target.label).join(", ")}.`
-          : "Connected or already available locally on each selected environment.",
+          : gt("Connected or already available locally on each selected environment."),
       });
       return results;
     },
@@ -133,10 +135,12 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
   return (
     <SettingsRow
       id="device-hosts"
-      title="Device hosts"
+      title={gt("Device hosts")}
       serverScoped
       settingKeys={["deviceHosts"]}
-      description="Add remote machines with simulator or emulator runtimes installed, and the selected environments will connect over SSH and set up device tools automatically."
+      description={gt(
+        "Add remote machines with simulator or emulator runtimes installed, and the selected environments will connect over SSH and set up device tools automatically.",
+      )}
       control={
         <Button
           size="sm"
@@ -149,14 +153,14 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
             setEditing({ kind: "ssh", id: randomUUID(), label: "", target: "" });
           }}
         >
-          <PlusIcon className="size-3.5" /> Add host
+          <PlusIcon className="size-3.5" /> {gt("Add host")}
         </Button>
       }
     >
       <div className="pt-3 pb-2">
         {!props.environmentId ? (
           <p className="text-sm text-muted-foreground">
-            Connect a selected environment to manage device hosts.
+            {gt("Connect a selected environment to manage device hosts.")}
           </p>
         ) : (
           <>
@@ -240,6 +244,7 @@ function DeviceHostList({
   runningKeys: ReadonlySet<string>;
   testConnection: ReturnType<typeof useHostConnectionChecks>["testConnection"];
 }) {
+  const gt = useGT();
   const { environments: scopeEnvironments } = useSettingsScope();
   const environmentLabels = new Map(
     scopeEnvironments.map((environment) => [
@@ -272,7 +277,7 @@ function DeviceHostList({
   return (
     <>
       {rows.length === 0 ? (
-        <p className="py-2 text-sm text-muted-foreground">No device hosts.</p>
+        <p className="py-2 text-sm text-muted-foreground">{gt("No device hosts.")}</p>
       ) : null}
       {rows.map(({ host, members }) => {
         const hostChecks = checks[deviceHostConnectionKey(host)];
@@ -495,7 +500,7 @@ function DeviceHostList({
                           {result.versions}
                           {result.check?.status === "local" ? (
                             <p className="text-xs text-muted-foreground">
-                              Already available locally
+                              {gt("Already available locally")}
                             </p>
                           ) : (
                             <DeviceHostAvailability
@@ -515,12 +520,14 @@ function DeviceHostList({
                 first.versions
               )}
               {!compact && check?.status === "local" ? (
-                <p className="mt-1 text-xs text-muted-foreground">Already available locally</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {gt("Already available locally")}
+                </p>
               ) : null}
               {!compact && error ? (
                 <div className="mt-1" role="status">
                   <details className="text-xs text-destructive">
-                    <summary>Connection failed</summary>
+                    <summary>{gt("Connection failed")}</summary>
                     <p className="mt-1 whitespace-pre-wrap break-words">{error}</p>
                   </details>
                 </div>
@@ -561,9 +568,9 @@ function DeviceHostList({
                 <MoreVertical />
               </MenuTrigger>
               <MenuPopup align="end">
-                <MenuItem onClick={() => onEdit(host)}>Edit</MenuItem>
+                <MenuItem onClick={() => onEdit(host)}>{gt("Edit")}</MenuItem>
                 <MenuItem variant="destructive" onClick={() => onRemove(host)}>
-                  Remove
+                  {gt("Remove")}
                 </MenuItem>
                 {compact
                   ? retryable.map((result) => (
@@ -574,7 +581,7 @@ function DeviceHostList({
                           retryHost(result.environmentId, result.host.id, result.environmentId)
                         }
                       >
-                        {retrying === result.environmentId ? "Retrying" : "Retry"} from{" "}
+                        {retrying === result.environmentId ? gt("Retrying") : gt("Retry")} from{" "}
                         {result.label}
                         {result.address ? ` (${result.address})` : null}
                       </MenuItem>
@@ -591,7 +598,11 @@ function DeviceHostList({
                 else void testConnection(host);
               }}
             >
-              {canRetry ? (retrying === host.id ? "Retrying…" : "Retry") : "Test connection"}
+              {canRetry
+                ? retrying === host.id
+                  ? gt("Retrying…")
+                  : gt("Retry")
+                : gt("Test connection")}
             </Button>
           </div>
         );

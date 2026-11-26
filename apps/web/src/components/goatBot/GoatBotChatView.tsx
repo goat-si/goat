@@ -15,6 +15,7 @@ import { goatBotHomeKey } from "./goatBotHomeRequest";
 import {
   GOAT_BOT_HOME_DOCKED_WIDTH,
   GoatBotHomeDockedRegistry,
+  GoatBotHomeSheetRegistry,
   useGoatBotHomePresentation,
 } from "./goatBotLayout";
 
@@ -154,6 +155,8 @@ export interface GoatBotChatViewProps {
   readonly canOpenCurrentBot?: boolean | undefined;
   /** The environment whose bot history is shown, which can differ from a new home during a move. */
   readonly environmentId?: EnvironmentId | null | undefined;
+  /** The right panel's toggle, for a header that has one. */
+  readonly panelControls?: ReactNode | undefined;
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
@@ -204,6 +207,7 @@ function GoatBotChatViewContent({
   onCheckAgain,
   openHome = null,
   onHomeHandled,
+  panelControls,
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -219,6 +223,7 @@ function GoatBotChatViewContent({
   const picture = useGoatBotPicture();
   const { viewRef, presentation, hidden } = useGoatBotHomePresentation(panelOpen);
   const registerHomeDocked = useContext(GoatBotHomeDockedRegistry);
+  const registerHomeSheet = useContext(GoatBotHomeSheetRegistry);
   const narrow = presentation === "sheet";
   const bot = availability.kind === "ready" ? availability.bot : null;
   const destination = member
@@ -505,6 +510,7 @@ function GoatBotChatViewContent({
             ) : null}
           </div>
           <div aria-hidden className="flex-1 basis-0" />
+          {panelControls}
         </WorkspacePageHeader>
         {availability.kind === "offline" ||
         availability.kind === "home_offline" ||
@@ -756,6 +762,7 @@ function GoatBotChatViewContent({
         >
           {/* A phone-width window gives the home the whole screen; wider, the chat stays beside it. */}
           <SheetPopup
+            ref={registerHomeSheet}
             finalFocus={sheetFinalFocus}
             showCloseButton={false}
             className="max-sm:w-full max-sm:max-w-none"

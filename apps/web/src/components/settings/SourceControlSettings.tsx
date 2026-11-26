@@ -1,3 +1,5 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT } from "gt-react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { ChevronDownIcon } from "~/components/solar";
 import * as Duration from "effect/Duration";
@@ -135,26 +137,30 @@ function isVcsNotReady(item: VcsDiscoveryItem | SourceControlProviderDiscoveryIt
   return !isProviderDiscoveryItem(item) && !item.implemented;
 }
 
-function authPresentation(auth: SourceControlProviderAuth): {
+function authPresentation(
+  auth: SourceControlProviderAuth,
+  gt: ReturnType<typeof useGT>,
+): {
   readonly label: string;
   readonly badge: "warning" | null;
 } {
   if (auth.status === "authenticated") {
-    return { label: "Authenticated", badge: null };
+    return { label: gt("Authenticated"), badge: null };
   }
   if (auth.status === "unauthenticated") {
-    return { label: "Not authenticated", badge: "warning" };
+    return { label: gt("Not authenticated"), badge: "warning" };
   }
-  return { label: "Status unknown", badge: null };
+  return { label: gt("Status unknown"), badge: null };
 }
 
 function RedactedAccount(props: { readonly account: string | null }) {
+  const gt = useGT();
   return (
     <RedactedSensitiveText
       value={props.account}
-      ariaLabel="Toggle source control account visibility"
-      revealTooltip="Click to reveal account"
-      hideTooltip="Click to hide account"
+      ariaLabel={gt("Toggle source control account visibility")}
+      revealTooltip={gt("Click to reveal account")}
+      hideTooltip={gt("Click to hide account")}
     />
   );
 }
@@ -202,21 +208,24 @@ function SourceControlItemMark({
   );
 }
 
-function itemSummary({
-  item,
-  auth,
-  authAccount,
-}: {
-  readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
-  readonly auth: SourceControlProviderAuth | null;
-  readonly authAccount: string | null;
-}) {
+function itemSummary(
+  {
+    item,
+    auth,
+    authAccount,
+  }: {
+    readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
+    readonly auth: SourceControlProviderAuth | null;
+    readonly authAccount: string | null;
+  },
+  gt: ReturnType<typeof useGT>,
+) {
   if (isVcsNotReady(item)) {
-    return <span>Support for {item.label} is coming soon.</span>;
+    return <span>{gt("Support for {label} is coming soon.", { label: item.label })}</span>;
   }
 
   if (item.status !== "available") {
-    return <span>Not available on this server: {item.installHint}</span>;
+    return <span>{gt("Not available on this server: {hint}", { hint: item.installHint })}</span>;
   }
 
   if (auth) {
@@ -224,10 +233,10 @@ function itemSummary({
       const authDetail = optionLabel(auth.detail);
       return (
         <>
-          <span>Authenticated</span>
+          <span>{gt("Authenticated")}</span>
           {authAccount ? (
             <>
-              <span aria-hidden>as</span>
+              <span aria-hidden>·</span>
               <RedactedAccount account={authAccount} />
             </>
           ) : null}
@@ -237,31 +246,41 @@ function itemSummary({
     }
 
     if (!item.executable && auth.status === "unauthenticated") {
-      return <span>Available. {item.installHint}</span>;
+      return <span>{gt("Available. {hint}", { hint: item.installHint })}</span>;
     }
 
     if (auth.status === "unauthenticated" && auth.accounts?.some((entry) => entry.authenticated)) {
-      return <span>{optionLabel(auth.detail) ?? `Every ${item.label} host is turned off.`}</span>;
+      return (
+        <span>
+          {optionLabel(auth.detail) ??
+            gt("Every {label} host is turned off.", { label: item.label })}
+        </span>
+      );
     }
 
     if (auth.status === "unauthenticated") {
       return (
         <span>
-          {item.label} is not authenticated on this server. Sign in or configure credentials using
-          the <code className="rounded bg-muted px-1 py-px text-2xs">{item.executable}</code> tool
-          on the server host to enable change request features.
+          {gt(
+            "{label} is not authenticated on this server. To enable change request features, sign in or configure credentials on the server host with this tool:",
+            { label: item.label },
+          )}{" "}
+          <code className="rounded bg-muted px-1 py-px text-2xs">{item.executable}</code>
         </span>
       );
     }
     const authDetail = optionLabel(auth.detail);
     return (
       <span>
-        Could not verify {item.label}. {authDetail ?? item.installHint}
+        {gt("Could not verify {label}. {detail}", {
+          label: item.label,
+          detail: authDetail ?? item.installHint,
+        })}
       </span>
     );
   }
 
-  return <span>Available</span>;
+  return <span>{gt("Available")}</span>;
 }
 
 function DiscoveryItemRow({
@@ -278,12 +297,13 @@ function DiscoveryItemRow({
   };
   readonly children?: ReactNode;
 }) {
+  const gt = useGT();
   const version = optionLabel(item.version);
   const enabled = isProviderDiscoveryItem(item)
     ? item.status === "available" && item.auth.status === "authenticated"
     : item.status === "available" && item.implemented;
   const auth = isProviderDiscoveryItem(item) ? item.auth : null;
-  const authStatus = auth ? authPresentation(auth) : null;
+  const authStatus = auth ? authPresentation(auth, gt) : null;
   const authAccount = auth ? optionLabel(auth.account) : null;
   const [isExpanded, setIsExpanded] = useState(false);
   const hasDetails = children !== undefined;
@@ -313,7 +333,7 @@ function DiscoveryItemRow({
               {version ? <code className="text-xs text-muted-foreground">{version}</code> : null}
               {isVcsNotReady(item) ? (
                 <Badge variant="warning" size="sm">
-                  Coming Soon
+                  {gt("Coming Soon")}
                 </Badge>
               ) : null}
               {authStatus?.badge ? (
@@ -323,7 +343,7 @@ function DiscoveryItemRow({
               ) : null}
             </div>
             <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs leading-normal text-muted-foreground/80">
-              {itemSummary({ item, auth, authAccount })}
+              {itemSummary({ item, auth, authAccount }, gt)}
             </p>
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
@@ -333,7 +353,7 @@ function DiscoveryItemRow({
                 variant="ghost-muted"
                 onClick={() => setIsExpanded((open) => !open)}
                 aria-expanded={isExpanded}
-                aria-label={`Toggle ${item.label} details`}
+                aria-label={gt("Toggle {label} details", { label: item.label })}
               >
                 <ChevronDownIcon
                   className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
@@ -348,14 +368,22 @@ function DiscoveryItemRow({
                       checked={offered.checked}
                       disabled={offered.disabled}
                       onCheckedChange={offered.onChange}
-                      aria-label={`Offer ${item.label} when adding or publishing a project`}
+                      aria-label={gt("Offer {label} when adding or publishing a project", {
+                        label: item.label,
+                      })}
                     />
                   }
                 />
-                <TooltipPopup side="top">Offer when adding or publishing a project</TooltipPopup>
+                <TooltipPopup side="top">
+                  {gt("Offer when adding or publishing a project")}
+                </TooltipPopup>
               </Tooltip>
             ) : !isVcsNotReady(item) ? (
-              <Switch checked={enabled} disabled aria-label={`${item.label} availability`} />
+              <Switch
+                checked={enabled}
+                disabled
+                aria-label={gt("{label} availability", { label: item.label })}
+              />
             ) : null}
           </div>
         </div>
@@ -373,6 +401,8 @@ function DiscoveryItemRow({
 }
 
 function GitFetchIntervalSettings() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
@@ -386,7 +416,7 @@ function GitFetchIntervalSettings() {
   );
   const canResetFetchInterval =
     automaticGitFetchIntervalSeconds !== defaultAutomaticGitFetchIntervalSeconds;
-  const setting = searchableSetting("git-fetch-interval");
+  const setting = localizedSetting("git-fetch-interval");
 
   return (
     <SettingsSearchTarget id={setting.id} className="grid gap-3">
@@ -395,9 +425,9 @@ function GitFetchIntervalSettings() {
           <div className="flex min-w-0 items-center gap-1">
             <span className="text-xs font-medium text-foreground">{setting.title}</span>
             <PolicyTooltip>
-              This interval is configured for Git only. The shared Background activity policy still
-              decides whether Git refreshes may run when the timer fires. Custom intervals appear as
-              Advanced in General settings.
+              {gt(
+                "This interval is configured for Git only. The shared Background activity policy still decides whether Git refreshes may run when the timer fires. Custom intervals appear as Advanced in General settings.",
+              )}
             </PolicyTooltip>
             <span
               className={cn(
@@ -408,7 +438,7 @@ function GitFetchIntervalSettings() {
             >
               {canResetFetchInterval ? (
                 <SettingResetButton
-                  label="fetch interval"
+                  label={gt("fetch interval")}
                   onClick={() =>
                     updateSettings(
                       backgroundActivityOverrideSettings(settings.backgroundActivity, {
@@ -421,7 +451,9 @@ function GitFetchIntervalSettings() {
             </span>
           </div>
           <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Refresh remote branches in the background. Set to 0 to avoid automatic Git prompts.
+            {gt(
+              "Refresh remote branches in the background. Set to 0 to avoid automatic Git prompts.",
+            )}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -440,12 +472,12 @@ function GitFetchIntervalSettings() {
             }
           >
             <NumberFieldGroup>
-              <NumberFieldDecrement aria-label="Decrease fetch interval" />
-              <NumberFieldInput aria-label="Automatic Git fetch interval in seconds" />
-              <NumberFieldIncrement aria-label="Increase fetch interval" />
+              <NumberFieldDecrement aria-label={gt("Decrease fetch interval")} />
+              <NumberFieldInput aria-label={gt("Automatic Git fetch interval in seconds")} />
+              <NumberFieldIncrement aria-label={gt("Increase fetch interval")} />
             </NumberFieldGroup>
           </NumberField>
-          <span className="text-xs text-muted-foreground">seconds</span>
+          <span className="text-xs text-muted-foreground">{gt("seconds")}</span>
         </div>
       </div>
     </SettingsSearchTarget>
@@ -499,28 +531,31 @@ function EmptySourceControlDiscovery({
   readonly isPending: boolean;
   readonly onScan: () => void;
 }) {
+  const gt = useGT();
   const hasError = error !== null;
 
   return (
-    <SettingsSection id={searchableSetting("source-control").id} title="Server environment">
+    <SettingsSection id={searchableSetting("source-control").id} title={gt("Server environment")}>
       <Empty>
         <EmptyMedia variant="icon">
           <PullRequestGlyph.pullRequest />
         </EmptyMedia>
         <EmptyHeader>
           <EmptyTitle>
-            {hasError ? "Could not scan the server environment" : "Nothing detected yet"}
+            {hasError ? gt("Could not scan the server environment") : gt("Nothing detected yet")}
           </EmptyTitle>
           <EmptyDescription>
             {hasError
               ? error
-              : "Install Git on the server, add optional hosting integrations or credentials your workspace needs, then rescan."}
+              : gt(
+                  "Install Git on the server, add optional hosting integrations or credentials your workspace needs, then rescan.",
+                )}
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button size="sm" variant="outline" onClick={onScan} disabled={isPending}>
             <RefreshIcon size="sm" refreshing={isPending} />
-            Scan
+            {gt("Scan")}
           </Button>
         </EmptyContent>
       </Empty>
@@ -529,6 +564,7 @@ function EmptySourceControlDiscovery({
 }
 
 export function SourceControlSettingsPanel() {
+  const gt = useGT();
   const { scope, environment, connectedEnvironments } = useSettingsScope();
 
   const environmentId =
@@ -619,13 +655,13 @@ export function SourceControlSettingsPanel() {
             variant="ghost-muted"
             onClick={handleScan}
             disabled={discovery.isPending}
-            aria-label="Rescan server environment"
+            aria-label={gt("Rescan server environment")}
           >
             <RefreshIcon refreshing={discovery.isPending} />
           </Button>
         }
       />
-      <TooltipPopup side="top">Rescan Git and hosting integrations</TooltipPopup>
+      <TooltipPopup side="top">{gt("Rescan Git and hosting integrations")}</TooltipPopup>
     </Tooltip>
   );
 
@@ -633,25 +669,30 @@ export function SourceControlSettingsPanel() {
     <SettingsPageContainer>
       <ProjectDefaultsSettings category="source-control" />
       {environmentId === null ? (
-        <SettingsSection id={searchableSetting("source-control").id} title="Server environment">
+        <SettingsSection
+          id={searchableSetting("source-control").id}
+          title={gt("Server environment")}
+        >
           <p className="px-4 py-3 text-sm text-muted-foreground">
-            Connect an environment to inspect its version control tools and hosting integrations.
+            {gt(
+              "Connect an environment to inspect its version control tools and hosting integrations.",
+            )}
           </p>
         </SettingsSection>
       ) : isInitialScanPending ? (
         <>
           <SourceControlSectionSkeleton
-            title={`Version control${environmentSuffix}`}
+            title={gt("Version control") + environmentSuffix}
             headerAction={scanButton}
           />
-          <SourceControlSectionSkeleton title="Source control providers" />
+          <SourceControlSectionSkeleton title={gt("Source control providers")} />
         </>
       ) : hasDiscoveryItems ? (
         <>
           {hasVersionControlSystems ? (
             <SettingsSection
               id={searchableSetting("source-control").id}
-              title={`Version control${environmentSuffix}`}
+              title={gt("Version control") + environmentSuffix}
               headerAction={scanButton}
             >
               {result.versionControlSystems.map((item) => (
@@ -667,8 +708,8 @@ export function SourceControlSettingsPanel() {
               id={hasVersionControlSystems ? undefined : searchableSetting("source-control").id}
               title={
                 hasVersionControlSystems
-                  ? "Source control providers"
-                  : `Source control providers${environmentSuffix}`
+                  ? gt("Source control providers")
+                  : gt("Source control providers") + environmentSuffix
               }
               headerAction={hasVersionControlSystems ? null : scanButton}
             >

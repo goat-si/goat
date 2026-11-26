@@ -17,3 +17,12 @@ export const SURFACE_UNAVAILABLE_HINTS = {
   pullRequests: "No linked pull requests available.",
   device: "Available from a thread.",
 } as const;
+
+export type RightPanelLauncherSurface = keyof typeof SURFACE_UNAVAILABLE_HINTS;
+
+export function surfaceOffered(
+  offered: ReadonlySet<RightPanelLauncherSurface> | undefined,
+  surface: RightPanelLauncherSurface,
+): boolean {
+  return offered === undefined || offered.has(surface);
+}

@@ -387,6 +387,8 @@ export function createMemoryEnvironmentAtoms<R, E>(
             tag !== WS_METHODS.siteNotesDelete &&
             tag !== WS_METHODS.siteNotesRestoreSeed) ||
             config.environment.capabilities.memory?.siteNotes === true) &&
+          (tag !== WS_METHODS.memoryThreadPreference ||
+            config.environment.capabilities.memory?.savedThreadPreference === true) &&
           (tag !== WS_METHODS.memoryTurnInspect ||
             config.environment.capabilities.memory?.turnMemory === true) &&
           (tag !== WS_METHODS.memoryMove ||
@@ -476,14 +478,16 @@ export function createMemoryEnvironmentAtoms<R, E>(
                 stream,
               ),
             Stream.concat(
-              Stream.fromEffect(Effect.sleep(BODY_TTL)).pipe(
-                Stream.map(() => ({
-                  before,
-                  forgetGeneration,
-                  settled: true,
-                  value: Option.none(),
-                })),
-              ),
+              tag === WS_METHODS.memoryThreadPreference
+                ? Stream.empty
+                : Stream.fromEffect(Effect.sleep(BODY_TTL)).pipe(
+                    Stream.map(() => ({
+                      before,
+                      forgetGeneration,
+                      settled: true,
+                      value: Option.none(),
+                    })),
+                  ),
             ),
           );
         })
@@ -588,6 +592,23 @@ export function createMemoryEnvironmentAtoms<R, E>(
       .pipe(Atom.setIdleTTL(0)),
   );
   type TurnTarget = { environmentId: EnvironmentId; input: Omit<TurnMemoryInput, "memorySpaceId"> };
+  const preference = bodyQuery(WS_METHODS.memoryThreadPreference);
+  const canViewPreference = command(WS_METHODS.memoryThreadPreference).permissionAtom;
+  const preferenceForThread = Atom.family((key: string) => {
+    const [environmentId, input] = JSON.parse(key) as [
+      EnvironmentId,
+      { threadId: ScopedThreadRef["threadId"] },
+    ];
+    return Atom.make((get) => {
+      if (!get(canViewPreference(environmentId))) return null;
+      const status = get(spaceForTurn(environmentId));
+      if (status._tag !== "Success" || !status.value) return null;
+      const reply = get(
+        preference.reply({ environmentId, input: { ...input, memorySpaceId: status.value } }),
+      );
+      return reply ? Option.getOrNull(reply) : null;
+    }).pipe(Atom.setIdleTTL(0));
+  });
   const turnForRun = Atom.family((key: string) => {
     const [environmentId, input] = JSON.parse(key) as [EnvironmentId, TurnTarget["input"]];
     const version = Atom.make(
@@ -706,6 +727,10 @@ export function createMemoryEnvironmentAtoms<R, E>(
     list: bodyQuery(WS_METHODS.memoryList),
     search: bodyQuery(WS_METHODS.memorySearch),
     read,
+    savedThreadPreference: (ref: ScopedThreadRef) =>
+      preferenceForThread(
+        environmentRpcKey({ environmentId: ref.environmentId, input: { threadId: ref.threadId } }),
+      ),
     turnMemory,
     turnMemoryForRun: (target: TurnTarget) => turnForRun(environmentRpcKey(target)),
     canInspectTurnMemory,

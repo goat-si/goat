@@ -7,6 +7,8 @@ import {
   RunId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ThreadResultAttachmentRef, ThreadResultAttachments } from "./threadResultAttachments.ts";
+export { ThreadResultAttachments } from "./threadResultAttachments.ts";
 import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 export { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 
@@ -35,6 +37,12 @@ const CommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{7,64}$/i));
 export const ThreadResultReport = Schema.Struct({
   runId: Schema.optional(RunId),
   expectedAttemptId: Schema.optional(RunAttemptId),
+  attachmentRefs: Schema.optional(
+    Schema.Array(ThreadResultAttachmentRef).check(Schema.isMaxLength(8)),
+  ).annotate({
+    description:
+      "Existing attachments on messages in this thread. Supply runId and expectedAttemptId from the current run. References from earlier attempts remain available.",
+  }),
   notificationRelevance: Schema.optional(Schema.Literals(["important", "no_update"])),
   outcome: ThreadResultOutcome,
   summary: Schema.optional(
@@ -58,6 +66,7 @@ export type ThreadResultReport = typeof ThreadResultReport.Type;
 export const ThreadResult = Schema.Struct({
   runId: RunId,
   runStatus: OrchestrationV2RunStatus,
+  attachments: Schema.optional(ThreadResultAttachments),
   /**
    * The reported outcome; without a report, failed or cancelled when the run's
    * status says so, otherwise null.

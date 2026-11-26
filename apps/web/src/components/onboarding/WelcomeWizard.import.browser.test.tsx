@@ -9,6 +9,7 @@ import {
   type AuthSessionState,
 } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { GTProvider } from "gt-react";
 import { expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
@@ -140,6 +141,8 @@ vi.mock(import("../settings/MemoryGenerationSettings"), () => ({
 vi.mock(import("./MemorySharingChoice"), () => ({ MemorySharingChoice: () => null }));
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import ko from "../../i18n/translations/ko.json";
+import { ToastProvider } from "../ui/toast";
 import { WelcomeWizard } from "./WelcomeWizard";
 
 const primaryId = EnvironmentId.make("primary");
@@ -249,14 +252,23 @@ async function clickStage(label: string) {
   await act(async () => stage?.click());
 }
 
-async function mountImport(remote = false) {
+async function mountImport(remote = false, korean = false) {
   state.selectedEnvironment = remote ? "remote" : "primary";
   await using stack = new AsyncDisposableStack();
+  const wizard = (
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <WelcomeWizard localAvailable={!remote} onDone={state.onDone} />
+    </RegistryContext.Provider>
+  );
   const screen = stack.use(
     await render(
-      <RegistryContext.Provider value={appAtomRegistry}>
-        <WelcomeWizard localAvailable={!remote} onDone={state.onDone} />
-      </RegistryContext.Provider>,
+      korean ? (
+        <GTProvider locale="ko" translations={{ ko }}>
+          <ToastProvider>{wizard}</ToastProvider>
+        </GTProvider>
+      ) : (
+        wizard
+      ),
     ),
   );
   await click("Continue");
@@ -444,4 +456,44 @@ it("finishes setup without landing when the imported project never reaches the c
   await click("Import 1 project");
   await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
   expect(state.onDone).toHaveBeenCalledWith(undefined);
+});
+
+it("counts completed projects while the remaining history import is pending", async () => {
+  using _now = setup();
+  const pending = deferred<{ importedCount: number; skippedCount: number }>();
+  state.importThreads
+    .mockResolvedValueOnce(
+      AsyncResult.success({
+        importedCount: 0,
+        skippedCount: 1,
+        skippedThreads: [{ thread: "demo", reason: "Transcript changed during import." }],
+      }),
+    )
+    .mockImplementationOnce(async () => AsyncResult.success(await pending.promise));
+  await using _screen = await mountImport();
+  await click("Import 2 projects");
+  await vi.waitFor(() => expect(pageText()).toContain("1 of 2 projects processed"));
+  await act(async () => {
+    pending.resolve({ importedCount: 1, skippedCount: 0 });
+    await pending.promise;
+  });
+  await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
+});
+
+it("translates skipped-thread reasons from the server", async () => {
+  using _now = setup();
+  state.importThreads.mockResolvedValue(
+    AsyncResult.success({
+      importedCount: 1,
+      skippedCount: 4,
+      skippedDetailsOmitted: 3,
+      skippedThreads: [{ thread: "Example", reason: "Transcript changed during import." }],
+    }),
+  );
+  await using _screen = await mountImport(false, true);
+  await click("Import 2 projects");
+  await vi.waitFor(() => expect(pageText()).toContain("Some history was not imported"));
+  await click("Show details");
+  await vi.waitFor(() => expect(pageText()).toContain("가져오는 동안 대화 기록이 변경되었습니다."));
+  expect(pageText()).toContain("그 외 6개");
 });

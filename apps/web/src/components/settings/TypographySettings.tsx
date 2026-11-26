@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import type { ReactNode } from "react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
@@ -36,11 +38,7 @@ import {
   SettingsSection,
   useSettingsSearchTargetId,
 } from "./settingsLayout";
-import {
-  isAdvancedTypographyTarget,
-  revealSettingsSearchTarget,
-  searchableSetting,
-} from "./settingsSearch";
+import { isAdvancedTypographyTarget, revealSettingsSearchTarget } from "./settingsSearch";
 import { makeFontDefaultFamiliesCache } from "./fontDefaultFamiliesCache";
 
 let fontDefaultFamilies: ReturnType<typeof makeFontDefaultFamiliesCache> | undefined;
@@ -48,29 +46,33 @@ let fontDefaultFamilies: ReturnType<typeof makeFontDefaultFamiliesCache> | undef
 function resolveFontDefaultFamilies() {
   fontDefaultFamilies ??= makeFontDefaultFamiliesCache(document.fonts, window);
   return fontDefaultFamilies.get(() => ({
-    sans: resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK) ?? "System default",
-    code: resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK) ?? "System monospace",
+    sans: resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK) ?? "",
+    code: resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK) ?? "",
   }));
 }
 
 function useFontDefaultFamilies() {
   const settings = useScopedSettings();
   const [defaults] = useState(resolveFontDefaultFamilies);
+  const gt = useGT();
+  const sans = defaults.sans || gt("System default");
   return {
-    sans: defaults.sans,
-    code: defaults.code,
-    interfaceFamily: settings.fontFamilySans.trim() || defaults.sans,
+    sans,
+    code: defaults.code || gt("System monospace"),
+    interfaceFamily: settings.fontFamilySans.trim() || sans,
   };
 }
 
 function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
-      {...searchableSetting("interface-font")}
-      description="Everything outside code blocks and the terminal."
+      {...setting("interface-font")}
+      description={gt("Everything outside code blocks and the terminal.")}
       defaultFamily={defaults.sans}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilySans}
       value={settings.fontFamilySans}
@@ -82,7 +84,7 @@ function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
         })
       }
       size={{
-        label: "Interface font size",
+        label: gt("Interface font size"),
         min: MIN_INTERFACE_FONT_SIZE,
         max: MAX_INTERFACE_FONT_SIZE,
         value: settings.fontSizeInterface,
@@ -95,13 +97,15 @@ function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
 }
 
 function PromptFontRow() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
-      {...searchableSetting("prompt-font")}
-      description="Only the box you write prompts in. Mono works well here."
+      {...setting("prompt-font")}
+      description={gt("Only the box you write prompts in. Mono works well here.")}
       defaultFamily={defaults.interfaceFamily}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer}
       value={settings.fontFamilyComposer}
@@ -113,7 +117,7 @@ function PromptFontRow() {
         })
       }
       size={{
-        label: "Prompt font size",
+        label: gt("Prompt font size"),
         min: MIN_PROMPT_FONT_SIZE,
         max: MAX_PROMPT_FONT_SIZE,
         value: settings.fontSizePrompt,
@@ -127,21 +131,23 @@ function PromptFontRow() {
 
 function CodeFontRow({
   title,
-  description = "Code blocks, diffs, and file previews.",
+  description,
   preview,
 }: {
   title?: string;
   description?: string;
   preview?: ReactNode;
 }) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
-      {...searchableSetting("code-font")}
+      {...setting("code-font")}
       {...(title !== undefined ? { title } : {})}
-      description={description}
+      description={description ?? gt("Code blocks, diffs, and file previews.")}
       defaultFamily={defaults.code}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilyCode}
       value={settings.fontFamilyCode}
@@ -154,7 +160,7 @@ function CodeFontRow({
       }
       requireMonospace
       size={{
-        label: "Code font size",
+        label: gt("Code font size"),
         min: MIN_CODE_FONT_SIZE,
         max: MAX_CODE_FONT_SIZE,
         value: settings.fontSizeCode,
@@ -167,13 +173,15 @@ function CodeFontRow({
 }
 
 function TerminalFontRow() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
-      {...searchableSetting("terminal-font")}
-      description="Terminal output, independent from code blocks and diffs."
+      {...setting("terminal-font")}
+      description={gt("Terminal output, independent from code blocks and diffs.")}
       defaultFamily={defaults.code}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal}
       value={settings.fontFamilyTerminal}
@@ -186,7 +194,7 @@ function TerminalFontRow() {
       }
       requireMonospace
       size={{
-        label: "Terminal font size",
+        label: gt("Terminal font size"),
         min: MIN_TERMINAL_FONT_SIZE,
         max: MAX_TERMINAL_FONT_SIZE,
         value: settings.fontSizeTerminal,
@@ -208,17 +216,19 @@ function TerminalFontRow() {
 }
 
 function FontSmoothingRow() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   if (!isMacPlatform(navigator.platform)) return null;
   return (
     <SettingsRow
-      {...searchableSetting("font-smoothing")}
-      description="Use thinner grayscale text smoothing instead of the macOS default."
+      {...setting("font-smoothing")}
+      description={gt("Use thinner grayscale text smoothing instead of the macOS default.")}
       resetAction={
         settings.fontSmoothing !== DEFAULT_UNIFIED_SETTINGS.fontSmoothing ? (
           <SettingResetButton
-            label="font smoothing"
+            label={setting("font-smoothing").title}
             onClick={() =>
               updateSettings({ fontSmoothing: DEFAULT_UNIFIED_SETTINGS.fontSmoothing })
             }
@@ -229,7 +239,7 @@ function FontSmoothingRow() {
         <Switch
           checked={settings.fontSmoothing}
           onCheckedChange={(checked) => updateSettings({ fontSmoothing: Boolean(checked) })}
-          aria-label="Font smoothing"
+          aria-label={gt("Font smoothing")}
         />
       }
     />
@@ -237,16 +247,18 @@ function FontSmoothingRow() {
 }
 
 function WordWrapRow() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   return (
     <SettingsRow
-      {...searchableSetting("word-wrap")}
-      description="Wrap long lines in code blocks, diffs, and file previews by default."
+      {...setting("word-wrap")}
+      description={gt("Wrap long lines in code blocks, diffs, and file previews by default.")}
       resetAction={
         settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? (
           <SettingResetButton
-            label="word wrapping"
+            label={setting("word-wrap").title}
             onClick={() => updateSettings({ wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap })}
           />
         ) : null
@@ -255,7 +267,7 @@ function WordWrapRow() {
         <Switch
           checked={settings.wordWrap}
           onCheckedChange={(checked) => updateSettings({ wordWrap: Boolean(checked) })}
-          aria-label="Wrap code, diffs, and file previews by default"
+          aria-label={gt("Wrap code, diffs, and file previews by default")}
         />
       }
     />
@@ -275,13 +287,14 @@ function FontSettingsGroup() {
 }
 
 function SimpleFontRows() {
+  const gt = useGT();
   const settings = useScopedSettings();
   return (
     <>
       <InterfaceFontRow preview={<PromptFontPreview />} />
       <CodeFontRow
-        title="Monospace font"
-        description="Code blocks, diffs, file previews, and the terminal."
+        title={gt("Monospace font")}
+        description={gt("Code blocks, diffs, file previews, and the terminal.")}
         preview={
           <>
             <CodeFontPreview />
@@ -305,6 +318,7 @@ function SimpleFontRows() {
 }
 
 export function TypographySection() {
+  const gt = useGT();
   const [advanced, setAdvanced] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -322,14 +336,14 @@ export function TypographySection() {
   return (
     <SettingsSection
       id="typography"
-      title="Typography"
+      title={gt("Typography")}
       headerAction={
         <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-          Advanced
+          {gt("Advanced")}
           <Switch
             checked={showAdvanced}
             onCheckedChange={(checked) => setAdvanced(Boolean(checked))}
-            aria-label="Show advanced typography settings"
+            aria-label={gt("Show advanced typography settings")}
           />
         </label>
       }
@@ -372,6 +386,7 @@ function FontFamilySettingsRow({
     onChange: (v: number) => void;
   };
 }) {
+  const gt = useGT();
   const trimmed = value.trim();
   const [draft, setDraft] = useState(value);
   const [draftSettled, setDraftSettled] = useState(true);
@@ -427,7 +442,7 @@ function FontFamilySettingsRow({
   const familyControl =
     fontEnumeration.status === "granted" ? (
       <FontFamilyPicker
-        ariaLabel={`${title} family`}
+        ariaLabel={gt("{title} family", { title })}
         defaultFamily={defaultFamily}
         selectedFamily={trimmed}
         requireMonospace={requireMonospace}
@@ -437,7 +452,7 @@ function FontFamilySettingsRow({
     ) : (
       <Input
         size="sm"
-        aria-label={`${title} family`}
+        aria-label={gt("{title} family", { title })}
         aria-invalid={draftPending || undefined}
         autoCapitalize="off"
         autoComplete="off"

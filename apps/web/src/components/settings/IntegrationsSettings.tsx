@@ -1,4 +1,6 @@
-import { useGT } from "gt-react";
+import { BrowserAppearanceSetting } from "./BrowserAppearanceSetting";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT, msg, useMessages } from "gt-react";
 import {
   FILL_VALUE,
   RESPONSIVE_VALUE,
@@ -43,7 +45,6 @@ import {
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_BROWSER_SEARCH_ENGINE,
   DEFAULT_BROWSER_VIEWPORT,
-  DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
   FILL_PREVIEW_VIEWPORT,
   PREVIEW_VIEWPORT_MAX_AREA,
@@ -54,7 +55,6 @@ import {
   isBuiltInBrowserProfileId,
   resolveBrowserProfiles,
   type BrowserImportSource,
-  type PreviewAppearancePreference,
 } from "@goat/contracts";
 import { isValidSearchUrlTemplate } from "@goat/shared/preview";
 import { PREVIEW_VIEWPORT_PRESETS } from "@goat/shared/previewViewport";
@@ -135,7 +135,6 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserRefreshDialog } from "./BrowserRefreshDialog";
 import { importBrowserCookiesIntoTarget } from "./browserProfileImport";
@@ -185,15 +184,12 @@ const RESPONSIVE_SEED_SIZE = { width: 1280, height: 800 } as const;
 
 const NO_GROUPING: Intl.NumberFormatOptions = { useGrouping: false };
 
-const APPEARANCE_LABELS: Readonly<Record<PreviewAppearancePreference, string>> = {
-  system: "System",
-  light: "Light",
-  dark: "Dark",
-};
-
 const zoomLabel = (zoomFactor: number) => `${Math.round(zoomFactor * 100)}%`;
 
 function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const m = useMessages();
+  const localizedSetting = useTranslatedSearchableSetting();
   const viewport = useClientSettings((settings) => settings.browserDefaultViewport);
   const updateSettings = useUpdateScopedSettings();
 
@@ -241,13 +237,15 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
 
   return (
     <SettingsRow
-      {...searchableSetting("browser-default-viewport")}
+      {...localizedSetting("browser-default-viewport")}
       devicePreference
-      description="Tab size for you and agents. Fill fits the panel; other sizes show the device toolbar."
+      description={gt(
+        "Tab size for you and agents. Fill fits the panel; other sizes show the device toolbar.",
+      )}
       resetAction={
         !disabled && viewport._tag !== DEFAULT_BROWSER_VIEWPORT._tag ? (
           <SettingResetButton
-            label="default browser viewport"
+            label={gt("default browser viewport")}
             onClick={() => updateSettings({ browserDefaultViewport: DEFAULT_BROWSER_VIEWPORT })}
           />
         ) : null
@@ -262,15 +260,15 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
             <SelectTrigger
               size="sm"
               className="w-full min-w-0 sm:w-44"
-              aria-label="Default browser viewport"
+              aria-label={gt("Default browser viewport")}
             >
-              <SelectValue>{viewportSelectLabel(viewport)}</SelectValue>
+              <SelectValue>{m(viewportSelectLabel(viewport))}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              <SelectItem value={FILL_VALUE}>Fill panel</SelectItem>
-              <SelectItem value={RESPONSIVE_VALUE}>Responsive</SelectItem>
+              <SelectItem value={FILL_VALUE}>{gt("Fill panel")}</SelectItem>
+              <SelectItem value={RESPONSIVE_VALUE}>{gt("Responsive")}</SelectItem>
               <SelectGroup>
-                <SelectGroupLabel>Standard</SelectGroupLabel>
+                <SelectGroupLabel>{gt("Standard")}</SelectGroupLabel>
                 {PREVIEW_VIEWPORT_PRESETS.map((preset) => (
                   <SelectItem key={preset.id} value={preset.id}>
                     <span className="flex w-full items-center justify-between gap-5">
@@ -298,7 +296,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
                 onValueCommitted={(value) => commitDimension("width", value)}
               >
                 <NumberFieldGroup>
-                  <NumberFieldInput aria-label="Default viewport width" />
+                  <NumberFieldInput aria-label={gt("Default viewport width")} />
                 </NumberFieldGroup>
               </NumberField>
               <span className="text-xs text-muted-foreground">×</span>
@@ -313,7 +311,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
                 onValueCommitted={(value) => commitDimension("height", value)}
               >
                 <NumberFieldGroup>
-                  <NumberFieldInput aria-label="Default viewport height" />
+                  <NumberFieldInput aria-label={gt("Default viewport height")} />
                 </NumberFieldGroup>
               </NumberField>
               <Tooltip>
@@ -334,7 +332,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
                     </Button>
                   }
                 />
-                <TooltipPopup side="top">Rotate</TooltipPopup>
+                <TooltipPopup side="top">{gt("Rotate")}</TooltipPopup>
               </Tooltip>
             </div>
           ) : null}
@@ -345,18 +343,20 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
 }
 
 function BrowserZoomSetting({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const zoomFactor = useClientSettings((settings) => settings.browserDefaultZoomFactor);
   const updateSettings = useUpdateScopedSettings();
 
   return (
     <SettingsRow
-      {...searchableSetting("browser-default-zoom")}
+      {...localizedSetting("browser-default-zoom")}
       devicePreference
-      description="Page zoom applied to new browser tabs."
+      description={gt("Page zoom applied to new browser tabs.")}
       resetAction={
         !disabled && zoomFactor !== DEFAULT_PREVIEW_ZOOM_FACTOR ? (
           <SettingResetButton
-            label="default browser zoom"
+            label={gt("default browser zoom")}
             onClick={() =>
               updateSettings({ browserDefaultZoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR })
             }
@@ -372,7 +372,11 @@ function BrowserZoomSetting({ disabled }: { readonly disabled: boolean }) {
             if (next !== undefined) updateSettings({ browserDefaultZoomFactor: next });
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Default browser zoom">
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-40"
+            aria-label={gt("Default browser zoom")}
+          >
             <SelectValue>{zoomLabel(zoomFactor)}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -388,68 +392,25 @@ function BrowserZoomSetting({ disabled }: { readonly disabled: boolean }) {
   );
 }
 
-function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) {
-  const appearance = useClientSettings((settings) => settings.browserDefaultAppearance);
-  const updateSettings = useUpdateScopedSettings();
-
-  return (
-    <SettingsRow
-      {...searchableSetting("browser-default-appearance")}
-      devicePreference
-      description="The color scheme pages are told to prefer. System follows your OS setting."
-      resetAction={
-        !disabled && appearance !== DEFAULT_PREVIEW_APPEARANCE ? (
-          <SettingResetButton
-            label="default browser appearance"
-            onClick={() => updateSettings({ browserDefaultAppearance: DEFAULT_PREVIEW_APPEARANCE })}
-          />
-        ) : null
-      }
-      control={
-        <Select
-          disabled={disabled}
-          value={appearance}
-          onValueChange={(value) => {
-            if (value === "system" || value === "light" || value === "dark") {
-              updateSettings({ browserDefaultAppearance: value });
-            }
-          }}
-        >
-          <SelectTrigger
-            size="sm"
-            className="w-full sm:w-40"
-            aria-label="Default browser appearance"
-          >
-            <SelectValue>{APPEARANCE_LABELS[appearance]}</SelectValue>
-          </SelectTrigger>
-          <SelectPopup align="end" alignItemWithTrigger={false}>
-            {Object.entries(APPEARANCE_LABELS).map(([value, label]) => (
-              <SelectItem hideIndicator key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      }
-    />
-  );
-}
-
 function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const showKeys = useClientSettings((settings) => settings.browserRecordingShowKeyPresses);
   const showMouse = useClientSettings((settings) => settings.browserRecordingShowMousePresses);
   const updateSettings = useUpdateScopedSettings();
   return (
     <>
       <SettingsRow
-        {...searchableSetting("browser-recording-key-presses")}
+        {...localizedSetting("browser-recording-key-presses")}
         devicePreference
-        description="Show pressed keys and shortcuts in new recordings. Password fields are excluded."
+        description={gt(
+          "Show pressed keys and shortcuts in new recordings. Password fields are excluded.",
+        )}
         control={
           <Switch
             disabled={disabled}
             checked={showKeys}
-            aria-label="Show key presses in recordings"
+            aria-label={gt("Show key presses in recordings")}
             onCheckedChange={(checked) =>
               updateSettings({ browserRecordingShowKeyPresses: Boolean(checked) })
             }
@@ -457,14 +418,14 @@ function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolea
         }
       />
       <SettingsRow
-        {...searchableSetting("browser-recording-mouse-presses")}
+        {...localizedSetting("browser-recording-mouse-presses")}
         devicePreference
-        description="Highlight mouse presses and held buttons in new recordings."
+        description={gt("Highlight mouse presses and held buttons in new recordings.")}
         control={
           <Switch
             disabled={disabled}
             checked={showMouse}
-            aria-label="Show mouse presses in recordings"
+            aria-label={gt("Show mouse presses in recordings")}
             onCheckedChange={(checked) =>
               updateSettings({ browserRecordingShowMousePresses: Boolean(checked) })
             }
@@ -476,18 +437,20 @@ function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolea
 }
 
 function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const frameRate = useClientSettings((settings) => settings.browserRecordingFrameRate);
   const updateSettings = useUpdateScopedSettings();
 
   return (
     <SettingsRow
-      {...searchableSetting("browser-recording-frame-rate")}
+      {...localizedSetting("browser-recording-frame-rate")}
       devicePreference
-      description="Maximum recording rate. 30 fps saves CPU and storage; 60 fps is smoother."
+      description={gt("Maximum recording rate. 30 fps saves CPU and storage; 60 fps is smoother.")}
       resetAction={
         !disabled && frameRate !== DEFAULT_BROWSER_RECORDING_FRAME_RATE ? (
           <SettingResetButton
-            label="browser recording frame rate"
+            label={gt("browser recording frame rate")}
             onClick={() =>
               updateSettings({ browserRecordingFrameRate: DEFAULT_BROWSER_RECORDING_FRAME_RATE })
             }
@@ -508,7 +471,7 @@ function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boo
           <SelectTrigger
             size="sm"
             className="w-full sm:w-40"
-            aria-label="Browser recording frame rate"
+            aria-label={gt("Browser recording frame rate")}
           >
             <SelectValue>{frameRate} fps</SelectValue>
           </SelectTrigger>
@@ -526,23 +489,28 @@ function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boo
 }
 
 const LINK_TARGET_LABELS: Readonly<Record<BrowserLinkTarget, string>> = {
-  system: "Your default browser",
-  app: "GOAT",
+  system: msg("Your default browser"),
+  app: msg("GOAT"),
 };
 
 function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const m = useMessages();
+  const localizedSetting = useTranslatedSearchableSetting();
   const linkTarget = useClientSettings((settings) => settings.browserLinkTarget);
   const updateSettings = useUpdateScopedSettings();
 
   return (
     <SettingsRow
-      {...searchableSetting("browser-link-target")}
+      {...localizedSetting("browser-link-target")}
       devicePreference
-      description="Where links in the chat and terminal open. Hold ⌘ or Ctrl while clicking a link to open it in your default browser either way."
+      description={gt(
+        "Where links in the chat and terminal open. Hold ⌘ or Ctrl while clicking a link to open it in your default browser either way.",
+      )}
       resetAction={
         !disabled && linkTarget !== DEFAULT_BROWSER_LINK_TARGET ? (
           <SettingResetButton
-            label="link target"
+            label={gt("link target")}
             onClick={() => updateSettings({ browserLinkTarget: DEFAULT_BROWSER_LINK_TARGET })}
           />
         ) : null
@@ -557,13 +525,13 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
             }
           }}
         >
-          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Open links in">
-            <SelectValue>{LINK_TARGET_LABELS[linkTarget]}</SelectValue>
+          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Open links in")}>
+            <SelectValue>{m(LINK_TARGET_LABELS[linkTarget])}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {(Object.keys(LINK_TARGET_LABELS) as ReadonlyArray<BrowserLinkTarget>).map((target) => (
               <SelectItem hideIndicator key={target} value={target}>
-                {LINK_TARGET_LABELS[target]}
+                {m(LINK_TARGET_LABELS[target])}
               </SelectItem>
             ))}
           </SelectPopup>
@@ -584,6 +552,8 @@ const SEARCH_ENGINE_LABELS: Readonly<Record<BrowserSearchEngine, string>> = {
 };
 
 function BrowserSearchEngineSetting() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const engine = useClientSettings((settings) => settings.browserSearchEngine);
   const customUrl = useClientSettings((settings) => settings.browserCustomSearchUrl);
   const updateSettings = useUpdateScopedSettings();
@@ -591,13 +561,13 @@ function BrowserSearchEngineSetting() {
   return (
     <>
       <SettingsRow
-        {...searchableSetting("browser-search-engine")}
+        {...localizedSetting("browser-search-engine")}
         devicePreference
-        description="What the address bar searches when you type something that isn't a URL."
+        description={gt("What the address bar searches when you type something that isn't a URL.")}
         resetAction={
           engine !== DEFAULT_BROWSER_SEARCH_ENGINE || customUrl !== "" ? (
             <SettingResetButton
-              label="search engine"
+              label={gt("search engine")}
               onClick={() =>
                 updateSettings({
                   browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE,
@@ -617,7 +587,7 @@ function BrowserSearchEngineSetting() {
               }
             }}
           >
-            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Search engine">
+            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={gt("Search engine")}>
               <SelectValue>{SEARCH_ENGINE_LABELS[engine]}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -632,20 +602,20 @@ function BrowserSearchEngineSetting() {
       />
       {engine === "custom" ? (
         <SettingsRow
-          title="Custom search URL"
+          title={gt("Custom search URL")}
           devicePreference
-          description="Use %s where the search terms go."
+          description={gt("Use %s where the search terms go.")}
           status={
             isValidSearchUrlTemplate(customUrl)
               ? undefined
-              : "Enter an http or https URL containing %s. Searches use DuckDuckGo until then."
+              : gt("Enter an http or https URL containing %s. Searches use DuckDuckGo until then.")
           }
           control={
             <DraftInput
               nativeInput
               size="sm"
               className="w-full sm:w-64"
-              aria-label="Custom search URL"
+              aria-label={gt("Custom search URL")}
               placeholder="https://example.com/search?q=%s"
               autoCapitalize="none"
               spellCheck={false}
@@ -661,18 +631,22 @@ function BrowserSearchEngineSetting() {
 }
 
 function PullRequestLinksOpenInAppSetting() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const openInApp = useClientSettings((settings) => settings.pullRequestLinksOpenInApp);
   const updateSettings = useUpdatePrimarySettings();
 
   return (
     <SettingsRow
-      {...searchableSetting("pull-request-links-open-in-app")}
+      {...localizedSetting("pull-request-links-open-in-app")}
       devicePreference
-      description="Clicking a pull request link opens it in GOAT. Turn off to open pull request links like any other link, on your git host."
+      description={gt(
+        "Clicking a pull request link opens it in GOAT. Turn off to open pull request links like any other link, on your git host.",
+      )}
       resetAction={
         openInApp ? null : (
           <SettingResetButton
-            label="open pull requests in GOAT"
+            label={gt("open pull requests in GOAT")}
             onClick={() => updateSettings({ pullRequestLinksOpenInApp: true })}
           />
         )
@@ -683,7 +657,7 @@ function PullRequestLinksOpenInAppSetting() {
           onCheckedChange={(checked) =>
             updateSettings({ pullRequestLinksOpenInApp: Boolean(checked) })
           }
-          aria-label="Open pull requests in GOAT"
+          aria-label={gt("Open pull requests in GOAT")}
         />
       }
     />
@@ -691,13 +665,14 @@ function PullRequestLinksOpenInAppSetting() {
 }
 
 function DeviceIntegrationSettings() {
+  const gt = useGT();
   const { search, environment: selected } = useSettingsScope();
   const settings = useScopedSettings();
   const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
   const environmentId = connected ? selected.environmentId : null;
 
   return (
-    <SettingsSection id="devices" title="Devices">
+    <SettingsSection id="devices" title={gt("Devices")}>
       <DeviceIntegrationControls
         key={`${environmentId}:${JSON.stringify(search)}`}
         environmentId={environmentId}
@@ -717,6 +692,9 @@ function DeviceIntegrationControls({
   enabled: boolean;
   agentAccessEnabled: boolean;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const localizedSetting = useTranslatedSearchableSetting();
   const canConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const { state, loaded } = useDeviceState(environmentId);
   const { scope, environments, connectedEnvironments } = useSettingsScope();
@@ -773,7 +751,7 @@ function DeviceIntegrationControls({
     if (failed.length > 0) {
       toastManager.add({
         type: "error",
-        title: "Device settings not saved on all environments",
+        title: gt("Device settings not saved on all environments"),
         description: `Could not update ${failed.map((environment) => environment.label).join(", ")}.`,
       });
     }
@@ -805,7 +783,9 @@ function DeviceIntegrationControls({
                   .finally(() => setPending(null));
               }}
             >
-              {pending === `update-${tool}` ? "Updating…" : `Update to v${version.requiredVersion}`}
+              {pending === `update-${tool}`
+                ? gt("Updating…")
+                : gt("Update to v{version}", { version: version.requiredVersion })}
             </Button>
           ) : null}
           {state.supportsToolInspection ? (
@@ -821,7 +801,7 @@ function DeviceIntegrationControls({
                 );
               }}
             >
-              {pending === "check" ? "Checking…" : "Check versions"}
+              {pending === "check" ? gt("Checking…") : gt("Check versions")}
             </Button>
           ) : null}
         </div>
@@ -837,10 +817,10 @@ function DeviceIntegrationControls({
   return (
     <>
       <SettingsRow
-        {...searchableSetting("device-hub")}
+        {...localizedSetting("device-hub")}
         serverScoped
         settingKeys={["enableDeviceSupport"]}
-        description={deviceHubDescription}
+        description={m(deviceHubDescription)}
         control={
           <>
             <DeviceToolVersions
@@ -860,7 +840,7 @@ function DeviceIntegrationControls({
                 busy ||
                 pending !== null
               }
-              aria-label="Simulators and emulators"
+              aria-label={gt("Simulators and emulators")}
               onCheckedChange={(checked) =>
                 void update("hub", {
                   enabled: Boolean(checked),
@@ -874,7 +854,7 @@ function DeviceIntegrationControls({
       <AnimatedHeight>
         {platformsRevealed ? (
           <SettingsRow
-            {...searchableSetting("device-platform-support")}
+            {...localizedSetting("device-platform-support")}
             description={
               connectedEnvironments.length > 1
                 ? `Status for ${connectedEnvironments.find((environment) => environment.environmentId === environmentId)?.label}. Select an environment to inspect its simulator support.`
@@ -912,17 +892,17 @@ function DeviceIntegrationControls({
                   void list({ environmentId, input: {} }).finally(() => setPending(null));
                 }}
               >
-                {pending === "check" ? "Checking…" : "Refresh"}
+                {pending === "check" ? gt("Checking…") : gt("Refresh")}
               </Button>
             }
           />
         ) : null}
       </AnimatedHeight>
       <SettingsRow
-        {...searchableSetting("agent-device-access")}
+        {...localizedSetting("agent-device-access")}
         serverScoped
         settingKeys={["enableAgentDeviceAccess"]}
-        description={agentDeviceDescription}
+        description={m(agentDeviceDescription)}
         control={
           <>
             <DeviceToolVersions
@@ -940,7 +920,7 @@ function DeviceIntegrationControls({
                 (!projectScope && (!loaded || !anyHubEnabled || busy)) ||
                 pending !== null
               }
-              aria-label="Agent device access"
+              aria-label={gt("Agent device access")}
               onCheckedChange={(checked) =>
                 projectScope
                   ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
@@ -963,18 +943,22 @@ function DeviceIntegrationControls({
 }
 
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdateScopedSettings();
 
   return (
     <SettingsRow
-      {...searchableSetting("browser-auto-show-floating-preview")}
+      {...localizedSetting("browser-auto-show-floating-preview")}
       devicePreference
-      description="Show the floating preview when an agent opens a browser or device unless the agent says otherwise."
+      description={gt(
+        "Show the floating preview when an agent opens a browser or device unless the agent says otherwise.",
+      )}
       resetAction={
         !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
           <SettingResetButton
-            label="auto-show floating preview"
+            label={gt("auto-show floating preview")}
             onClick={() =>
               updateSettings({
                 browserAutoShowFloatingPreview: DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
@@ -990,7 +974,7 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
           onCheckedChange={(checked) =>
             updateSettings({ browserAutoShowFloatingPreview: Boolean(checked) })
           }
-          aria-label="Auto-show floating preview"
+          aria-label={gt("Auto-show floating preview")}
         />
       }
     />
@@ -998,6 +982,8 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
 }
 
 function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const userProfiles = useClientSettings((settings) => settings.browserProfiles);
   const defaultProfileId = useClientSettings((settings) => settings.browserDefaultProfileId);
   const settingsHydrated = useClientSettingsHydrated();
@@ -1082,7 +1068,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
       toastManager.add({
         type: "error",
         title: `Could not clear ${name}'s data`,
-        description: "You're not connected to a server yet.",
+        description: gt("You're not connected to a server yet."),
       });
       return;
     }
@@ -1191,8 +1177,10 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
 
   return (
     <SettingsRow
-      {...searchableSetting("browser-profiles")}
-      description="Profiles separate cookies and logins. Incognito data is cleared when the app closes."
+      {...localizedSetting("browser-profiles")}
+      description={gt(
+        "Profiles separate cookies and logins. Incognito data is cleared when the app closes.",
+      )}
       control={
         <Menu onOpenChange={(open) => open && loadSources()}>
           <MenuTrigger
@@ -1205,25 +1193,25 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
             }
           >
             <PlusIcon />
-            Add profile
+            {gt("Add profile")}
           </MenuTrigger>
           <MenuPopup align="end">
             <MenuItem
               disabled={!settingsHydrated || atProfileLimit}
-              onClick={() => createProfile("New profile")}
+              onClick={() => createProfile(gt("New profile"))}
             >
-              Blank profile
+              {gt("Blank profile")}
             </MenuItem>
             {atProfileLimit ? (
-              <MenuItem disabled>You&rsquo;ve reached the profile limit</MenuItem>
+              <MenuItem disabled>{gt("You’ve reached the profile limit")}</MenuItem>
             ) : null}
             <MenuSeparator />
             <MenuGroup>
-              <MenuGroupLabel>Import from</MenuGroupLabel>
+              <MenuGroupLabel>{gt("Import from")}</MenuGroupLabel>
               {sources === null ? (
-                <MenuItem disabled>Looking for browsers…</MenuItem>
+                <MenuItem disabled>{gt("Looking for browsers…")}</MenuItem>
               ) : importableSources.length === 0 ? (
-                <MenuItem disabled>No supported browsers found</MenuItem>
+                <MenuItem disabled>{gt("No supported browsers found")}</MenuItem>
               ) : (
                 <>
                   {importableSources.map((source) => (
@@ -1247,7 +1235,9 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     </MenuItem>
                   ))}
                   {primaryEnvironment == null ? (
-                    <MenuItem disabled>Connect to an environment to import cookies</MenuItem>
+                    <MenuItem disabled>
+                      {gt("Connect to an environment to import cookies")}
+                    </MenuItem>
                   ) : null}
                 </>
               )}
@@ -1260,6 +1250,10 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
         {listedProfiles.map((profile, index) => {
           const builtIn = isBuiltInBrowserProfileId(profile.id);
           const isDefault = profile.id === resolvedDefaultId;
+          const displayName =
+            profile.id === DEFAULT_BROWSER_PROFILE_ID && profile.name === "Default"
+              ? gt("Default")
+              : profile.name;
           return (
             <div
               key={profile.id}
@@ -1276,23 +1270,23 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       profileWritesDisabled && "opacity-64",
                     )}
                   >
-                    {profile.name}
+                    {displayName}
                   </span>
                 ) : (
                   <DraftInput
                     nativeInput
                     size="sm"
                     className="w-full max-w-56"
-                    aria-label={`Rename ${profile.name}`}
+                    aria-label={gt("Rename {name}", { name: displayName })}
                     disabled={profileWritesDisabled || importInFlight}
                     maxLength={BROWSER_PROFILE_NAME_MAX_LENGTH}
-                    value={profile.name}
+                    value={displayName}
                     onCommit={(next) => renameProfile(profile.id, next)}
                   />
                 )}
                 {isDefault ? (
                   <span className={cn("flex", profileWritesDisabled && "opacity-64")}>
-                    <Badge>Default</Badge>
+                    <Badge>{gt("Default")}</Badge>
                   </span>
                 ) : null}
               </span>
@@ -1303,7 +1297,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       size="icon-xs"
                       variant="ghost-muted"
                       disabled={profileWritesDisabled || importInFlight}
-                      aria-label={`${profile.name} options`}
+                      aria-label={gt("{name} options", { name: displayName })}
                     />
                   }
                 >
@@ -1323,13 +1317,14 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                         }
                         onClick={() => setRefreshProfile(profile)}
                       >
-                        Refresh from browser profile
+                        {gt("Refresh from browser profile")}
                       </MenuItem>
                       {sources?.find((source) => source.id === profile.importSource?.sourceId)
                         ?.refreshUnavailable === "appBoundEncryption" ? (
                         <MenuItem disabled>
-                          Chrome on Windows protects these cookies (app-bound encryption), so GOAT
-                          cannot read them. Sign in inside GOAT's browser instead.
+                          {gt(
+                            "Chrome on Windows protects these cookies (app-bound encryption), so GOAT cannot read them. Sign in inside GOAT's browser instead.",
+                          )}
                         </MenuItem>
                       ) : null}
                     </>
@@ -1342,7 +1337,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       }
                     }}
                   >
-                    Set as default
+                    {gt("Set as default")}
                   </MenuItem>
                   <MenuItem
                     disabled={!settingsHydrated || !removalAvailable}
@@ -1352,7 +1347,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       } else clearProfileData(profile.id, profile.name);
                     }}
                   >
-                    Clear cookies and cache
+                    {gt("Clear cookies and cache")}
                   </MenuItem>
                   {builtIn ? null : (
                     <MenuItem
@@ -1362,7 +1357,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                         if (settingsHydrated) setProfilePendingRemoval(profile);
                       }}
                     >
-                      Remove profile and data
+                      {gt("Remove profile and data")}
                     </MenuItem>
                   )}
                   {!removalAvailable ? (
@@ -1370,8 +1365,8 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                       <MenuSeparator />
                       <MenuItem disabled>
                         {environmentsReady
-                          ? "Connect to an environment to clear profile data"
-                          : "Checking environments…"}
+                          ? gt("Connect to an environment to clear profile data")
+                          : gt("Checking environments…")}
                       </MenuItem>
                     </>
                   ) : null}
@@ -1394,8 +1389,9 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove “{profilePendingRemoval?.name}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              Its cookies and logins are deleted. Desktop tabs already open in this profile stay
-              open until you close them; server browser tabs close now.
+              {gt(
+                "Its cookies and logins are deleted. Desktop tabs already open in this profile stay open until you close them; server browser tabs close now.",
+              )}
             </AlertDialogDescription>
             {profileRemovalError ? (
               <p aria-live="polite" className="text-sm text-destructive">
@@ -1404,7 +1400,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
             ) : null}
             {!removalAvailable ? (
               <p className="text-sm text-muted-foreground">
-                Connect to an environment to remove this profile and its data.
+                {gt("Connect to an environment to remove this profile and its data.")}
               </p>
             ) : null}
           </AlertDialogHeader>
@@ -1413,7 +1409,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
               disabled={profileRemovalInFlight}
               render={<Button variant="outline" disabled={profileRemovalInFlight} />}
             >
-              Cancel
+              {gt("Cancel")}
             </AlertDialogClose>
             <Button
               variant="destructive"
@@ -1424,7 +1420,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                 }
               }}
             >
-              {profileRemovalInFlight ? "Removing…" : "Remove profile"}
+              {profileRemovalInFlight ? gt("Removing…") : gt("Remove profile")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -1441,11 +1437,15 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
               Clear “{profilePendingClear?.name}”’s cookies and cache?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              You are signed out of its sites. Server browser tabs open in this profile close now.
+              {gt(
+                "You are signed out of its sites. Server browser tabs open in this profile close now.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               variant="destructive"
               onClick={() => {
@@ -1454,7 +1454,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                 setProfilePendingClear(null);
               }}
             >
-              Clear data
+              {gt("Clear data")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -1489,8 +1489,8 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
               .catch(() => {
                 toastManager.add({
                   type: "error",
-                  title: "Could not open System Settings",
-                  description: "Open Privacy & Security → Full Disk Access manually.",
+                  title: gt("Could not open System Settings"),
+                  description: gt("Open Privacy & Security → Full Disk Access manually."),
                 });
               });
           }}

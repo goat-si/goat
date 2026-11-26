@@ -235,6 +235,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         derivedCap: 1000,
         conversationMemoryControl: true,
         turnMemory: true,
+        savedThreadPreference: true,
         scopeMoves: true,
         scopeMoveReceipts: true,
         originFilter: true,

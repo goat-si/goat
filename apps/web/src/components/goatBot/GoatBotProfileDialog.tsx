@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import {
   useId,
@@ -47,6 +48,7 @@ export function GoatBotProfileDialog(props: {
   readonly instructionsEditable?: boolean;
   readonly finalFocus?: ComponentProps<typeof DialogPopup>["finalFocus"];
 }) {
+  const gt = useGT();
   const [name, setName] = useState(props.draftName ?? props.initial.name);
   const [avatar, setAvatar] = useState(props.initial.avatar ?? "");
   const [purpose, setPurpose] = useState(props.initial.purpose);
@@ -105,9 +107,9 @@ export function GoatBotProfileDialog(props: {
       >
         <form className="contents" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
-            <DialogTitle>Edit bot</DialogTitle>
+            <DialogTitle>{gt("Edit bot")}</DialogTitle>
             <DialogDescription>
-              Changes reach the bot when it starts its next conversation session.
+              {gt("Changes reach the bot when it starts its next conversation session.")}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -135,7 +137,7 @@ export function GoatBotProfileDialog(props: {
                 value={avatar}
                 maxLength={AVATAR_MAX}
                 disabled={busy}
-                placeholder="An emoji, or empty for the default face"
+                placeholder={gt("An emoji, or empty for the default face")}
                 onChange={(event) => setAvatar(event.target.value)}
               />
             </label>
@@ -148,7 +150,7 @@ export function GoatBotProfileDialog(props: {
                 value={purpose}
                 maxLength={PURPOSE_MAX}
                 disabled={busy}
-                placeholder="What should this bot help with?"
+                placeholder={gt("What should this bot help with?")}
                 onChange={(event) => setPurpose(event.target.value)}
               />
             </label>
@@ -160,14 +162,14 @@ export function GoatBotProfileDialog(props: {
                   maxLength={16 * 1024}
                   disabled={busy}
                   rows={4}
-                  placeholder="What should this bot do every time?"
+                  placeholder={gt("What should this bot do every time?")}
                   onChange={(event) => setInstructions(event.target.value)}
                 />
               </label>
             ) : null}
             {props.children}
             {nameMissing ? (
-              <p className="text-sm text-muted-foreground">The bot needs a name.</p>
+              <p className="text-sm text-muted-foreground">{gt("The bot needs a name.")}</p>
             ) : null}
             {error ? (
               <p
@@ -186,7 +188,7 @@ export function GoatBotProfileDialog(props: {
               </p>
             )}
             <Button type="button" variant="outline" disabled={busy} onClick={props.onClose}>
-              Cancel
+              {gt("Cancel")}
             </Button>
             <Button
               type="submit"
@@ -195,7 +197,7 @@ export function GoatBotProfileDialog(props: {
                 unavailable !== undefined ? reasonId : alertSaysWhy ? alertId : undefined
               }
             >
-              {busy ? "Saving…" : "Save"}
+              {busy ? gt("Saving…") : gt("Save")}
             </Button>
           </DialogFooter>
         </form>

@@ -441,7 +441,18 @@ it.effect.each(["succeeded", "failed", "cancelled", "blocked"] as const)(
         state.runs = [run(runA, "completed"), run(runB, "completed", 2)];
         state.latestRunId = runB;
         state.messages = [message("a1", runA, "Assistant text is not the structured summary.")];
-        const report: ThreadResultReport = { outcome, summary: "  Verified report. \n" };
+        const report = {
+          outcome,
+          summary: "  Verified report. \n",
+          attachments: [
+            {
+              messageId: "message",
+              attachmentId: "attachment",
+              attemptId: "attempt",
+              name: "evidence.xml",
+            },
+          ],
+        };
         yield* sql`
           INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
           VALUES (${threadId}, ${runA}, ${JSON.stringify(report)}, ${"2026-10-12T00:00:00.000Z"})
@@ -451,14 +462,13 @@ it.effect.each(["succeeded", "failed", "cancelled", "blocked"] as const)(
           runId: runA,
           status: "completed",
           summary: "Assistant text is not the structured summary.",
-          reported: { outcome, summary: "Verified report." },
+          reported: { outcome, summary: "Verified report.", attachments: report.attachments },
         });
         const unreported = yield* service.wait({ ...waitInput, watchRunId: runB });
         expect(unreported.observedRun).not.toHaveProperty("reported");
       }),
     ),
 );
-
 it.effect.each([undefined, " \n ", "x".repeat(4000)])(
   "omits a blank reported summary and bounds a full-length summary (%#)",
   (summary) =>
@@ -482,7 +492,6 @@ it.effect.each([undefined, " \n ", "x".repeat(4000)])(
       }),
     ),
 );
-
 it.effect.each(["queued", "running"] as const)(
   "does not expose a stored result while the run is %s",
   (status) =>
@@ -499,7 +508,6 @@ it.effect.each(["queued", "running"] as const)(
       }),
     ),
 );
-
 test("wakes from the report PubSub with no run event", ({ service, subscribed }) =>
   Effect.gen(function* () {
     const fiber = yield* service.wait(waitInput).pipe(Effect.forkChild);
@@ -882,7 +890,6 @@ test("a thread launched on this machine reports to its launcher instead of faili
       "> Which branch?",
     );
   }));
-
 test("a delegated task reports to the thread that delegated it", ({ service, sql, state }) =>
   Effect.gen(function* () {
     yield* service.unbind(threadId);
@@ -902,7 +909,6 @@ test("a delegated task reports to the thread that delegated it", ({ service, sql
       [launcher, "completed"],
     ]);
   }));
-
 test("a thread launched from another machine without a binding still has no origin", ({
   service,
   sql,
@@ -1026,7 +1032,6 @@ test("relay receipts survive collection and service recreation and remain scoped
     yield* restarted.unbind(relaying);
     expect(yield* restarted.relayReceipt(relaying, input.clientRequestId)).toBeNull();
   }));
-
 it.effect.each(["initial", "wakeup"] as const)(
   "a projection defect when subagents is missing on %s read fails the wait promptly instead of hanging",
   (phase) =>
