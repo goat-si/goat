@@ -2,9 +2,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { assert, it } from "@effect/vitest";
 import {
   OrchestratorMcpFailure,
+  MessageId,
   ProviderInstanceId,
   ProviderDriverKind,
   RunId,
+  RunAttemptId,
   RuntimeRequestId,
   type OrchestratorMcpDelegateTaskInput,
 } from "@goat/contracts";
@@ -194,12 +196,25 @@ it.effect(
         });
         const call = yield* Queue.take(f.calls);
         assert.equal(call.input.arguments.watchRunId, remoteRunId);
+        const attachments = [
+          {
+            messageId: MessageId.make("message"),
+            attachmentId: "attachment",
+            attemptId: RunAttemptId.make("attempt"),
+            name: "evidence.xml",
+          },
+        ];
         yield* Deferred.succeed(call.reply, {
           threadId: remoteThreadId,
           reports: [],
           hasMore: false,
           latestRunId: RunId.make("later-B"),
-          observedRun: { runId: remoteRunId, status: "completed", summary: "A finished" },
+          observedRun: {
+            runId: remoteRunId,
+            status: "completed",
+            summary: "A finished",
+            reported: { outcome: "succeeded", attachments },
+          },
           timedOut: false,
         });
         let result = yield* Queue.take(f.commands);
@@ -209,6 +224,7 @@ it.effect(
         assert.equal(status.link, handle.link);
         assert.equal(status.status, "completed");
         assert.equal(status.summary, "A finished");
+        assert.deepEqual(status.attachments, attachments);
         assert.equal(status.latestTerminalSummary, "A finished");
         assert.equal((yield* service.delegateTask(scope, input)).taskId, handle.taskId);
         assert.equal(f.launches.length, 1);

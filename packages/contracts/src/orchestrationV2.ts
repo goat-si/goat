@@ -4,6 +4,9 @@ import {
 } from "./orchestrationV2Launch.ts";
 export { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
 import { PreparedRunPinBase, WorktreePreparationBasePin } from "./worktreePreparation.ts";
+import { ThreadResultAttachments } from "./threadResultAttachments.ts";
+import { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
+export { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
 export type { WorktreePreparationBasePin } from "./worktreePreparation.ts";
 export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
@@ -785,16 +788,6 @@ export const OrchestrationV2SubagentWorkflow = Schema.Struct({
 });
 export type OrchestrationV2SubagentWorkflow = typeof OrchestrationV2SubagentWorkflow.Type;
 
-export const OrchestrationV2TaskRole = Schema.Literals([
-  "implementation",
-  "research",
-  "review",
-  "design",
-  "test",
-  "general",
-]);
-export type OrchestrationV2TaskRole = typeof OrchestrationV2TaskRole.Type;
-
 /**
  * Wire-only, for clients that opted in with `acceptDedupedBodies` or `dedupeBodies=1`: the field
  * was blanked because an earlier record on the same response or stream holds the same value.
@@ -849,6 +842,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   progress: Schema.optional(Schema.String),
   workflow: Schema.optional(OrchestrationV2SubagentWorkflow),
   result: Schema.NullOr(Schema.String),
+  resultAttachments: Schema.optional(ThreadResultAttachments),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   updatedAt: Schema.DateTimeUtc,
@@ -3485,6 +3479,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     correlationId: TrimmedNonEmptyString,
     status: Schema.Literals(["completed", "failed", "cancelled", "interrupted"]),
     summary: Schema.String.check(Schema.isMaxLength(4_000)),
+    attachments: Schema.optional(ThreadResultAttachments),
   }),
 
   ThreadPullRequestWatchSyncCommand,

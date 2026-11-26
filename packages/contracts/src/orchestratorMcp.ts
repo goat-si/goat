@@ -51,7 +51,7 @@ import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
 import { OrchestratorMcpThreadPullRequest } from "./orchestratorMcpThreadPullRequest.ts";
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
-import { ThreadResult } from "./threadResult.ts";
+import { ThreadResult, ThreadResultAttachments } from "./threadResult.ts";
 import { RemoteSenderAttribution, TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { LastThreadTitleRegeneration, ThreadTitleRegeneration } from "./threadTitle.ts";
@@ -250,6 +250,7 @@ export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
 const OrchestratorMcpRunningTaskNext = Schema.String;
 
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
+  attachments: Schema.optional(ThreadResultAttachments),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   taskId: NodeId,
   host: Schema.optional(Schema.String),

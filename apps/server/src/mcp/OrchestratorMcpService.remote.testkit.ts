@@ -260,6 +260,9 @@ export const fixtureWith = Effect.fnUntraced(function* (
                   ...task,
                   status: command.status,
                   result: command.summary,
+                  ...(command.attachments === undefined
+                    ? {}
+                    : { resultAttachments: command.attachments }),
                 });
               }
             }
