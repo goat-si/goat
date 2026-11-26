@@ -135,26 +135,74 @@ export function parsePullRequestQuery(raw: string): {
   };
 }
 
+/** The Filters menu's radio qualifiers: it shows a typed one in place of its own value. */
+const MENU_QUALIFIERS = ["draft", "review", "checks"] as const;
+type MenuQualifier = (typeof MENU_QUALIFIERS)[number];
+
+export function pullRequestMenuFilters(
+  typed: PullRequestListFilters,
+  menuFilters: PullRequestListFilters,
+): PullRequestListFilters {
+  return {
+    ...menuFilters,
+    draft: typed.draft ?? menuFilters.draft,
+    review: typed.review ?? menuFilters.review,
+    checks: typed.checks ?? menuFilters.checks,
+  };
+}
+
 /**
- * The Draft menu shows a typed `draft:` qualifier, so picking another value has to take the
- * qualifier out of the query: left in, it would keep outranking whatever the menu stores.
+ * Picking another menu value takes the matching typed qualifier out of the query: left in, it
+ * would keep outranking whatever the menu stores.
+ */
+export function applyPullRequestFilterChange(
+  query: string,
+  menuFilters: PullRequestListFilters,
+  next: PullRequestListFilters,
+) {
+  const typed = parsePullRequestQuery(query).filters;
+  const changed = (key: MenuQualifier) => next[key] !== (typed[key] ?? menuFilters[key]);
+  const replaced = MENU_QUALIFIERS.filter((key) => typed[key] !== undefined && changed(key));
+  const removes = (token: string) => {
+    const filters = parsePullRequestQuery(token).filters;
+    return replaced.some((key) => filters[key] !== undefined);
+  };
+  return {
+    // Cut by source span so text the tokenizer skips, like an unclosed quote, stays as typed.
+    query:
+      replaced.length === 0
+        ? query
+        : [...query.matchAll(QUERY_TOKEN)]
+            .reduceRight(
+              (rest, match) =>
+                removes(match[0])
+                  ? rest.slice(0, match.index) +
+                    rest.slice(match.index + match[0].length).trimStart()
+                  : rest,
+              query,
+            )
+            .trim(),
+    filters: {
+      ...next,
+      draft: changed("draft") ? next.draft : menuFilters.draft,
+      review: changed("review") ? next.review : menuFilters.review,
+      checks: changed("checks") ? next.checks : menuFilters.checks,
+    },
+  };
+}
+
+/**
+ * Backward-compatible wrapper for callers whose menu only overlays typed `draft:` qualifiers.
  */
 export function applyPullRequestDraftFilterChange(
   query: string,
   menuFilters: PullRequestListFilters,
   next: PullRequestListFilters,
 ) {
-  const typedDraft = parsePullRequestQuery(query).filters.draft;
-  if (next.draft === (typedDraft ?? menuFilters.draft))
-    return { query, filters: { ...next, draft: menuFilters.draft } };
-  return {
-    query:
-      typedDraft === undefined
-        ? query
-        : [...query.matchAll(QUERY_TOKEN)]
-            .map(([token]) => token)
-            .filter((token) => parsePullRequestQuery(token).filters.draft === undefined)
-            .join(" "),
-    filters: next,
-  };
+  const typed = parsePullRequestQuery(query).filters;
+  return applyPullRequestFilterChange(query, menuFilters, {
+    ...next,
+    review: next.review === menuFilters.review ? (typed.review ?? next.review) : next.review,
+    checks: next.checks === menuFilters.checks ? (typed.checks ?? next.checks) : next.checks,
+  });
 }

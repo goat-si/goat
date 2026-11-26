@@ -1,7 +1,8 @@
 import { Button } from "../../components/ui/Button";
 import {
-  applyPullRequestDraftFilterChange,
+  applyPullRequestFilterChange,
   parsePullRequestQuery,
+  pullRequestMenuFilters,
 } from "@goat/client-runtime/pull-request-query";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
@@ -104,7 +105,6 @@ export function PullRequestsScreen(
   const debouncedQuery = useDebouncedValue(tab.query.trim(), 180);
   const query = tab.searchMode === "resting" ? "" : debouncedQuery;
   const typedQuery = tab.searchMode === "resting" ? "" : tab.query;
-  const typedDraft = parsePullRequestQuery(typedQuery).filters.draft;
   const listControls = usePullRequestListControls();
   const selectedEnvironmentId = listControls.environmentId;
   const environmentId = environments.some((item) => item.environmentId === selectedEnvironmentId)
@@ -300,13 +300,15 @@ export function PullRequestsScreen(
               }))}
               environmentId={environmentId}
               onEnvironmentChange={listControls.setEnvironmentId}
-              value={
-                typedDraft
-                  ? { ...controls, filters: { ...controls.filters, draft: typedDraft } }
-                  : controls
-              }
+              value={{
+                ...controls,
+                filters: pullRequestMenuFilters(
+                  parsePullRequestQuery(typedQuery).filters,
+                  controls.filters,
+                ),
+              }}
               onChange={(next) => {
-                const update = applyPullRequestDraftFilterChange(
+                const update = applyPullRequestFilterChange(
                   typedQuery,
                   controls.filters,
                   next.filters,
