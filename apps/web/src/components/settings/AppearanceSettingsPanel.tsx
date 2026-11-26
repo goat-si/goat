@@ -56,15 +56,16 @@ const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
 };
 
 const BACKDROP_ERROR_MESSAGES = {
-  "not-image": "Choose an image file.",
-  "too-large": "That image is larger than 25 MB.",
-  unreadable: "The image could not be read.",
+  "not-image": msg("Choose an image file."),
+  "too-large": msg("That image is larger than 25 MB."),
+  unreadable: msg("The image could not be read."),
 } as const;
 
 function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | "custom" }) {
   const gt = useGT();
   const setting = useTranslatedSearchableSetting();
   const updateSettings = useUpdateScopedSettings();
+  const m = useMessages();
   const presence = useCustomBackdropPresence();
   const { state } = useDesktopWindowMaterial();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -72,12 +73,14 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
   const nativeMaterialApplied =
     state?.applied === "macos-glass" || state?.applied === "windows-mica";
   const description =
-    error ??
+    (error === null ? null : m(error)) ??
     (nativeMaterialApplied
-      ? "Your desktop shows through the window. This background is used when System glass is off."
+      ? gt(
+          "Your desktop shows through the window. This background is used when System glass is off.",
+        )
       : glassBackdrop === "custom" && presence === "missing"
-        ? "No image on this device. Showing the built-in background."
-        : "Shown behind the glass panels.");
+        ? gt("No image on this device. Showing the built-in background.")
+        : gt("Shown behind the glass panels."));
 
   return (
     <SettingsRow
@@ -99,11 +102,13 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
               className="w-full sm:w-40"
               aria-label={setting("appearance-background").title}
             >
-              <SelectValue>{glassBackdrop === "custom" ? "Custom image" : "Built-in"}</SelectValue>
+              <SelectValue>
+                {glassBackdrop === "custom" ? gt("Custom image") : gt("Built-in")}
+              </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              <SelectItem value="built-in">Built-in</SelectItem>
-              <SelectItem value="custom">Custom image</SelectItem>
+              <SelectItem value="built-in">{gt("Built-in")}</SelectItem>
+              <SelectItem value="custom">{gt("Custom image")}</SelectItem>
             </SelectPopup>
           </Select>
           <input
@@ -130,7 +135,7 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
             }}
           />
           <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
-            Choose image…
+            {gt("Choose image…")}
           </Button>
           {presence === "present" ? (
             <Button
@@ -143,7 +148,7 @@ function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | 
                 });
               }}
             >
-              Remove
+              {gt("Remove")}
             </Button>
           ) : null}
         </div>
