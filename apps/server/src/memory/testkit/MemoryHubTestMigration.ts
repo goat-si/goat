@@ -9,6 +9,7 @@ import originCatchupMigration from "../../persistence/Migrations/164_MemoryOrigi
 import suggestionQuotaMigration from "../../persistence/Migrations/165_MemorySuggestionQuota.ts";
 
 import { conversationMemoryPolicySchema } from "../../persistence/Migrations/186_ConversationMemoryPolicy.ts";
+import { conversationMemoryExcludedMessagesSchema } from "../../persistence/Migrations/187_ConversationMemoryExcludedMessages.ts";
 
 export default hubMigration.pipe(
   Effect.andThen(threadLineageMigration),
@@ -18,4 +19,5 @@ export default hubMigration.pipe(
   Effect.andThen(originCatchupMigration),
   Effect.andThen(suggestionQuotaMigration),
   Effect.andThen(conversationMemoryPolicySchema),
+  Effect.andThen(conversationMemoryExcludedMessagesSchema),
 );

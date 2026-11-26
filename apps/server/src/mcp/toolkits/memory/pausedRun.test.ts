@@ -1,3 +1,4 @@
+import { eligibleSourceMessages, scanWholeSource } from "../../../memory/memorySourceScan.ts";
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -71,5 +72,75 @@ it.effect(
         caller(),
       );
       expect(allowed.body).toMatchObject({ outcome: "accepted" });
+    }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each(["restartContinuationOfRunId", "usageLimitContinuationOfRunId"] as const)(
+  "%s inherits the pause of the original request across automatic continuations",
+  (link) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = M.ThreadId.make("continued-memory");
+      yield* sql`CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY, event_id TEXT, application_event_version INTEGER, aggregate_kind TEXT, stream_id TEXT, event_type TEXT, payload_json TEXT)`;
+      const append = (type: string, payload: Record<string, unknown>) =>
+        sql`INSERT INTO orchestration_events VALUES (NULL, NULL, 2, 'thread', ${threadId}, ${type}, ${JSON.stringify(payload)})`;
+      const turn = (id: string, parent?: string) =>
+        Effect.gen(function* () {
+          yield* append("message.updated", {
+            id: id + "-input",
+            role: "user",
+            text: id,
+            runId: id,
+          });
+          yield* append("run.created", {
+            id,
+            userMessageId: id + "-input",
+            status: "completed",
+            [link]: parent,
+          });
+        });
+      yield* setConversationMemoryEnabled(sql, false);
+      yield* turn("original");
+      yield* setConversationMemoryEnabled(sql, true);
+      yield* turn("continuation", "original");
+      yield* turn("retry", "continuation");
+      yield* append("message.updated", {
+        id: "reply",
+        role: "assistant",
+        text: "Use yarn",
+        runId: "retry",
+      });
+      yield* turn("fresh");
+      yield* turn("fresh-retry", "fresh");
+      yield* turn("orphan", "absent");
+      yield* turn("loop", "loop");
+      const allowed = (runId: string) =>
+        issueConversationRunCheck(sql, { threadId, runId }).pipe(Effect.flatten);
+      expect(yield* allowed("original")).toBe(false);
+      expect(yield* allowed("retry")).toBe(false);
+      expect(yield* allowed("fresh-retry")).toBe(true);
+      expect(yield* allowed("orphan")).toBe(false);
+      expect(yield* allowed("loop")).toBe(false);
+      const save = yield* Fixture.call(
+        "goat_memory_remember",
+        { text: "Use yarn", scope: "user" },
+        {
+          ...Fixture.scope(),
+          client: undefined,
+          thread: {
+            threadId,
+            runId: M.RunId.make("retry"),
+            providerSessionId: "synthetic",
+            providerInstanceId: M.ProviderInstanceId.make("codex"),
+          },
+        },
+      );
+      expect(save.body).toMatchObject({ code: "unavailable" });
+      expect(yield* sql`SELECT 1 FROM memory_payloads`).toHaveLength(0);
+      const scan = yield* scanWholeSource(sql, threadId);
+      expect(eligibleSourceMessages(scan, {}).map((row) => row.id)).toEqual([
+        "fresh-input",
+        "fresh-retry-input",
+      ]);
     }).pipe(Effect.provide(Fixture.layer)),
 );
