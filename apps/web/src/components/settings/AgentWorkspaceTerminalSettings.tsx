@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
@@ -5,7 +6,7 @@ import { Atom } from "effect/reactivity";
 import { serverEnvironment } from "../../state/server";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
   useScopedSettings,
@@ -14,14 +15,14 @@ import {
 } from "./useScopedSettings";
 
 const WORKSPACE_CHOICES = [
-  { value: "off", label: "Off" },
-  { value: "read", label: "Read" },
-  { value: "read_write", label: "Read and write" },
+  { value: "off", label: msg("Off") },
+  { value: "read", label: msg("Read") },
+  { value: "read_write", label: msg("Read and write") },
 ] as const;
 const TERMINAL_CHOICES = [
-  { value: "off", label: "Off" },
-  { value: "read", label: "Read" },
-  { value: "operate", label: "Operate" },
+  { value: "off", label: msg("Off") },
+  { value: "read", label: msg("Read") },
+  { value: "operate", label: msg("Operate") },
 ] as const;
 
 export function AgentWorkspaceTerminalSettings() {
@@ -43,6 +44,9 @@ function AccessSetting({
     readonly label: string;
   }[];
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { connectedEnvironments } = useSettingsScope();
   const settings = useScopedSettings();
   const mixed = useScopedSettingsMixed([setting]);
@@ -61,22 +65,27 @@ function AccessSetting({
     ),
   );
   const workspace = setting === "agentWorkspaceAccess";
-  const title = workspace ? "Agent workspace access" : "Agent terminal access";
+  const row = localizedSetting(workspace ? "agent-workspace-access" : "agent-terminal-access");
   const value = settings[setting];
+  const selected = choices.find((choice) => choice.value === value);
   return (
     <SettingsRow
-      {...searchableSetting(workspace ? "agent-workspace-access" : "agent-terminal-access")}
+      {...row}
       serverScoped
       settingKeys={[setting]}
       description={
         workspace
-          ? "Allow explicitly authorized agents to read or save workspace files. Projects can override this policy. Off blocks new calls."
-          : "Operate permits shell execution with the server's OS file and network authority. The starting workspace directory is not a sandbox. Off blocks new calls but does not stop running terminals; close them in the terminal view."
+          ? gt(
+              "Allow explicitly authorized agents to read or save workspace files. Projects can override this policy. Off blocks new calls.",
+            )
+          : gt(
+              "Operate permits shell execution with the server's OS file and network authority. The starting workspace directory is not a sandbox. Off blocks new calls but does not stop running terminals; close them in the terminal view.",
+            )
       }
       resetAction={
         mixed || value !== DEFAULT_SERVER_SETTINGS[setting] ? (
           <SettingResetButton
-            label={title}
+            label={row.title}
             disabled={!allowed}
             onClick={() =>
               update(workspace ? { agentWorkspaceAccess: "off" } : { agentTerminalAccess: "off" })
@@ -95,15 +104,15 @@ function AccessSetting({
               update({ agentTerminalAccess: next });
           }}
         >
-          <SelectTrigger size="sm" aria-label={title}>
+          <SelectTrigger size="sm" aria-label={row.title}>
             <SelectValue>
-              {mixed ? "Mixed" : choices.find((choice) => choice.value === value)?.label}
+              {mixed ? gt("Mixed") : selected ? m(selected.label) : undefined}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {choices.map((choice) => (
               <SelectItem key={choice.value} value={choice.value}>
-                {choice.label}
+                {m(choice.label)}
               </SelectItem>
             ))}
           </SelectPopup>
