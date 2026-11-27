@@ -51,6 +51,5 @@ export function useSelectedThreadGitState() {
     gitOperationLabel: gitActionState.currentLabel,
     sourceControlDiscovery,
     selectedThreadBranches,
-    selectedThreadBranchesLoading: selectedThreadBranchState.isPending,
   };
 }
