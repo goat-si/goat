@@ -277,6 +277,7 @@ it.effect("app links leave the current page loaded, including after a redirect",
     Effect.gen(function* () {
       yield* ServerBrowser.ServerBrowser;
       const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
       heldGoto = null;
       const opened = yield* broker.invoke<PreviewAutomationStatus>({
         scope,

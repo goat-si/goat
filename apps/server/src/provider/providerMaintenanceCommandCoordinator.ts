@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Update leases coordinate Node server processes.
 import * as NodeCrypto from "node:crypto";
-import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as KeyedLock from "@goat/shared/KeyedLock";
@@ -25,13 +24,11 @@ class MachineLockError extends Schema.TaggedError<MachineLockError>()("MachineLo
   cause: Schema.Defect(),
 }) {}
 
-const lockDirectory = () => NodePath.join(NodeOS.tmpdir(), "goat-provider-updates");
-
 /** @internal */
 export const machineLockFile = (lockKey: string) =>
   NodePath.join(
-    lockDirectory(),
-    NodeCrypto.createHash("sha256").update(lockKey).digest("hex").slice(0, 32),
+    NodeOS.tmpdir(),
+    `goat-provider-update-${NodeCrypto.createHash("sha256").update(lockKey).digest("hex").slice(0, 32)}`,
   );
 
 const withMachineLock = <A, E, R>(
@@ -45,16 +42,14 @@ const withMachineLock = <A, E, R>(
       const services = yield* Effect.context<never>();
       yield* Effect.acquireRelease(
         Effect.tryPromise({
-          try: async () => {
-            await NodeFSP.mkdir(lockDirectory(), { recursive: true });
-            return await lock(machineLockFile(lockKey), {
+          try: () =>
+            lock(machineLockFile(lockKey), {
               realpath: false,
               stale: 60_000,
               update: 10_000,
               onCompromised: () =>
                 Effect.runSyncWith(services)(Deferred.fail(compromised, makeLockError())),
-            });
-          },
+            }),
           catch: (cause) =>
             new MachineLockError({
               held: (cause as { code?: unknown } | null)?.code === "ELOCKED",

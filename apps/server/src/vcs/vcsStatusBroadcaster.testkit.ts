@@ -78,10 +78,15 @@ export function layerTestFor(state: {
   fileSystem?: FileSystem.FileSystem;
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
-  return VcsStatusBroadcaster.layer.pipe(
-    Layer.provide(
-      Layer.succeed(VcsRefSnapshot, () => Effect.sync(() => state.refSnapshot ?? null)),
-    ),
+  const broadcasterLayer =
+    "refSnapshot" in state
+      ? VcsStatusBroadcaster.layer.pipe(
+          Layer.provide(
+            Layer.succeed(VcsRefSnapshot, () => Effect.sync(() => state.refSnapshot ?? null)),
+          ),
+        )
+      : VcsStatusBroadcaster.layer;
+  return broadcasterLayer.pipe(
     Layer.provideMerge(
       state.fileSystem
         ? Layer.merge(Layer.succeed(FileSystem.FileSystem, state.fileSystem), Path.layer)

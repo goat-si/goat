@@ -90,6 +90,7 @@ describe.skipIf(!windowsHost)("Windows file manager shell", () => {
             layerTest({
               platform: "win32",
               env: { PATH: "C:\\Windows", PATHEXT: ".EXE" },
+              existingPaths: [target],
               onSpawn: (command) => {
                 spawned = command;
               },

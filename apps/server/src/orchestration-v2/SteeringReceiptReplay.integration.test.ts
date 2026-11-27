@@ -1,5 +1,11 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, MessageId, ProjectId, ProviderDriverKind } from "@goat/contracts";
+import {
+  CommandId,
+  MessageId,
+  ProjectId,
+  ProviderDriverKind,
+  withMessageSenderNote,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -86,7 +92,7 @@ it.effect("replays an accepted steer after its target turn completes", () =>
         .pipe(Effect.flip);
       assert.equal(fresh._tag, "ThreadManagementNoSteerableRunError");
       yield* worker.drain();
-      assert.deepEqual(steered, [input.text]);
+      assert.deepEqual(steered, [withMessageSenderNote(input, input.text)]);
       assert.lengthOf(started, 1);
     }).pipe(
       Effect.provide(

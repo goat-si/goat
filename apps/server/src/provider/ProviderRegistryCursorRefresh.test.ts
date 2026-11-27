@@ -191,12 +191,12 @@ it.effect.each(["before commit", "during the cache write"] as const)(
               FileSystem.FileSystem,
               Effect.map(FileSystem.FileSystem, (fs) => ({
                 ...fs,
-                writeFileString: (path, data, options) =>
+                rename: (from, to) =>
                   Effect.gen(function* () {
                     if (pause === "during the cache write" && (yield* HoldHealthPublication)) {
                       yield* pauseRefresh;
                     }
-                    return yield* fs.writeFileString(path, data, options);
+                    return yield* fs.rename(from, to);
                   }),
               })),
             ).pipe(Layer.provide(NodeServices.layer)),
