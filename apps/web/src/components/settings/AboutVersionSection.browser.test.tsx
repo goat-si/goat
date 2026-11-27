@@ -29,9 +29,11 @@ const available: DesktopUpdateState = {
   canRetry: false,
 };
 
+const snapshot = { read: () => available };
+
 vi.mock("../../state/desktopUpdate", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/desktopUpdate")>()),
-  useDesktopUpdateState: () => available,
+  useDesktopUpdateState: () => snapshot.read(),
 }));
 
 it("tells the user why an update download from About failed", async () => {
@@ -54,4 +56,43 @@ it("tells the user why an update download from About failed", async () => {
   await screen.getByRole("button", { name: /download/i }).click();
 
   await expect.element(page.getByText("Could not download update")).toBeVisible();
+});
+
+it.each(["download", "install"] as const)(
+  "offers the target installer and a stage-specific retry after %s fails",
+  async (stage) => {
+    using _snapshot = vi.spyOn(snapshot, "read").mockReturnValue({
+      ...available,
+      status: stage === "install" ? "downloaded" : "available",
+      downloadedVersion: stage === "install" ? "1.2.4" : null,
+      errorContext: stage,
+      message: "Failure detail from the updater.",
+      canRetry: true,
+    });
+    const openExternal = vi.fn(async () => true);
+    using _bridge = stubGlobal("desktopBridge", { openExternal });
+    await using screen = await render(<AboutVersionSection />);
+    await expect
+      .element(screen.getByText("Failure detail from the updater.", { exact: true }))
+      .toBeVisible();
+    await expect
+      .element(
+        screen.getByRole("button", {
+          name: stage === "install" ? "Retry installation" : "Retry download",
+        }),
+      )
+      .toBeVisible();
+    const installer = screen.getByRole("link", { name: "Find installer on GitHub" });
+    await installer.click();
+    expect(openExternal).toHaveBeenCalledWith(
+      "https://github.com/goat-si/goat-releases/releases/tag/v1.2.4",
+    );
+  },
+);
+
+it("keeps normal offers free of manual recovery actions", async () => {
+  using _bridge = stubGlobal("desktopBridge", {});
+  await using screen = await render(<AboutVersionSection />);
+  await expect.element(screen.getByRole("button", { name: "Download", exact: true })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Find installer on GitHub" }).query()).toBeNull();
 });

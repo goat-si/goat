@@ -3811,5 +3811,11 @@
   "bb122f1d94960037": "The result is unknown. Reconnect and check the import result.",
   "4e506a7c2f37a858": "The selection changed. Preview again before importing.",
   "68a5236a421d0f4c": "Review the result and preview again before importing more items.",
-  "95cec271a3e79153": "The saved result is unavailable. Previous items may have been applied. Preview again."
+  "95cec271a3e79153": "The saved result is unavailable. Previous items may have been applied. Preview again.",
+  "a71729bfde45aa62": "Retry download",
+  "9c4a6d9d6080c00a": "Retry installation",
+  "86c1d328fe309dd7": "Find installer on GitHub",
+  "0ad2a52cc57493b3": "The installer was denied access. Check the permissions on GOAT and its folder, or ask an administrator before retrying.",
+  "f23baf6efecfb207": "The installer encountered a read-only file system. Check that the installation location is writable before retrying.",
+  "e22d35d70b137e22": "Download failed: {error}"
 }

@@ -16,6 +16,7 @@ import {
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
+  translateDesktopUpdateMessage,
   resolveDesktopUpdateButtonAction,
 } from "./desktopUpdate.logic";
 
@@ -29,7 +30,9 @@ it("shows a refused install as failed when the updater returns to downloaded", (
     errorContext: "install",
     canRetry: true,
   };
-  expect(getDesktopUpdateButtonTooltip(state)).toBe("Install failed for 1.1.0. Click to retry.");
+  expect(getDesktopUpdateButtonTooltip(state)).toBe(
+    "Install failed for 1.1.0. Click to retry.\nInstall refused",
+  );
 });
 
 it("reports an install refused after the desktop accepts it", async () => {
@@ -148,9 +151,11 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
-    expect(getDesktopUpdateButtonTooltip(state)).toBe("Download failed for 1.1.0. Click to retry.");
+    expect(getDesktopUpdateButtonTooltip(state)).toBe(
+      "Download failed for 1.1.0. Click to retry.\nnetwork timeout",
+    );
     expect(getDesktopUpdateButtonTooltip({ ...state, notAppliedVersion: "1.1.0" })).toBe(
-      "Update 1.1.0 did not apply. Click to retry.",
+      "Update 1.1.0 did not apply. Click to retry.\nnetwork timeout",
     );
   });
 
@@ -402,4 +407,12 @@ it("passes a braced diagnostic through unchanged without an ICU error", () => {
   expect(getDesktopUpdateCheckError(state, gt)).toBe(diagnostic);
   expect(getDesktopUpdateStatusText(state, gt)).toBe(diagnostic);
   expect(getDesktopUpdateIdleTooltip(state, gt).detail).toContain(diagnostic);
+});
+
+it("translates the download failure prefix without parsing provider diagnostics as ICU", () => {
+  const gt: DesktopUpdateTranslate = (source, args) =>
+    gtFallback(source === "Download failed: {error}" ? "下载失败：{error}" : source, args);
+  expect(translateDesktopUpdateMessage("Download failed: net::ERR_RESET {request-id}", gt)).toBe(
+    "下载失败：net::ERR_RESET {request-id}",
+  );
 });

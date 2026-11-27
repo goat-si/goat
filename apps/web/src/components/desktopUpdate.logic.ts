@@ -110,7 +110,10 @@ export function getDesktopUpdateButtonTooltip(
   const installationNotice = state.installationNotice
     ? translateDesktopUpdateMessage(state.installationNotice, gt)
     : null;
-  return installationNotice ? `${actionTooltip}\n${installationNotice}` : actionTooltip;
+  const failureDetail = state.message?.trim()
+    ? getDesktopUpdateTransferFailure(state, gt)?.detail
+    : null;
+  return [actionTooltip, failureDetail, installationNotice].filter(Boolean).join("\n");
 }
 
 function getDesktopUpdateActionTooltip(
@@ -204,10 +207,15 @@ export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): 
   return message.length > 0 ? message : null;
 }
 
-export function getDesktopUpdateInstallError(result: DesktopUpdateActionResult): string | null {
-  if (result.completed || result.state.errorContext !== "install")
-    return getDesktopUpdateActionError(result);
-  return result.state.message?.trim() || null;
+export function getDesktopUpdateInstallError(
+  result: DesktopUpdateActionResult,
+  gt: DesktopUpdateTranslate = gtFallback,
+): string | null {
+  const message =
+    result.completed || result.state.errorContext !== "install"
+      ? getDesktopUpdateActionError(result)
+      : result.state.message?.trim();
+  return translateDesktopUpdateMessage(message || null, gt);
 }
 
 export async function installDesktopUpdate(
@@ -234,6 +242,29 @@ export async function installDesktopUpdate(
 
 export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateActionResult): boolean {
   return getDesktopUpdateActionError(result) !== null;
+}
+
+/** A check or a later successful transfer must clear any recovery actions for the old offer. */
+export function getDesktopUpdateTransferFailure(
+  state: DesktopUpdateState | null,
+  gt: DesktopUpdateTranslate = gtFallback,
+) {
+  if (!state?.enabled) return null;
+  const stage = state.errorContext;
+  if (
+    (stage !== "download" && stage !== "install") ||
+    resolveDesktopUpdateButtonAction(state) !== stage
+  )
+    return null;
+  return {
+    detail:
+      translateDesktopUpdateMessage(state.message?.trim() || null, gt) ??
+      (stage === "install" ? gt("Install failed.") : gt("Could not download update")),
+    retryLabel: stage === "install" ? gt("Retry installation") : gt("Retry download"),
+    releaseUrl: getDesktopUpdateReleaseUrl(
+      stage === "install" ? state.downloadedVersion : state.availableVersion,
+    ),
+  };
 }
 
 export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
@@ -280,11 +311,15 @@ export function getDesktopUpdateStatusText(
   );
 }
 
-// Exact app-owned sentences only. Service diagnostics are not message ids.
+// Only app-owned wording goes through translation. Service diagnostics remain literal values.
 export function translateDesktopUpdateMessage(
   message: string | null | undefined,
   gt: DesktopUpdateTranslate,
 ): string | null {
+  const downloadPrefix = "Download failed: ";
+  if (message?.startsWith(downloadPrefix)) {
+    return gt("Download failed: {error}", { error: message.slice(downloadPrefix.length) });
+  }
   switch (message) {
     case "Automatic updates are not available because no update feed is configured.":
       return gt("Automatic updates are not available because no update feed is configured.");
@@ -305,6 +340,14 @@ export function translateDesktopUpdateMessage(
     case "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.":
       return gt(
         "Your account can't write to GOAT or its folder, so installing updates needs an administrator. Servers this app connects to, including this Mac's SSH runtime, still update on their own.",
+      );
+    case "The installer was denied access. Check the permissions on GOAT and its folder, or ask an administrator before retrying.":
+      return gt(
+        "The installer was denied access. Check the permissions on GOAT and its folder, or ask an administrator before retrying.",
+      );
+    case "The installer encountered a read-only file system. Check that the installation location is writable before retrying.":
+      return gt(
+        "The installer encountered a read-only file system. Check that the installation location is writable before retrying.",
       );
     case "Could not clear the pending update record. Check again to retry.":
       return gt("Could not clear the pending update record. Check again to retry.");

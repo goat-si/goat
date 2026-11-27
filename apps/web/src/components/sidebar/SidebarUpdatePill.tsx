@@ -21,6 +21,7 @@ import {
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
+  getDesktopUpdateTransferFailure,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
@@ -200,7 +201,7 @@ export async function installLocalUpdate(
 ): Promise<boolean> {
   try {
     const result = await installDesktopUpdate(bridge);
-    const actionError = getDesktopUpdateInstallError(result);
+    const actionError = getDesktopUpdateInstallError(result, gt);
     if (actionError) {
       reportError(gt("Could not install update"), actionError);
       return false;
@@ -309,16 +310,12 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     (state && !state.enabled && state.message
       ? translateDesktopUpdateMessage(state.message, gt)
       : null);
-  // A failed automatic download raises no toast, so the button is where its reason shows.
-  const downloadError =
-    state?.enabled && state.errorContext === "download" && state.message
-      ? translateDesktopUpdateMessage(state.message, gt)
-      : null;
+  const transferFailure = getDesktopUpdateTransferFailure(state, gt);
   const tooltip = [
     heading,
     detail,
     installationDetail && !detail?.includes(installationDetail) ? installationDetail : null,
-    downloadError,
+    transferFailure && !detail?.includes(transferFailure.detail) ? transferFailure.detail : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -715,7 +712,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         createPortal(
           <aside
             aria-label={gt("Update available")}
-            className="fixed bottom-4 left-16 z-40 w-72 max-w-[calc(100vw-5rem)] rounded-xl border bg-popover p-3.5 text-sm text-popover-foreground shadow-lg"
+            className="fixed bottom-4 left-16 z-40 w-72 max-w-[calc(100vw-5rem)] rounded-xl border bg-popover p-3.5 text-sm text-popover-foreground shadow-lg [overflow-wrap:anywhere]"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2">

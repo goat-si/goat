@@ -68,6 +68,7 @@ import {
   DesktopUpdaterReportedError,
   describeUpdateErrorCause,
   downloadFailureMessage,
+  installFailureMessage,
   isAbandonedCheckFailure,
   UPDATE_CHECK_SETTLE_WAIT,
   UPDATE_CHECK_TIMEOUT_MINUTES,
@@ -728,7 +729,7 @@ export const make = Effect.gen(function* () {
           Effect.catchTags({
             ElectronUpdaterQuitAndInstallError: Effect.fn("desktop.updates.handleInstallFailure")(
               function* (error) {
-                yield* recoverFailedInstall(error.message);
+                yield* recoverFailedInstall(installFailureMessage(error.cause, error.message));
                 yield* logUpdaterError(error.message, {
                   errorTag: error._tag,
                   cause: describeUpdateErrorCause(error.cause),
@@ -1091,7 +1092,7 @@ export const make = Effect.gen(function* () {
       cause,
     });
     if (Option.isSome(activeAction) && activeAction.value === "install") {
-      yield* recoverFailedInstall(error.message);
+      yield* recoverFailedInstall(installFailureMessage(cause, error.message));
       yield* logUpdaterError(error.message, {
         errorTag: error._tag,
         cause: describeUpdateErrorCause(error.cause),
