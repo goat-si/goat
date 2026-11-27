@@ -33,13 +33,8 @@ export function makeAcpPromptContent(deps: {
   ) {
     const prompt: Array<EffectAcpSchema.ContentBlock> =
       text.length > 0 ? [{ type: "text", text }] : [];
-    const imageAttachments = attachments.filter(isProviderNativeImageAttachment);
-    if (imageAttachments.length > 0 && !deps.supportsImagePrompts) {
-      return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-        driver: deps.driver,
-        detail: "ACP driver did not negotiate image prompt support",
-      });
-    }
+    // Without image prompts the saved path already in the message text is how the agent
+    // reaches the image; a flavor's own builder checks the capabilities it is handed.
     if (deps.flavor.buildPrompt) {
       const setup = yield* Ref.get(deps.activeSessionSetup);
       const modelOption = findModelConfigOption(yield* deps.configOptions);
@@ -73,6 +68,9 @@ export function makeAcpPromptContent(deps: {
         );
       return [...blocks];
     }
+    const imageAttachments = deps.supportsImagePrompts
+      ? attachments.filter(isProviderNativeImageAttachment)
+      : [];
     for (const attachment of imageAttachments) {
       const path = deps.host.resolveAttachmentPath(attachment as ChatAttachment);
       if (path === null) {
