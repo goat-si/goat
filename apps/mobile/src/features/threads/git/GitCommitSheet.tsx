@@ -50,7 +50,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
 
   const selectedFiles = allFiles.filter((file) => !excludedFiles.has(file.path));
-  const allSelected = excludedFiles.size === 0;
+  const allSelected = selectedFiles.length === allFiles.length;
   const noneSelected = selectedFiles.length === 0;
   const selectedInsertions = selectedFiles.reduce((sum, file) => sum + file.insertions, 0);
   const selectedDeletions = selectedFiles.reduce((sum, file) => sum + file.deletions, 0);
@@ -63,7 +63,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
       action: "commit",
       featureBranch,
       ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
+      ...(excludedFiles.size > 0 ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
     });
     if (result !== null && navigation.isFocused()) navigation.goBack();
   };
@@ -134,7 +134,9 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                   tone="text"
                   onPress={() =>
                     setExcludedFiles(
-                      allSelected ? new Set(allFiles.map((file) => file.path)) : new Set(),
+                      allSelected
+                        ? new Set([...excludedFiles, ...allFiles.map((file) => file.path)])
+                        : new Set(),
                     )
                   }
                 />
