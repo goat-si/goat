@@ -2635,10 +2635,17 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         ) {
           const delivery = memoryInput?.inputDelivery;
           const sending = Effect.fnUntraced(function* () {
-            if (abortController.signal.aborted || turn.finalized) return false;
+            if (abortController.signal.aborted || !turnIsLive(state, turn)) return false;
             if (delivery !== undefined && !(yield* delivery.begin())) return false;
-            return !abortController.signal.aborted && !turn.finalized;
+            return !abortController.signal.aborted && turnIsLive(state, turn);
           });
+          const sendIfLive =
+            <A>(send: (signal: AbortSignal) => Promise<A>) =>
+            async (signal: AbortSignal) => {
+              const requestSignal = AbortSignal.any([signal, abortController.signal]);
+              if (requestSignal.aborted || !turnIsLive(state, turn)) return { sent: false };
+              return { sent: true, value: await send(requestSignal) };
+            };
           const { variant, ...payloadWithoutVariant } = inputPayload;
           const selectedVariant = yield* resolveOpenCodeVariant(
             client,
@@ -2653,7 +2660,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           };
           const match = messageText.trim().match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
           const command = match
-            ? (yield* OpenCodeRuntime.loadOpenCodeCommands(client).pipe(
+            ? (yield* OpenCodeRuntime.loadOpenCodeCommands(client, abortController.signal).pipe(
                 Effect.timeout("10 seconds"),
                 Effect.orElseSucceed(() => []),
               )).find((entry) => entry.name === match[1])
@@ -2731,20 +2738,26 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .filter((part) => part !== undefined)
                       .join("\n\n"),
                   };
-            if (abortController.signal.aborted || turn.finalized)
+            if (abortController.signal.aborted || !turnIsLive(state, turn))
               return yield* delivery?.skipped() ?? Effect.void;
             turn.pendingMemoryReceipt = {
               id: payload.messageID,
               receipt: MemoryContext.deliveryReceipt(memoryInput, snapshot),
             };
-            return yield* sendSdkCall("session.promptAsync", (signal) =>
-              client.session.promptAsync(prepared, {
-                signal: AbortSignal.any([signal, abortController.signal]),
-              }),
+            return yield* sendSdkCall(
+              "session.promptAsync",
+              sendIfLive((signal) => client.session.promptAsync(prepared, { signal })),
             ).pipe(
               Effect.tapError(() => takeMemoryReceipt(turn, payload.messageID, false)),
-              Effect.andThen(delivery?.submitted() ?? Effect.void),
-              Effect.andThen(delivery?.accepted() ?? Effect.void),
+              Effect.flatMap(({ sent }) =>
+                sent
+                  ? (delivery?.submitted() ?? Effect.void).pipe(
+                      Effect.andThen(delivery?.accepted() ?? Effect.void),
+                    )
+                  : takeMemoryReceipt(turn, payload.messageID, false).pipe(
+                      Effect.andThen(delivery?.skipped() ?? Effect.void),
+                    ),
+              ),
             );
           }
           if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
@@ -2767,10 +2780,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ...(payload.variant ? { variant: payload.variant } : {}),
             parts: payload.parts?.filter((part) => part.type === "file") ?? [],
           };
-          const request = yield* sdkCall("session.command", commandPayload, (signal) =>
-            client.session.command(commandPayload, {
-              signal: AbortSignal.any([signal, abortController.signal]),
-            }),
+          const request = yield* sdkCall(
+            "session.command",
+            commandPayload,
+            sendIfLive((signal) => client.session.command(commandPayload, { signal })),
           ).pipe(
             Effect.asVoid,
             // OpenCode answers only when generation ends; once admitted, the event stream owns the outcome.

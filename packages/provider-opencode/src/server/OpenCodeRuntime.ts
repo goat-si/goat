@@ -32,11 +32,11 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import {
-  safeProcessCwd,
+  collectStreamAsString,
   resolveProviderProbeTimeoutMs,
+  safeProcessCwd,
 } from "@goat/provider-core/server/snapshotProbe";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
-import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
 import {
   classifyStartupExit,
   isOpenCodeMissingCommand,
@@ -209,8 +209,12 @@ export interface OpenCodeInventory {
 
 export type OpenCodeSlashCommand = Pick<Command, "name" | "description" | "source" | "hints">;
 
-export const loadOpenCodeCommands = (client: OpencodeClient) =>
-  runOpenCodeSdk("command.list", (signal) => client.command.list(undefined, { signal })).pipe(
+export const loadOpenCodeCommands = (client: OpencodeClient, requestSignal?: AbortSignal) =>
+  runOpenCodeSdk("command.list", (signal) =>
+    client.command.list(undefined, {
+      signal: requestSignal ? AbortSignal.any([signal, requestSignal]) : signal,
+    }),
+  ).pipe(
     Effect.map((result): ReadonlyArray<OpenCodeSlashCommand> =>
       (result.data ?? []).map(({ name, description, source, hints }) => ({
         name,
@@ -584,8 +588,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       shared: true,
     });
     const spawnCommand = yield* resolveCommand(launch.command, launch.args, input.environment);
-    // A server GOAT starts always has a password; without a configured one it is generated and
-    // kept in memory.
+    // A server GOAT starts always has a password; without one it is generated in memory.
     const serverPassword =
       resolveOpenCodeServerPassword({
         external: false,
@@ -746,11 +749,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     const version = yield* (
       input.verify?.(url) ??
         verifyOpenCodeServerVersion(
-          createOpenCodeSdkClient({
-            baseUrl: url,
-            directory: input.directory,
-            serverPassword,
-          }),
+          createOpenCodeSdkClient({ baseUrl: url, directory: input.directory, serverPassword }),
           input.environment,
         )
     );
