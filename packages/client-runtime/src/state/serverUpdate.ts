@@ -232,6 +232,9 @@ export function serverUpdateStateForProgressEvent(
           : "resuming",
     fromVersion,
     targetVersion,
+    ...(event.type === "complete" && event.result.updateId !== undefined
+      ? { updateId: event.result.updateId }
+      : {}),
   };
 }
 
