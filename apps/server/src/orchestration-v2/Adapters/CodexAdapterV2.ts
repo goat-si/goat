@@ -272,7 +272,9 @@ import { resolveCodexForkBoundary, resolveCodexRollbackTurnCount } from "./Codex
 export { resolveCodexForkBoundary, resolveCodexRollbackTurnCount } from "./CodexForkBoundary.ts";
 import {
   approvalDecisionToLegacyReviewDecision,
+  codexCommandApprovalPrompt,
   codexFileChangeApprovalPrompt,
+  codexPermissionsApprovalPrompt,
   permissionsResponseFromDecision,
   providerRequestKindFromPermissions,
   toCodexUserInputAnswers,
@@ -3554,10 +3556,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly nativeRequestId: string;
           readonly requestKind: ProviderRequestKind;
           readonly prompt?: string | null;
+          readonly reason?: string | null | undefined;
           readonly appName?: string;
           readonly options?: ReadonlyArray<ProviderApprovalOption>;
         }) {
           const createdAt = yield* DateTime.now;
+          const reason = trimText(input.reason);
           const { owner, subagent } = approvalOwnerCodexTurn(input.context);
           const parentNodeId =
             subagent?.subagentNodeId ??
@@ -3637,6 +3641,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ...(input.prompt === null || input.prompt === undefined
               ? {}
               : { prompt: input.prompt }),
+            ...(reason === undefined ? {} : { reason }),
             ...(input.appName === undefined ? {} : { appName: input.appName }),
             ...(input.options === undefined ? {} : { options: input.options }),
           };
@@ -4836,9 +4841,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeItemId: payload.itemId,
               nativeRequestId,
               requestKind: "command",
-              ...((payload.reason ?? payload.command) === undefined
-                ? {}
-                : { prompt: payload.reason ?? payload.command }),
+              prompt: codexCommandApprovalPrompt(payload) ?? null,
+              reason: payload.reason,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
@@ -4911,6 +4915,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ...payload,
                   fileChanges: context.fileChangeKindsByItem.get(payload.itemId) ?? {},
                 }) ?? null,
+              reason: payload.reason,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
@@ -4974,7 +4979,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeItemId: payload.itemId,
               nativeRequestId: payload.itemId,
               requestKind,
-              ...(payload.reason === undefined ? {} : { prompt: payload.reason }),
+              prompt: codexPermissionsApprovalPrompt(payload.permissions) ?? null,
+              reason: payload.reason,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
@@ -5120,7 +5126,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeItemId: payload.callId,
               nativeRequestId,
               requestKind: "command",
-              prompt: payload.reason ?? payload.command.join(" "),
+              prompt:
+                codexCommandApprovalPrompt({
+                  command: payload.command.join(" "),
+                  cwd: payload.cwd,
+                }) ?? null,
+              reason: payload.reason,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
@@ -5190,6 +5201,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeRequestId: payload.callId,
               requestKind: "file-change",
               prompt: codexFileChangeApprovalPrompt(payload) ?? null,
+              reason: payload.reason,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
