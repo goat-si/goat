@@ -407,7 +407,8 @@ export const withProject = (
   projectId: string,
   saved?: Pick<ScheduledTask, "threadId" | "projectId"> | null,
 ): DraftState => {
-  const moved = { ...draft, projectId };
+  if (projectId === draft.projectId) return draft;
+  const moved = { ...draft, projectId, baseRef: "", existingWorktreePath: "" };
   if (!saved?.threadId) return moved;
   if (projectId === saved.projectId)
     return draft.threadId === "" && draft.threadMode !== "new_thread"

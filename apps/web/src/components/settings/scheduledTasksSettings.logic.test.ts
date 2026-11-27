@@ -25,6 +25,7 @@ import {
   taskToDraft,
   webhookDeliveryLabel,
   formatScheduledRelativeTime,
+  withProject,
 } from "./scheduledTasksSettings.logic";
 
 it("labels a work delivery Accepted until a firing is recorded", () => {
@@ -181,6 +182,21 @@ describe("editing scheduled task branch settings", () => {
     const draft = taskToDraft(legacyTask);
     expect(draft.baseRef).toBe("release");
     expect(draft.startFromOrigin).toBe(false);
+  });
+
+  it("clears the old project's base branch and checkout when the project changes", () => {
+    const worktree = taskToDraft(legacyTask);
+    expect(withProject(worktree, legacyTask.projectId)).toBe(worktree);
+    expect(withProject(worktree, "other")).toMatchObject({
+      projectId: "other",
+      workspaceMode: "worktree",
+      baseRef: "",
+    });
+    const checkout = taskToDraft({
+      ...legacyTask,
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/work/project" },
+    });
+    expect(withProject(checkout, "other").existingWorktreePath).toBe("");
   });
 });
 
