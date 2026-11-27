@@ -226,8 +226,11 @@ export function getLatestThreadForProject<
 }
 
 const PIN_ORDER_DIGITS = "abcdefghijklmnopqrstuvwxyz";
+/** Prefix of a tier that sorts before every plain key (see `activeThreadSortKey`). */
+const LEADING_ORDER_TIER = "0";
 
 function isValidPinOrderKey(key: string): boolean {
+  if (key.startsWith(LEADING_ORDER_TIER)) key = key.slice(LEADING_ORDER_TIER.length);
   if (key.length === 0) return false;
   for (const char of key) {
     if (!PIN_ORDER_DIGITS.includes(char)) return false;
@@ -265,6 +268,10 @@ export function pinOrderKeyBetween(before: string | null, after: string | null):
   if (a !== "" && !isValidPinOrderKey(a)) return null;
   if (b !== "" && !isValidPinOrderKey(b)) return null;
   if (b !== "" && a >= b) return null;
+  const tier = LEADING_ORDER_TIER;
+  if (b.startsWith(tier))
+    return tier + pinOrderMidpoint(a.slice(tier.length), b.slice(tier.length));
+  if (a.startsWith(tier)) return tier + pinOrderMidpoint(a.slice(tier.length), "");
   return pinOrderMidpoint(a, b);
 }
 
@@ -358,6 +365,34 @@ export function sortPinnedThreadsByOrderKey<
   return [...keyed, ...keyless];
 }
 
+const IMPLIED_KEY_WIDTH = 10;
+const IMPLIED_KEY_MAX_MS = 26 ** IMPLIED_KEY_WIDTH - 1;
+
+/**
+ * Sort key for the Active section. A thread nobody arranged takes an implied key from its
+ * anchor time, newest first, in a tier ahead of every arranged key. A move then only writes
+ * the moved thread, even beside threads whose server is offline.
+ */
+export function activeThreadSortKey(thread: {
+  readonly createdAt: string;
+  readonly unsettledAt?: string | null | undefined;
+  readonly latestUserMessageAt?: string | null | undefined;
+  readonly latestUserAuthoredMessageAt?: string | null | undefined;
+  readonly activeOrderKey?: string | null | undefined;
+}): string {
+  if (thread.activeOrderKey != null) return thread.activeOrderKey;
+  let value =
+    IMPLIED_KEY_MAX_MS -
+    Math.min(Math.max(activeThreadAnchorTimestampMs(thread), 0), IMPLIED_KEY_MAX_MS);
+  let digits = "";
+  for (let index = 0; index < IMPLIED_KEY_WIDTH; index += 1) {
+    digits = String.fromCharCode(97 + (value % 26)) + digits;
+    value = Math.floor(value / 26);
+  }
+  // A trailing "a" leaves no room to place a thread directly above this one.
+  return `${LEADING_ORDER_TIER}${digits}n`;
+}
+
 export function sortActiveThreadsByOrderKey<
   T extends {
     readonly id: string;
@@ -370,25 +405,12 @@ export function sortActiveThreadsByOrderKey<
   },
 >(threads: readonly T[]): T[] {
   if (threads.length < 2) return [...threads];
-  const timestamps = new Map<T, number>();
-  for (const thread of threads) {
-    if (thread.activeOrderKey == null) {
-      timestamps.set(thread, activeThreadAnchorTimestampMs(thread));
-    }
-  }
+  const keys = new Map(threads.map((thread) => [thread, activeThreadSortKey(thread)]));
   return [...threads].sort((left, right) => {
-    const leftKey = left.activeOrderKey;
-    const rightKey = right.activeOrderKey;
-    if (leftKey == null && rightKey != null) return -1;
-    if (leftKey != null && rightKey == null) return 1;
-    let order = 0;
-    if (leftKey != null && rightKey != null) {
-      order = leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-    } else {
-      order = timestamps.get(right)! - timestamps.get(left)!;
-    }
+    const leftKey = keys.get(left) ?? "";
+    const rightKey = keys.get(right) ?? "";
     return (
-      order ||
+      (leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0) ||
       left.id.localeCompare(right.id) ||
       (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
     );
