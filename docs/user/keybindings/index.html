@@ -190,12 +190,14 @@ expression restricts when it runs.</p>
 <h2 id="when-conditions">When conditions</h2>
 <p>Available context keys are <code>terminalFocus</code>, <code>terminalOpen</code>, <code>previewFocus</code>,
 <code>previewOpen</code>, <code>rightPanelOpen</code>, <code>modelPickerOpen</code>, <code>usagePageOpen</code>, <code>notesPageOpen</code>,
-<code>composerFocus</code>, <code>draftThreadRoute</code>, <code>turnRunning</code>, <code>editableFocus</code>, <code>fileViewFocus</code>,
+<code>composerFocus</code>, <code>draftThreadRoute</code>, <code>turnRunning</code>, <code>composerEmpty</code>, <code>editableFocus</code>, <code>fileViewFocus</code>,
 <code>fileTreeFocus</code>, <code>isWeb</code>, and <code>isDesktop</code>.
 In a thread, <code>rightPanelOpen</code> is true while its right panel is open. The default
 <code>mod+t</code> also requires <code>!terminalFocus</code> and opens the new-tab menu.
 <code>draftThreadRoute</code> is true in a new thread, including a restored draft, before you
 send its first message.
+<code>composerEmpty</code> is true while the composer has no text, attachments, or context, and is not
+editing a queued message or answering a question.
 <code>editableFocus</code> is true while a text field, the composer, or another editor has
 the keyboard. <code>fileViewFocus</code> is true while the Files panel or an open file has
 the keyboard, and <code>fileTreeFocus</code> while the Files panel has it. <code>isWeb</code> is true in a browser tab. <code>isDesktop</code> is true in the
@@ -252,7 +254,9 @@ can reopen until you reload or quit the app. This shortcut does not undo deleted
 Browsers also use it to reopen browser tabs; choose another binding in Settings
 if the browser takes it first.</p>
 <p>Many defaults include <code>!terminalFocus</code> so they do not intercept terminal input.
-Keep that condition when remapping them if you want the same behavior.</p>
+Keep that condition when remapping them if you want the same behavior.
+<code>sidebar.toggle</code> never takes a Ctrl chord from a focused terminal, so tmux’s <code>Ctrl+B</code>
+prefix reaches it. On macOS, <code>Cmd+B</code> still toggles the sidebar there.</p>
 <h2 id="desktop-quit-shortcut">Desktop quit shortcut</h2>
 <p>Use <code>Cmd+Q</code> on macOS or <code>Ctrl+Q</code> on Windows and Linux. In the default <strong>Hold</strong> mode,
 hold for 1.2 seconds or press twice within 500 milliseconds. Holding requires

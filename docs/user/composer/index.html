@@ -63,7 +63,14 @@ the oldest queued message as a steer. This leaves the current draft intact and
 requires an active turn that supports steering. If that shortcut sends the opposite
 action for your draft, click elsewhere in the thread, outside the composer and any terminal, to
 steer the queued message. Change <code>thread.steerQueuedMessage</code> in <strong>Settings → Keybindings</strong> to use
-another shortcut.</p>
+another shortcut. To make
+<code>Cmd+Enter</code> or <code>Ctrl+Enter</code> steer the oldest queued message when the composer is empty, add
+this rule to your <a href="/goat/docs/user/keybindings/#edit-the-configuration-file">keybindings file</a>:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "key"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"mod+enter"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "command"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"thread.steerQueuedMessage"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "when"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"composerFocus &amp;&amp; turnRunning &amp;&amp; composerEmpty"</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
 <p>Press <code>Option+Up</code> on macOS or <code>Alt+Up</code> on Windows and Linux with the cursor at the
 start of the composer to edit the most recently queued message. Change
 <code>thread.editQueuedMessage</code> to use another shortcut.</p>
