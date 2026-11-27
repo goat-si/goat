@@ -37,7 +37,7 @@ import {
   makeOpenCode2CatalogWatch,
   makeOpenCode2MachineCatalogFollower,
 } from "./openCode2CatalogWatch.ts";
-import { makeOpenCode2WorkspaceLister } from "./openCode2Workspace.ts";
+import { makeOpenCode2WorkspaceTracker } from "./openCode2Workspace.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2GlobalSkills,
@@ -498,11 +498,22 @@ export const OpenCodeDriver: ProviderDriver<
       sessionConfigKey: yield* random.uuidV4().pipe(Effect.orDie),
       runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
+    const scope = yield* Effect.scope;
     const catalogWatch = yield* makeOpenCode2CatalogWatch(currentEnvironment);
     const machineCatalog = makeOpenCode2MachineCatalogFollower(catalogWatch, host.paths.cwd);
+    const workspaceTracker = makeOpenCode2WorkspaceTracker({
+      server: openCode2ProbeServer,
+      pathService,
+      currentEnvironment,
+      scope,
+    });
     // A session or text generation can start the server too, and reads no catalog when it does.
-    yield* Stream.merge(openCode2Server.connections, openCode2ProbeServer.connections).pipe(
-      Stream.runForEach(machineCatalog.follow),
+    yield* Stream.runForEach(openCode2ProbeServer.connections, (connection) =>
+      workspaceTracker
+        .followScans(connection)
+        .pipe(Effect.andThen(machineCatalog.follow(connection))),
+    ).pipe(Effect.forkScoped);
+    yield* Stream.runForEach(openCode2Server.connections, machineCatalog.follow).pipe(
       Effect.forkScoped,
     );
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
@@ -547,11 +558,7 @@ export const OpenCodeDriver: ProviderDriver<
         ),
       ),
     );
-    const listOpenCode2Workspace = makeOpenCode2WorkspaceLister({
-      server: openCode2ProbeServer,
-      pathService,
-      currentEnvironment,
-    });
+    const listOpenCode2Workspace = workspaceTracker.listWorkspace;
     const serverOwner = yield* OpenCodeServerOwner.make({
       binaryPath: effectiveConfig.binaryPath,
       directory: host.paths.cwd,
