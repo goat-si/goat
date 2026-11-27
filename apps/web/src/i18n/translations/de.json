@@ -2324,6 +2324,7 @@
   "98515f1201b25dcc": "+{count} weitere",
   "986fcd365e71040f": "Header",
   "987c5623ba70f390": "Routen",
+  "988358208ad49792": "{count, plural, one {Minute} other {Minuten}}",
   "98a0d9d96a4b98f1": "Browserprofile",
   "98d14691acbe3d08": "Modellrouting",
   "98e6488574d951a3": "Prüfen Sie den Hostnamen, das Netzwerk und den SSH-Port und wiederholen Sie die Prüfung.",

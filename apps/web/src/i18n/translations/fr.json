@@ -2324,6 +2324,7 @@
   "98515f1201b25dcc": "+{count} de plus",
   "986fcd365e71040f": "En-têtes",
   "987c5623ba70f390": "Routes",
+  "988358208ad49792": "{count, plural, one {minute} other {minutes}}",
   "98a0d9d96a4b98f1": "Profils du navigateur",
   "98d14691acbe3d08": "Routage du modèle",
   "98e6488574d951a3": "Vérifiez le nom de l’hôte, le réseau et le port SSH, puis relancez la vérification.",

@@ -2324,6 +2324,7 @@
   "98515f1201b25dcc": "+{count} more",
   "986fcd365e71040f": "Headers",
   "987c5623ba70f390": "Routes",
+  "988358208ad49792": "{count, plural, one {minute} other {minutes}}",
   "98a0d9d96a4b98f1": "Browser profiles",
   "98d14691acbe3d08": "Model route",
   "98e6488574d951a3": "Check the host name, network and SSH port, then check again.",

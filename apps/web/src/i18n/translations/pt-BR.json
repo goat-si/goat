@@ -2324,6 +2324,7 @@
   "98515f1201b25dcc": "+{count} mais",
   "986fcd365e71040f": "Cabeçalhos",
   "987c5623ba70f390": "Rotas",
+  "988358208ad49792": "{count, plural, one {minuto} other {minutos}}",
   "98a0d9d96a4b98f1": "Perfis do navegador",
   "98d14691acbe3d08": "Rota do modelo",
   "98e6488574d951a3": "Confira o nome do host, a rede e a porta SSH e verifique novamente.",
