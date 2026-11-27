@@ -191,10 +191,13 @@ import { field, text } from "../unknownField.ts";
 import { mergeWorkflowAgentMetadata, withWorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
 import type { WorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
 import {
-  isClaudeConversationLine,
   isClaudeTranscriptConversationLine,
   isClaudeTranscriptTurnEnd,
 } from "./claudeTranscriptLines.ts";
+import {
+  readClaudeTranscriptState,
+  shouldReplaceStaleClaudeProcess,
+} from "./ClaudeExternalMessages.ts";
 import {
   initialWorkflowAgentTranscriptCursor,
   readWorkflowAgentTranscript,
@@ -1781,6 +1784,9 @@ interface ClaudeLiveQueryContext {
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
   readonly taskOutputRoot: string | undefined;
+  // Root messages this process streamed; what it holds beyond the history it resumed.
+  readonly emittedMessageUuids: Set<string>;
+  transcriptPath: string | undefined;
 }
 
 interface ActiveClaudeToolCall {
@@ -8856,7 +8862,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.queryPolicyKey === queryPolicyKey &&
             !existing.stopping &&
             !turnInput.resume;
-          if (reuseLaunchSettings) {
+          const replaceStaleProcess =
+            reuseLaunchSettings &&
+            resumeSessionAt === undefined &&
+            (yield* shouldReplaceStaleClaudeProcess({
+              threadId: turnInput.threadId,
+              live: existing,
+              keepsWork: Effect.gen(function* () {
+                return (
+                  (yield* liveProcessRunsBackgroundWork(existing)) ||
+                  scheduledWakeupsByNativeThread.has(nativeThreadId) ||
+                  (yield* holdsBufferedWake(
+                    nativeThreadId,
+                    (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [],
+                  ))
+                );
+              }),
+              cwd: session.cwd,
+              fileSystem,
+              path,
+            }));
+          if (reuseLaunchSettings && !replaceStaleProcess) {
             const routed = yield* routeModelCatalog(
               modelCatalog,
               cwd,
@@ -9129,6 +9155,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               cwd: resolvedTurnCwd,
               platform: hostPlatform,
             }),
+            emittedMessageUuids: new Set(),
+            transcriptPath: undefined,
           };
           // One step, so the replaced process cannot exit between the install and the handoff.
           yield* Ref.update(queryContext, (replaced) => {
@@ -9146,6 +9174,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               sdkMessageLock.withPermits(1)(
                 Effect.suspend(() => {
                   let firstInit = false;
+                  if (
+                    (message.type === "assistant" || message.type === "user") &&
+                    message.parent_tool_use_id === null &&
+                    message.uuid !== undefined
+                  ) {
+                    context.emittedMessageUuids.add(message.uuid);
+                  }
                   if (
                     message.type === "system" &&
                     message.subtype === "init" &&
@@ -10133,47 +10168,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         yield* Effect.addFinalizer(() => closeSession());
 
         // Metadata-only transcripts cannot be resumed or recreated; fail resumeThread to trigger a fresh session and handoff.
-        const claudeTranscriptState = Effect.fn("ClaudeAdapterV2.claudeTranscriptState")(function* (
-          nativeThreadId: string,
-        ) {
-          const configuredDir = adapterOptions.environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
-          const projectsDir = path.join(
-            configuredDir.length > 0
-              ? path.resolve(session.cwd, configuredDir)
-              : path.join(yield* HostProcess.HomeDirectory, ".claude"),
-            "projects",
-          );
-          // Any message in any transcript copy means Claude may still resume it.
-          let found = false;
-          let unreadable = false;
-          for (const project of yield* fileSystem.readDirectory(projectsDir)) {
-            const transcriptPath = path.join(projectsDir, project, `${nativeThreadId}.jsonl`);
-            // Stray files beside the project dirs fail with ENOTDIR.
-            if (
-              !(yield* fileSystem.exists(transcriptPath).pipe(Effect.orElseSucceed(() => false)))
-            ) {
-              continue;
-            }
-            const conversationLine = yield* fileSystem
-              .stream(transcriptPath)
-              .pipe(
-                Stream.decodeText,
-                Stream.splitLines,
-                Stream.filter(isClaudeConversationLine),
-                Stream.runHead,
-                Effect.option,
-              );
-            if (Option.isNone(conversationLine)) {
-              unreadable = true;
-              continue;
-            }
-            if (Option.isSome(conversationLine.value)) {
-              return "conversation" as const;
-            }
-            found = true;
-          }
-          return found && !unreadable ? ("empty" as const) : ("missing" as const);
-        });
+        const claudeTranscriptState = (nativeThreadId: string) =>
+          readClaudeTranscriptState({
+            nativeThreadId,
+            environment: adapterOptions.environment,
+            cwd: session.cwd,
+            fileSystem,
+            path,
+          });
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
