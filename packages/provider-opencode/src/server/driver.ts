@@ -373,7 +373,11 @@ export const OpenCodeDriver: ProviderDriver<
                 ? Effect.succeed(noUpdate)
                 : resolveProviderMaintenanceCapabilitiesEffect(
                     openCodeUpdateFor(generation.value),
-                    { binaryPath: effectiveConfig.binaryPath, env },
+                    {
+                      binaryPath: effectiveConfig.binaryPath,
+                      env,
+                      npmCacheDir: pathService.join(host.paths.providerStatusCacheDir, "npm"),
+                    },
                   ),
             ),
             Effect.provideService(LaunchEnvironment, env),
