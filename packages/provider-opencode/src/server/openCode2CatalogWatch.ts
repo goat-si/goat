@@ -1,6 +1,7 @@
 import type { ServerProvider } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
@@ -10,12 +11,15 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import type { OpenCodeSettings } from "../settings.ts";
 import type * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { loadOpenCode2DirectoryCatalog } from "./openCode2Catalog.ts";
 import {
   catalogFingerprint,
   openCode2ProviderModels,
   openCode2ReadyMessage,
+  readSettledOpenCode2Catalog,
   type OpenCode2Model,
 } from "./status.ts";
+import type * as OpenCode2Server from "./v2/OpenCode2Server.ts";
 
 // The registry keeps this many per-directory snapshots; older directories need no watch.
 const WATCHED_DIRECTORIES = 16;
@@ -32,8 +36,14 @@ interface WatchedCatalog {
  */
 export const makeOpenCode2CatalogWatch = Effect.fn(
   "OpencodeProviderStatus.makeOpenCode2CatalogWatch",
-)(function* () {
+)(function* (environment?: NodeJS.ProcessEnv | Effect.Effect<NodeJS.ProcessEnv>) {
   const scope = yield* Effect.scope;
+  const resolveEnvironment =
+    environment === undefined
+      ? Effect.succeed(undefined)
+      : Effect.isEffect(environment)
+        ? environment
+        : Effect.succeed(environment);
   const latest = yield* SubscriptionRef.make<ReadonlyArray<OpenCode2Model> | undefined>(undefined);
   const rescans = yield* Queue.unbounded<string, Cause.Done>();
   yield* Effect.addFinalizer(() => Queue.end(rescans));
@@ -48,8 +58,12 @@ export const makeOpenCode2CatalogWatch = Effect.fn(
   const reread = (
     watched: WatchedCatalog,
     changed: (catalog: ReadonlyArray<OpenCode2Model>) => Effect.Effect<unknown>,
+    read: Effect.Effect<
+      ReadonlyArray<OpenCode2Model>,
+      OpenCodeRuntime.OpenCodeRuntimeError
+    > = watched.read,
   ) =>
-    watched.read.pipe(
+    read.pipe(
       Effect.flatMap((catalog) => {
         const fingerprint = catalog.length > 0 ? catalogFingerprint(catalog) : undefined;
         if (fingerprint === undefined || fingerprint === watched.previous) return Effect.void;
@@ -114,7 +128,25 @@ export const makeOpenCode2CatalogWatch = Effect.fn(
             { concurrency: 4, discard: true },
           ),
         );
+        // A new server lists its startup snapshot first; nothing else reads it unless a check did.
+        const settleMachine = Effect.suspend(() => {
+          const machine = watching.machine;
+          return machine === undefined
+            ? Effect.void
+            : resolveEnvironment.pipe(
+                Effect.flatMap((env) =>
+                  reread(
+                    machine,
+                    (catalog) => SubscriptionRef.set(latest, catalog),
+                    readSettledOpenCode2Catalog(machine.read, env).pipe(
+                      Effect.map(Option.getOrElse((): ReadonlyArray<OpenCode2Model> => [])),
+                    ),
+                  ),
+                ),
+              );
+        });
         const watch = subscribe.pipe(
+          Effect.tap(() => settleMachine),
           Effect.flatMap((events) =>
             events.pipe(
               Stream.filter((event) => event.type === "model.updated"),
@@ -188,4 +220,22 @@ export const enrichOpenCode2Snapshot = (input: {
     ],
     { concurrency: "unbounded", discard: true },
   );
+};
+
+export const makeOpenCode2MachineCatalogFollower = (
+  catalogWatch: Pick<Effect.Success<ReturnType<typeof makeOpenCode2CatalogWatch>>, "follow">,
+  hostCwd: string,
+) => {
+  // An external server may not have the host's cwd; without a location it uses its own default.
+  const machineDirectory = (connection: OpenCode2Server.OpenCode2Connection) =>
+    connection.external ? undefined : hostCwd;
+  return {
+    machineDirectory,
+    follow: (connection: OpenCode2Server.OpenCode2Connection) =>
+      catalogWatch.follow(
+        connection.url,
+        connection.events,
+        loadOpenCode2DirectoryCatalog(connection.client, machineDirectory(connection)),
+      ),
+  };
 };

@@ -3,7 +3,6 @@ import { ProviderDriverKind } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
@@ -33,11 +32,15 @@ import { openCodeUsageReader, type OpenCodeUsageReaderEnv } from "./usage.ts";
 import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
 import { withGoatUsageScopes } from "./usageWindowScopes.ts";
 import { loadOpenCode2Catalog, loadOpenCode2DirectoryCatalog } from "./openCode2Catalog.ts";
-import { enrichOpenCode2Snapshot, makeOpenCode2CatalogWatch } from "./openCode2CatalogWatch.ts";
+import {
+  enrichOpenCode2Snapshot,
+  makeOpenCode2CatalogWatch,
+  makeOpenCode2MachineCatalogFollower,
+} from "./openCode2CatalogWatch.ts";
+import { makeOpenCode2WorkspaceLister } from "./openCode2Workspace.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2GlobalSkills,
-  loadOpenCode2Workspace,
   makeOpenCode2ModelLoader,
   makePendingOpenCodeProvider,
   openCode2CommandsToServerProviderSlashCommands,
@@ -495,15 +498,31 @@ export const OpenCodeDriver: ProviderDriver<
       sessionConfigKey: yield* random.uuidV4().pipe(Effect.orDie),
       runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
-    const catalogWatch = yield* makeOpenCode2CatalogWatch();
+    const catalogWatch = yield* makeOpenCode2CatalogWatch(currentEnvironment);
+    const machineCatalog = makeOpenCode2MachineCatalogFollower(catalogWatch, host.paths.cwd);
+    // A session or text generation can start the server too, and reads no catalog when it does.
+    yield* Stream.merge(openCode2Server.connections, openCode2ProbeServer.connections).pipe(
+      Stream.runForEach(machineCatalog.follow),
+      Effect.forkScoped,
+    );
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
       (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined, boundRead) =>
-        openCode2ProbeServer.withConnection(({ client, events, external, url }) => {
-          const directory = external ? undefined : host.paths.cwd;
-          return catalogWatch
-            .follow(url, events, loadOpenCode2DirectoryCatalog(client, directory))
-            .pipe(Effect.andThen(boundRead(loadOpenCode2Catalog(client, directory))));
-        }, launch),
+        openCode2ProbeServer.withConnection(
+          (connection) =>
+            machineCatalog
+              .follow(connection)
+              .pipe(
+                Effect.andThen(
+                  boundRead(
+                    loadOpenCode2Catalog(
+                      connection.client,
+                      machineCatalog.machineDirectory(connection),
+                    ),
+                  ),
+                ),
+              ),
+          launch,
+        ),
       openCode2ProbeServer.captureLaunch ??
         Effect.succeed(undefined as OpenCodeServerOwner.OpenCodeServerLaunch | undefined),
       (left, right) =>
@@ -528,52 +547,11 @@ export const OpenCodeDriver: ProviderDriver<
         ),
       ),
     );
-    const listOpenCode2Workspace = (cwd: string) =>
-      openCode2ProbeServer.withConnection(({ client, events }) =>
-        Effect.gen(function* () {
-          // OpenCode names a location by its resolved path (no trailing slash or `..`).
-          const directory = pathService.resolve(cwd);
-          const location = { directory };
-          const scanned = yield* Deferred.make<void>();
-          const pending = new Set(["command.updated", "skill.updated"]);
-          const stream = yield* events.pipe(Effect.option);
-          if (stream._tag === "Some") {
-            yield* stream.value.pipe(
-              Stream.runForEach((event) =>
-                "location" in event &&
-                event.location?.directory === directory &&
-                pending.delete(event.type) &&
-                pending.size === 0
-                  ? Deferred.succeed(scanned, undefined)
-                  : Effect.void,
-              ),
-              Effect.ignore,
-              Effect.forkScoped,
-            );
-          }
-          return yield* loadOpenCode2Workspace(
-            Effect.all(
-              {
-                skills: client.skill.list({ location }).pipe(Effect.map((list) => list.data)),
-                commands: client.command.list({ location }).pipe(Effect.map((list) => list.data)),
-              },
-              { concurrency: "unbounded" },
-            ),
-            Deferred.await(scanned),
-            // Without events no scan can be awaited, so trust the first read as before.
-            stream._tag === "None"
-              ? Effect.succeed(true)
-              : client.debug.location.list().pipe(
-                  Effect.map((loaded) => loaded.some((entry) => entry.directory === directory)),
-                  Effect.timeout("2 seconds"),
-                  Effect.orElseSucceed(() => true),
-                ),
-            // OpenCode answers provider.list for a location only once its skill scan has ended.
-            client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),
-            yield* currentEnvironment,
-          );
-        }).pipe(Effect.scoped),
-      );
+    const listOpenCode2Workspace = makeOpenCode2WorkspaceLister({
+      server: openCode2ProbeServer,
+      pathService,
+      currentEnvironment,
+    });
     const serverOwner = yield* OpenCodeServerOwner.make({
       binaryPath: effectiveConfig.binaryPath,
       directory: host.paths.cwd,

@@ -288,6 +288,7 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
             : acquire,
           withConnection: acquire,
           forget: Effect.void,
+          connections: Stream.never,
         });
         const textGeneration = yield* OpenCode2TextGeneration.make(
           context === undefined ? {} : { memoryRunnerContext: context },
@@ -324,6 +325,7 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
           supportsMemoryConnection: Effect.succeed(true),
           withMemoryConnection: () => Effect.fail(startError),
           forget: Effect.void,
+          connections: Stream.never,
         });
         const textGeneration = yield* OpenCode2TextGeneration.make({
           memoryRunnerContext: memoryContext,
@@ -467,6 +469,7 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
       withMemoryConnection: (_operation, _providerId, use) => use(connection),
       withConnection: () => Effect.die("Memory must never borrow the shared server."),
       forget: Effect.void,
+      connections: Stream.never,
     });
     const generation = yield* OpenCode2TextGeneration.make({
       memoryRunnerContext: memoryContext,
