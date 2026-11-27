@@ -462,7 +462,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const status = liftedThreadListV2Status(resolveThreadListRowStatus(thread), props.lift);
   const isUnread =
     status === "ready" && (threadHasUnseenCompletion(thread) || props.lift === "unseen");
-  const markableUnread = canMarkThreadUnread(thread);
+  const markableUnread = canMarkThreadUnread(thread) && threadCanArchive(thread.runtime);
   const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
   const statusLabel =
