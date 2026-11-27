@@ -390,7 +390,7 @@ function ThreadDetailBody(
     if (result.value.outcome === "shared") {
       Dialog.alert(
         "Turn stopped; the agent process kept running",
-        `${others === 0 ? "Newer work is using it." : `It is shared with ${others} working ${others === 1 ? "thread" : "threads"}. Stop those to free it.`}`,
+        `${others === 0 ? "Newer work is using it." : `It is shared with ${others} working ${others === 1 ? "thread. Stop that thread" : "threads. Stop those"} to free it.`}`,
       );
     }
   };
