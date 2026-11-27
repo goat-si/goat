@@ -390,4 +390,102 @@ describe("Codex additional context restoration", () => {
         }).pipe(Effect.provide(layerAdapterTest)),
       ),
   );
+
+  // Codex 0.171 keeps additionalContext in the compacted history, so a restore sends it twice.
+  it.effect("does not restore GOAT context that Codex kept through compaction", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "kept-context-thread";
+        const nativeTurnId = "kept-context-turn";
+        const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId,
+          codexInput: [{ type: "text", text: "work" }],
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          hasGoatMcp: true,
+        });
+        const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" }).map(
+          (entry) =>
+            entry.type === "emit_inbound" && entry.label === "initialize"
+              ? {
+                  ...entry,
+                  frame: {
+                    id: 1,
+                    result: {
+                      userAgent: "GOAT/0.171.0",
+                      codexHome: "/tmp/codex-home",
+                      platformFamily: "unix",
+                      platformOs: "macos",
+                    },
+                  },
+                }
+              : entry,
+        );
+        const transcript = makeCodexReplayTranscript({
+          scenario: "kept-context",
+          entries: [
+            ...entries.slice(0, 5),
+            {
+              type: "expect_outbound",
+              label: "context turn",
+              frame: { id: 3, method: "turn/start", params },
+            },
+            ...entries.slice(6),
+            {
+              type: "emit_inbound",
+              label: "compacted",
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  item: { type: "contextCompaction", id: "compact-kept" },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "done",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const requested: Array<string> = [];
+        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+          environmentId: EnvironmentId.make("test"),
+          threadId: ThreadId.make("thread-kept-context"),
+          providerSessionId: "kept-context-session",
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer test",
+          browserToolsAvailable: true,
+        });
+        const harness = yield* makeCodexReplayHarness(transcript, undefined, (method) =>
+          Effect.sync(() => requested.push(method)),
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("kept-context-attempt"),
+            text: "work",
+          }),
+        );
+        yield* harness.firstTerminal;
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        assert.notInclude(
+          requested,
+          "thread/inject_items",
+          "injected GOAT context that Codex kept in its compacted history",
+        );
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
 });

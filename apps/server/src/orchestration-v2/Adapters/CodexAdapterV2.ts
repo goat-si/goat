@@ -137,6 +137,7 @@ import {
   dynamicToolTitle,
 } from "@goat/shared/toolActivity";
 import { modelSelectionsEqual } from "@goat/shared/model";
+import { parseSemver } from "@goat/shared/semver";
 import { codexToolOutput } from "./CodexToolOutput.ts";
 import type {
   ChatAttachment,
@@ -806,6 +807,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           >(),
         );
         const contextRestores = makeCodexContextRestores(scope, additionalContextByThread);
+        // Codex 0.171 began keeping additionalContext in the compacted history; restoring it there duplicates it.
+        let compactionKeepsAdditionalContext = false;
         const memoryDelivery = makeCodexMemoryDelivery({
           additionalContextByThread,
           derivedCache,
@@ -943,6 +946,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
             if (userAgent !== null) codexVersion = /\/(\S+)/u.exec(userAgent)?.[1];
             const version = userAgent && /\/(\S+)/u.exec(userAgent)?.[1];
+            const parsedVersion = version ? parseSemver(version) : null;
+            if (parsedVersion)
+              compactionKeepsAdditionalContext =
+                parsedVersion.major > 0 || parsedVersion.minor >= 171;
             const advisory =
               version && adapterOptions.compatibility
                 ? yield* adapterOptions.compatibility(version)
@@ -6222,7 +6229,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             const compactionId = contextRestores.take(payload.threadId);
-            if (compactionId !== undefined) {
+            if (compactionId !== undefined && !compactionKeepsAdditionalContext) {
               yield* contextRestores.fork(
                 payload.threadId,
                 restoreAdditionalContext(payload.threadId, compactionId),
