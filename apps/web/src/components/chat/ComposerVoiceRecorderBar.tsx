@@ -18,7 +18,7 @@ export function ComposerVoiceRecorderBar({ controller, disabled }: ComposerVoice
   )?.label;
   const transcribesOn =
     route.kind === "local"
-      ? "Transcribes on this device"
+      ? "Sends audio to this computer"
       : environmentLabel
         ? `Transcribes on ${environmentLabel}`
         : null;

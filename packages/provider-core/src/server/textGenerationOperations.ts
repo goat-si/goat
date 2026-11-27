@@ -37,6 +37,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
+  buildSpeechPostProcessingPrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
 import {
@@ -377,6 +378,23 @@ export function fromRunner(
     });
   });
 
+  const generateSpeechPostProcessing: NonNullable<
+    ProviderTextGeneration["generateSpeechPostProcessing"]
+  > = Effect.fn(`${name}.generateSpeechPostProcessing`)(function* (input) {
+    const generated = yield* run({
+      operation: "generateSpeechPostProcessing",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildSpeechPostProcessingPrompt({
+        transcript: input.transcript,
+        draftText: input.draftText,
+        instructions: input.instructions,
+        language: input.language,
+      }),
+    });
+    return { text: generated.text.trim() };
+  });
+
   return {
     ...(options.memory === false
       ? noMemoryGeneration
@@ -390,5 +408,6 @@ export function fromRunner(
     generateThreadTitle,
     ...(generateChannelReception ? { generateChannelReception } : {}),
     generateReviewGuide,
+    generateSpeechPostProcessing,
   } satisfies ProviderTextGeneration;
 }

@@ -287,15 +287,10 @@ belongs to the device. If live transcription is interrupted, GOAT transcribes
 the full recording when you stop. Desktop Browser annotation comments and iPhone
 dictation continue to transcribe after recording stops.
 
-Model management requires the explicit `voice:manage` permission; ordinary pairing
-does not grant it. On the environment's machine, create a pairing with:
-
-```sh
-goat pair --scope orchestration:read --scope orchestration:operate --scope voice:manage
-```
-
-Using `--scope` replaces the default grant, so add any other permissions that
-device needs.
+Ordinary pairing includes the `voice:manage` permission, so you can download and
+select local speech models without pairing a second device or signing in to a
+provider. A client paired before this change keeps its old grant; create a fresh
+pairing link to give it voice management.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System

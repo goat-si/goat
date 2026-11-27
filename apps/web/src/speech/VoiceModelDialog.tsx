@@ -214,6 +214,28 @@ export function VoiceModelDialog(props: {
               </option>
             </select>
           </label>
+          <label className="block">
+            Transcript cleanup{" "}
+            <select
+              value={config?.postProcessingMode ?? "local"}
+              disabled={busy || !props.canManage || !config}
+              onChange={(event) => {
+                const mode = event.target.value;
+                if ((mode === "off" || mode === "local" || mode === "llm") && config)
+                  void mutate((ctx, signal) =>
+                    configureEnvironmentSpeech(
+                      ctx,
+                      { ...config, postProcessingMode: mode },
+                      signal,
+                    ),
+                  );
+              }}
+            >
+              <option value="off">Off</option>
+              <option value="local">On-device cleanup</option>
+              <option value="llm">AI cleanup (uses your default model)</option>
+            </select>
+          </label>
           {filterSpeechModels(
             models,
             search,
