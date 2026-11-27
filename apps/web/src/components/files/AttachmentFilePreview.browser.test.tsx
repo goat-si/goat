@@ -44,6 +44,8 @@ vi.mock(import("./office/WordDocument"), async () => {
 });
 
 import { getClientSettings } from "~/hooks/useSettings";
+import { getThemeSnapshot, setAppearanceMode } from "~/hooks/useTheme";
+import { THEME_APPEARANCE_MODE_STORAGE_KEY } from "~/themePalette";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import LargeTextViewer from "./LargeTextViewer";
 import VirtualTablePreview from "./VirtualTablePreview";
@@ -1933,6 +1935,19 @@ it.each(["archive", "sqlite"] as const)(
 );
 
 it("loads a font attachment through the lazy preview", async () => {
+  const previousStoredMode = window.localStorage.getItem(THEME_APPEARANCE_MODE_STORAGE_KEY);
+  const previousAppearanceMode = getThemeSnapshot().appearanceMode;
+  using _theme = {
+    [Symbol.dispose]() {
+      setAppearanceMode(previousAppearanceMode);
+      if (previousStoredMode === null) {
+        window.localStorage.removeItem(THEME_APPEARANCE_MODE_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(THEME_APPEARANCE_MODE_STORAGE_KEY, previousStoredMode);
+      }
+    },
+  };
+  setAppearanceMode("light");
   const { default: fontUrl } =
     await import("../../../node_modules/@betteroffice/fonts/assets/Carlito-Regular.ttf?url");
   const file = await (await fetch(fontUrl)).blob();
@@ -1952,6 +1967,18 @@ it("loads a font attachment through the lazy preview", async () => {
     expect(frame?.srcdoc).toContain("@font-face");
     expect(frame?.srcdoc).toContain("The quick brown fox");
   });
+  const rootBackground = () =>
+    getComputedStyle(document.documentElement).getPropertyValue("--background");
+  const frameBackground = () =>
+    screen.container.querySelector("iframe")?.srcdoc.match(/background:([^;}]+)/)?.[1];
+  const lightBackground = rootBackground();
+  expect(frameBackground()).toBe(lightBackground);
+  await act(() => {
+    setAppearanceMode("dark");
+  });
+  const darkBackground = rootBackground();
+  expect(darkBackground).not.toBe(lightBackground);
+  await vi.waitFor(() => expect(frameBackground()).toBe(darkBackground));
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
 });
 
