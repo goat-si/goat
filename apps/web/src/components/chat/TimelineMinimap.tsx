@@ -5,12 +5,15 @@ import { Button } from "../ui/button";
 import {
   resolveTimelineMinimapHeightStyle,
   resolveTimelineMinimapIndexFromPointer,
+  resolveTimelineMinimapMarkCount,
+  resolveTimelineMinimapMarkIndex,
   resolveTimelineMinimapNavigationInteractive,
   resolveTimelineMinimapTopPercent,
   TIMELINE_MINIMAP_MIN_ITEMS,
 } from "./MessagesTimeline.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
+import { observeResize } from "~/lib/observeResize";
 
 // A release outside the window can skip `mouseup`, so the next button-free
 // `mousemove` also counts.
@@ -55,6 +58,15 @@ export function TimelineMinimap({
     return () => node.removeEventListener("wheel", onWheel);
   };
 
+  const [railHeight, setRailHeight] = useState(0);
+  const railRef = (node: HTMLDivElement | null) => {
+    if (!node) return;
+    setRailHeight(node.getBoundingClientRect().height);
+    return observeResize(node, ([entry]) => {
+      if (entry) setRailHeight(entry.contentRect.height);
+    });
+  };
+
   const pressedOnStripRef = useRef(false);
   const [passThrough, setPassThrough] = useState(false);
 
@@ -80,6 +92,18 @@ export function TimelineMinimap({
     resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex - 1] ?? null);
   const nextItem =
     resolvedCurrentIndex === null || atEnd ? null : (items[resolvedCurrentIndex + 1] ?? null);
+
+  // A rail too short for every item groups neighbours onto one strip; the pointer and
+  // keyboard still resolve single items.
+  const markCount = resolveTimelineMinimapMarkCount(items.length, railHeight);
+  const marks: TimelineMinimapItem[][] = Array.from({ length: markCount }, () => []);
+  for (const [index, item] of items.entries()) {
+    marks[resolveTimelineMinimapMarkIndex(index, items.length, markCount)]?.push(item);
+  }
+  const activeMarkIndex =
+    resolvedActiveIndex === null
+      ? null
+      : resolveTimelineMinimapMarkIndex(resolvedActiveIndex, items.length, markCount);
 
   const resolveActiveIndexFromPointer = (event: MouseEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -125,6 +149,7 @@ export function TimelineMinimap({
             "absolute top-1/2 left-3 -translate-y-1/2",
             hitStripWidth > 0 && !passThrough ? "pointer-events-auto" : "pointer-events-none",
           )}
+          ref={railRef}
           onMouseDown={() => {
             if (pressedOnStripRef.current) return;
             pressedOnStripRef.current = true;
@@ -190,10 +215,10 @@ export function TimelineMinimap({
             type="button"
           >
             <div className="absolute top-0 left-3 h-full w-px bg-border/15" />
-            {items.map((item, index) => {
-              const top = `${resolveTimelineMinimapTopPercent(index, items.length)}%`;
+            {marks.map((markItems, index) => {
+              const top = `${resolveTimelineMinimapTopPercent(index, markCount)}%`;
               const activeDistance =
-                resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
+                activeMarkIndex === null ? null : Math.abs(index - activeMarkIndex);
               return (
                 // Compositor-friendly on purpose: in-view state and the hover
                 // fisheye animate constantly (every scroll tick and streaming
@@ -214,13 +239,15 @@ export function TimelineMinimap({
                   )}
                   data-in-view="false"
                   data-minimap-strip
-                  key={item.id}
+                  key={markItems[0]?.id ?? index}
                   ref={(node) => {
-                    if (node) {
-                      stripMap.set(item.id, node);
-                    } else {
-                      stripMap.delete(item.id);
-                    }
+                    if (!node) return;
+                    for (const item of markItems) stripMap.set(item.id, node);
+                    return () => {
+                      for (const item of markItems) {
+                        if (stripMap.get(item.id) === node) stripMap.delete(item.id);
+                      }
+                    };
                   }}
                   style={{ top }}
                 />
