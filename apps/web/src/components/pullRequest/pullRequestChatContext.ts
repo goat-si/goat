@@ -60,6 +60,18 @@ export function bounded(value: string): string {
   return `${trimmed.slice(0, end).trimEnd()}...`;
 }
 
+export function reviewThreadText(thread: PullRequestReviewThread): string {
+  // Strip bot bookkeeping comments before bounding finding text.
+  return bounded(
+    thread.comments
+      .flatMap((comment) => {
+        const body = readableBody(comment.body);
+        return body === null ? [] : [`${comment.author?.login ?? "ghost"}: ${body}`];
+      })
+      .join("\n"),
+  );
+}
+
 export function reviewThreadContext(
   thread: PullRequestReviewThread,
   pullRequestNumber: number,
@@ -74,15 +86,7 @@ export function reviewThreadContext(
     endIndex: lineIndex,
     rangeLabel:
       thread.line === null ? "file" : `L${thread.line}${thread.side === "left" ? " (before)" : ""}`,
-    // Strip bot bookkeeping comments before bounding finding text.
-    text: bounded(
-      thread.comments
-        .flatMap((comment) => {
-          const body = readableBody(comment.body);
-          return body === null ? [] : [`${comment.author?.login ?? "ghost"}: ${body}`];
-        })
-        .join("\n"),
-    ),
+    text: reviewThreadText(thread),
     diff: "",
     fenceLanguage: inferReviewCommentFenceLanguage(thread.path),
   };

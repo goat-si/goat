@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { GitCommandError, type PullRequestComment } from "@goat/contracts";
+import {
+  GitCommandError,
+  type PullRequestComment,
+  type PullRequestReviewThread,
+} from "@goat/contracts";
 import { reviewCommentContextLabel } from "~/lib/composerContextRecords";
 import {
   appendHandoff,
@@ -232,5 +236,49 @@ describe("Fix handoff visible review remarks", () => {
     });
     expect(single.prompt).toContain("> reviewer: Fix wrong total");
     expect(single.prompt).not.toContain("<!--");
+  });
+
+  it("counts only threads with readable text toward the findings limit", () => {
+    const thread = (body: string, id = "t1"): PullRequestReviewThread => ({
+      id,
+      path: "apps/web/src/page.tsx",
+      line: 12,
+      side: "right",
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          id: `${id}c1`,
+          author: { login: "reviewer", name: null, avatarUrl: null },
+          body,
+          createdAt: "2026-07-03T00:00:00Z",
+          url: null,
+        },
+      ],
+    });
+    const reviewThreads = Array.from({ length: 21 }, (_, index) =>
+      thread(index === 0 ? "Fix wrong total" : "<!-- marker -->", `t${index}`),
+    );
+    const handoff = buildFixFindingsHandoff({ ...base, comments: [], reviewThreads, checks: [] });
+    expect(handoff.reviewComments.map((comment) => comment.text)).toEqual([
+      "reviewer: Fix wrong total",
+    ]);
+    expect(handoff.prompt).not.toContain("further findings were omitted");
+
+    const hiddenRoot = reviewThreads[1]!;
+    const withReply = buildFixFindingsHandoff({
+      ...base,
+      comments: [],
+      reviewThreads: [
+        {
+          ...hiddenRoot,
+          comments: [...hiddenRoot.comments, ...thread("Fix wrong total").comments],
+        },
+      ],
+      checks: [],
+    });
+    expect(withReply.reviewComments.map((comment) => comment.text)).toEqual([
+      "reviewer: Fix wrong total",
+    ]);
   });
 });
