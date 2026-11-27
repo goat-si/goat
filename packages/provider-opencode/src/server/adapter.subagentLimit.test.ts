@@ -150,7 +150,12 @@ const resumeFixture = Effect.fn("resumeFixture")(function* (
         return { data: { id: root, time: { created: 1, updated: 1 } } };
       },
       get: async (input: { sessionID: string }) => ({
-        data: { id: input.sessionID, time: { created: 1, updated: 2 }, ...native },
+        data: {
+          id: input.sessionID,
+          directory: "/workspace",
+          time: { created: 1, updated: 2 },
+          ...native,
+        },
       }),
       update: async (input: Update) => {
         updates.push(input);

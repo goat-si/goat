@@ -156,6 +156,7 @@ import {
   OpenCodeProviderCapabilitiesV2,
   OPENCODE_PROVIDER,
   sdkResponseForRawLog,
+  moveSessionToCwd,
   unwrapData,
 } from "./adapterProtocol.ts";
 import {
@@ -2968,6 +2969,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.session.get({ sessionID: sessionId }),
               );
               const nativeSession = unwrapData("session.get", response);
+              yield* moveSessionToCwd(sessionId, nativeSession.directory, cwd, client, sdkCall);
               const resumedAt = yield* DateTime.now;
               const providerThread = {
                 ...threadInput.providerThread,

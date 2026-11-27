@@ -5,7 +5,7 @@ import {
   type ProviderSessionId,
   type ThreadId,
 } from "@goat/contracts";
-import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2";
+import type { Event as OpenCodeEvent, OpencodeClient } from "@opencode-ai/sdk/v2";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -253,3 +253,30 @@ export function unwrapData<A>(operation: string, result: { readonly data?: A }):
   }
   return result.data as NonNullable<A>;
 }
+
+// OpenCode 1.x runs a session, and publishes its events, in the directory it lives
+// in, so a session left behind by a worktree handoff must follow this client.
+export const moveSessionToCwd = Effect.fn("OpenCodeAdapter.moveSessionToCwd")(function* (
+  sessionId: string,
+  sessionDirectory: string | undefined,
+  cwd: string,
+  client: OpencodeClient,
+  sdkCall: <A>(
+    method: string,
+    payload: unknown,
+    call: (signal: AbortSignal) => Promise<A>,
+  ) => Effect.Effect<A, OpenCodeRuntime.OpenCodeRuntimeError>,
+) {
+  if (sessionDirectory === cwd) return;
+  const paths = yield* sdkCall("path.get", {}, () => client.path.get());
+  const directory = unwrapData("path.get", paths).directory;
+  if (sessionDirectory === directory) return;
+  const body = { sessionID: sessionId, destination: { directory } };
+  // SDK 1.15 has no binding for this route (later ones: experimental.controlPlane.moveSession).
+  yield* sdkCall("session.move", body, () =>
+    client["client"].post({
+      url: "/experimental/control-plane/move-session",
+      body,
+    }),
+  );
+});

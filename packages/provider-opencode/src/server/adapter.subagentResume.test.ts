@@ -204,6 +204,7 @@ it.effect.each([
       const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
       const rootSession = {
         id: root,
+        directory: "/workspace",
         time: { created: 1, updated: 1 },
         ...(previous === "inherited-verified"
           ? { permission: fullBase, metadata: { goatPermissionBase: fullBase } }
@@ -403,7 +404,9 @@ it.effect.each([
         event: { subscribe: async () => ({ stream: asyncEventStream().stream }) },
         session: {
           create: async () => ({ data: stored(root) }),
-          get: async ({ sessionID }: { sessionID: string }) => ({ data: stored(sessionID) }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { directory: "/workspace", ...stored(sessionID) },
+          }),
           children: async ({ sessionID }: { sessionID: string }) => {
             if (sessionID === child && refuseChildListing) {
               refuseChildListing = false;
@@ -723,7 +726,9 @@ it.effect.each(childPermissionRows)(
         event: { subscribe: async () => ({ stream: asyncEventStream().stream }) },
         session: {
           create: async () => ({ data: stored(root) }),
-          get: async ({ sessionID }: { sessionID: string }) => ({ data: stored(sessionID) }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { directory: "/workspace", ...stored(sessionID) },
+          }),
           children: async ({ sessionID }: { sessionID: string }) => {
             if (sessionID === parent && failSubtree) {
               failSubtree = false;
