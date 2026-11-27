@@ -61,7 +61,7 @@ export function useLanguagePreference(): string {
     : DEFAULT_LOCALE;
 }
 
-/** Translates the screens inside it into the saved language; "system" follows the device. */
+/** Translates the app into the saved language; "system" follows the device. Mounted once in AppProviders. */
 export function I18nProvider(props: { readonly children: ReactNode }) {
   // GT suspends while a locale's catalog loads. Deferring the switch keeps the current language
   // on screen until then, instead of GT's full-screen spinner.

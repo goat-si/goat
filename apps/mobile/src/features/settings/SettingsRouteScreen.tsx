@@ -46,19 +46,11 @@ import {
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { filterSettingsSections } from "./settings-search";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
-import { I18nProvider, useGT, useLanguagePreference } from "../../i18n/I18nProvider";
+import { useGT, useLanguagePreference } from "../../i18n/I18nProvider";
 import { nativeLanguageName } from "@goat/client-runtime/locales";
 import { SUPPORTED_LOCALES } from "../../i18n/locales";
 
 export function SettingsRouteScreen() {
-  return (
-    <I18nProvider>
-      <TranslatedSettingsRouteScreen />
-    </I18nProvider>
-  );
-}
-
-function TranslatedSettingsRouteScreen() {
   const gt = useGT();
   const surface = useWorkspaceSurface();
   const deviceType = useDeviceType();

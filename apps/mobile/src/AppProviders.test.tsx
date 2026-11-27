@@ -53,11 +53,12 @@ vi.mock("./features/settings/appearance/AppearancePreferencesProvider", () => ({
     themeVariables: new Proxy({}, { get: () => "#336699" }),
   }),
 }));
-vi.mock("./state/preferences", () => ({
-  mobilePreferencesAtom: Atom.make(AsyncResult.success({ language: "ko" })),
-}));
 vi.mock("./native/useEnrichedLinkVariants", () => ({
   useEnrichedLinkVariants: () => ({ linkVariants: {}, linkPillContent: undefined }),
+}));
+// Saved preferences live in native storage; the language stays the default while they load.
+vi.mock("./state/preferences", () => ({
+  mobilePreferencesAtom: Atom.make(AsyncResult.initial()),
 }));
 vi.mock("./native/HighlightedCodeBlock", async () => ({
   HighlightedCodeBlock: () => null,
@@ -70,14 +71,11 @@ vi.mock("./lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
 import { AppProviders } from "./AppProviders";
 import { SelectableMarkdownText } from "./native/SelectableMarkdownText";
 
-it("an assistant reply renders inside the app's providers, its selection menu in the saved language", async () => {
+it("an assistant reply renders inside the app's providers with its translated selection menu", async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement("div");
   document.body.appendChild(container);
-  const root = createRoot(container, {
-    onUncaughtError: () => {},
-    onCaughtError: () => {},
-  });
+  const root = createRoot(container);
   const reply = "Here is the capture: ![after](https://example.test/after.png)";
   try {
     await act(async () =>
@@ -89,7 +87,7 @@ it("an assistant reply renders inside the app's providers, its selection menu in
     );
     const message = container.querySelector("p");
     expect(message?.textContent).toBe(reply);
-    expect(message?.dataset.selectionCopy).toBe("복사");
+    expect(message?.dataset.selectionCopy).toBe("Copy");
   } finally {
     await act(async () => root.unmount());
     container.remove();

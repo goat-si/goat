@@ -2,7 +2,7 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { supportsMemoryProtocol, type EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { useContext, useEffect, useRef, useState } from "react";
-import { I18nProvider, useGT } from "../../i18n/I18nProvider";
+import { useGT } from "../../i18n/I18nProvider";
 import { serverEnvironment } from "../../state/server";
 import { environmentSession } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -34,14 +34,6 @@ export function useMemoryLifetime(environmentId: EnvironmentId) {
   };
 }
 export function MemoryConversationSettings({ environmentId }: { environmentId: EnvironmentId }) {
-  return (
-    <I18nProvider>
-      <ConversationControls environmentId={environmentId} />
-    </I18nProvider>
-  );
-}
-
-function ConversationControls({ environmentId }: { environmentId: EnvironmentId }) {
   const gt = useGT();
   const registry = useContext(RegistryContext);
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));

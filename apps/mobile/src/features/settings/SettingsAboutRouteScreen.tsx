@@ -12,7 +12,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { resolveMobileBrandChannel } from "../../lib/mobileBranding";
 import { useDeadlinePassed } from "../../lib/clock";
-import { I18nProvider, useGT } from "../../i18n/I18nProvider";
+import { useGT } from "../../i18n/I18nProvider";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
@@ -24,14 +24,6 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
 
 export function SettingsAboutRouteScreen() {
-  return (
-    <I18nProvider>
-      <AboutScreen />
-    </I18nProvider>
-  );
-}
-
-function AboutScreen() {
   const insets = useSafeAreaInsets();
 
   return (
