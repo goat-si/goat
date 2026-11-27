@@ -251,6 +251,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./appImageRuntimeEnv": {
+      "types": "./src/appImageRuntimeEnv.ts",
+      "import": "./src/appImageRuntimeEnv.ts"
+    },
     "./cliPath": {
       "types": "./src/cliPath.ts",
       "import": "./src/cliPath.ts"
