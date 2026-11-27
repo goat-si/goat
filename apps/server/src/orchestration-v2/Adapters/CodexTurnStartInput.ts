@@ -19,8 +19,7 @@ export interface CodexTurnStartInput {
   readonly computerUseDeferred?: boolean;
   /** This turn reloaded a conversation Codex held across a server restart. */
   readonly reloadedAfterRestart?: boolean;
-  /** ChatGPT token sharing does not accept service tiers. */
-  readonly omitServiceTier?: boolean;
+  readonly subscriptionSharing?: boolean;
   readonly memoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["memoryContext"];
   readonly clearMemoryContext?: boolean;
   /** What the thread's MCP Apps want the agent to know (`ui/update-model-context`). */

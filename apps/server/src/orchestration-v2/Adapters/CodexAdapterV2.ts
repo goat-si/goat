@@ -6543,7 +6543,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ...codexTurnSkills(mcpSession, runtime.cuaDriver),
               computerUseDeferred,
               reloadedAfterRestart: restartNotices.has(threadId),
-              omitServiceTier: adapterOptions.resolveRuntime !== undefined,
+              subscriptionSharing: adapterOptions.resolveRuntime !== undefined,
               cyberAccess: codexCyberAccess(
                 adapterOptions.offeredModels === undefined
                   ? []
