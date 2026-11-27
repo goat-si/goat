@@ -3,10 +3,13 @@ import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { ExternalLinkIcon } from "~/components/solar";
 
 import {
+  getDesktopUpdateDownloadedVersion,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
 } from "../desktopUpdate.logic";
 import { openDesktopUpdateReleaseNotes } from "../desktopUpdate.toast";
+import { InlineButton } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 
 type DesktopUpdateShell = Pick<DesktopBridge, "openExternal">;
@@ -45,6 +48,31 @@ function ReleaseLink({
   );
 }
 
+export function UpdateCardReleaseLink({ state }: { state: DesktopUpdateState }) {
+  const gt = useGT();
+  const shell = window.desktopBridge;
+  const version = getDesktopUpdateDownloadedVersion(state);
+  if (!version) return null;
+  if (!state.releaseNotes.some((note) => note.version === version)) {
+    const releaseUrl = getDesktopUpdateReleaseUrl(version);
+    return releaseUrl ? (
+      <ReleaseLink shell={shell} releaseUrl={releaseUrl}>
+        {gt("View release on GitHub")}
+      </ReleaseLink>
+    ) : null;
+  }
+  return (
+    <Popover>
+      <PopoverTrigger className="mt-2" render={<InlineButton tone="muted" />}>
+        {gt("What's changed")}
+      </PopoverTrigger>
+      <PopoverPopup aria-label={gt("What's changed")} side="top" align="start">
+        <SidebarUpdateReleaseNotes shell={shell} state={state} />
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
 export function SidebarUpdateReleaseNotes({
   shell,
   state,
@@ -52,7 +80,7 @@ export function SidebarUpdateReleaseNotes({
 }: {
   readonly shell: DesktopUpdateShell | undefined;
   readonly state: DesktopUpdateState;
-  readonly tooltip: string;
+  readonly tooltip?: string;
 }) {
   const gt = useGT();
   if (state.releaseNotes.length === 0) {
@@ -61,10 +89,12 @@ export function SidebarUpdateReleaseNotes({
 
   return (
     <div className="flex max-h-[calc(var(--available-height)-0.5rem)] min-h-0 w-fit max-w-[min(24rem,calc(100vw-2rem))] flex-col text-left">
-      <div className="shrink-0 px-1">
-        {/* The tooltip names everything the button updates, which can be more than this app. */}
-        <div className="text-sm leading-5 font-medium whitespace-pre-line">{tooltip}</div>
-      </div>
+      {tooltip && (
+        <div className="shrink-0 px-1">
+          {/* The tooltip names everything the button updates, which can be more than this app. */}
+          <div className="text-sm leading-5 font-medium whitespace-pre-line">{tooltip}</div>
+        </div>
+      )}
       <div className="min-h-0 max-h-[min(28rem,calc(100vh-6rem))] overflow-y-auto px-1 pt-4 pb-1">
         {state.releaseNotes.map((releaseNote, index) => {
           const releaseUrl = getDesktopUpdateReleaseUrl(releaseNote.version);

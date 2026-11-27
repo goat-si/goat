@@ -1,9 +1,9 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { gtFallback } from "gt-react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../../test/render";
+import { act, render, stubGlobal } from "../../../test/render";
 import { clearDismissedDownloadFailure } from "../../state/desktopUpdate";
 import { installLocalUpdate, SidebarUpdatePill } from "./SidebarUpdatePill";
 
@@ -82,6 +82,58 @@ function publish(update: DesktopUpdateState | null) {
 const releaseNotes = () => document.querySelector('[aria-label="Update release notes"]');
 
 describe("SidebarUpdatePill release notes", () => {
+  it.each(["available", "downloaded"] as const)(
+    "opens notes without starting the %s update action",
+    async (status) => {
+      sessionStorage.removeItem("desktop-update-notice");
+      const update = nightlyUpdate(RELEASE_NOTES);
+      setup({
+        ...update,
+        status,
+        downloadedVersion: status === "downloaded" ? update.availableVersion : null,
+      });
+      const downloadUpdate = vi.fn(),
+        installUpdate = vi.fn();
+      using _bridge = stubGlobal("desktopBridge", {
+        downloadUpdate,
+        installUpdate,
+        getLocalEnvironmentBootstraps: () => [],
+      });
+      await using _screen = await render(<SidebarUpdatePill />);
+      const button = page
+        .getByRole("complementary", { name: "Update available" })
+        .getByRole("button", { name: "What's changed" });
+      await button.click();
+      await expect
+        .element(page.getByRole("dialog", { name: "What's changed" }).getByText("Faster sidebar."))
+        .toBeVisible();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(button).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await expect.element(page.getByRole("dialog", { name: "What's changed" })).toBeVisible();
+      expect(downloadUpdate).not.toHaveBeenCalled();
+      expect(installUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it("opens the offered version on GitHub when only an older version has notes", async () => {
+    sessionStorage.removeItem("desktop-update-notice");
+    setup(nightlyUpdate([{ ...RELEASE_NOTES[0]!, version: "0.0.50-nightly.1" }]));
+    const openExternal = vi.fn(async () => true);
+    using _bridge = stubGlobal("desktopBridge", {
+      openExternal,
+      getLocalEnvironmentBootstraps: () => [],
+    });
+    await using _screen = await render(<SidebarUpdatePill />);
+    const link = page
+      .getByRole("complementary", { name: "Update available" })
+      .getByRole("link", { name: "View release on GitHub" });
+    await link.click();
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/\/tag\/v0\.0\.50-nightly\.2$/),
+    );
+  });
+
   it("keeps a dismissed offer quiet and surfaces a subsequent download failure", async () => {
     sessionStorage.removeItem("desktop-update-notice");
     const update = nightlyUpdate([]);
