@@ -1,3 +1,4 @@
+import { whenVariableLabels } from "./keybindingWhenLabels";
 import { useGT, useMessages } from "gt-react";
 import {
   WhenExpressionRemoveButton,
@@ -172,15 +173,17 @@ function WhenVariableSelect({
   unknownIdentifiers?: ReadonlyArray<string>;
   onChange: (value: string) => void;
 }) {
-  const gt = useGT();
-  const selected = variables.find((option) => option === value);
-  const options =
-    selected || variables.some((option) => option === value) ? variables : [value, ...variables];
+  const m = useMessages();
+  const label = (id: string) => {
+    const message = whenVariableLabels.get(id);
+    return message ? m(message) : id;
+  };
+  const options = variables.includes(value) ? variables : [value, ...variables];
 
   return (
     <Select value={value} onValueChange={(nextValue) => nextValue && onChange(nextValue)}>
       <SelectTrigger size="compact" className="min-w-0 flex-1">
-        <SelectValue placeholder={gt("Condition")} />
+        <SelectValue>{label(value)}</SelectValue>
         {unknownIdentifiers && unknownIdentifiers.length > 0 ? (
           <UnknownWhenVariableWarning identifiers={unknownIdentifiers} focusable={false} />
         ) : null}
@@ -188,7 +191,7 @@ function WhenVariableSelect({
       <SelectContent alignItemWithTrigger={false} matchTriggerWidth={false} className="max-h-72">
         {options.map((option) => (
           <SelectItem key={option} value={option} className="w-full">
-            <span className="truncate">{option}</span>
+            <span className="truncate">{label(option)}</span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -359,7 +362,7 @@ function WhenExpressionNodeEditor({
       <div className="flex flex-wrap items-center gap-2">
         <Select value={operator} onValueChange={(value) => setOperator(value as BooleanOperator)}>
           <SelectTrigger size="compact" className="w-24">
-            <SelectValue />
+            <SelectValue>{operator === "and" ? gt("and") : gt("or")}</SelectValue>
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false} matchTriggerWidth={false}>
             <SelectItem value="and">{gt("and")}</SelectItem>

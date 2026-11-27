@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { ResolvedKeybindingsConfig } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useSyncExternalStore } from "react";
@@ -61,7 +62,8 @@ export function NotesListToggle(props: { keybindings: ResolvedKeybindingsConfig 
   const shortcut = pageCommandShortcutLabel(props.keybindings, "notes.toggleList", {
     context: { notesPageOpen: true },
   });
-  const label = collapsed ? "Show notes list" : "Hide notes list";
+  const gt = useGT();
+  const label = collapsed ? gt("Show notes list") : gt("Hide notes list");
   return (
     <div className="max-md:hidden">
       <Tooltip>
