@@ -7,7 +7,6 @@ import {
   CommandId,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
-  type OrchestrationV2PlanArtifact,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
@@ -34,7 +33,11 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 import { AgentScope } from "@goat/shared/AgentScope";
-import { withCommandActions, compactUndefined } from "./ProviderEventCommandActions.ts";
+import {
+  withCommandActions,
+  withPlanStepDurations,
+  compactUndefined,
+} from "./ProviderEventCommandActions.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -126,70 +129,6 @@ export const layerAnalytics = Layer.effect(
     };
   }),
 );
-
-type TodoListPlan = Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }>;
-
-function withPlanStepDurations(
-  plan: TodoListPlan,
-  previous: TodoListPlan | undefined,
-  occurredAt: DateTime.Utc,
-): TodoListPlan {
-  const occurredAtIso = DateTime.formatIso(occurredAt);
-  const occurredAtMs = DateTime.toEpochMillis(occurredAt);
-  const previousById = new Map(previous?.steps.map((step) => [step.id, step]));
-  // Provider step IDs may be positional. Changed text must not inherit another task's timing.
-  const previousStep = (step: TodoListPlan["steps"][number]) => {
-    const prior = previousById.get(step.id);
-    return prior?.text === step.text ? prior : undefined;
-  };
-  const hasNewCompletion = plan.steps.some((step) => {
-    const prior = previousStep(step);
-    return step.status === "completed" && prior?.status !== "completed";
-  });
-  let fallbackCompletionConsumed = false;
-
-  return {
-    ...plan,
-    steps: plan.steps.map((step) => {
-      const prior = previousStep(step);
-      const baseStep = { id: step.id, text: step.text, status: step.status };
-      if (step.status === "completed") {
-        if (prior?.status === "completed") {
-          return {
-            ...baseStep,
-            ...(prior.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
-          };
-        }
-        const durationAnchorAt =
-          prior?.status === "running" || !fallbackCompletionConsumed
-            ? prior?.durationAnchorAt
-            : occurredAtIso;
-        fallbackCompletionConsumed = true;
-        const anchorMs =
-          durationAnchorAt === undefined ? occurredAtMs : Date.parse(durationAnchorAt);
-        const durationMs = Number.isFinite(anchorMs) ? Math.max(0, occurredAtMs - anchorMs) : 0;
-        return {
-          ...baseStep,
-          ...(durationMs > 0 ? { durationMs } : {}),
-        };
-      }
-      if (step.status === "running") {
-        return {
-          ...baseStep,
-          durationAnchorAt:
-            prior?.status === "running" ? (prior.durationAnchorAt ?? occurredAtIso) : occurredAtIso,
-        };
-      }
-      return {
-        ...baseStep,
-        durationAnchorAt:
-          hasNewCompletion || prior?.status !== "pending"
-            ? occurredAtIso
-            : (prior.durationAnchorAt ?? occurredAtIso),
-      };
-    }),
-  };
-}
 
 const CONVERSATION_RUN_STATUSES = new Set<OrchestrationV2Run["status"]>([
   "completed",
@@ -780,6 +719,9 @@ export const layer: Layer.Layer<
                 yield* makeDomainEvent(input, {
                   type: "turn-item.updated",
                   payload: makeProviderFailureTurnItem({
+                    ...(input.event.failureItemId === undefined
+                      ? {}
+                      : { id: input.event.failureItemId }),
                     driver: input.event.driver,
                     threadId: input.threadId,
                     runId: input.runId ?? null,

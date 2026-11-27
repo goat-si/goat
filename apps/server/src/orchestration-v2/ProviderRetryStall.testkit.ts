@@ -205,6 +205,7 @@ export function registerRetryStallCheck({
           providerTurnId,
           runOrdinal: 1,
           failureItemOrdinal: 3,
+          failureItemId: retryItem("running").id,
           status: "failed",
           failure: { ...failure, retryable: false },
           retry,

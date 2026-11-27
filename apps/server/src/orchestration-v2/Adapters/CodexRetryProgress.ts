@@ -1,4 +1,12 @@
-import type { OrchestrationV2ProviderRetry } from "@goat/contracts";
+import {
+  ProviderDriverKind,
+  type OrchestrationV2ProviderRetry,
+  type ProviderTurnId,
+  type TurnItemId,
+} from "@goat/contracts";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+
+const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 
 export function parseCodexRetryProgress(
   message: string,
@@ -13,4 +21,27 @@ export function parseCodexRetryProgress(
     return null;
   }
   return { attempt, maxAttempts };
+}
+
+// Each retry episode after a recovery gets its own row, placed after the turn's progress so far.
+export function codexFailureItemKey(context: {
+  readonly providerTurnId: ProviderTurnId;
+  readonly recoveredProviderRetries?: number;
+}): string {
+  const key = `terminal-failure:${context.providerTurnId}`;
+  return context.recoveredProviderRetries === undefined
+    ? key
+    : `${key}:${context.recoveredProviderRetries}`;
+}
+
+export function codexFailureItemId(context: {
+  readonly providerTurnId: ProviderTurnId;
+  readonly recoveredProviderRetries?: number;
+}): TurnItemId | undefined {
+  return context.recoveredProviderRetries === undefined
+    ? undefined
+    : IdAllocator.derive.turnItemFromProviderItem({
+        driver: CODEX_PROVIDER,
+        nativeItemId: codexFailureItemKey(context),
+      });
 }

@@ -33,7 +33,11 @@ import {
   nonEmptyText,
   normalizeCodexCause,
 } from "./CodexWebSearch.ts";
-import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
+import {
+  codexFailureItemId,
+  codexFailureItemKey,
+  parseCodexRetryProgress,
+} from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
 import { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
 import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
@@ -156,6 +160,7 @@ import type {
   RuntimeMode,
   RuntimeRequestId,
   ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
@@ -364,6 +369,7 @@ export interface ActiveCodexTurnContext {
   hasOutput?: boolean;
   preOutputRetryAttempt?: number;
   closedCommandItemIds?: ReadonlySet<string>;
+  recoveredProviderRetries?: number;
   latestProviderFailure?: {
     readonly nativeMessage: string;
     readonly nativeCode: string | null;
@@ -408,6 +414,7 @@ interface ActiveCodexProviderRetry {
   readonly failure: OrchestrationV2ProviderFailure;
   readonly startedAt: DateTime.Utc;
   readonly itemOrdinal: number;
+  readonly id: TurnItemId | undefined;
 }
 
 interface TrackedRunningCommandItem {
@@ -1339,12 +1346,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (providerRetry === undefined) {
             return;
           }
+          context.recoveredProviderRetries = (context.recoveredProviderRetries ?? 0) + 1;
           yield* providerRetryTimers.cancel(context.providerTurnId);
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver: CODEX_PROVIDER,
             turnItem: {
               ...makeProviderRetryTurnItem({
+                ...(providerRetry.id === undefined ? {} : { id: providerRetry.id }),
                 driver: CODEX_PROVIDER,
                 threadId: context.projectionThreadId,
                 runId: context.projectionRunId,
@@ -4133,8 +4142,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             );
             const itemOrdinal =
               previous?.itemOrdinal ??
-              (yield* resolveItemOrdinal(context, `terminal-failure:${context.providerTurnId}`));
+              (yield* resolveItemOrdinal(context, codexFailureItemKey(context)));
             const state: ActiveCodexProviderRetry = {
+              id: previous === undefined ? codexFailureItemId(context) : previous.id,
               nativeMessage: payload.error.message,
               nativeCode: code,
               nativeDetails: additionalDetails || payload.error.message,
@@ -4159,6 +4169,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               type: "turn_item.updated",
               driver: CODEX_PROVIDER,
               turnItem: makeProviderRetryTurnItem({
+                ...(state.id === undefined ? {} : { id: state.id }),
                 driver: CODEX_PROVIDER,
                 threadId: context.projectionThreadId,
                 runId: context.projectionRunId,
@@ -5327,6 +5338,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 input.context.latestProviderFailure,
                 input.providerRetry,
               );
+              const failureItemId = codexFailureItemId(input.context);
               return {
                 type: "turn.terminal",
                 driver: CODEX_PROVIDER,
@@ -5335,8 +5347,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 runOrdinal: input.context.input.runOrdinal,
                 failureItemOrdinal: yield* resolveItemOrdinal(
                   input.context,
-                  `terminal-failure:${input.context.providerTurnId}`,
+                  codexFailureItemKey(input.context),
                 ),
+                ...(failureItemId === undefined ? {} : { failureItemId }),
                 status: terminalStatus,
                 failure:
                   failure.class === "usage_limit"
@@ -5392,6 +5405,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           yield* emitProviderEvent(current);
           if (current.status === "failed" && current.failure.class === "usage_limit") {
             const item = makeProviderFailureTurnItem({
+              ...(current.failureItemId === undefined ? {} : { id: current.failureItemId }),
               driver: CODEX_PROVIDER,
               threadId: context.input.threadId,
               runId: context.input.runId,
@@ -5783,6 +5797,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     retryDelayMs,
                   };
                   const state: ActiveCodexProviderRetry = {
+                    id: terminal.failureItemId,
                     nativeMessage: input.failureMessage ?? terminal.failure.message,
                     nativeCode: terminal.failure.code,
                     httpStatus: codexHttpStatus(input.failureErrorInfo),
@@ -5798,6 +5813,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     type: "turn_item.updated",
                     driver: CODEX_PROVIDER,
                     turnItem: makeProviderRetryTurnItem({
+                      ...(state.id === undefined ? {} : { id: state.id }),
                       driver: CODEX_PROVIDER,
                       threadId: input.context.projectionThreadId,
                       runId: input.context.projectionRunId,
@@ -5840,6 +5856,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   type: "turn_item.updated",
                   driver: CODEX_PROVIDER,
                   turnItem: makeProviderRetryTurnItem({
+                    ...(providerRetry.id === undefined ? {} : { id: providerRetry.id }),
                     driver: CODEX_PROVIDER,
                     threadId: input.context.projectionThreadId,
                     runId: input.context.projectionRunId,
