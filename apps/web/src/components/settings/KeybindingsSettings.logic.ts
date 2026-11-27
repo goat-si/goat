@@ -250,7 +250,15 @@ const KEYBINDING_GROUPS = [
   {
     id: "navigation",
     title: msg("Navigation"),
-    prefixes: ["sidebar", "rightPanel", "commandPalette", "filePicker", "projectSearch", "editor"],
+    prefixes: [
+      "navigation",
+      "sidebar",
+      "rightPanel",
+      "commandPalette",
+      "filePicker",
+      "projectSearch",
+      "editor",
+    ],
   },
   { id: "files", title: msg("Files"), prefixes: ["files"] },
   { id: "threads", title: msg("Threads"), prefixes: ["thread", "chat", "pullRequest"] },
