@@ -93,12 +93,28 @@ export function describeSchedule(task: ScheduledTask, timeZone?: string): string
   return `${days} at ${formatTime(task.schedule.timeOfDay)}${zone === undefined ? "" : ` ${zone}`}`;
 }
 
+// A stored wall time names no date or zone, so format it in UTC where nothing can shift it.
 export function formatTime(value: string): string {
   const [hours, minutes] = value.split(":").map(Number);
   if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return value;
-  const time = new Date();
-  time.setHours(hours ?? 9, minutes ?? 0, 0, 0);
-  return time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(Date.UTC(2000, 0, 1, hours ?? 9, minutes ?? 0)).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+}
+
+export function timePickerValue(value: string): Date {
+  const [hours, minutes] = value.split(":").map(Number);
+  // Native pickers read local hours, and 2000-01-01 has no DST change in any zone, unlike today.
+  const time = new Date(2000, 0, 1);
+  time.setHours(
+    Number.isInteger(hours) ? (hours ?? 9) : 9,
+    Number.isInteger(minutes) ? (minutes ?? 0) : 0,
+    0,
+    0,
+  );
+  return time;
 }
 
 export function repeatLabel(weekdays: ReadonlyArray<number>): string {
