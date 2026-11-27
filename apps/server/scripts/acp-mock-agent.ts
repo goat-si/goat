@@ -19,6 +19,7 @@ import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
 import { antigravityCommands } from "./acpMockAntigravityCommands.ts";
+import * as antigravityThought from "./acpMockAntigravityThoughtLevel.ts";
 import * as mockOptions from "./acpMockScenarioOptions.ts";
 import * as LateLoad from "./acpMockLateLoad.ts";
 import { availableModels } from "./acpMockModels.ts";
@@ -219,6 +220,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         currentValue: currentModeId,
         options: availableModes.map((mode) => ({ value: mode.id, name: mode.name })),
       },
+      ...antigravityThought.antigravityThoughtLevelOption(currentModelId),
     ];
   }
   if (parameterizedModelPicker) {
@@ -643,6 +645,7 @@ const program = Effect.gen(function* () {
         yield* Deferred.await(resumeRelease);
       }
       if (antigravityProfile) {
+        antigravityThought.applyAntigravityResumeThoughtLevel();
         yield* publishAntigravityCommands(request.sessionId);
       }
       return {
@@ -840,6 +843,10 @@ const program = Effect.gen(function* () {
       }
       if (request.configId === "model" && typeof request.value === "string") {
         currentModelId = request.value;
+        if (antigravityProfile) antigravityThought.onAntigravityModelSelected(request.value);
+      }
+      if (request.configId === "thought_level" && typeof request.value === "string") {
+        antigravityThought.setAntigravityThoughtLevel(request.value);
       }
       if (request.configId === "agent" && typeof request.value === "string") {
         currentAgent = request.value;

@@ -565,7 +565,9 @@ export const AntigravityDriver: ProviderDriver<
           return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
         }
         if (event._tag === "ConfigOptionsUpdated") {
-          return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
+          return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event), {
+            fromCatalogProbe: true,
+          });
         }
         return event._tag === "AvailableCommandsUpdated"
           ? provider.onAvailableCommands(
@@ -703,9 +705,9 @@ export const AntigravityDriver: ProviderDriver<
         ),
       ),
       profileDirectory,
-      onSessionStarted: (started, cwd) =>
+      onSessionStarted: (started, cwd, session) =>
         provider
-          .onSessionStarted(started, cwd, startedProfiles.get(started))
+          .onSessionStarted(started, cwd, startedProfiles.get(started), session)
           .pipe(Effect.andThen(authFlow.onSignedInElsewhere)),
       onSessionEvent: (event, cwd) => {
         if (event._tag === "ConfigOptionsUpdated") {

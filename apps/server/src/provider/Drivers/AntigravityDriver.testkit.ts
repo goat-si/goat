@@ -50,6 +50,7 @@ export const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     readonly config?: Partial<AntigravitySettings>;
     readonly enabled?: boolean;
     readonly inheritPath?: boolean;
+    readonly environment?: ReadonlyArray<{ readonly name: string; readonly value: string }>;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -239,6 +240,7 @@ export const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       { name: "GEMINI_HOME", value: "/must-not-be-used" },
       { name: "ANTIGRAVITY_HARNESS_PATH", value: "/must-not-be-used" },
       { name: "BROWSER", value: "must-not-run" },
+      ...(options.environment ?? []),
     ].map((variable) => ({ ...variable, sensitive: false })),
   }).pipe(
     Effect.provide(layerInstallation),
