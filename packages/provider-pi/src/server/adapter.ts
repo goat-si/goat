@@ -261,6 +261,20 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         void,
         ProviderAdapter.ProviderAdapterProtocolError
       > | null = null;
+      const failBarriers = Effect.fnUntraced(function* (subject: string) {
+        if (pendingPromptResponsesDrained !== null)
+          yield* Deferred.fail(
+            pendingPromptResponsesDrained,
+            protocolError(`${subject} while awaiting prompt acknowledgment`),
+          );
+        if (extensionStatusReset !== null)
+          yield* Deferred.fail(
+            extensionStatusReset.ready,
+            protocolError(`${subject} during status reset`),
+          );
+        if (rollbackBarrier !== null)
+          yield* Deferred.fail(rollbackBarrier, protocolError(`${subject} during rollback`));
+      });
       let closed = false;
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
@@ -268,21 +282,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           customAnswers.clear();
           sessionEntity = { ...sessionEntity, extensionStatuses: [] };
           pendingWake = null;
-          if (pendingPromptResponsesDrained !== null)
-            yield* Deferred.fail(
-              pendingPromptResponsesDrained,
-              protocolError("Pi session closed while awaiting prompt acknowledgment"),
-            );
-          if (extensionStatusReset !== null)
-            yield* Deferred.fail(
-              extensionStatusReset.ready,
-              protocolError("Pi session closed during status reset"),
-            );
-          if (rollbackBarrier !== null)
-            yield* Deferred.fail(
-              rollbackBarrier,
-              protocolError("Pi session closed during rollback"),
-            );
+          yield* failBarriers("Pi session closed");
         }),
       );
       let appliedModel: string | null = null;
@@ -2281,24 +2281,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           sessionEventPermit.withPermits(1)(
             Effect.gen(function* () {
               runtimeRetired = true;
-              yield* asyncSubagents.clear();
               const state = threadState;
+              // Pi ending while nothing is in flight is an idle exit, not a failure.
+              const idle =
+                state !== null &&
+                state.activeTurn === null &&
+                pendingWake === null &&
+                !asyncSubagents.hasAny() &&
+                pendingPrompts.size === 0 &&
+                !nativeCompacting &&
+                !registrationInProgress &&
+                rollbackBarrier === null &&
+                extensionStatusReset === null &&
+                pendingPromptResponsesDrained === null;
+              yield* asyncSubagents.clear();
               closed = true;
-              if (pendingPromptResponsesDrained !== null)
-                yield* Deferred.fail(
-                  pendingPromptResponsesDrained,
-                  protocolError("Pi transport closed while awaiting prompt acknowledgment"),
-                );
-              if (extensionStatusReset !== null)
-                yield* Deferred.fail(
-                  extensionStatusReset.ready,
-                  protocolError("Pi transport closed during status reset"),
-                );
-              if (rollbackBarrier !== null)
-                yield* Deferred.fail(
-                  rollbackBarrier,
-                  protocolError("Pi transport closed during rollback"),
-                );
+              yield* failBarriers("Pi transport closed");
               pendingWake = null;
               const interrupted = state?.activeTurn?.interrupted === true;
               if (state?.activeTurn != null) {
@@ -2316,7 +2314,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (unsolicitedActivityDetected) {
                 yield* updateProviderSession("error", PiConstants.PI_UNSOLICITED_ACTIVITY_ERROR);
                 yield* Queue.end(events);
-              } else if (stopRequested) {
+              } else if (stopRequested || idle) {
                 yield* updateProviderSession("stopped", null);
                 yield* Queue.end(events);
               } else {

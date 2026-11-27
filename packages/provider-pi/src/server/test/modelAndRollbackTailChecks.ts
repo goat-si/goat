@@ -6,6 +6,8 @@ import {
   type OrchestrationV2ProviderTurn,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { PI_PROVIDER } from "../adapter.ts";
 import type * as Fixture from "../adapter.test.ts";
@@ -187,6 +189,42 @@ export function registerPiModelTailChecks({
         result.success.providerThread.nativeThreadRef?.nativeId,
         "/fake/rolled-back-session.jsonl",
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("ends the session as stopped when Pi exits while no turn is running", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const adapter = yield* makeAdapter(fake, "");
+      const runtime = yield* adapter.openSession({
+        threadId: THREAD_ID,
+        providerSessionId: SESSION_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const statuses: Array<{ status: string; lastError: string | null | undefined }> = [];
+      const drained = yield* runtime.events.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            if (event.type === "provider_session.updated")
+              statuses.push({
+                status: event.providerSession.status,
+                lastError: event.providerSession.lastError,
+              });
+          }),
+        ),
+        Effect.exit,
+        Effect.forkScoped,
+      );
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.closeStdout;
+      const exit = yield* Fiber.join(drained);
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.deepEqual(statuses.at(-1), { status: "stopped", lastError: null });
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 }
