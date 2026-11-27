@@ -16,8 +16,8 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
   applyAntigravityAcpModelSelection,
-  antigravityClientInfo,
   antigravityPermissionDisposition,
+  antigravityServesGoat,
   antigravitySessionMeta,
   antigravitySessionMode,
   buildAntigravityPrompt,
@@ -60,22 +60,36 @@ function makeModelRuntime(
   };
 }
 
+describe("antigravityServesGoat", () => {
+  // The model manifest accepts the same `v` and `agy_acp_server_` prefixes.
+  it.each([
+    ["1.5.0", false],
+    ["v1.5.0", false],
+    ["agy_acp_server_1.5.0", false],
+    ["1.5.1", true],
+    ["agy_acp_server_1.5.12", true],
+    ["custom", true],
+  ] as const)("%s → %s", (version, serves) => {
+    expect(antigravityServesGoat(version)).toBe(serves);
+  });
+});
+
 describe("Antigravity release gates", () => {
   it.each([
-    { version: "1.4.1", filter: false, native: false, ownName: false, advertisedAppend: false },
-    { version: "1.4.2", filter: true, native: false, ownName: false, advertisedAppend: false },
-    { version: "1.4.4", filter: true, native: false, ownName: false, advertisedAppend: false },
-    { version: "1.4.5", filter: true, native: true, ownName: false, advertisedAppend: false },
-    { version: "1.4.6", filter: false, native: false, ownName: false, advertisedAppend: false },
-    { version: "1.5.0", filter: false, native: false, ownName: false, advertisedAppend: false },
-    { version: "1.5.1", filter: false, native: false, ownName: true, advertisedAppend: false },
-    { version: "1.5.7", filter: false, native: false, ownName: true, advertisedAppend: true },
-    { version: "1.3.0", filter: false, native: false, ownName: false, advertisedAppend: false },
-    { version: undefined, filter: false, native: false, ownName: false, advertisedAppend: false },
-    { version: "unknown", filter: false, native: false, ownName: false, advertisedAppend: false },
+    { version: "1.4.1", filter: false, native: false, advertisedAppend: false },
+    { version: "1.4.2", filter: true, native: false, advertisedAppend: false },
+    { version: "1.4.4", filter: true, native: false, advertisedAppend: false },
+    { version: "1.4.5", filter: true, native: true, advertisedAppend: false },
+    { version: "1.4.6", filter: false, native: false, advertisedAppend: false },
+    { version: "1.5.0", filter: false, native: false, advertisedAppend: false },
+    { version: "1.5.1", filter: false, native: false, advertisedAppend: false },
+    { version: "1.5.7", filter: false, native: false, advertisedAppend: true },
+    { version: "1.3.0", filter: false, native: false, advertisedAppend: false },
+    { version: undefined, filter: false, native: false, advertisedAppend: false },
+    { version: "unknown", filter: false, native: false, advertisedAppend: false },
   ])(
-    "$version: workflow filter $filter, qualified reads $native, advertised system append $advertisedAppend, own client name $ownName",
-    ({ version, filter, native, ownName, advertisedAppend }) => {
+    "$version: workflow filter $filter, qualified reads $native, advertised system append $advertisedAppend",
+    ({ version, filter, native, advertisedAppend }) => {
       const initialize = {
         protocolVersion: 1,
         ...(advertisedAppend
@@ -97,7 +111,6 @@ describe("Antigravity release gates", () => {
         filter || native || advertisedAppend ? { antigravity } : undefined,
       );
       expect(isQualifiedAntigravityRelease(version)).toBe(native);
-      expect(antigravityClientInfo(version).name).toBe(ownName ? "goat" : "zed");
     },
   );
 });

@@ -56,9 +56,11 @@ import {
 } from "../antigravityAuthSupport.ts";
 import {
   antigravitySessionMode,
+  antigravityServesGoat,
   antigravityModelOptions,
   antigravityThinkingConfig,
   makeAntigravityAcpRuntime,
+  OPEN_MODEL_ACCESS_RELEASE,
   type AntigravityAcpRuntimeInput,
 } from "../acp/AntigravityAcpSupport.ts";
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
@@ -351,18 +353,20 @@ export const AntigravityDriver: ProviderDriver<
       const startCompatible = Effect.fn("AntigravityDriver.startCompatible")(function* () {
         const version = (yield* runtime.initialize()).agentInfo?.version;
         const advisory = version ? yield* installation.compatibility(version) : undefined;
-        const refused =
-          version &&
-          brokenRuntimeError({
-            instanceId,
-            name: "Antigravity",
-            version,
-            advisory,
-            action:
-              executable.source === "managed"
-                ? "Update it in Antigravity setup"
-                : `Update the Antigravity executable at ${executable.executablePath}`,
-          });
+        const action =
+          executable.source === "managed"
+            ? "Update it in Antigravity setup"
+            : `Update the Antigravity executable at ${executable.executablePath}`;
+        const refused = !version
+          ? undefined
+          : (brokenRuntimeError({ instanceId, name: "Antigravity", version, advisory, action }) ??
+            (antigravityServesGoat(version)
+              ? undefined
+              : new ProviderSetupError({
+                  instanceId,
+                  operation: "runtime",
+                  detail: `Antigravity ${version} only serves allowlisted editors, not GOAT. ${action} to ${OPEN_MODEL_ACCESS_RELEASE.join(".")} or newer, then retry.`,
+                })));
         if (refused) {
           return yield* new AcpErrors.AcpTransportError({ detail: refused.detail, cause: refused });
         }
