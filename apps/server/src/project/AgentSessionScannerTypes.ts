@@ -38,4 +38,4 @@ export type AgentSessionRecentThread =
       readonly source: AgentSessionImportSource;
       readonly messages: AgentSessionThread["messages"];
     }
-  | { readonly _tag: "Skipped" };
+  | { readonly _tag: "Skipped"; readonly thread: string; readonly reason: string };

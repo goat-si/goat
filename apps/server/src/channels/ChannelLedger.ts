@@ -1,5 +1,5 @@
 import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
-import { acceptChannelInput } from "./channelAcceptInput.ts";
+import { acceptChannelInput, type ChannelInboxRow } from "./channelAcceptInput.ts";
 import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
 import { type ChannelDeliveryLedgerOps, deliveryLedger } from "./channelDeliveryLedger.ts";
@@ -9,6 +9,7 @@ import * as ChannelWake from "./ChannelWake.ts";
 import { recordChannelLaunchHead } from "./channelRoutineOwnWork.ts";
 import { makeRoutineWorkAuthority } from "./channelRoutineWorkAuthority.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
+import { channelMessageMemory } from "./channelMessageMemory.ts";
 import { bindWorkerFollowUpSender, bindWorkerProviderBrief } from "./channelProviderBrief.ts";
 import { makeChannelInputSessionAuthority } from "./channelInputSessionAuthority.ts";
 import { botLedger, type ChannelBotLedgerOps } from "./channelBotLedger.ts";
@@ -75,6 +76,7 @@ export interface ChannelOutboxInsert {
 }
 
 export interface ChannelStoredInput {
+  readonly conversationMemoryPaused?: true;
   readonly ownerId: string;
   /** The bot this input was sent to; fixed when it is stored. */
   readonly botId: BotId;
@@ -147,7 +149,9 @@ export interface ChannelTailEntry {
 }
 export type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
-type ChannelLedgerOps = ChannelBotLedgerOps & ChannelDeliveryLedgerOps;
+type ChannelLedgerOps = ChannelBotLedgerOps &
+  ChannelDeliveryLedgerOps &
+  ReturnType<typeof channelMessageMemory>;
 
 type ChannelLedgerOperations = ChannelLedgerOps & ReturnType<typeof makeTaskHistoryReads>;
 
@@ -256,6 +260,7 @@ export class ChannelLedger extends Context.Service<
     readonly readConversationTail: (
       conversationId: ChannelConversationId,
       limit: number,
+      options?: { readonly omitMemoryPaused: boolean },
     ) => Effect.Effect<ReadonlyArray<ChannelTailEntry>, ChannelLedgerError>;
     /**
      * Inputs in one conversation, accepted before `beforeInputId`, whose text or reply contains
@@ -651,26 +656,6 @@ export interface RemoteWorkerStateUpdate {
   readonly update: (current: string | undefined) => string;
 }
 
-interface InboxRow {
-  readonly input_id: string;
-  readonly owner_id: string;
-  readonly conversation_id: string;
-  readonly binding_id: string;
-  readonly content_hash: string;
-  readonly message_json: string;
-  readonly requester_json: string | null;
-  readonly state: string;
-  readonly accepted_at: string;
-  readonly read_at: string | null;
-  readonly reception_id: string | null;
-  readonly decision_json: string | null;
-  readonly reply_json: string | null;
-  readonly failure_json: string | null;
-  readonly task_ids_json: string;
-  readonly timeline_sequence: number | null;
-  readonly bot_id: string;
-}
-
 interface TaskRow {
   readonly owner_id: string;
   readonly task_json: string;
@@ -698,7 +683,7 @@ const toLedgerError =
 
 const INGEST_STATES = new Set(["accepted", "processing", "replied", "rejected"]);
 
-const inboxSnapshot = (row: InboxRow): ChannelStoredInput => {
+const inboxSnapshot = (row: ChannelInboxRow): ChannelStoredInput => {
   const reply = row.reply_json === null ? undefined : decodeReply(row.reply_json);
   const failure = row.failure_json === null ? undefined : decodeFailure(row.failure_json);
   const snapshot = {
@@ -727,6 +712,7 @@ const inboxSnapshot = (row: InboxRow): ChannelStoredInput => {
   return {
     ownerId: row.owner_id,
     botId: BotId.make(row.bot_id),
+    ...(row.conversation_memory_enabled === 0 ? { conversationMemoryPaused: true } : {}),
     snapshot,
     message: decodeInbound(row.message_json),
     requester: row.requester_json === null ? undefined : decodeRequester(row.requester_json),
@@ -791,7 +777,7 @@ const make = Effect.gen(function* () {
     insertOutboxRows(sql, deliveries, now);
 
   const readInbox = (inputId: string) =>
-    sql<InboxRow>`SELECT * FROM channel_inbox WHERE input_id = ${inputId}`.pipe(
+    sql<ChannelInboxRow>`SELECT * FROM channel_inbox WHERE input_id = ${inputId}`.pipe(
       Effect.map((rows) => (rows[0] === undefined ? undefined : inboxSnapshot(rows[0]))),
     );
 
@@ -860,6 +846,7 @@ const make = Effect.gen(function* () {
   const bots = botLedger(sql, changes);
   const reception = { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries, changes };
   return ChannelLedger.of({
+    ...channelMessageMemory(sql),
     acceptInput: (input) =>
       acceptChannelInput(sql, readInbox, input).pipe(Effect.mapError(toLedgerError("acceptInput"))),
     inputSessionScopes: (id) =>
@@ -900,7 +887,7 @@ const make = Effect.gen(function* () {
       ),
     ...receptionLedger(sql, reception),
     ...bots,
-    readConversationTail: (conversationId, limit) =>
+    readConversationTail: (conversationId, limit, options) =>
       sql<{
         readonly input_id: ChannelInputId;
         readonly message_json: string;
@@ -909,6 +896,7 @@ const make = Effect.gen(function* () {
       }>`
         SELECT input_id, message_json, accepted_at, reply_json FROM channel_inbox
         WHERE conversation_id = ${conversationId} AND state != 'rejected'
+        ${options?.omitMemoryPaused ? sql`AND conversation_memory_enabled <> 0` : sql``}
         ORDER BY accepted_at DESC, input_id DESC LIMIT ${limit}
       `.pipe(
         Effect.map((rows) =>
@@ -937,6 +925,7 @@ const make = Effect.gen(function* () {
           AND EXISTS (
             SELECT 1 FROM channel_inbox AS asking WHERE asking.input_id = ${beforeInputId}
               AND channel_inbox.rowid < asking.rowid
+              AND (asking.conversation_memory_enabled = 0 OR channel_inbox.conversation_memory_enabled <> 0)
           )
           AND (json_extract(message_json, '$.text') LIKE ${pattern} ESCAPE '\\'
             OR json_extract(reply_json, '$.text') LIKE ${pattern} ESCAPE '\\')

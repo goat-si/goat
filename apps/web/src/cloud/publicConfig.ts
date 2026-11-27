@@ -72,9 +72,10 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
 
 export function resolveRelayTracingConfig() {
   // The relay exporter is created during module initialization, so this must be synchronous.
+  // Relay spans leave the machine, so only a desktop whose environment opted in exports them.
   if (
-    typeof window !== "undefined" &&
-    window.desktopBridge?.getRelayTelemetryEnabled?.() === false
+    typeof window === "undefined" ||
+    window.desktopBridge?.getRelayTelemetryEnabled?.() !== true
   ) {
     return null;
   }

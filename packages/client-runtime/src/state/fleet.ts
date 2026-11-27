@@ -428,6 +428,8 @@ export interface FleetMachine {
   readonly id: string;
   readonly label: string;
   readonly subtitle: string | null;
+  /** Routing source, when the subtitle describes a route rather than a machine name. */
+  readonly viaLabel?: string | null;
   readonly kind: FleetMachineKind;
   /** Host OS and hardware shape, known for connected environments only. */
   readonly os: ExecutionEnvironmentPlatformOs | null;
@@ -568,6 +570,7 @@ export function buildFleet(input: {
         id: machineId(owner),
         label: ownerEnvironment.label,
         subtitle: reachedThroughPen(ownerEnvironment) ? VIA_PEN : null,
+        viaLabel: reachedThroughPen(ownerEnvironment) ? "Pen" : null,
         kind: "environment",
         os: ownerEnvironment.os ?? environment.os ?? null,
         machineKind: ownerEnvironment.machineKind ?? environment.machineKind ?? null,
@@ -582,7 +585,10 @@ export function buildFleet(input: {
         agents: new Map(),
       });
     } else {
-      if (reachedThroughPen(environment)) existing.subtitle ??= VIA_PEN;
+      if (reachedThroughPen(environment) && existing.subtitle === null) {
+        existing.subtitle = VIA_PEN;
+        existing.viaLabel = "Pen";
+      }
       existing.answering ||= environment.connected !== false;
       existing.os ??= environment.os ?? null;
       existing.machineKind ??= environment.machineKind ?? null;
@@ -754,6 +760,7 @@ export function buildFleet(input: {
         id,
         label,
         subtitle: viaLabel === null ? null : "via " + viaLabel,
+        viaLabel,
         kind,
         os: null,
         machineKind: null,
@@ -785,6 +792,7 @@ export function buildFleet(input: {
       if (!recordOwners.has(machine.id)) recordOwners.set(machine.id, dispatcher);
       if (machine.kind === "environment" && machine.label !== cloud.label) {
         machine.subtitle = cloud.label;
+        machine.viaLabel = null;
       }
     }
 

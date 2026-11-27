@@ -438,13 +438,27 @@ export const getHandoffs = Effect.fn("getHandoffs")(function* (
     // Each part is verified before tar sees any of its bytes.
     const extractor = yield* tarExtractor(options.dir);
     let total = 0;
-    for (const part of read.parts) {
-      const bytes = yield* client.downloadAsset(part.asset.id);
-      if (bytes.byteLength !== part.size || sha256(bytes) !== part.sha256) {
-        return yield* fail(`${part.asset.name} does not match its manifest size and SHA-256.`);
+    // Keep oversized custom parts serial. Effect.forEach returns results in manifest order.
+    const concurrency = read.parts.some((part) => part.asset.size > DEFAULT_PART_BYTES) ? 1 : 2;
+    for (let offset = 0; offset < read.parts.length; offset += concurrency) {
+      const batch = yield* Effect.forEach(
+        read.parts.slice(offset, offset + concurrency),
+        (part) =>
+          Effect.gen(function* () {
+            const bytes = yield* client.downloadAsset(part.asset.id);
+            if (bytes.byteLength !== part.size || sha256(bytes) !== part.sha256) {
+              return yield* fail(
+                `${part.asset.name} does not match its manifest size and SHA-256.`,
+              );
+            }
+            return bytes;
+          }),
+        { concurrency },
+      );
+      for (const bytes of batch) {
+        yield* extractor.write(bytes);
+        total += bytes.byteLength;
       }
-      yield* extractor.write(bytes);
-      total += bytes.byteLength;
     }
     yield* extractor.finish;
     yield* Console.log(`Restored ${name} (${total} bytes) into ${options.dir}.`);

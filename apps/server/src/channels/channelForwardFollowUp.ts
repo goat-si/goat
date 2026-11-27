@@ -178,9 +178,14 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     // Steer only the run read above, and only while it holds no more memory than the requester
     // has now; a run that started since, or one that holds more, gets a queued turn instead.
+    const paused = yield* ledger.inputMemoryPaused(stored.task.originInputId, senderInputId);
     const steerInto =
       requester !== undefined &&
-      steersInto(newest, false, captureMemoryGrantCeiling(requester.grantedScopes, false))
+      steersInto(
+        newest,
+        false,
+        paused ? "none" : captureMemoryGrantCeiling(requester.grantedScopes, false),
+      )
         ? newest
         : undefined;
     const permissionRefused = yield* Ref.make<PermissionRefusal | undefined>(undefined);
@@ -203,6 +208,12 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
                   ),
               ),
         ),
+      );
+      yield* ledger.preserveInputMemoryPause(
+        worker.threadId,
+        ids.messageId,
+        stored.task.originInputId,
+        senderInputId,
       );
       if (carriesNotes && senderInputId !== undefined)
         yield* ledger.bindWorkerFollowUpSender(worker.threadId, ids.messageId, senderInputId);

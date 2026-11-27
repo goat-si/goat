@@ -87,6 +87,7 @@ function snapshotKey(
       machine.id,
       machine.label,
       machine.subtitle,
+      machine.viaLabel,
       machine.boat,
       machine.reportedAliases,
       machine.answering,

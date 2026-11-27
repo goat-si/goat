@@ -67,7 +67,7 @@ export function useLanguagePreference(): string {
     : DEFAULT_LOCALE;
 }
 
-/** Translates the screens inside it into the saved language; "system" follows the device. */
+/** Translates the app into the saved language; "system" follows the device. Mounted once in AppProviders. */
 export function I18nProvider(props: { readonly children: ReactNode }) {
   const { catalogLocale, formattingLocale } = resolveLocaleSelection(
     useLanguagePreference(),

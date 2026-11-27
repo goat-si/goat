@@ -248,6 +248,28 @@ describe("HubNodes Pen registrations", () => {
     ),
   );
 
+  it.effect(
+    "an add expecting the desktop's machine refuses an alias that answers as another (#3914)",
+    () =>
+      run(({ service, state, rows }) =>
+        Effect.gen(function* () {
+          const input = {
+            kind: "ssh" as const,
+            alias: "box",
+            hostname: null,
+            username: null,
+            port: null,
+          };
+          const expected = { addedBy: user, beforeSave: Effect.void, expectEnvironmentId: remote };
+          state.identity = EnvironmentId.make("env-replacement");
+          expect((yield* Effect.flip(service.add(input, expected))).reason).toBe("refused");
+          expect(yield* rows).toEqual([]);
+          state.identity = remote;
+          expect((yield* service.add(input, expected)).node.environmentId).toBe(remote);
+        }),
+      ),
+  );
+
   it.effect("a person adding a Pen route by hand owns it once Pen's route is closed", () =>
     run(({ service, state, rows }) =>
       Effect.gen(function* () {

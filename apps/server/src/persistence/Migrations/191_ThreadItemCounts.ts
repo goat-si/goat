@@ -9,20 +9,26 @@ import * as SqlClient from "effect/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`
-    CREATE TABLE orchestration_v2_projection_thread_item_counts (
-      thread_id TEXT PRIMARY KEY,
-      item_count INTEGER NOT NULL
-    ) WITHOUT ROWID
+  const existing = yield* sql`
+    SELECT 1 FROM sqlite_master
+    WHERE type = 'table' AND name = 'orchestration_v2_projection_thread_item_counts'
   `;
-  yield* sql`
-    INSERT INTO orchestration_v2_projection_thread_item_counts (thread_id, item_count)
-    SELECT counts.thread_id, SUM(counts.item_count)
-    FROM orchestration_v2_projection_turn_item_counts counts
-    WHERE counts.run_key = ''
-      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs WHERE run_id = counts.run_key)
-    GROUP BY counts.thread_id
-  `;
+  if (existing.length === 0) {
+    yield* sql`
+      CREATE TABLE orchestration_v2_projection_thread_item_counts (
+        thread_id TEXT PRIMARY KEY,
+        item_count INTEGER NOT NULL
+      ) WITHOUT ROWID
+    `;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_thread_item_counts (thread_id, item_count)
+      SELECT counts.thread_id, SUM(counts.item_count)
+      FROM orchestration_v2_projection_turn_item_counts counts
+      WHERE counts.run_key = ''
+        OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs WHERE run_id = counts.run_key)
+      GROUP BY counts.thread_id
+    `;
+  }
 
   // The shell read subtracts only these runs. ProjectionStore.selectShellItemCounts must spell
   // the same predicate for SQLite to use this partial index.
@@ -34,7 +40,7 @@ export default Effect.gen(function* () {
 
   // 085's triggers upsert per-run counts, so an item write fires the insert or the update here.
   yield* sql`
-    CREATE TRIGGER orchestration_v2_thread_item_counts_count_insert
+    CREATE TRIGGER IF NOT EXISTS orchestration_v2_thread_item_counts_count_insert
     AFTER INSERT ON orchestration_v2_projection_turn_item_counts
     WHEN new.run_key = ''
       OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs WHERE run_id = new.run_key)
@@ -45,7 +51,7 @@ export default Effect.gen(function* () {
     END
   `;
   yield* sql`
-    CREATE TRIGGER orchestration_v2_thread_item_counts_count_update
+    CREATE TRIGGER IF NOT EXISTS orchestration_v2_thread_item_counts_count_update
     AFTER UPDATE ON orchestration_v2_projection_turn_item_counts
     BEGIN
       UPDATE orchestration_v2_projection_thread_item_counts
@@ -63,7 +69,7 @@ export default Effect.gen(function* () {
     END
   `;
   yield* sql`
-    CREATE TRIGGER orchestration_v2_thread_item_counts_count_delete
+    CREATE TRIGGER IF NOT EXISTS orchestration_v2_thread_item_counts_count_delete
     AFTER DELETE ON orchestration_v2_projection_turn_item_counts
     WHEN old.run_key = ''
       OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs WHERE run_id = old.run_key)
@@ -78,7 +84,7 @@ export default Effect.gen(function* () {
 
   // Items can be written before their run; they count from when it exists.
   yield* sql`
-    CREATE TRIGGER orchestration_v2_thread_item_counts_run_insert
+    CREATE TRIGGER IF NOT EXISTS orchestration_v2_thread_item_counts_run_insert
     AFTER INSERT ON orchestration_v2_projection_runs
     BEGIN
       INSERT INTO orchestration_v2_projection_thread_item_counts (thread_id, item_count)
@@ -90,7 +96,7 @@ export default Effect.gen(function* () {
     END
   `;
   yield* sql`
-    CREATE TRIGGER orchestration_v2_thread_item_counts_run_delete
+    CREATE TRIGGER IF NOT EXISTS orchestration_v2_thread_item_counts_run_delete
     AFTER DELETE ON orchestration_v2_projection_runs
     BEGIN
       UPDATE orchestration_v2_projection_thread_item_counts

@@ -1,5 +1,7 @@
 import { vi } from "vite-plus/test";
 
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
+
 // These jsdom suites load the mobile runtime without an Expo native module registry.
 vi.mock("expo", () => ({
   requireNativeModule: () => ({}),

@@ -443,19 +443,34 @@ describe("OtelEnvironment", () => {
 });
 
 describe("isRelayTracingEnabled", () => {
-  it("defaults on and respects the T3CODE SDK override of the standard kill switch", () => {
-    assert.isTrue(OtelEnvironment.isRelayTracingEnabled({}));
-    assert.isFalse(OtelEnvironment.isRelayTracingEnabled({ OTEL_SDK_DISABLED: "true" }));
+  it("stays off until GOAT_TELEMETRY_ENABLED=true opts in, then honors the SDK kill switches", () => {
+    assert.isFalse(OtelEnvironment.isRelayTracingEnabled({}));
+    const optedIn = { GOAT_TELEMETRY_ENABLED: "true" };
+    assert.isTrue(OtelEnvironment.isRelayTracingEnabled(optedIn));
+    assert.isFalse(
+      OtelEnvironment.isRelayTracingEnabled({ ...optedIn, OTEL_SDK_DISABLED: "true" }),
+    );
     assert.isTrue(
       OtelEnvironment.isRelayTracingEnabled({
+        ...optedIn,
         OTEL_SDK_DISABLED: "true",
         GOAT_OTEL_SDK_DISABLED: "false",
       }),
     );
     assert.isFalse(
       OtelEnvironment.isRelayTracingEnabled({
+        ...optedIn,
         OTEL_SDK_DISABLED: "false",
         GOAT_OTEL_SDK_DISABLED: "true",
+      }),
+    );
+  });
+
+  it("stays off when T3 Code's variable opts out, even with GOAT_TELEMETRY_ENABLED=true", () => {
+    assert.isFalse(
+      OtelEnvironment.isRelayTracingEnabled({
+        GOAT_TELEMETRY_ENABLED: "true",
+        T3CODE_TELEMETRY_ENABLED: "false", // goat-rename: legacy
       }),
     );
   });

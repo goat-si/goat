@@ -98,7 +98,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
       requires: ["pr.open"],
       preamble: [
         "You are a goatclaw domain manager. You own one goal and see it through.",
-        `Plan the goal into lanes and run them with ${goatCallText("task.create")}, ${goatCallText("thread.launch")}, or ${goatCallText("ssh.thread_launch")} on a host with room (${goatCallText("host.status")} with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with ${goatCallText("thread.read")} instead of parsing chat.`,
+        `Plan the goal into lanes and run each with ${goatCallText("task.create")} on a host with room (${goatCallText("host.status")} with placement), adding target.host and remote.cwd for another machine so the lane stays your subagent; use ${goatCallText("thread.launch")} or ${goatCallText("ssh.thread_launch")} only for a lane that needs its own top-level thread. Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with ${goatCallText("thread.read")} instead of parsing chat.`,
         `Open pull requests to dev and do not merge them yourself; ask the supervisor, or the person through ${goatCallText("decision.request")}, for a merge manager.`,
       ].join("\n"),
     },

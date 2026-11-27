@@ -132,15 +132,15 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
      * Right before turn/start, after the start's preparation: checks and reserves the thread in one
      * step, or steers an ordinary run's message into a turn GOAT never owned and adopts that turn.
      */
-    dispatch: Effect.fn("CodexTurnStartGuard.dispatch")(function* (input: {
+    dispatch: Effect.fn("CodexTurnStartGuard.dispatch")(function* <E2 = never>(input: {
       readonly threadId: string;
       readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
       /** The context turn/start would carry; a steer delivers it too. */
-      readonly additionalContext:
-        | Record<string, CodexSchema.V2TurnSteerParams__AdditionalContextEntry>
-        | undefined;
+      readonly additionalContext?: Effect.Effect<
+        Record<string, CodexSchema.V2TurnSteerParams__AdditionalContextEntry> | undefined,
+        E2
+      >;
       readonly steer: boolean;
-      readonly beforeSteer?: Effect.Effect<void> | undefined;
       readonly reserve: () => {
         readonly failed: () => void;
         readonly answered: (turnId: string) => void;
@@ -152,16 +152,22 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
       if (busy === undefined) return { type: "start", reservation: input.reserve() } as const;
       if (busy.type !== "unowned" || !input.steer) return yield* deps.fail(UNOWNED_TURN);
       adoptions.set(busy.turnId, undefined);
+      const additionalContext =
+        input.additionalContext &&
+        (yield* input.additionalContext.pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              adoptions.delete(busy.turnId);
+            }),
+          ),
+        ));
       // Model, effort and permission settings have no steer field: the adopted turn keeps its own.
       const params = {
         threadId: input.threadId,
         expectedTurnId: busy.turnId,
         input: [...input.codexInput],
-        ...(input.additionalContext === undefined
-          ? {}
-          : { additionalContext: input.additionalContext }),
+        ...(additionalContext === undefined ? {} : { additionalContext }),
       };
-      yield* input.beforeSteer ?? Effect.void;
       const steered = yield* deps.client.request("turn/steer", params).pipe(Effect.exit);
       if (Exit.isFailure(steered)) {
         adoptions.delete(busy.turnId);

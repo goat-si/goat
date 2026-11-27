@@ -1,3 +1,4 @@
+import { msg, useGT, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { AuthProvidersManageScope, type BotProfile, type EnvironmentId } from "@goat/contracts";
 import { FACE_MOTION_RANK, goatBotFaceSpoken } from "@goat/client-runtime/goatBot";
@@ -101,27 +102,27 @@ const EXACT_MATCH = { exact: true } as const;
 
 const RAIL_ITEMS: Record<RailItemId, { label: string; icon: IconComponent; unavailable?: string }> =
   {
-    fleet: { label: "Fleet", icon: ActivityIcon },
+    fleet: { label: msg("Fleet"), icon: ActivityIcon },
     bot: { label: "GOAT Bot", icon: BotIcon },
-    decisions: { label: "Decisions", icon: ListChecksIcon },
-    usage: { label: "Usage", icon: ChartNoAxesColumnIcon },
+    decisions: { label: msg("Decisions"), icon: ListChecksIcon },
+    usage: { label: msg("Usage"), icon: ChartNoAxesColumnIcon },
     pullRequests: {
-      label: "Pull requests",
+      label: msg("Pull requests"),
       icon: PullRequestGlyph.pullRequest,
-      unavailable: "No connected environment supports pull requests",
+      unavailable: msg("No connected environment supports pull requests"),
     },
     memory: {
-      label: "Memory",
+      label: msg("Memory"),
       icon: BrainIcon,
-      unavailable: "No connected environment supports memory",
+      unavailable: msg("No connected environment supports memory"),
     },
-    scheduled: { label: "Scheduled tasks", icon: CalendarClockIcon },
-    hub: { label: "Hub", icon: ServerIcon },
-    notes: { label: "Notes", icon: FileTextIcon },
+    scheduled: { label: msg("Scheduled tasks"), icon: CalendarClockIcon },
+    hub: { label: msg("Hub"), icon: ServerIcon },
+    notes: { label: msg("Notes"), icon: FileTextIcon },
     addProvider: {
-      label: "Add provider",
+      label: msg("Add provider"),
       icon: PlugIcon,
-      unavailable: "Needs a primary environment where you can manage providers",
+      unavailable: msg("Needs a primary environment where you can manage providers"),
     },
   };
 
@@ -158,20 +159,17 @@ function RailTooltip({ label, children }: { label: string; children: ReactElemen
   );
 }
 
-function countLabel(label: string, count: number | undefined) {
-  return count !== undefined && count > 0 ? `${label}, ${count} waiting` : label;
-}
-
 const FLEET_TOOLTIP_ROWS = 8;
 
 const machineBusy = (machine: FleetMachineSummary) => machine.running + machine.attention > 0;
 
-function machineWork(machine: FleetMachineSummary) {
-  const parts = [
-    machine.running > 0 ? `${machine.running} running` : null,
-    machine.attention > 0 ? `${machine.attention} need you` : null,
-  ].filter((part) => part !== null);
-  return parts.length === 0 ? "idle" : parts.join(", ");
+function machineWork(machine: FleetMachineSummary, gt: ReturnType<typeof useGT>) {
+  const { running, attention } = machine;
+  if (running > 0 && attention > 0)
+    return gt("{running} running, {attention} need you", { running, attention });
+  if (running > 0) return gt("{running} running", { running });
+  if (attention > 0) return gt("{attention} need you", { attention });
+  return gt("Idle");
 }
 
 /**
@@ -181,6 +179,8 @@ function machineWork(machine: FleetMachineSummary) {
  * the rail.
  */
 const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean }) {
+  const gt = useGT();
+  const m = useMessages();
   const summary = useFleetSummary();
   const live = summary.running + summary.attention;
   const ranked = [
@@ -188,15 +188,21 @@ const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean 
     ...summary.machines.filter((machine) => !machineBusy(machine)),
   ];
   const tooltipRows = ranked.slice(0, FLEET_TOOLTIP_ROWS);
-  const label =
-    live === 0 ? "Fleet" : `Fleet, ${summary.running} running, ${summary.attention} need you`;
+  const title = m(RAIL_ITEMS.fleet.label);
+  const activity =
+    live === 0
+      ? null
+      : gt("{running} running, {attention} need you", {
+          running: summary.running,
+          attention: summary.attention,
+        });
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Link
             to="/fleet"
-            aria-label={label}
+            aria-label={activity === null ? title : gt("{title}, {activity}", { title, activity })}
             activeOptions={EXACT_MATCH}
             aria-current={active ? "page" : undefined}
             className={railItemClassName(active)}
@@ -209,19 +215,24 @@ const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean 
       <TooltipPopup side="right">
         <span className="flex flex-col gap-0.5">
           <span className="font-medium">
-            {live === 0
-              ? "Fleet: nothing running"
-              : `Fleet: ${summary.running} running, ${summary.attention} need you`}
+            {activity === null
+              ? gt("Fleet: nothing running")
+              : gt("{title}: {activity}", { title, activity })}
           </span>
           {summary.machines.length > 0
             ? tooltipRows.map((machine) => (
                 <span key={machine.environmentId}>
-                  {machine.label}: {machineWork(machine)}
+                  {gt("{name}: {activity}", {
+                    name: machine.label,
+                    activity: machineWork(machine, gt),
+                  })}
                 </span>
               ))
             : null}
           {summary.machines.length > FLEET_TOOLTIP_ROWS ? (
-            <span>and {summary.machines.length - FLEET_TOOLTIP_ROWS} more</span>
+            <span>
+              {gt("and {count} more", { count: summary.machines.length - FLEET_TOOLTIP_ROWS })}
+            </span>
           ) : null}
         </span>
       </TooltipPopup>
@@ -300,6 +311,8 @@ function MemberRailItem({ bot, onOpen }: { bot: BotProfile; onOpen: () => void }
 
 /** Home returns to the last thread or draft, switches back from bots, and stays put when one is already open. */
 export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boolean }) {
+  const gt = useGT();
+  const home = gt("Home");
   const setMode = useGlobalAgentStore((state) => state.setMode);
   const destination = useHomeRailDestination();
   const params = useParams({ strict: false });
@@ -320,14 +333,14 @@ export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boo
     if (onHomeThread && plainClick) event.preventDefault();
   };
   const shared = {
-    "aria-label": "Home",
+    "aria-label": home,
     "aria-current": current ? ("page" as const) : undefined,
     className: railItemClassName(current),
     onClick: handleClick,
     children: <HomeIcon aria-hidden />,
   };
   return (
-    <RailTooltip label="Home">
+    <RailTooltip label={home}>
       {destination.kind === "thread" ? (
         <Link
           to="/$environmentId/$threadId"
@@ -344,12 +357,15 @@ export const HomeRailItem = memo(function HomeRailItem({ active }: { active: boo
 });
 
 const DecisionsRailItem = memo(function DecisionsRailItem({ active }: { active: boolean }) {
+  const gt = useGT();
+  const m = useMessages();
   const { count } = useAtomValue(decisionInbox.summaryAtom);
+  const label = m(RAIL_ITEMS.decisions.label);
   return (
-    <RailTooltip label="Decisions">
+    <RailTooltip label={label}>
       <Link
         to="/decisions"
-        aria-label={countLabel("Decisions", count)}
+        aria-label={count > 0 ? gt("Decisions, {count} waiting", { count }) : label}
         activeOptions={EXACT_MATCH}
         aria-current={active ? "page" : undefined}
         className={railItemClassName(active)}
@@ -376,6 +392,8 @@ interface AddProviderTarget {
 }
 
 function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider: () => void }) {
+  const m = useMessages();
+  const label = m(RAIL_ITEMS[props.id].label);
   const isActive = (id: DestinationId) => props.active === id;
   const current = (id: DestinationId) => (isActive(id) ? ("page" as const) : undefined);
   switch (props.id) {
@@ -387,10 +405,10 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       return <DecisionsRailItem active={isActive("decisions")} />;
     case "usage":
       return (
-        <RailTooltip label="Usage">
+        <RailTooltip label={label}>
           <Link
             to="/usage"
-            aria-label="Usage"
+            aria-label={label}
             activeOptions={EXACT_MATCH}
             aria-current={current("usage")}
             className={railItemClassName(isActive("usage"))}
@@ -401,11 +419,11 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       );
     case "pullRequests":
       return (
-        <RailTooltip label="Pull requests">
+        <RailTooltip label={label}>
           <Link
             to="/pull-requests"
             search={readPullRequestListPreferences()}
-            aria-label="Pull requests"
+            aria-label={label}
             activeOptions={EXACT_MATCH}
             aria-current={current("pullRequests")}
             className={railItemClassName(isActive("pullRequests"))}
@@ -416,11 +434,11 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       );
     case "memory":
       return (
-        <RailTooltip label="Memory">
+        <RailTooltip label={label}>
           <Link
             to="/settings/memory"
             search={validateMemorySettingsSearch({})}
-            aria-label="Memory"
+            aria-label={label}
             activeOptions={EXACT_MATCH}
             aria-current={current("memory")}
             className={railItemClassName(isActive("memory"))}
@@ -431,10 +449,10 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       );
     case "scheduled":
       return (
-        <RailTooltip label="Scheduled tasks">
+        <RailTooltip label={label}>
           <Link
             to="/settings/scheduled-tasks"
-            aria-label="Scheduled tasks"
+            aria-label={label}
             activeOptions={EXACT_MATCH}
             aria-current={current("scheduled")}
             className={railItemClassName(isActive("scheduled"))}
@@ -445,10 +463,10 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       );
     case "hub":
       return (
-        <RailTooltip label="Hub">
+        <RailTooltip label={label}>
           <Link
             to="/settings/hub"
-            aria-label="Hub"
+            aria-label={label}
             activeOptions={EXACT_MATCH}
             aria-current={current("hub")}
             className={railItemClassName(isActive("hub"))}
@@ -459,11 +477,11 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       );
     case "notes":
       return (
-        <RailTooltip label="Notes">
+        <RailTooltip label={label}>
           <Link
             to="/notes"
             search={{}}
-            aria-label="Notes"
+            aria-label={label}
             activeOptions={EXACT_MATCH}
             aria-current={current("notes")}
             className={railItemClassName(isActive("notes"))}
@@ -474,11 +492,11 @@ function RailItem(props: { id: RailItemId; active: DestinationId; onAddProvider:
       );
     case "addProvider":
       return (
-        <RailTooltip label="Add provider">
+        <RailTooltip label={label}>
           <button
             id={ADD_PROVIDER_BUTTON_ID}
             type="button"
-            aria-label="Add provider"
+            aria-label={label}
             aria-haspopup="dialog"
             className={railItemClassName(false)}
             onClick={props.onAddProvider}
@@ -499,7 +517,10 @@ function updateRailPreferences(update: (preferences: RailPreferences) => RailPre
 
 /** The "+" menu: every rail item, whether it shows, and its place, including ones unavailable here. */
 function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
+  const gt = useGT();
+  const m = useMessages();
   const last = props.items.length - 1;
+  const customize = gt("Customize rail");
   return (
     <Popover>
       <Tooltip>
@@ -510,7 +531,7 @@ function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
                 <button
                   id={CUSTOMIZE_RAIL_BUTTON_ID}
                   type="button"
-                  aria-label="Customize rail"
+                  aria-label={customize}
                   className={railItemClassName(false)}
                 />
               }
@@ -519,15 +540,24 @@ function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
             </PopoverTrigger>
           }
         />
-        <TooltipPopup side="right">Customize rail</TooltipPopup>
+        <TooltipPopup side="right">{customize}</TooltipPopup>
       </Tooltip>
-      <PopoverPopup side="right" align="end" padding="compact" width="sm" aria-label="Rail items">
+      <PopoverPopup
+        side="right"
+        align="end"
+        padding="compact"
+        width="sm"
+        aria-label={gt("Rail items")}
+      >
         <div className="flex flex-col gap-0.5 text-sm">
-          <div className="px-1 pb-1 text-xs font-medium text-muted-foreground">Show in rail</div>
+          <div className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+            {gt("Show in rail")}
+          </div>
           <ul className="flex flex-col">
             {props.items.map((item, index) => {
               const meta = RAIL_ITEMS[item.id];
               const Icon = meta.icon;
+              const label = m(meta.label);
               const checked =
                 item.choice === "default" ? item.defaultShown : item.choice === "shown";
               return (
@@ -543,16 +573,16 @@ function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
                     />
                     <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                     <span className="flex min-w-0 flex-col">
-                      <span className="truncate">{meta.label}</span>
+                      <span className="truncate">{label}</span>
                       {!item.available && meta.unavailable ? (
-                        <span className="text-xs text-muted-foreground">{meta.unavailable}</span>
+                        <span className="text-xs text-muted-foreground">{m(meta.unavailable)}</span>
                       ) : null}
                     </span>
                   </label>
                   <Button
                     size="icon-xs"
                     variant="ghost-muted"
-                    aria-label={`Move ${meta.label} up`}
+                    aria-label={gt("Move {label} up", { label })}
                     disabled={index === 0}
                     onClick={() =>
                       updateRailPreferences((preferences) => moveRailItem(preferences, item.id, -1))
@@ -563,7 +593,7 @@ function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
                   <Button
                     size="icon-xs"
                     variant="ghost-muted"
-                    aria-label={`Move ${meta.label} down`}
+                    aria-label={gt("Move {label} down", { label })}
                     disabled={index === last}
                     onClick={() =>
                       updateRailPreferences((preferences) => moveRailItem(preferences, item.id, 1))
@@ -582,7 +612,7 @@ function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
               onClick={() => updateRailPreferences(() => DEFAULT_RAIL_PREFERENCES)}
             >
               <RotateCcwIcon />
-              Reset to defaults
+              {gt("Reset to defaults")}
             </Button>
           </div>
         </div>
@@ -593,6 +623,8 @@ function RailCustomizeMenu(props: { items: ReadonlyArray<ResolvedRailItem> }) {
 
 /** The desktop app-wide destination rail beside the thread sidebar. */
 export const DestinationRail = memo(function DestinationRail() {
+  const gt = useGT();
+  const settings = gt("Settings");
   const pathname = useLocation({ select: (location) => location.pathname });
   const params = useParams({ strict: false });
   const botRef = useGlobalAgentStore((state) => state.botRef);
@@ -647,7 +679,7 @@ export const DestinationRail = memo(function DestinationRail() {
 
   return (
     <nav
-      aria-label="App"
+      aria-label={gt("App")}
       className="sticky top-0 z-20 hidden h-svh w-(--destination-rail-width) shrink-0 flex-col items-center bg-background md:flex"
       data-destination-rail=""
       data-glass-pane="rail"
@@ -673,10 +705,10 @@ export const DestinationRail = memo(function DestinationRail() {
         <div className="flex-1" />
         <RailCustomizeMenu items={items} />
         <SidebarUpdatePill placement="rail" />
-        <RailTooltip label="Settings">
+        <RailTooltip label={settings}>
           <Link
             to="/settings"
-            aria-label="Settings"
+            aria-label={settings}
             activeOptions={EXACT_MATCH}
             aria-current={active === "settings" ? "page" : undefined}
             className={railItemClassName(active === "settings")}

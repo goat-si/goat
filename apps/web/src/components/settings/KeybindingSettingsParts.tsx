@@ -1,6 +1,10 @@
+import { useGT } from "gt-react";
 import type { ReactNode, RefObject } from "react";
-import { SearchIcon, TriangleAlertIcon } from "~/components/solar";
+import { MinusIcon, SearchIcon, TriangleAlertIcon } from "~/components/solar";
 import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge";
+import type { KeybindingRow } from "./KeybindingsSettings.logic";
+import { useKeybindingDisplayLabel } from "./useKeybindingDisplayLabel";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -15,6 +19,8 @@ export function KeybindingsSearchInput({
   onChange: (next: string) => void;
   inputRef: RefObject<HTMLInputElement | null>;
 }) {
+  const gt = useGT();
+  const label = gt("Search keybindings");
   return (
     <InputGroup className="min-w-0 basis-full **:[input]:h-9 sm:basis-0 sm:flex-1 sm:**:[input]:h-8">
       <InputGroupAddon>
@@ -26,8 +32,8 @@ export function KeybindingsSearchInput({
         value={query}
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={(event) => handleKeybindingsSearchEscape(event, query, onChange)}
-        placeholder="Search keybindings"
-        aria-label="Search keybindings"
+        placeholder={label}
+        aria-label={label}
         size="sm"
       />
     </InputGroup>
@@ -73,36 +79,43 @@ export function UnknownWhenVariableWarning({
   identifiers: ReadonlyArray<string>;
   focusable?: boolean;
 }) {
+  const gt = useGT();
   if (identifiers.length === 0) return null;
   const label =
     identifiers.length === 1
-      ? `Unknown condition: ${identifiers[0]}`
-      : `Unknown conditions: ${identifiers.join(", ")}`;
+      ? gt("Unknown condition: {condition}", { condition: identifiers[0] ?? "" })
+      : gt("Unknown conditions: {conditions}", { conditions: identifiers.join(", ") });
 
   return (
     <WarningTooltipIcon label={label} focusable={focusable} className="size-4.5">
-      GOAT does not recognize this condition yet. It can still be saved, but it may not match unless
-      the runtime provides it.
+      {gt(
+        "GOAT does not recognize this condition yet. It can still be saved, but it may not match unless the runtime provides it.",
+      )}
     </WarningTooltipIcon>
   );
 }
 
 export function KeybindingConflictWarning({ labels }: { labels: ReadonlyArray<string> }) {
+  const gt = useGT();
   if (labels.length === 0) return null;
+  const commands = labels.slice(0, 3).join(", ");
   const description =
-    labels.length === 1
-      ? `Conflicts with ${labels[0]}.`
-      : `Conflicts with ${labels.slice(0, 3).join(", ")}${labels.length > 3 ? ", and more" : ""}.`;
+    labels.length > 3
+      ? gt("Conflicts with {commands}, and more.", { commands })
+      : gt("Conflicts with {commands}.", { commands });
 
   return (
     <WarningTooltipIcon label={description}>
-      {description} The most recent matching binding wins when both conditions can apply.
+      {description} {gt("The most recent matching binding wins when both conditions can apply.")}
     </WarningTooltipIcon>
   );
 }
 
 export function BrowserKeybindingNotice() {
-  const message = "The browser may claim some shortcuts first. The desktop app receives them all.";
+  const gt = useGT();
+  const message = gt(
+    "The browser may claim some shortcuts first. The desktop app receives them all.",
+  );
   return (
     <Tooltip>
       <TooltipTrigger
@@ -116,6 +129,60 @@ export function BrowserKeybindingNotice() {
       <TooltipPopup side="top" className="max-w-72">
         {message}
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function KeybindingSourceBadge({ source }: { source: KeybindingRow["source"] }) {
+  const gt = useGT();
+  if (source === "Default") return null;
+  return (
+    <Badge variant="outline" size="sm">
+      {source === "Custom" ? gt("Custom") : gt("Project")}
+    </Badge>
+  );
+}
+
+export function KeybindingRowTitle({ row }: { row: KeybindingRow }) {
+  const labelForCommand = useKeybindingDisplayLabel();
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="flex items-center gap-2" />}>
+        {labelForCommand(row.command)}
+        <KeybindingSourceBadge source={row.source} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{row.command}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function WhenExpressionRemoveButton({
+  label,
+  className,
+  onRemove,
+}: {
+  label: string;
+  className?: string | undefined;
+  onRemove: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={200}
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className={cn("size-7", className)}
+            aria-label={label}
+            onClick={onRemove}
+          />
+        }
+      >
+        <MinusIcon aria-hidden className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
     </Tooltip>
   );
 }

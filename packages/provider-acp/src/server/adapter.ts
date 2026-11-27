@@ -1,5 +1,5 @@
 import { makeRecordWakeReport } from "./recordWakeReport.ts";
-import { confirmPromptMemory } from "./promptMemory.ts";
+import { confirmPromptMemory, preparePromptMemory } from "./promptMemory.ts";
 import { promptOutcomeFailure, readRetiredPromptOutcome } from "./retiredPromptOutcome.ts";
 import type { PromptOutcomeCheck } from "./retiredPromptOutcome.ts";
 import {
@@ -167,7 +167,6 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
-import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import {
@@ -7277,6 +7276,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const {
               memoryContext: _memoryContext,
               refreshMemoryContext: _refreshMemoryContext,
+              canDeliverMemory: _canDeliverMemory,
               appContext: _appContext,
               ...turnOwner
             } = turnInput;
@@ -7466,17 +7466,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }
             const checkPromptOutcome = yield* watchOutcome(requestedSessionId);
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
-            const { prompt, receipt, uncertain } = yield* Effect.gen(function* () {
-              const skipMemory =
-                isAppOwnedWakeTurn ||
-                (compactsContext &&
-                  turnInput.message.text.trim() === "/compact" &&
-                  turnInput.message.attachments.length === 0);
-              const {
-                text: memory,
-                receipt,
-                uncertain,
-              } = yield* MemoryContext.promptMemory(skipMemory ? undefined : turnInput, driver);
+            const skipMemory =
+              isAppOwnedWakeTurn ||
+              (compactsContext &&
+                turnInput.message.text.trim() === "/compact" &&
+                turnInput.message.attachments.length === 0);
+            const withMemory = yield* preparePromptMemory(
+              skipMemory ? undefined : turnInput,
+              driver,
+            ).pipe(Effect.tapError(() => finalizeTurn(context, "failed")));
+            const sendPrompt = Effect.fnUntraced(function* () {
               const config = yield* mcpSessions.read(turnInput.threadId);
               // Only the attachment installed on this native session can advertise tools.
               const attached = terminalEnvironmentBySessionId.get(requestedSessionId);
@@ -7492,42 +7491,37 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 hasMemoryTools || memoryToolClaims.has(requestedSessionId);
               if (hasMemoryTools) memoryToolClaims.add(requestedSessionId);
               else memoryToolClaims.delete(requestedSessionId);
-              return {
-                receipt,
-                uncertain,
-                prompt: [
-                  ...promptParts!.prompt,
-                  ...(announceMemoryTools
-                    ? [
-                        {
-                          type: "text" as const,
-                          text: `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`,
-                        },
-                      ]
-                    : []),
-                  ...(memory === undefined ? [] : [{ type: "text" as const, text: memory }]),
-                ],
-              };
-            }).pipe(Effect.tapError(() => finalizeTurn(context, "failed")));
+              const base = [
+                ...promptParts!.prompt,
+                ...(announceMemoryTools
+                  ? [
+                      {
+                        type: "text" as const,
+                        text: `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`,
+                      },
+                    ]
+                  : []),
+              ];
+              return yield* withMemory(context, (memory, beforeDispatch) =>
+                runtime.prompt(
+                  { prompt: [...base, ...memory] },
+                  {
+                    dispatched: context.promptDispatched,
+                    released: context.foregroundIdle,
+                    prepareForDispatch: beforeDispatch.pipe(
+                      Effect.map((blocks) => [...base, ...blocks]),
+                    ),
+                  },
+                ),
+              );
+            });
             const settle = { generation: promptGeneration, checkPromptOutcome };
             yield* startInactivityWatchdog(context, settle);
-            yield* uncertain;
-            const confirm = yield* Effect.cached(receipt);
-            context.confirmMemory = confirm;
             yield* followPrompt(
               context,
               (superseded) =>
-                sendPromptWhenIdle(
-                  context,
-                  () =>
-                    runtime.prompt(
-                      { prompt },
-                      { dispatched: context.promptDispatched, released: context.foregroundIdle },
-                    ),
-                  superseded,
-                ).pipe(
+                sendPromptWhenIdle(context, sendPrompt, superseded).pipe(
                   Effect.tap(() => turnInput.inputDelivery?.submitted() ?? Effect.void),
-                  Effect.tap(() => confirm),
                   Effect.tap(() =>
                     Ref.update(promptInstructionStates, (current) => {
                       if (promptParts?.instructionState === undefined) return current;

@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   HubNode,
   HubNodeAddedBy,
   HubNodeId,
@@ -49,6 +50,8 @@ export interface HubNodesAddOptions<E, R> {
   readonly beforeSave: Effect.Effect<void, E, R>;
   /** Refuse instead of saving a node whose environment id the hub cannot read yet. */
   readonly requireIdentity?: boolean;
+  /** Refuse instead of saving when the alias answers as another environment than the caller saved. */
+  readonly expectEnvironmentId?: EnvironmentId;
 }
 
 /**
@@ -374,6 +377,11 @@ export const make = Effect.gen(function* () {
       return yield* new HubNodesError({
         reason: "invalid_request",
         detail: `GOAT has not run on ${alias} yet; run goat_ssh_host_prepare first`,
+      });
+    if (options.expectEnvironmentId !== undefined && identity !== options.expectEnvironmentId)
+      return yield* new HubNodesError({
+        reason: "refused",
+        detail: `${alias} now answers as ${identity ?? "an unidentified host"}, not ${options.expectEnvironmentId}; add it again.`,
       });
     return yield* lock.withPermits(1)(
       Effect.gen(function* () {

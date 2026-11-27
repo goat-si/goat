@@ -20,9 +20,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
-
 import type { ShellEnvironmentPatch } from "@goat/contracts";
 import * as HostProcess from "./HostProcess.ts";
+import { windowsEnvironmentValueCommand } from "./windowsTelemetryValueSelection.ts";
+export { windowsEnvironmentValueCommand } from "./windowsTelemetryValueSelection.ts";
 import { locateXcodeGitWithXcrun } from "./macosGit.ts";
 import * as Context from "effect/Context";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
@@ -280,7 +281,7 @@ function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): st
 
       return [
         `Write-Output '${envCaptureStart(name)}'`,
-        `$value = [Environment]::GetEnvironmentVariable('${name}')`,
+        windowsEnvironmentValueCommand(name),
         "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
         `Write-Output '${envCaptureEnd(name)}'`,
       ];
@@ -901,8 +902,13 @@ function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<strin
 
   return [
     ...(appData ? [`${appData}\\npm`] : []),
-    ...(localAppData ? [`${localAppData}\\Programs\\nodejs`, `${localAppData}\\Volta\\bin`] : []),
-    ...(localAppData ? [`${localAppData}\\pnpm`] : []),
+    ...(localAppData
+      ? [
+          `${localAppData}\\Programs\\nodejs`,
+          `${localAppData}\\Volta\\bin`,
+          `${localAppData}\\pnpm`,
+        ]
+      : []),
     ...(userProfile
       ? [`${userProfile}\\.local\\bin`, `${userProfile}\\.bun\\bin`, `${userProfile}\\scoop\\shims`]
       : []),

@@ -14,6 +14,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
+import { stableStringify } from "@goat/shared/relaySigning";
 import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 
@@ -24,9 +25,11 @@ import type { SshLaunchResult } from "../sshRemote/SshRemoteDispatch.ts";
 const childWorkFailure = (error: ChannelChildWork.ChannelChildWorkError): OrchestratorMcpFailure =>
   error.reason === "at_capacity"
     ? new OrchestratorMcpFailure({ code: "capacity_exceeded", message: error.detail })
-    : error.reason === "depth_exceeded" || error.reason === "run_not_attributable"
-      ? new OrchestratorMcpFailure({ code: "capability_denied", message: error.detail })
-      : new OrchestratorMcpFailure({ code: "orchestration_error", message: error.detail });
+    : error.reason === "invalid_deliverable"
+      ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.detail })
+      : error.reason === "depth_exceeded" || error.reason === "run_not_attributable"
+        ? new OrchestratorMcpFailure({ code: "capability_denied", message: error.detail })
+        : new OrchestratorMcpFailure({ code: "orchestration_error", message: error.detail });
 
 /** The admission shapes a surface acts on; "not_channel_owned" never leaves this module. */
 export type ChannelChildAdmission = Exclude<
@@ -49,6 +52,7 @@ export const admitChildWork = Effect.fn("childWorkAdmission.admitChildWork")(fun
     readonly prompt: string;
     /** The launch target's canonical parts, joined in order. */
     readonly destinationKey: string;
+    readonly launchOptions?: string | undefined;
     readonly destinationHint?: string | undefined;
     readonly clientRequestId?: string | undefined;
   },
@@ -61,6 +65,7 @@ export const admitChildWork = Effect.fn("childWorkAdmission.admitChildWork")(fun
       surface: input.surface,
       prompt: input.prompt,
       destinationKey: input.destinationKey,
+      launchOptions: input.launchOptions,
       ...(input.destinationHint === undefined ? {} : { destinationHint: input.destinationHint }),
       ...(input.clientRequestId === undefined ? {} : { clientRequestId: input.clientRequestId }),
     })
@@ -86,6 +91,10 @@ export const admitDelegate = Effect.fn("childWorkAdmission.admitDelegate")(funct
           readonly driverKind?: string | undefined;
         }
       | undefined;
+    readonly runtimeMode?: string | undefined;
+    readonly interactionMode?: string | undefined;
+    readonly callerRuntimeMode?: string | undefined;
+    readonly callerInteractionMode?: string | undefined;
     readonly isolation?: string | undefined;
     readonly role?: string | undefined;
     readonly remote?:
@@ -126,6 +135,20 @@ export const admitDelegate = Effect.fn("childWorkAdmission.admitDelegate")(funct
     surface: remote === undefined ? "delegate_local" : "delegate_remote",
     prompt: input.prompt,
     destinationKey,
+    ...(input.clientRequestId?.startsWith("required:")
+      ? {
+          launchOptions: stableStringify({
+            target: input.target,
+            remote,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            callerRuntimeMode: input.callerRuntimeMode,
+            callerInteractionMode: input.callerInteractionMode,
+            isolation: input.isolation,
+            role: input.role,
+          }),
+        }
+      : {}),
     ...(remote === undefined ? {} : { destinationHint: remote.host + ":" + remote.cwd }),
     ...(input.clientRequestId === undefined ? {} : { clientRequestId: input.clientRequestId }),
   });

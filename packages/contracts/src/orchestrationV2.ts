@@ -6,6 +6,7 @@ import {
 } from "./orchestrationV2Launch.ts";
 export { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
 import { PreparedRunPinBase, WorktreePreparationBasePin } from "./worktreePreparation.ts";
+import { ThreadResultAttachments } from "./threadResultAttachments.ts";
 export type { WorktreePreparationBasePin } from "./worktreePreparation.ts";
 export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
@@ -841,6 +842,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   progress: Schema.optional(Schema.String),
   workflow: Schema.optional(OrchestrationV2SubagentWorkflow),
   result: Schema.NullOr(Schema.String),
+  resultAttachments: Schema.optional(ThreadResultAttachments),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   updatedAt: Schema.DateTimeUtc,
@@ -3477,6 +3479,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     correlationId: TrimmedNonEmptyString,
     status: Schema.Literals(["completed", "failed", "cancelled", "interrupted"]),
     summary: Schema.String.check(Schema.isMaxLength(4_000)),
+    attachments: Schema.optional(ThreadResultAttachments),
   }),
 
   ThreadPullRequestWatchSyncCommand,

@@ -260,6 +260,9 @@ export const fixtureWith = Effect.fnUntraced(function* (
                   ...task,
                   status: command.status,
                   result: command.summary,
+                  ...(command.attachments === undefined
+                    ? {}
+                    : { resultAttachments: command.attachments }),
                 });
               }
             }
@@ -401,10 +404,14 @@ export const fixtureWith = Effect.fnUntraced(function* (
     unknown: () => {
       launchRunId = null;
     },
-    refuse: (reason: SshRemoteDispatch.SshRemoteDispatchError["reason"]) => {
+    refuse: (
+      reason: SshRemoteDispatch.SshRemoteDispatchError["reason"],
+      facts: { readonly launchMayHaveStarted?: boolean } = {},
+    ) => {
       launchFailure = new SshRemoteDispatch.SshRemoteDispatchError({
         reason,
         message: "Launch refused or unanswered",
+        ...facts,
       });
     },
     failBeforeRegistration: () => {

@@ -1,5 +1,6 @@
 import { isGoatConnectEnabled } from "./goatConnect.ts";
 import * as Cause from "effect/Cause";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -202,7 +203,11 @@ export function layer(
         ...resource.attributes,
       },
     },
-  }).pipe(Layer.provide(OtlpSerialization.layerJson));
+  }).pipe(
+    Layer.provide(OtlpSerialization.layerJson),
+    // An operator's OTEL_RESOURCE_ATTRIBUTES describe their machines for their own receiver.
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
+  );
 
   return Layer.effect(
     RelayClientTracer,

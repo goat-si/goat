@@ -33,6 +33,7 @@ import {
 // RPC reads), the catalog, snapshots and presentations, native components, the Home-mode hook's
 // inputs, the row menu, and Home's other parts (face, status card, library, memory, search).
 type Props = Record<string, unknown> & { children?: ReactNode };
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
 const nativeAlert = vi.hoisted(() => vi.fn());
 const fx = vi.hoisted(() => ({
   registry: undefined as unknown as import("effect/reactivity").AtomRegistry.AtomRegistry,
@@ -55,6 +56,8 @@ const fx = vi.hoisted(() => ({
   reads: [] as string[],
 }));
 // Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
+
 vi.mock("./useKeptPerComputer", () => ({
   useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
     live.data,
@@ -606,12 +609,12 @@ async function renderHome() {
   };
 }
 
-it("hides exactly the threads Home's current list opens, and each one opens from Home", async () => {
+it("hides Home's current links and recorded chores, and opens each link from Home", async () => {
   setup();
   // Home closed: Threads already leaves out the current list's worker, coding and remote work.
   // No bot conversation is loaded here, so the whole hide set is work.
   const hidden = [...fx.registry.get(hiddenGoatBotThreadKeysAtom)].sort();
-  expect(hidden).toEqual(workKeys.filter((item) => item !== key("env", "k1")).sort());
+  expect(hidden).toEqual([...workKeys].sort());
   await using screen = await renderHome();
   await screen.openLink("Ship the release", "Work thread: Ship the release");
   await screen.openLink("Ship the release", "GOAT thread: Patch web");
@@ -622,9 +625,9 @@ it("hides exactly the threads Home's current list opens, and each one opens from
   await screen.press("Open Home");
   expect(screen.button("Actions for Finished 6")).toBeUndefined();
   await screen.openLink("Finished 6", "Work thread: Finished 6", true);
-  // Every hidden key, and nothing else, opened from Home.
+  // Every Home link, and nothing else, opened from Home; the unlisted chore is hidden by its record.
   const opened = fx.openThread.mock.calls.map(([thread]) => key(thread.environmentId, thread.id));
-  expect(opened.sort()).toEqual(hidden);
+  expect(opened.sort()).toEqual(hidden.filter((item) => item !== key("env", "k1")));
   // Show work's child reads and a peek of a task left the hidden set as it was.
   expect(
     fx.reads.some((read) => read.startsWith("channel.listChildWork") && read.includes('"t1"')),
@@ -633,7 +636,7 @@ it("hides exactly the threads Home's current list opens, and each one opens from
   await screen.press("Ship the release");
   expect(screen.button("Back to home. Ship the release")).toBeDefined();
   expect(hiddenSet()).toEqual(hidden);
-  // The chore Home does not link stays in Threads; Home lists it among other threads.
+  // Home still lists the chore among other threads, even though Threads hides it.
   await screen.press("Open Home");
   expect(screen.button("GOAT thread: Tidy logs")).toBeDefined();
 });
@@ -651,7 +654,7 @@ it("lists Home's work again when its list read fails or a destination disconnect
       previousSuccess: Option.some(listed(rows, [remote])),
     }),
   );
-  expect(hiddenWork()).toEqual([]);
+  expect(hiddenWork()).toEqual([key("env", "k1")]);
   await using screen = await renderHome();
   expect(screen.button("Actions for Ship the release")).toBeDefined();
 });
@@ -659,7 +662,7 @@ it("lists Home's work again when its list read fails or a destination disconnect
 it("hides nothing from Home while its first list read is pending, offline, or not permitted", () => {
   setup();
   setList(AsyncResult.initial(true));
-  expect(hiddenWork()).toEqual([]);
+  expect(hiddenWork()).toEqual([key("env", "k1")]);
   setList(listed(rows, [remote]));
   expect(hiddenWork()).toContain(key("env", "c1"));
   // Offline the bot is not eligible, so Home stops governing and the legacy rule decides.
@@ -686,11 +689,12 @@ it("returns Threads to the legacy rule when either visibility capability is with
     ]);
     // Returned, Home's rule decides again.
     fx.registry.set(fx.config("env"), configOf(env));
-    expect(hiddenWork(), missing).toEqual(workKeys.filter((item) => item !== key("env", "k1")));
+    expect(hiddenWork(), missing).toEqual(workKeys);
   }
 });
 
 const envLinks = workKeys.filter((item) => item !== key("env", "k1"));
+const envHidden = [...envLinks, key("env", "k1")];
 const envLegacy = [
   key("env", "w1"),
   key("env", "k1"),
@@ -704,7 +708,7 @@ it("keeps another computer's bot work on dev's rule while Home opens this one", 
   setList(listed(farRows), "far");
   // B-mac governs its own Home, but this device's Home is A-mac's: B-mac's coding thread stays in
   // Threads and its worker stays hidden, as on dev.
-  expect(hiddenSet()).toEqual(sorted([...envLinks, key("far", "bw1")]));
+  expect(hiddenSet()).toEqual(sorted([...envHidden, key("far", "bw1")]));
 });
 
 it("moves Home's rule to the computer Home opens, and each thread it hides opens from that Home", async () => {
@@ -731,7 +735,7 @@ it("governs no computer until preferences have loaded, then hides what the loade
     expect(hiddenSet()).toEqual(sorted(envLegacy));
   }
   saveBot(null);
-  expect(hiddenSet()).toEqual(sorted(envLinks));
+  expect(hiddenSet()).toEqual(sorted(envHidden));
   await using screen = await renderHome();
   await screen.openLink("Ship the release", "GOAT thread: Patch web");
   expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
@@ -745,7 +749,7 @@ it("hides a current task's thread and opens it from Home while the bot cannot ta
   // Without the bot's own commands the chat says this connection cannot message it.
   fx.registry.set(fx.permission("channel.ensureBot"), false);
   fx.registry.set(fx.permission("channel.ingest"), false);
-  expect(hiddenSet()).toEqual(sorted(envLinks));
+  expect(hiddenSet()).toEqual(sorted(envHidden));
   await using screen = await renderHome();
   await screen.openLink("Ship the release", "GOAT thread: Patch web");
   expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
@@ -774,10 +778,10 @@ function advertise(extra: object) {
 it("governs the selected computer only where Home can show its task list", async () => {
   setup();
   advertise({ goatBotTaskThreads: false });
-  // Dev's rule on a server without task lists hides none of the bot's work.
-  expect(hiddenSet()).toEqual([]);
+  // Without task lists, the chore still hides by its own launch record.
+  expect(hiddenSet()).toEqual([key("env", "k1")]);
   advertise({});
-  expect(hiddenSet()).toEqual(sorted(envLinks));
+  expect(hiddenSet()).toEqual(sorted(envHidden));
   await using screen = await renderHome();
   await screen.openLink("Ship the release", "GOAT thread: Patch web");
   expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });

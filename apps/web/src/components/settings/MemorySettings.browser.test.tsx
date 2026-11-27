@@ -686,7 +686,6 @@ it("keeps pending reenrollment when removing another owner permission and render
   expect(container.textContent).toContain("Sharing off");
   expect(container.textContent).toContain("Make this device the hub");
 });
-
 // A manually settled Deferred keeps response ordering deterministic without timers.
 async function deferredResult() {
   let resolve!: (value: unknown) => void;
@@ -787,7 +786,6 @@ async function supportedScreen(
   await render();
   return { render, registry };
 }
-
 it.each([false, true])(
   "clears an in-flight forget on write-only revoke and ignores its late result (after regrant: %s)",
   async (afterRegrant) => {
@@ -832,7 +830,6 @@ it.each([false, true])(
     expect(container.textContent).toContain("Forget request failed");
   },
 );
-
 it("discards the editor and its draft on write-only revoke and requires Edit after regrant", async () => {
   const { render, registry } = await supportedScreen();
   const writes = vi.spyOn(registry, "set");
@@ -853,7 +850,6 @@ it("discards the editor and its draft on write-only revoke and requires Edit aft
     "Synthetic original",
   );
 });
-
 it("retries a failed load inline without a reload control", async () => {
   let loads = 0;
   state.executors.set("hubSettingsGet", async () =>
@@ -870,7 +866,6 @@ it("retries a failed load inline without a reload control", async () => {
   expect(container.textContent).not.toContain("Operational details");
   expect(container.textContent).not.toContain("Device removal applied");
 });
-
 it("reads memory status again when memory is turned off or its model changes", async () => {
   let reads = 0;
   state.executors.set("syncStatus", async () => {
@@ -898,7 +893,6 @@ it("reads memory status again when memory is turned off or its model changes", a
   });
   expect(reads).toBe(first + 2);
 });
-
 it("automatically opens the ready space and keeps saved memories read-only after disabling", async () => {
   state.queries.set("list", Option.some({ items: [activeItem], nextCursor: null }));
   const { render } = await supportedScreen(false);
@@ -929,7 +923,6 @@ it("automatically opens the ready space and keeps saved memories read-only after
   ).toMatchObject({ input: { settings: { mode: "hub", memorySpaceId: null } } });
   expect(container.textContent).toContain("Synthetic original");
 });
-
 it("unmounts retained bodies and an open source when read is None, without reopening source on recovery", async () => {
   const { render } = await supportedScreen();
   state.queries.set(
@@ -986,7 +979,6 @@ it("unmounts retained bodies and an open source when read is None, without reope
   expect(container.textContent).not.toContain("Retained body");
   expect(container.textContent).toContain("Open Original 1");
 });
-
 it.each([false, true])(
   "retries the same forget after body-free invalidation (signal first: %s)",
   async (signalFirst) => {
@@ -1030,7 +1022,6 @@ it.each([false, true])(
     expect(container.textContent).not.toContain("Synthetic original");
   },
 );
-
 it.each(["write", "read", "reconnect", "close"])(
   "discards a body-free forget retry after %s changes",
   async (boundary) => {
@@ -1901,7 +1892,6 @@ it("keeps scope selection in one row with dozens of projects and selects the las
     },
   });
 });
-
 // WP6 controls exercise the actual workflow/store; command transport is the fixture boundary.
 async function renderControl(element: ReactNode | (() => ReactNode)) {
   const { AtomRegistry } = await import("effect/reactivity");
@@ -1928,6 +1918,7 @@ import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 import { MemoryReportRetrySettings } from "./MemoryReportRetrySettings";
 import { MemoryScopeSettings } from "./MemoryScopeSettings";
 import { MemoryImportSettings } from "./MemoryImportSettings";
+import { exerciseImportProgressLocale } from "./MemoryImportProgress.locale.testkit";
 import { exerciseCodexConflictNotice } from "./MemoryImportSettings.browser.testkit";
 import {
   MemorySpaceId,
@@ -2116,6 +2107,18 @@ it("checks saved imports on a fresh mount without discovering, previewing, or ap
     ),
   ).toEqual(["status", "status"]);
 });
+it("translates recovery and stopped import progress in Chinese", () =>
+  exerciseImportProgressLocale({
+    state,
+    envId,
+    spaceId,
+    renderControl,
+    click,
+    deferredResult,
+    root,
+    container,
+    id,
+  }));
 it("requires discover, preview, scope and selection confirmation before an explicit apply", async () => {
   const sourceId = id(61);
   state.executors.set("importProvider", async (request) => {

@@ -1,3 +1,4 @@
+import { gtFallback, type useGT } from "gt-react";
 import {
   quotaWindowToAvailability,
   type HostStatusMetrics,
@@ -22,19 +23,26 @@ export interface FleetConsoleQuota extends Omit<FleetQuotaRow, "driver" | "peak"
   readonly inferred?: ReadonlyArray<string>;
 }
 
-const plural = (count: number, word: string) => count + " " + word + (count === 1 ? "" : "s");
-
 /** A pool-wide block has no percentage; it reads as a sentence, never as 100%. */
-function blockDetail(prefix: string, blocks: ReadonlyArray<ServerProviderUsageAvailability>) {
+function blockDetail(
+  prefix: string,
+  blocks: ReadonlyArray<ServerProviderUsageAvailability>,
+  gt: ReturnType<typeof useGT>,
+) {
   return blocks
     .filter((block) => block.exhausted)
-    .map(
-      (block) =>
+    .map((block) => {
+      const status =
+        block.scopeModel === undefined
+          ? gt("all accounts blocked")
+          : gt("all accounts blocked for {model}", { model: block.scopeModel });
+      return (
         prefix +
-        "all accounts blocked" +
-        (block.scopeModel === undefined ? "" : " for " + block.scopeModel) +
-        (block.resetsAt === undefined ? "" : " until " + block.resetsAt),
-    );
+        (block.resetsAt === undefined
+          ? status
+          : gt("{status} until {time}", { status, time: block.resetsAt }))
+      );
+    });
 }
 
 function knownWindows(windows: ReadonlyArray<QuotaWindow>) {
@@ -43,12 +51,14 @@ function knownWindows(windows: ReadonlyArray<QuotaWindow>) {
   );
 }
 
-function windowDetail(windows: ReadonlyArray<QuotaWindow>): string {
+function windowDetail(windows: ReadonlyArray<QuotaWindow>, gt: ReturnType<typeof useGT>): string {
   return knownWindows(windows)
     .map(
       (window) =>
-        `${window.label}${window.scopeModel === undefined ? "" : ` (${window.scopeModel})`}: ${Math.round(window.usedPercent)}% (${window.source})` +
-        (window.resetsAt === undefined ? "" : `, resets ${window.resetsAt}`),
+        `${window.label === "Weekly" ? gt("Weekly") : window.label}${window.scopeModel === undefined ? "" : ` (${window.scopeModel})`}: ${Math.round(window.usedPercent)}% (${gt(window.source)})` +
+        (window.resetsAt === undefined
+          ? ""
+          : ", " + gt("resets {time}", { time: window.resetsAt })),
     )
     .join(" · ");
 }
@@ -72,7 +82,11 @@ const inventoryHomeName = (metrics: HostStatusMetrics | undefined, homeId: strin
   displayName(metrics?.opencodex?.link.homeName, homeId);
 
 /** The newest Home snapshot is authoritative; merging older windows could resurrect unknown data. */
-export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
+export function fleetQuota(
+  rows: ReadonlyArray<FleetHostRow>,
+  maxWindows = 2,
+  gt: ReturnType<typeof useGT> = gtFallback,
+) {
   const homes = new Map<string, QuotaPool>();
   const homeLabels = new Map<string, { name: string; sampledAt: number }>();
   for (const row of rows) {
@@ -134,13 +148,13 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       ) {
         unreadable.push({
           key: JSON.stringify(["opencodex-unavailable", row.key, quota.instanceId]),
-          label: "OpenCodex pool",
+          label: gt("OpenCodex pool"),
           host: row.label,
           windows: [],
           peak: null,
           hidden: 0,
           status:
-            "pool unavailable" +
+            gt("pool unavailable") +
             (route.openCodexVersion === undefined
               ? ""
               : " (OpenCodex " + route.openCodexVersion + ")"),
@@ -195,23 +209,27 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
           })),
         );
         detail.push(
-          `${provider.provider}: ${windowDetail(provider.pooled.windows) || "Quota unknown"}`,
+          `${provider.provider}: ${windowDetail(provider.pooled.windows, gt) || gt("Quota unknown")}`,
         );
         if (provider.pooled.headroom !== undefined)
-          detail.push(`Headroom: ${provider.pooled.headroom}`);
+          detail.push(gt("Headroom: {value}", { value: provider.pooled.headroom }));
         if (provider.pooled.nextResetAt !== undefined)
-          detail.push(`Next reset: ${provider.pooled.nextResetAt}`);
+          detail.push(gt("Next reset: {time}", { time: provider.pooled.nextResetAt }));
         detail.push(
           ...blockDetail(
             provider.provider + ": ",
             provider.pooled.windows.flatMap((window) => quotaWindowToAvailability(window) ?? []),
+            gt,
           ),
         );
         const accounts = new Map(provider.accounts.map((account) => [account.accountRef, account]));
         accountCount += accounts.size;
         for (const account of accounts.values()) {
+          const name = quotaPoolAccountName(account, (plan) =>
+            plan ? gt("{plan} account", { plan }) : gt("Account"),
+          );
           detail.push(
-            `${quotaPoolAccountName(account)} (${account.state}): ${windowDetail(account.windows) || "Quota unknown"}`,
+            `${name} (${gt(account.state)}): ${windowDetail(account.windows, gt) || gt("Quota unknown")}`,
           );
         }
       }
@@ -228,7 +246,7 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       detail.push(
         ...windows.map((window) => `${window.label}: ${Math.round(window.usedPercent)}%`),
         ...[...(routed.get(homeId) ?? [])].flatMap(([provider, quota]) =>
-          blockDetail(provider + ": ", quota.limits.availability ?? []),
+          blockDetail(provider + ": ", quota.limits.availability ?? [], gt),
         ),
       );
     }
@@ -236,9 +254,12 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
     const hiddenWindows = Math.max(0, windows.length - maxWindows);
     const hidden = hiddenWindows + accountCount;
     const inferred = [...(inferredHosts.get(homeId)?.values() ?? [])];
+    const accountsLabel = gt("{count, plural, one {# account} other {# accounts}}", {
+      count: accountCount,
+    });
     pools.push({
       key: JSON.stringify(["opencodex", homeId]),
-      label: "OpenCodex pool",
+      label: gt("OpenCodex pool"),
       host: homeName(homeId),
       windows: sorted.slice(0, maxWindows),
       peak: sorted[0]?.usedPercent ?? null,
@@ -246,17 +267,30 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
       ...(inferred.length === 0 ? {} : { inferred }),
       hiddenLabel:
         "+" +
-        [hiddenWindows > 0 ? plural(hiddenWindows, "window") : "", plural(accountCount, "account")]
+        [
+          hiddenWindows > 0
+            ? gt("{count, plural, one {# window} other {# windows}}", { count: hiddenWindows })
+            : "",
+          accountsLabel,
+        ]
           .filter((part) => part.length > 0)
           .join(" · "),
       detail: [
-        "OpenCodex pool" + (homeName(homeId) === null ? "" : ` · ${homeName(homeId)}`),
-        `${hiddenWindows} more ${hiddenWindows === 1 ? "window" : "windows"} · ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`,
+        gt("OpenCodex pool") + (homeName(homeId) === null ? "" : ` · ${homeName(homeId)}`),
+        gt("{count, plural, one {# more window} other {# more windows}}", {
+          count: hiddenWindows,
+        }) +
+          " · " +
+          accountsLabel,
         ...detail,
         ...(inferred.length === 0
           ? []
           : [
-              `Quota routing inferred for ${inferred.join(", ")}: ${inferred.length === 1 ? "this host did" : "these hosts did"} not report which instances use this pool, so Fleet matched them by provider driver. Hosts on an older GOAT report it after an update.`,
+              gt("Quota routing inferred for {hosts}", { hosts: inferred.join(", ") }) +
+                ": " +
+                gt(
+                  "Fleet matched instances by provider driver because their hosts did not report which ones use this pool. Older hosts report this after a GOAT update.",
+                ),
             ]),
       ].join("\n"),
     });

@@ -13,6 +13,26 @@ The same runner checks the context diet's core listing against the full one
 summarized in [post-ship regression measurement](../internals/agent-surface.md#post-ship-regression-measurement).
 Results live beside their raw rows in [results](../../scripts/agent-surface/eval/results/).
 
+## Direct Bot chat
+
+To check whether the Bot answers an ordinary question itself, create a fresh member Bot in an
+isolated GOAT instance, select the model to evaluate, and send this message once:
+
+> What is the capital of France? Please reply with just the city name.
+
+After the reply appears, score the recorded samples in the instance's database:
+
+```sh
+node scripts/agent-surface/eval/direct-chat.ts /path/to/isolated/userdata/statev2.sqlite
+```
+
+An optional second argument selects a specific channel input ID. Each JSON line records the
+executed model, task and child counts, unexpected tool calls, and pass status. Passing requires
+a completed Bot turn that delivered “Paris” to the requester. Child-work admissions, extra channel tasks, subagents,
+provider commands and tool calls beyond tool discovery and progress or result reporting fail this
+direct-answer control. The command exits unsuccessfully if a sample fails or no matching sample
+exists. Use one fresh Bot per sample so unrelated turns cannot contaminate the result.
+
 ## The task set
 
 [tasks.json](../../scripts/agent-surface/eval/tasks.json) is fixed and versioned. Changing a
@@ -147,6 +167,35 @@ version 1, recorded as `COMPOSITION_RULE_VERSION` in the report):
 A failed campaign leaves `goat_eval` opt-in. Record the verdict and the results folder in the
 D8 entry either way.
 
+## Measuring Bot worker order
+
+Run each case in a fresh member Bot on an isolated local GOAT project. From the repo root,
+prepare an unused directory **inside that project** and send the printed prompt unchanged.
+Each sample gets fresh values. Keep the fixture until the sample is scored.
+
+```sh
+runner=scripts/agent-surface/eval/worker-order.ts
+node "$runner" prepare parallel "$project/parallel-sample"
+node "$runner" prepare dependent "$project/dependent-sample"
+```
+
+Both workers run a 12-second probe. In the parallel case, the two measured probe intervals must
+overlap on the same host clock and in the corresponding recorded commands. In the dependent case,
+A returns a random value that selects B's input file. B must be launched after A completes, receive
+A's value in its assignment, and return the contents of the selected file. The checks also require
+two distinct workers, both delivered results, and a delivered Bot reply containing both values.
+
+After each Bot finishes, score the recorded input. When the same prompt was sent more than once,
+append the input ID from its channel receipt. The scorer takes a read-only transaction on the isolated server database. It prints one JSON
+record with each worker's timing, delivery state, overlap in milliseconds and separate check
+results. An unsuccessful sample exits with status 1. These local records measure work ordering;
+they do not establish timing guarantees across devices.
+
+```sh
+node "$runner" score parallel "$project/parallel-sample" "$database"
+node "$runner" score dependent "$project/dependent-sample" "$database"
+```
+
 ## Running a campaign
 
 Run campaigns only against a dev server with seeded data, started with `vp run dev` in a
@@ -257,3 +306,36 @@ out of committed replay data. Changing a case or grading rule raises `REPLAY_VER
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.
 - Model turns are a range until providers report requests per run.
+
+## Delegated Bot outcomes
+
+Run `--tasks delegated-bot-outcome` on its own with task set version 4. The
+normal listing and composition campaigns keep their existing task set version.
+Use the existing campaign format with the models to compare in `arms`, the
+same Worker model in `fixtureModel`, and the absolute fixture directory in
+`values.workspace`. Leave listing and tool or item filters unset. Put a nonempty single line in `result-a.txt`; leave
+`result-b-missing.txt` absent.
+
+Run against a separate desktop-mode development server on 127.0.0.1.
+`GOAT_EVAL_BOT_ORIGIN` points to that server's HTTP origin,
+`GOAT_EVAL_BOT_BEARER_FILE` points to a file containing its desktop session
+bearer, and `GOAT_EVAL_BOT_DB` points to its isolated `statev2.sqlite`. The
+runner creates a fresh member Bot through the normal desktop RPC for every
+scheduled arm. The same rendered prompt and Worker model apply across arms.
+
+```sh
+node scripts/agent-surface/eval/run.ts --campaign bot-campaign.json --tasks delegated-bot-outcome --live > bot-runs.jsonl
+```
+
+The JSON rows record both Workers' command and report evidence, the model
+selections used, accepted and rejected parent report attempts, and the channel
+task state. If B delivered a verified missing-file result but reported its
+investigation as successful, the row flags that mismatch and still grades the
+parent on the result it received.
+`false-success` requires a verified A success and B missing-file failure with
+a recorded or accepted parent success or a completed Bot ledger item. A missing
+final report is counted separately. A run passes when the parent filed a failure
+report and the Bot item settled as failed. The command emits the scheduled rows,
+then exits 1 if any failed; an incomplete observation stops it early to avoid
+leaving several eval runs active. These rows are standalone evidence and do not
+contribute to the listing or composition gates.

@@ -3,11 +3,14 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   acknowledgeTaskRead,
   botTaskWait,
+  botTaskAttemptEvidence,
   canSendToGoatBot,
+  currentRequiredResults,
   goatBotOpenQuestionPlaceholder,
   goatBotTaskWait,
   isRetryableTaskStatus,
   mergeBotRemoteWorkers,
+  newestBotTaskSummary,
   presentTaskStatus,
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
@@ -20,12 +23,14 @@ import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useResizableWidth, RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
+import { GoatBotRequiredResults } from "./GoatBotRequiredResults";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotUnavailableWork, GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider";
 import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotAttemptEvidence } from "./GoatBotAttemptEvidence";
 import { GoatBotTaskActivity } from "./GoatBotTaskActivity";
 import { GoatBotTaskSnooze } from "./GoatBotTaskSnooze";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
@@ -38,6 +43,7 @@ import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { GOAT_BOT_TASK_PANE_WIDTH } from "./goatBotLayout";
 import { useGoatBotHiddenChatNotice } from "./GoatBotHiddenChatNotice";
 import { useBotTaskLookup } from "./useBotTaskLookup";
+import { useGoatBotTaskChanges } from "./useGoatBotTaskChanges";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { goatBotDraftDestination } from "./GoatBotRouteDrafts";
@@ -79,6 +85,7 @@ export function GoatBotTaskPane({
     useBotThreads(environmentId, memberThreadsKey(member));
   const listedTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const botId = member?.botId ?? BotId.make("main");
+  const changes = useGoatBotTaskChanges(environmentId);
   const lookup = useBotTaskLookup(
     environmentId,
     taskId,
@@ -88,18 +95,22 @@ export function GoatBotTaskPane({
       refreshing: pending,
       holdsTask: listedTask !== undefined,
       revision: workRevision,
+      changeRevision: changes,
     },
     member?.state !== "deleted",
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
-  const taskSummary =
-    task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
+  const taskSummary = newestBotTaskSummary(
+    task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined,
+    lookup.value,
+  );
+  const evidence = botTaskAttemptEvidence(lookup.value, taskSummary);
   const chip = chips.get(taskId);
   // What Home's row and the bot's face say this task waits for; an unlisted task has no view.
   const wait =
     task?.kind === "task"
-      ? botTaskWait(task, chip)
+      ? botTaskWait({ ...task, task: taskSummary ?? task.task }, chip)
       : taskSummary
         ? goatBotTaskWait({
             status: taskSummary.status,
@@ -124,6 +135,7 @@ export function GoatBotTaskPane({
       if (sent !== undefined) finish(sent);
     },
   });
+  const requiredResults = currentRequiredResults(lookup.value, taskSummary);
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   // A draft belongs to the task and bot it was written for; opening another one empties the box.
@@ -324,6 +336,7 @@ export function GoatBotTaskPane({
           </p>
         )}
       </header>
+      {evidence && <GoatBotAttemptEvidence evidence={evidence} />}
       {found?.state === "unavailable" && (
         <p id="task-view-unavailable" role="status">
           Task view unavailable; pin, done and read status cannot be determined.
@@ -373,6 +386,7 @@ export function GoatBotTaskPane({
           </Button>
         </div>
       )}
+      {requiredResults && <GoatBotRequiredResults progress={requiredResults} />}
       {lookup.value?.activity && <GoatBotTaskActivity work={lookup.value} />}
       {task !== undefined && listedTask !== undefined && (
         <div className="px-3">

@@ -30,6 +30,7 @@ import { fixture } from "../cua/DesktopCuaDriver.testkit.ts";
 const layerShell = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
   installIntoProcess: Effect.succeed(true),
   awaitDiscovery: Effect.succeed(true),
+  discoverySettled: Effect.succeed(true),
   updates: Stream.empty,
 });
 

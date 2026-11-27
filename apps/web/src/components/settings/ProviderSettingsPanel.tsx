@@ -1,8 +1,6 @@
 import { useGT, useLocale } from "gt-react";
-import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isSecretsFeatureEnabled } from "../../env";
 import { SecretsSettingsPanel } from "./SecretsSettings";
-import { environmentTransportLabel } from "./EnvironmentRow.logic";
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
@@ -48,7 +46,6 @@ import * as Result from "effect/Result";
 import { PlusIcon } from "~/components/solar";
 import { useRef, useState, type ReactNode } from "react";
 
-import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   useEnvironmentSettings,
   usePersistEnvironmentProviderInstanceMutation,
@@ -133,6 +130,7 @@ import {
   buildProviderInstanceOverridePatch,
   modelListChanges,
   providerConfigString,
+  providerEnvironmentDetail,
   configuredBinaryPath,
   classifyProviderEnvironmentAccess,
   isProviderSettingsEnvironmentAvailable,
@@ -202,15 +200,6 @@ function ProviderLastChecked({ environmentId }: { environmentId: EnvironmentId }
   return <span>{gt("Checked {time}", { time })}</span>;
 }
 
-function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
-  if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
-  if (environment.relayManaged)
-    return isGoatConnectEnabled() ? "GOAT Connect" : environmentTransportLabel(environment);
-  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
-  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
-  return environment.displayUrl ?? "Remote device";
-}
-
 const providerCardHeightClassName =
   "@min-[48rem]/providers:h-[min(44rem,calc(100dvh-11rem))] @min-[48rem]/providers:min-h-[32rem]";
 
@@ -227,8 +216,9 @@ function ProviderSettingsPlaceholder({
   readonly description: string;
   readonly children?: ReactNode;
 }) {
+  const setting = useTranslatedSearchableSetting();
   return (
-    <SettingsSection {...searchableSetting("providers")} variant="plain">
+    <SettingsSection {...setting("providers")} variant="plain">
       {deviceTabs ? (
         <div className="flex min-h-11 min-w-0 items-center px-3 sm:px-4">{deviceTabs}</div>
       ) : null}
@@ -261,16 +251,17 @@ function EnvironmentUnavailablePlaceholder({
   readonly access: Exclude<ProviderEnvironmentAccess, { kind: "editable" | "read-only" }>;
   readonly deviceTabs?: ReactNode;
 }) {
+  const gt = useGT();
   const isLoading = access.kind === "loading";
   const title = isLoading
-    ? "Loading provider settings"
+    ? gt("Loading provider settings")
     : access.kind === "error"
-      ? "Could not connect to this device"
-      : "Provider settings are unavailable";
+      ? gt("Could not connect to this device")
+      : gt("Provider settings are unavailable");
   const description = isLoading
     ? access.reason === "permissions"
-      ? "Checking what this session is allowed to change."
-      : `Waiting for ${environment.label}'s configuration.`
+      ? gt("Checking what this session is allowed to change.")
+      : gt("Waiting for {device}'s configuration.", { device: environment.label })
     : connectionStatusTitle(environment.connection);
   const error = isLoading ? null : environment.connection.error;
   // Wedged devices can remain here indefinitely; a spinner would continuously repaint.
@@ -315,6 +306,7 @@ export function ProviderSettingsPanel(target: ProviderSettingsTarget) {
 }
 
 function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
+  const gt = useGT();
   const { environments, isReady } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const searchTargetId = useSettingsSearchTargetId();
@@ -388,7 +380,7 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
     !target.scoped && !onlyPrimaryDevice && options.length > 0 ? (
       <ScrollArea radius="none" hideScrollbars scrollFade className="h-11 min-w-0 flex-1">
         <ToggleGroup
-          aria-label="Devices"
+          aria-label={gt("Devices")}
           variant="segmented"
           className="my-2"
           value={effectiveEnvironmentId ? [effectiveEnvironmentId] : []}
@@ -399,7 +391,7 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
         >
           {options.map((environment) => {
             const machine = resolveEnvironmentMachineKind(environment.serverConfig);
-            const detail = providerEnvironmentDetail(environment);
+            const detail = providerEnvironmentDetail(environment, gt);
             const statusText = connectionStatusTitle(environment.connection);
             return (
               <Tooltip key={environment.environmentId}>
@@ -446,18 +438,20 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
         <ProviderSettingsPlaceholder
           deviceTabs={deviceTabs}
           icon={<EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(null)} />}
-          title="Device unavailable"
-          description="Reconnect this device to set up its provider, or select another device."
+          title={gt("Device unavailable")}
+          description={gt(
+            "Reconnect this device to set up its provider, or select another device.",
+          )}
         />
       ) : null}
       {options.length === 0 && !targetEnvironmentMissing ? (
         <ProviderSettingsPlaceholder
           icon={<EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(null)} />}
-          title={isReady ? "No connected devices" : "Loading devices"}
+          title={isReady ? gt("No connected devices") : gt("Loading devices")}
           description={
             isReady
-              ? "Connect an execution environment before configuring providers."
-              : "Reading connected execution environments."
+              ? gt("Connect an execution environment before configuring providers.")
+              : gt("Reading connected execution environments.")
           }
         />
       ) : null}
@@ -648,8 +642,8 @@ export function EnvironmentProviderSettings({
         if (result._tag === "Success" && !result.value.accepted) {
           toastManager.add({
             type: "warning",
-            title: "Authentication request expired",
-            description: "Refresh the provider and start the authentication flow again.",
+            title: gt("Authentication request expired"),
+            description: gt("Refresh the provider and start the authentication flow again."),
           });
           return;
         }
@@ -657,9 +651,9 @@ export function EnvironmentProviderSettings({
           const error = squashAtomCommandFailure(result);
           toastManager.add({
             type: "error",
-            title: "Could not continue authentication",
+            title: gt("Could not continue authentication"),
             description:
-              error instanceof Error ? error.message : "The authentication request expired.",
+              error instanceof Error ? error.message : gt("The authentication request expired."),
           });
         }
       });
@@ -741,7 +735,7 @@ export function EnvironmentProviderSettings({
             description:
               error instanceof Error
                 ? error.message
-                : "The provider update command could not be started.",
+                : gt("The provider update command could not be started."),
           }),
         );
       }
@@ -883,8 +877,8 @@ export function EnvironmentProviderSettings({
       if (options?.throwOnFailure) throw error;
       toastManager.add({
         type: "error",
-        title: "Could not update provider instance",
-        description: error instanceof Error ? error.message : "The settings update failed.",
+        title: gt("Could not update provider instance"),
+        description: error instanceof Error ? error.message : gt("The settings update failed."),
       });
     }
     return result._tag !== "Failure";
@@ -919,7 +913,9 @@ export function EnvironmentProviderSettings({
   const deleteInstance = useStableCallback(
     async (instanceId: ProviderInstanceId, instance: ProviderInstanceConfig) => {
       const confirmed = await confirmProviderInstanceRemoval(
-        `Remove the ${providerInstanceName(instance)} provider instance?`,
+        gt("Remove the {provider} provider instance?", {
+          provider: providerInstanceName(instance),
+        }),
       );
       if (!confirmed) return;
       const updateResult = await persistProviderInstance({
@@ -930,8 +926,8 @@ export function EnvironmentProviderSettings({
         const error = squashAtomCommandFailure(updateResult);
         toastManager.add({
           type: "error",
-          title: "Could not delete provider instance",
-          description: error instanceof Error ? error.message : "The settings update failed.",
+          title: gt("Could not delete provider instance"),
+          description: error instanceof Error ? error.message : gt("The settings update failed."),
         });
         return;
       }
@@ -950,8 +946,9 @@ export function EnvironmentProviderSettings({
         const error = squashAtomCommandFailure(uninstallResult);
         toastManager.add({
           type: "warning",
-          title: "Provider deleted, but managed files remain",
-          description: error instanceof Error ? error.message : "Managed binary cleanup failed.",
+          title: gt("Provider deleted, but managed files remain"),
+          description:
+            error instanceof Error ? error.message : gt("Managed binary cleanup failed."),
         });
       }
     },
@@ -964,7 +961,9 @@ export function EnvironmentProviderSettings({
       resolveProviderInstanceEnabled(instance) &&
       !resolveProviderInstanceEnabled({ driver: driverKind });
     const confirmed = await confirmProviderInstanceRemoval(
-      `Reset the ${providerInstanceName(instance)} provider to its defaults?`,
+      gt("Reset the {provider} provider to its defaults?", {
+        provider: providerInstanceName(instance),
+      }),
       turnsOff ? " It will also be turned off." : "",
     );
     if (!confirmed) return;
@@ -973,8 +972,8 @@ export function EnvironmentProviderSettings({
       const error = squashAtomCommandFailure(result);
       toastManager.add({
         type: "error",
-        title: "Could not reset provider instance",
-        description: error instanceof Error ? error.message : "The settings update failed.",
+        title: gt("Could not reset provider instance"),
+        description: error instanceof Error ? error.message : gt("The settings update failed."),
       });
     }
   });
@@ -1103,7 +1102,7 @@ export function EnvironmentProviderSettings({
   return (
     <>
       <SettingsSection
-        {...searchableSetting("providers")}
+        {...setting("providers")}
         variant="plain"
         titleAction={
           !readOnly ? (
@@ -1114,18 +1113,17 @@ export function EnvironmentProviderSettings({
                     size="icon-xs"
                     variant="ghost-muted"
                     onClick={() => setIsAddInstanceDialogOpen(true)}
-                    aria-label="Add provider"
+                    aria-label={gt("Add provider")}
                   >
                     <PlusIcon />
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Add provider</TooltipPopup>
+              <TooltipPopup side="top">{gt("Add provider")}</TooltipPopup>
             </Tooltip>
           ) : null
         }
         headerAction={
-          // The ghost button's padding would inset its label; the New design aligns the text to the card edge.
           <div className="flex min-w-0 items-center gap-2 redesign:-me-2">
             <ProviderUpdatesAction />
             <Tooltip>
@@ -1161,8 +1159,11 @@ export function EnvironmentProviderSettings({
         {readOnly ? (
           <SettingsGroup divided={false} className="overflow-hidden">
             <SettingsRow
-              title="Limited permissions"
-              description={`This session can view ${environmentLabel}'s providers but can't change their settings.`}
+              title={gt("Limited permissions")}
+              description={gt(
+                "This session can view {device}'s providers but can't change their settings.",
+                { device: environmentLabel },
+              )}
             />
           </SettingsGroup>
         ) : null}
@@ -1188,7 +1189,7 @@ export function EnvironmentProviderSettings({
                     onClick={() => setIsAddInstanceDialogOpen(true)}
                   >
                     <PlusIcon className="size-4 shrink-0" />
-                    Add provider
+                    {gt("Add provider")}
                   </button>
                 ) : null}
               </div>
@@ -1206,8 +1207,8 @@ export function EnvironmentProviderSettings({
             ) : (
               <div className="p-6 text-sm text-muted-foreground">
                 {targetInstanceMissing
-                  ? "This provider instance is no longer available on this device."
-                  : "No providers configured."}
+                  ? gt("This provider instance is no longer available on this device.")
+                  : gt("No providers configured.")}
               </div>
             )}
           </div>
@@ -1405,6 +1406,7 @@ function ProviderInstanceRow({
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
 }) {
+  const gt = useGT();
   const allProjects = useProjects();
   const acpProjects =
     mode === "editor" && liveProvider?.driver === "acpRegistry"
@@ -1546,17 +1548,20 @@ function ProviderInstanceRow({
           (liveProvider.status !== "ready" || authSource?.auth.canLogout) ? (
           <>
             <SettingsRow
-              title="Cloud sign-in"
+              title={gt("Cloud sign-in")}
               description={
                 authSource && authSource.enabled && !authSourceSignsInHere
-                  ? `Signs in with ${authSourceName}. Sign in to ${authSourceName} on this machine, then refresh.`
-                  : `Signs in with ${authSourceName}.`
+                  ? gt(
+                      "Signs in with {provider}. Sign in to {provider} on this machine, then refresh.",
+                      { provider: authSourceName },
+                    )
+                  : gt("Signs in with {provider}.", { provider: authSourceName })
               }
             />
             {authSource && !authSource.enabled ? (
               <SettingsRow
-                title="Account provider is off"
-                description={`Turn on ${authSourceName} to sign in.`}
+                title={gt("Account provider is off")}
+                description={gt("Turn on {provider} to sign in.", { provider: authSourceName })}
               />
             ) : !readOnly && authSource && authSourceSignsInHere ? (
               <ProviderAuthenticationSection
@@ -1569,8 +1574,8 @@ function ProviderInstanceRow({
               />
             ) : !authSource ? (
               <SettingsRow
-                title="Account unavailable"
-                description="Refresh provider status to load the account sign-in controls."
+                title={gt("Account unavailable")}
+                description={gt("Refresh provider status to load the account sign-in controls.")}
               />
             ) : null}
           </>
@@ -1592,8 +1597,10 @@ function ProviderInstanceRow({
           driver === "cursor" &&
           liveProvider?.setup?.canAuthenticate === false ? (
           <SettingsRow
-            title="Cursor account"
-            description="Using CURSOR_API_KEY. Remove it from this provider's environment to use browser sign-in."
+            title={gt("Cursor account")}
+            description={gt(
+              "Using CURSOR_API_KEY. Remove it from this provider's environment to use browser sign-in.",
+            )}
           />
         ) : null
       }

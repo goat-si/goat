@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { HubLinkDirection } from "@goat/client-runtime/state/hub-fleet";
@@ -41,6 +42,7 @@ export function HubDeviceRoutes({
   readonly alias: string;
   readonly direction: HubLinkDirection | null;
 }) {
+  const gt = useGT();
   const canRead = useAtomValue(serverEnvironment.listHubDeviceRoutes.permissionAtom(environmentId));
   const canChange = useAtomValue(
     serverEnvironment.updateHubDeviceRoutes.permissionAtom(environmentId),
@@ -151,13 +153,13 @@ export function HubDeviceRoutes({
     waiting === null ? null : (
       <div className="space-y-1.5 text-xs">
         <p className="text-muted-foreground">
-          A route change waits for a decision. A person who can change this hub's settings answers
-          it in the decision inbox. Then continue here. Other edits wait until it is continued or
-          discarded. Discard forgets it here; the decision stays in the inbox until it is answered.
+          {gt(
+            "A route change waits for a decision. A person who can change this hub's settings answers it in the decision inbox. Then continue here. Other edits wait until it is continued or discarded. Discard forgets it here; the decision stays in the inbox until it is answered.",
+          )}
         </p>
         <div className="flex flex-wrap gap-2">
           <Button size="xs" variant="outline" render={<Link to="/settings/decision-inbox" />}>
-            Open decision
+            {gt("Open decision")}
           </Button>
           <Button
             size="xs"
@@ -168,10 +170,10 @@ export function HubDeviceRoutes({
               void change(waiting.change, waiting.decisionId);
             }}
           >
-            Continue
+            {gt("Continue")}
           </Button>
           <Button size="xs" variant="ghost" disabled={busy} onClick={() => setWaiting(null)}>
-            Discard
+            {gt("Discard")}
           </Button>
         </div>
       </div>
@@ -190,22 +192,25 @@ export function HubDeviceRoutes({
             void read();
           }}
         >
-          Routes
+          {gt("Routes")}
         </Button>
         {waitingNotice}
       </>
     );
   return (
-    <section aria-label={`Routes of ${alias}`} className="space-y-2 rounded-md border p-2 text-xs">
+    <section
+      aria-label={gt("Routes of {alias}", { alias })}
+      className="space-y-2 rounded-md border p-2 text-xs"
+    >
       <div className="flex items-center gap-2">
-        <span className="font-medium">SSH routes, tried in order</span>
+        <span className="font-medium">{gt("SSH routes, tried in order")}</span>
         <Button size="xs" variant="ghost" className="ml-auto" onClick={() => setOpen(false)}>
-          Close
+          {gt("Close")}
         </Button>
       </div>
       {routes?.exclusive === true ? (
         <p className="text-muted-foreground">
-          This link is exclusive: its one route is fixed, so it cannot be edited here.
+          {gt("This link is exclusive: its one route is fixed, so it cannot be edited here.")}
         </p>
       ) : null}
       {routes === null ? null : (
@@ -216,36 +221,36 @@ export function HubDeviceRoutes({
               <span className="font-mono">{route}</span>
               {route === routes.pin ? (
                 <Badge size="sm" variant="outline">
-                  pinned
+                  {gt("pinned")}
                 </Badge>
               ) : null}
               <span className="ml-auto flex gap-1">
                 <Button
                   size="xs"
                   variant="ghost"
-                  aria-label={`Move ${route} up`}
+                  aria-label={gt("Move {route} up", { route })}
                   disabled={busy || !editable || index === 0}
                   onClick={() => move(index, index - 1)}
                 >
-                  Up
+                  {gt("Up")}
                 </Button>
                 <Button
                   size="xs"
                   variant="ghost"
-                  aria-label={`Move ${route} down`}
+                  aria-label={gt("Move {route} down", { route })}
                   disabled={busy || !editable || index === routes.routes.length - 1}
                   onClick={() => move(index, index + 1)}
                 >
-                  Down
+                  {gt("Down")}
                 </Button>
                 <Button
                   size="xs"
                   variant="ghost"
-                  aria-label={`Remove ${route}`}
+                  aria-label={gt("Remove {route}", { route })}
                   disabled={busy || !editable || route === routes.pin}
                   onClick={() => void change({ op: "remove", route })}
                 >
-                  Remove
+                  {gt("Remove")}
                 </Button>
               </span>
             </li>
@@ -264,8 +269,8 @@ export function HubDeviceRoutes({
       >
         <Input
           size="sm"
-          aria-label={`New route for ${alias}`}
-          placeholder="SSH alias of the same machine"
+          aria-label={gt("New route for {alias}", { alias })}
+          placeholder={gt("SSH alias of the same machine")}
           value={draft}
           disabled={busy || !editable}
           onChange={(event) => setDraft(event.target.value)}
@@ -276,12 +281,12 @@ export function HubDeviceRoutes({
           type="submit"
           disabled={busy || !editable || draft.trim() === ""}
         >
-          {busy ? "Working…" : "Add route"}
+          {busy ? gt("Working…") : gt("Add route")}
         </Button>
       </form>
       {readError === null ? null : (
         <p role="alert" className="text-destructive">
-          Could not read the routes again: {readError}
+          {gt("Could not read the routes again: {error}", { error: readError })}
         </p>
       )}
       {answer === null || (answer.state === "ok" && answer.code === undefined) ? null : (

@@ -1,3 +1,5 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT } from "gt-react";
 import type { EnvironmentId, UnifiedSettings, UsageLimitSourceConfig } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { PlusIcon } from "~/components/solar";
@@ -20,7 +22,6 @@ import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
 import { SecretReferencePicker } from "./SecretReferencePicker";
 import { SecretInput } from "./SecretInput";
-import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function UsageProviderSettings({
@@ -36,6 +37,8 @@ export function UsageProviderSettings({
   readonly cursorKeychainUsageEnabled: boolean;
   readonly readOnly: boolean;
 }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const updateCursorSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "update Cursor account usage",
@@ -64,12 +67,12 @@ export function UsageProviderSettings({
   return (
     <>
       <SettingsSection
-        {...searchableSetting("usage-providers")}
+        {...localizedSetting("usage-providers")}
         headerAction={
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setAdding(true)}>
               <PlusIcon className="size-3" aria-hidden />
-              Add CLIProxyAPI hub
+              {gt("Add CLIProxyAPI hub")}
             </Button>
           ) : null
         }
@@ -77,11 +80,13 @@ export function UsageProviderSettings({
         {platform?.os === "darwin" ? (
           <SettingsRow
             id="cursor-keychain-usage"
-            title="Cursor account usage"
-            description="Read your existing Cursor CLI login from macOS Keychain to show account history and monthly limits. macOS may ask you to allow access."
+            title={gt("Cursor account usage")}
+            description={gt(
+              "Read your existing Cursor CLI login from macOS Keychain to show account history and monthly limits. macOS may ask you to allow access.",
+            )}
             control={
               <Switch
-                aria-label="Cursor account usage"
+                aria-label={gt("Cursor account usage")}
                 checked={cursorKeychainUsageEnabled}
                 disabled={readOnly || updatingCursor}
                 onCheckedChange={(enabled) => void setCursorUsageEnabled(enabled)}
@@ -90,7 +95,7 @@ export function UsageProviderSettings({
           />
         ) : null}
         {entries.length === 0 ? (
-          <SettingsRow title="No CLIProxyAPI hubs added." />
+          <SettingsRow title={gt("No CLIProxyAPI hubs added.")} />
         ) : (
           entries.map(([id, source]) => {
             const label = source.label?.trim() || source.url;
@@ -108,7 +113,7 @@ export function UsageProviderSettings({
                   source.managementKeyReference != null || source.managementKey === "" ? (
                     <>
                       {source.managementKeyReference == null ? (
-                        <span>Management key not set. Re-enter it for this address.</span>
+                        <span>{gt("Management key not set. Re-enter it for this address.")}</span>
                       ) : null}
                       <UsageSourceReference
                         environmentId={environmentId}
@@ -156,6 +161,7 @@ function UsageSourceReference({
   readonly readOnly: boolean;
   readonly onSave: (source: UsageLimitSourceConfig) => void;
 }) {
+  const gt = useGT();
   const [stored, setStored] = useState(
     source.managementKeyReference == null && source.managementKey === "",
   );
@@ -177,7 +183,7 @@ function UsageSourceReference({
       {stored && !readOnly ? (
         <div>
           <SecretInput
-            aria-label="Replacement management key"
+            aria-label={gt("Replacement management key")}
             value={key}
             onChange={(event) => setKey(event.target.value)}
           />
@@ -190,7 +196,7 @@ function UsageSourceReference({
               setKey("");
             }}
           >
-            Save key
+            {gt("Save key")}
           </Button>
           {source.managementKeyReference != null || source.managementKey !== "" ? (
             <Button
@@ -201,7 +207,7 @@ function UsageSourceReference({
                 setKey("");
               }}
             >
-              Cancel
+              {gt("Cancel")}
             </Button>
           ) : null}
         </div>
@@ -217,24 +223,27 @@ function RemoveUsageProviderButton({
   readonly label: string;
   readonly onConfirm: () => void;
 }) {
+  const gt = useGT();
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button size="xs" variant="ghost" onClick={() => setOpen(true)}>
-        Remove
+        {gt("Remove")}
       </Button>
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {label}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The hub's management key is deleted from this server. Its accounts leave the Limits
-              view; the hub itself is untouched. Add it again with the URL and key to bring them
-              back.
+              {gt(
+                "The hub's management key is deleted from this server. Its accounts leave the Limits view; the hub itself is untouched. Add it again with the URL and key to bring them back.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               variant="destructive"
               onClick={() => {
@@ -242,7 +251,7 @@ function RemoveUsageProviderButton({
                 onConfirm();
               }}
             >
-              Remove hub
+              {gt("Remove hub")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

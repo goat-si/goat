@@ -8,12 +8,6 @@ import {
 import { resolveScratchProjectScopeKey } from "@goat/client-runtime/state/project-grouping";
 import type { Project } from "./types";
 
-export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
-  repository: "Group by repository",
-  repository_path: "Group by repository path",
-  separate: "Keep separate",
-};
-
 export function withProjectGroupingOverride(
   overrides: Readonly<Record<string, SidebarProjectGroupingMode>> | undefined,
   overrideKey: string,

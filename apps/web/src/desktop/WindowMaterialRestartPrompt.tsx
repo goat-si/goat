@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { isSystemMaterialRequested, type DesktopWindowMaterialReason } from "@goat/contracts";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { onClientSettingsPersisted, useClientSettings } from "../hooks/useSettings";
@@ -24,18 +25,19 @@ export function WindowMaterialRestartDialog({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const gt = useGT();
   const [restarting, setRestarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
 
   const restart = async () => {
     const relaunch = window.desktopBridge?.relaunchForWindowMaterial;
     if (!relaunch) return;
     setRestarting(true);
-    setError(null);
+    setFailed(false);
     try {
       await relaunch();
     } catch {
-      setError("Couldn't restart GOAT. Quit and reopen it to use Liquid Glass.");
+      setFailed(true);
       setRestarting(false);
     }
   };
@@ -46,30 +48,35 @@ export function WindowMaterialRestartDialog({
       onOpenChange={(next) => {
         if (restarting) return;
         onOpenChange(next);
-        if (!next) setError(null);
+        if (!next) setFailed(false);
       }}
     >
       <AlertDialogPopup>
         <AlertDialogHeader>
-          <AlertDialogTitle>Restart GOAT to use Liquid Glass?</AlertDialogTitle>
+          <AlertDialogTitle>{gt("Restart GOAT to use Liquid Glass?")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Liquid Glass applies once GOAT reopens its window. Agents and terminals running in GOAT
-            on this computer will stop.
+            {gt(
+              "Liquid Glass applies once GOAT reopens its window. Agents and terminals running in GOAT on this computer will stop.",
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error ? <p className="px-6 pb-4 text-sm text-destructive">{error}</p> : null}
+        {failed ? (
+          <p className="px-6 pb-4 text-sm text-destructive">
+            {gt("Couldn't restart GOAT. Quit and reopen it to use Liquid Glass.")}
+          </p>
+        ) : null}
         <AlertDialogFooter>
           <AlertDialogClose disabled={restarting} render={<Button variant="outline" />}>
-            Later
+            {gt("Later")}
           </AlertDialogClose>
           <Button disabled={restarting} onClick={() => void restart()}>
             {restarting ? (
               <>
                 <Spinner size="sm" />
-                Restarting…
+                {gt("Restarting…")}
               </>
             ) : (
-              "Restart now"
+              gt("Restart now")
             )}
           </Button>
         </AlertDialogFooter>

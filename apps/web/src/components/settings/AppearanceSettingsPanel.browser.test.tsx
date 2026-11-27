@@ -1,3 +1,5 @@
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
 import { RegistryProvider } from "@effect/atom-react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -129,7 +131,7 @@ it("saves a chosen image and selects the custom background", async () => {
   await screen.getByRole("combobox", { name: "Style" }).click();
   await screen.getByRole("option", { name: "Liquid Glass" }).click();
   const image = new File(["image"], "background.png", { type: "image/png" });
-  await userEvent.upload(screen.getByLabelText("Background image"), image);
+  await userEvent.upload(screen.getByLabelText("Background image", { exact: true }), image);
   await vi.waitFor(() => expect(backdrop.save).toHaveBeenCalledWith(image));
   await vi.waitFor(() => expect(getClientSettings().glassBackdrop).toBe("custom"));
   await expect
@@ -150,7 +152,7 @@ it("shows the image validation error in the Background row", async () => {
   await screen.getByRole("combobox", { name: "Style" }).click();
   await screen.getByRole("option", { name: "Liquid Glass" }).click();
   await userEvent.upload(
-    screen.getByLabelText("Background image"),
+    screen.getByLabelText("Background image", { exact: true }),
     new File(["text"], "not-image.png", { type: "image/png" }),
   );
   await expect.element(screen.getByText("Choose an image file.")).toBeVisible();
@@ -175,4 +177,23 @@ it("removes a stored background and returns to the built-in background", async (
   await screen.getByRole("button", { name: "Remove" }).click();
   await vi.waitFor(() => expect(backdrop.clear).toHaveBeenCalledOnce());
   await vi.waitFor(() => expect(getClientSettings().glassBackdrop).toBe("built-in"));
+});
+
+it("provides Korean accessible names for background controls and the animation preview", async () => {
+  backdrop.presence = "missing";
+  using _fixture = materialBridge();
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <RegistryProvider>
+        <AppearanceSettingsPanel />
+      </RegistryProvider>
+    </GTProvider>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "패널 애니메이션 미리보기 다시 재생" }))
+    .toBeInTheDocument();
+  await screen.getByRole("combobox", { name: "스타일" }).click();
+  await screen.getByRole("option", { name: "Liquid Glass" }).click();
+  await expect.element(screen.getByRole("combobox", { name: "배경" })).toBeVisible();
+  await expect.element(screen.getByLabelText("배경 이미지", { exact: true })).toBeInTheDocument();
 });

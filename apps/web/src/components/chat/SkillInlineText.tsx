@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { ScopedThreadRef, ServerProviderSkill } from "@goat/contracts";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import { Children, cloneElement, isValidElement, type ReactNode } from "react";
@@ -74,30 +75,45 @@ function SkillChip(props: {
   rawText: string;
   threadRef: ScopedThreadRef | undefined;
 }) {
+  const gt = useGT();
   const label = formatProviderSkillDisplayName(props.skill);
   const description = props.skill.description?.trim() || props.skill.shortDescription?.trim();
+  return (
+    <SkillDetailsPopover label={label} description={description} copyMarkdown={props.rawText}>
+      {props.threadRef && props.skill.path ? (
+        <PopoverClose
+          render={<Button variant="outline" size="sm" />}
+          onClick={() => {
+            if (props.threadRef)
+              useRightPanelStore.getState().openFile(props.threadRef, props.skill.path);
+          }}
+        >
+          {gt("View instructions")}
+        </PopoverClose>
+      ) : null}
+    </SkillDetailsPopover>
+  );
+}
+
+export function SkillDetailsPopover(props: {
+  label: string;
+  description: string | null | undefined;
+  copyMarkdown?: string;
+  children: ReactNode;
+}) {
+  const gt = useGT();
   return (
     <ContextChipPopover
       kind="skill"
       icon={<SkillChipIcon />}
-      label={label}
-      accessibleLabel={`Skill ${label}`}
-      copyMarkdown={props.rawText}
+      label={props.label}
+      accessibleLabel={gt("Skill {skill}", { skill: props.label })}
+      {...(props.copyMarkdown === undefined ? {} : { copyMarkdown: props.copyMarkdown })}
     >
       <div className="space-y-3 p-2 text-sm">
-        <p className="font-medium">{label}</p>
-        <p>{description || "No description is available for this skill."}</p>
-        {props.threadRef && props.skill.path ? (
-          <PopoverClose
-            render={<Button variant="outline" size="sm" />}
-            onClick={() => {
-              if (props.threadRef)
-                useRightPanelStore.getState().openFile(props.threadRef, props.skill.path);
-            }}
-          >
-            View instructions
-          </PopoverClose>
-        ) : null}
+        <p className="font-medium">{props.label}</p>
+        <p>{props.description || gt("No description is available for this skill.")}</p>
+        {props.children}
       </div>
     </ContextChipPopover>
   );

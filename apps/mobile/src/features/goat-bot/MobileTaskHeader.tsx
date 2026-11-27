@@ -1,7 +1,10 @@
 import {
+  botTaskAttemptEvidence,
+  newestBotTaskSummary,
   taskAttemptLabel,
   mergeBotRemoteWorkers,
   type BotWorkTask,
+  type GoatBotEnvironmentInput,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import type {
@@ -11,10 +14,12 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 
+import { useGT } from "../../i18n/I18nProvider";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotTaskActivity } from "./mobileBotWorkDetails";
+import { MobileRequiredResults } from "./MobileRequiredResults";
 import { MobileTaskActions } from "./MobileTaskActions";
 import {
   mobileBotTaskStatus,
@@ -60,11 +65,12 @@ export function MobileTaskHeader(props: {
     ReturnType<typeof useMobileTaskScreen>,
     "lookup" | "canUpdate" | "update" | "retried"
   > &
-    Partial<Pick<ReturnType<typeof useMobileTaskScreen>, "snooze">>;
+    Partial<Pick<ReturnType<typeof useMobileTaskScreen>, "snooze" | "listedDetails">>;
   /** The title the opener carried, else the conversation card's. */
   readonly title: string | null;
   readonly botName: string;
   readonly environmentId: EnvironmentId | null;
+  readonly environments?: ReadonlyArray<Pick<GoatBotEnvironmentInput, "environmentId" | "label">>;
   readonly enabled: boolean;
   readonly canRetry: boolean;
   /** A settled current list, or the one kept offline, that does not hold this task. */
@@ -79,6 +85,7 @@ export function MobileTaskHeader(props: {
   /** The conversation's card, drawn without the status it may no longer hold for older work. */
   readonly card: GoatBotTaskCard | null;
 }) {
+  const gt = useGT();
   const { lookup, canUpdate, retried } = props.screen;
   const onUpdate = (input: ChannelUpdateTaskViewInput) => void props.screen.update(input);
   useMobileStatusAnnouncement(props.task === undefined ? lookupLine(lookup) : null, {
@@ -101,15 +108,25 @@ export function MobileTaskHeader(props: {
         : unavailable
           ? lookedUpTitle(unavailable.task.task.title, unavailable.task.task.titleTruncated)
           : (props.title ?? "Task thread");
+  const result =
+    lookup.state === "known" || lookup.state === "unavailable" ? lookup.result : undefined;
+  const details = props.screen.listedDetails ?? result;
+  const summary = props.task
+    ? newestBotTaskSummary(props.task.row.task, details)
+    : (task?.row.task ?? unavailable?.task.task);
   const status = task
-    ? mobileBotTaskStatus(task.row, props.chips)
+    ? mobileBotTaskStatus({ ...task.row, task: summary ?? task.row.task }, props.chips)
     : unavailable
       ? mobileTaskSummaryStatus(unavailable.task.task, props.chips)
       : null;
-  const generation = task?.row.task.generation ?? unavailable?.task.task.generation;
-  const doneMeans = task?.row.task.doneMeans ?? unavailable?.task.task.doneMeans;
-  const result =
-    lookup.state === "known" || lookup.state === "unavailable" ? lookup.result : undefined;
+  const generation = summary?.generation;
+  const doneMeans = summary?.doneMeans;
+  const evidence = botTaskAttemptEvidence(details, summary);
+  const worker = evidence?.worker;
+  const machine =
+    worker?.host ??
+    props.environments?.find((entry) => entry.environmentId === worker?.environmentId)?.label ??
+    worker?.environmentId;
   return (
     <View className="gap-2 border-b border-border px-4 py-3">
       <Text className="font-semibold text-foreground">{title}</Text>
@@ -121,9 +138,30 @@ export function MobileTaskHeader(props: {
       ) : null}
       {doneMeans !== undefined && (
         <Text className="text-foreground-muted">
-          <Text className="font-medium text-foreground">Done means</Text> {doneMeans}
+          <Text className="font-medium text-foreground">{gt("Done means")}</Text> {doneMeans}
         </Text>
       )}
+      {machine && (
+        <Text className="text-foreground-muted">
+          <Text className="font-medium text-foreground">{gt("Worker machine")}</Text> {machine}
+        </Text>
+      )}
+      {evidence?.summary && (
+        <ScrollView className="max-h-24" nestedScrollEnabled>
+          <Text className="text-foreground-muted">
+            <Text className="font-medium text-foreground">{gt("Latest update")}</Text>{" "}
+            {evidence.summary}
+          </Text>
+        </ScrollView>
+      )}
+      {evidence?.report && (
+        <Text className="text-foreground-muted">
+          {evidence.report === "present"
+            ? gt("Worker report received")
+            : gt("Worker report missing")}
+        </Text>
+      )}
+      <MobileRequiredResults work={details} task={summary} />
       {result?.activity && <MobileBotTaskActivity work={result} />}
       {!props.enabled ? (
         <Text className="text-foreground-muted">

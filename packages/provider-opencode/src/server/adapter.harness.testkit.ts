@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import { openCodePermissionRules, makeOpenCodeAdapterV2, OPENCODE_PROVIDER } from "./adapter.ts";
@@ -167,6 +168,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
   client: object,
   options: {
     readonly external?: boolean;
+    readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
     readonly model?: string;
     readonly modelOptions?: ReadonlyArray<ProviderOptionSelection>;
     readonly memory?: Pick<
@@ -188,6 +190,7 @@ export const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness"
     instanceId,
     settings: OPEN_CODE_TEST_SETTINGS,
     environment: {},
+    ...(options.nativeEventLogger && { nativeEventLogger: options.nativeEventLogger }),
   }).pipe(
     Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
       connectToOpenCodeServer: () =>

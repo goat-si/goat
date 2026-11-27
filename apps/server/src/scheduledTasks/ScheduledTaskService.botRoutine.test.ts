@@ -870,6 +870,12 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         assert.isEmpty(yield* migrate);
         yield* sql`UPDATE effect_sql_migrations SET name='ChannelLedger' WHERE name='ChannelLedgerRequiresWorkerReleaseAuthority'`;
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 177`;
+        yield* sql`DROP TRIGGER conversation_memory_delete_thread`;
+        yield* sql`DROP TRIGGER conversation_memory_mark_paused_message`;
+        yield* sql`DROP TABLE conversation_memory_excluded_messages`;
+        yield* sql`DROP INDEX conversation_memory_run_inputs`;
+        yield* sql`DROP TABLE conversation_memory_policy`;
+        yield* sql`ALTER TABLE channel_inbox DROP COLUMN conversation_memory_enabled`;
         yield* sql`ALTER TABLE channel_inbox DROP COLUMN auth_session_id`;
         yield* sql`ALTER TABLE remote_dispatches DROP COLUMN remote_environment_id`;
         yield* sql`DROP TABLE channel_bot_attention`;
@@ -884,15 +890,6 @@ it.effect("work triggers fence startup on a build that cannot enforce their gran
         yield* sql`ALTER TABLE channel_tasks DROP COLUMN status_version`;
         yield* sql`DELETE FROM channel_runtime_state WHERE key = 'bot-task-activity-since'`;
         yield* sql`ALTER TABLE channel_conversations DROP COLUMN slack_bot_id`;
-        for (const trigger of [
-          "count_insert",
-          "count_update",
-          "count_delete",
-          "run_insert",
-          "run_delete",
-        ])
-          yield* sql.unsafe(`DROP TRIGGER orchestration_v2_thread_item_counts_${trigger}`);
-        yield* sql`DROP TABLE orchestration_v2_projection_thread_item_counts`;
         assert.isUndefined(yield* checkOldBuild(176));
         assert.deepStrictEqual(
           yield* runMigrations({ toMigrationInclusive: 177 }).pipe(

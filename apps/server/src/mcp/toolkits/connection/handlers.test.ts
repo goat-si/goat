@@ -1,3 +1,4 @@
+import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
 import * as Setup from "../../../sshRemote/SshHostSetup.ts";
 import * as Sessions from "../../../auth/SessionStore.ts";
@@ -108,6 +109,11 @@ const testLayer = (
     Layer.provideMerge(Layer.succeed(McpInvocationContext.McpInvocationContext, caller)),
     Layer.provideMerge(
       SshDeviceAdd.layer.pipe(
+        Layer.provide(
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+            identifyTarget: () => Effect.succeed(null),
+          }),
+        ),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(Sessions.SessionStore)({ cookieName: "test", legacyCookieName: undefined }),

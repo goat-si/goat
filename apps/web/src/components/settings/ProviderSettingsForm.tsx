@@ -1,3 +1,4 @@
+import { useGT, msg, useMessages } from "gt-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { supportsProviderHome } from "@goat/client-runtime/state/provider-instance-display";
 import { isMiniMaxCode } from "@goat/provider-acp-registry/settings";
@@ -187,6 +188,7 @@ function ProviderCommandArguments({
   value,
   onChange,
 }: Pick<ProviderSettingsFormProps, "value" | "onChange">) {
+  const gt = useGT();
   const args = configuredCommandArgs(value);
   const [rows, setRows] = useState(() => args.map(makeCommandArgumentDraftRow));
   const rowsRef = useRef(rows);
@@ -220,8 +222,8 @@ function ProviderCommandArguments({
 
   return (
     <SettingsRow
-      title="Arguments"
-      description="One literal argument per row, in launch order."
+      title={gt("Arguments")}
+      description={gt("One literal argument per row, in launch order.")}
       control={
         <Button
           type="button"
@@ -230,7 +232,7 @@ function ProviderCommandArguments({
           onClick={() => updateArguments([...rowsRef.current, makeCommandArgumentDraftRow("")])}
         >
           <PlusIcon />
-          Add argument
+          {gt("Add argument")}
         </Button>
       }
     >
@@ -373,6 +375,7 @@ function ProviderSettingsTextInput({
   readonly descriptionId: string | undefined;
   readonly onChange: ProviderSettingsFormProps["onChange"];
 }) {
+  const gt = useGT();
   const [rejected, setRejected] = useState<string | null>(null);
   return (
     <div className="flex w-full min-w-0 flex-col gap-1 @min-[32rem]/settings-row:w-56">
@@ -398,7 +401,7 @@ function ProviderSettingsTextInput({
         spellCheck={false}
       />
       {rejected !== null ? (
-        <p className="text-2xs text-destructive">Enter a valid value. It was not saved.</p>
+        <p className="text-2xs text-destructive">{gt("Enter a valid value. It was not saved.")}</p>
       ) : null}
     </div>
   );
@@ -433,6 +436,7 @@ function ProviderSettingsFieldRow({
   variant,
   onChange,
 }: ProviderSettingsFieldRowProps) {
+  const gt = useGT();
   const inputId = `${idPrefix}-${field.key}`;
   const descriptionClassName =
     variant === "dialog"
@@ -492,7 +496,7 @@ function ProviderSettingsFieldRow({
               size="sm"
               className="min-w-0 flex-1"
               configured={secretConfigured}
-              placeholder="Enter or re-enter secret"
+              placeholder={gt("Enter or re-enter secret")}
               value=""
               onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
             />
@@ -640,6 +644,40 @@ function ProviderSettingsFieldRow({
   );
 }
 
+// Provider schemas also run on the server. Mark built-in field copy here for the web catalog.
+const BUILT_IN_FIELD_MESSAGES = new Set<string>([
+  msg("Binary path"),
+  msg("Path to the Codex binary used by this instance."),
+  msg("CODEX_HOME path"),
+  msg("Custom Codex home and config directory."),
+  msg("Shadow home path"),
+  msg("Account-specific Codex home. Keeps auth.json separate while sharing state from CODEX_HOME."),
+  msg("Launch arguments"),
+  msg("Additional CLI arguments passed to codex app-server on session start."),
+  msg("Path to the Claude binary used by this instance."),
+  msg("CLAUDE_CONFIG_DIR path"),
+  msg("Custom Claude home and config directory. Keeps .claude.json and .claude separate."),
+  msg("Additional CLI arguments passed on session start."),
+  msg("Auto-compact after"),
+  msg("Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude's default."),
+  msg("Compact idle threads"),
+  msg(
+    "When to compact an idle thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Overrides the default in General settings.",
+  ),
+  msg("Claude login instance"),
+  msg("ID of the local Claude instance whose binary and claude.ai login this cloud provider uses."),
+  msg("Sign-in method"),
+  msg("Google accounts use your subscription; API keys and Agent Platform bill usage."),
+  msg("API key"),
+  msg("Gemini or Vertex AI express key. Stored separately on the host."),
+  msg("GCP project"),
+  msg("Required for Gemini Enterprise. Agent Platform uses it when no API key is set."),
+  msg("GCP location"),
+  msg("Region for Gemini Enterprise or Agent Platform."),
+  msg("Executable"),
+  msg("Executable name or path on this environment."),
+]);
+
 export function ProviderSettingsForm({
   definition,
   environmentId,
@@ -648,6 +686,8 @@ export function ProviderSettingsForm({
   variant: formVariant,
   onChange,
 }: ProviderSettingsFormProps) {
+  const m = useMessages();
+  const fieldText = (text: string) => (BUILT_IN_FIELD_MESSAGES.has(text) ? m(text) : text);
   const variant = formVariant === "instance-settings" ? "settings" : formVariant;
   // Settings shows the Home route in its own section; the add-instance forms keep these fields.
   const fields = deriveProviderSettingsFields(definition, value).filter(
@@ -671,7 +711,11 @@ export function ProviderSettingsForm({
       {fields.map((field) => (
         <ProviderSettingsFieldRow
           key={field.key}
-          field={field}
+          field={{
+            ...field,
+            label: fieldText(field.label),
+            ...(field.description ? { description: fieldText(field.description) } : {}),
+          }}
           environmentId={environmentId}
           allowReference={
             (definition.driverKind === "antigravity" && field.key === "apiKey") ||

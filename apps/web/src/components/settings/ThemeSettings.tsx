@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { CheckIcon } from "~/components/solar";
 import { useState } from "react";
 import { useEnvironmentThemeDefinitions } from "../../hooks/useEnvironmentTheme";
@@ -34,7 +35,7 @@ import { ThemeImportDialog } from "./ThemeImportDialog";
 import { ThemeBackgroundNotice } from "./ThemeBackgroundNotice";
 import { ThemePickerMenu, type ThemeChoice } from "./ThemePickerMenu";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { useThemeEditorStore } from "./themeEditorStore";
 import {
   STANDARD_THEME_CARDS,
@@ -88,6 +89,7 @@ export function ThemeLibrary({
   themeHalves: ThemeHalves | null;
   setThemeHalf: (appearance: ThemeAppearance, themeId: string | null) => boolean;
 }) {
+  const gt = useGT();
   const openThemeEditor = useThemeEditorStore((store) => store.openThemeEditor);
   const environmentThemes = useEnvironmentThemeDefinitions();
   const [themeRemovalTarget, setThemeRemovalTarget] = useState<{
@@ -107,8 +109,8 @@ export function ThemeLibrary({
     toastManager.add(
       stackedThreadToast({
         type: "error",
-        title: "Couldn’t save theme selection",
-        description: "Try again.",
+        title: gt("Couldn’t save theme selection"),
+        description: gt("Try again."),
       }),
     );
   };
@@ -117,8 +119,8 @@ export function ThemeLibrary({
     toastManager.add(
       stackedThreadToast({
         type: "error",
-        title: "Couldn’t remove theme",
-        description: "Try again.",
+        title: gt("Couldn’t remove theme"),
+        description: gt("Try again."),
       }),
     );
   };
@@ -233,7 +235,7 @@ export function ThemeLibrary({
     openThemeEditor({
       editingThemeId: null,
       seedThemeId,
-      seedName: `${label} copy`,
+      seedName: gt("{name} copy", { name: label }),
       initialAppearance,
     });
 
@@ -309,16 +311,18 @@ export function ThemeLibrary({
   ];
 
   const ownerLabel = (id: string | null) => cardDefById(id).label;
+  const setting = useTranslatedSearchableSetting();
   const appearanceOption =
     APPEARANCE_OPTIONS.find((option) => option.mode === appearanceMode) ?? APPEARANCE_OPTIONS[0];
+  const appearanceLabels = { system: gt("System"), light: gt("Light"), dark: gt("Dark") };
   const AppearanceIcon = appearanceOption.icon;
 
   return (
     <>
       <ThemeBackgroundNotice />
       <SettingsRow
-        {...searchableSetting("color-scheme")}
-        description="Follow the system appearance, or stay in light or dark mode."
+        {...setting("color-scheme")}
+        description={gt("Follow the system appearance, or stay in light or dark mode.")}
         control={
           <Select
             value={appearanceMode}
@@ -326,16 +330,20 @@ export function ThemeLibrary({
               if (value === "system" || value === "light" || value === "dark") setMode(value);
             }}
           >
-            <SelectTrigger aria-label="Color scheme" className="w-full sm:w-40" size="sm">
+            <SelectTrigger
+              aria-label={setting("color-scheme").title}
+              className="w-full sm:w-40"
+              size="sm"
+            >
               <AppearanceIcon aria-hidden />
-              <SelectValue>{appearanceOption.label}</SelectValue>
+              <SelectValue>{appearanceLabels[appearanceOption.mode]}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              {APPEARANCE_OPTIONS.map(({ mode, label, icon: Icon }) => (
+              {APPEARANCE_OPTIONS.map(({ mode, icon: Icon }) => (
                 <SelectItem key={mode} value={mode}>
                   <span className="flex items-center gap-2">
                     <Icon aria-hidden />
-                    {label}
+                    {appearanceLabels[mode]}
                   </span>
                 </SelectItem>
               ))}
@@ -344,8 +352,8 @@ export function ThemeLibrary({
         }
       />
       <SettingsRow
-        {...searchableSetting("theme")}
-        description="Choose colors for light and dark mode, or create your own theme."
+        {...setting("theme")}
+        description={gt("Choose colors for light and dark mode, or create your own theme.")}
         control={
           <ThemePickerMenu
             choices={choices}
@@ -370,14 +378,18 @@ export function ThemeLibrary({
       <ThemeImportDialog
         onImportedMany={(importedThemes, { updated }) => {
           if (updated) refreshTheme();
-          const verb = updated ? "updated" : "added";
+          const name = importedThemes[0]?.label;
           toastManager.add(
             stackedThreadToast({
               type: "success",
               title:
-                importedThemes.length === 1
-                  ? `${importedThemes[0]!.label} ${verb}`
-                  : `${importedThemes.length} themes ${verb}`,
+                importedThemes.length === 1 && name !== undefined
+                  ? updated
+                    ? gt("{name} updated", { name })
+                    : gt("{name} added", { name })
+                  : updated
+                    ? gt("Themes updated: {count}", { count: importedThemes.length })
+                    : gt("Themes added: {count}", { count: importedThemes.length }),
               description: importedThemes.map((imported) => imported.label).join(", "),
             }),
           );
@@ -389,8 +401,11 @@ export function ThemeLibrary({
             toastManager.add(
               stackedThreadToast({
                 type: "success",
-                title: `${importedTheme.label} added`,
-                description: `It’s now your ${modes[0]!} theme.`,
+                title: gt("{name} added", { name: importedTheme.label }),
+                description:
+                  modes[0] === "light"
+                    ? gt("It’s now your light theme.")
+                    : gt("It’s now your dark theme."),
               }),
             );
             return true;
@@ -399,8 +414,8 @@ export function ThemeLibrary({
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: `${importedTheme.label} added`,
-              description: "It’s now active.",
+              title: gt("{name} added", { name: importedTheme.label }),
+              description: gt("It’s now active."),
             }),
           );
           return true;
@@ -413,13 +428,15 @@ export function ThemeLibrary({
           <AlertDialogHeader>
             <AlertDialogTitle>
               {canRemoveCollection
-                ? `Remove themes from “${removeDialogCollectionLabel}”?`
-                : `Remove “${removeDialogTheme?.label}”?`}
+                ? gt("Remove themes from “{name}”?", { name: removeDialogCollectionLabel ?? "" })
+                : gt("Remove “{name}”?", { name: removeDialogTheme?.label ?? "" })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {canRemoveCollection
-                ? "Select the variants you want to remove. You can restore them by importing the extension again."
-                : "You can bring it back anytime by importing its JSON file."}
+                ? gt(
+                    "Select the variants you want to remove. You can restore them by importing the extension again.",
+                  )
+                : gt("You can bring it back anytime by importing its JSON file.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {canRemoveCollection ? (
@@ -473,15 +490,19 @@ export function ThemeLibrary({
             </div>
           ) : null}
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               disabled={themeIdsToRemove.length === 0}
               variant="destructive"
               onClick={handleConfirmRemoveTheme}
             >
               {canRemoveCollection
-                ? `Remove selected${themeIdsToRemove.length > 0 ? ` (${themeIdsToRemove.length})` : ""}`
-                : "Remove theme"}
+                ? themeIdsToRemove.length > 0
+                  ? gt("Remove selected ({count})", { count: themeIdsToRemove.length })
+                  : gt("Remove selected")
+                : gt("Remove theme")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

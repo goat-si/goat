@@ -59,6 +59,22 @@ const task = {
 };
 
 describe("channel tasks", () => {
+  it("reads old ledger rows and lets older peers decode task result additions", () => {
+    const {
+      requiredDeliverables: _required,
+      completionReport: _report,
+      ...fields
+    } = ChannelTask.fields;
+    const old = Schema.decodeUnknownSync(Schema.Struct(fields));
+    const added = {
+      completionReport: "present",
+      requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1 }],
+    };
+    expect(decodeTask(task)).toEqual(task);
+    expect(decodeTask({ ...task, ...added })).toMatchObject(added);
+    expect(old({ ...task, ...added })).toEqual(task);
+  });
+
   it("round-trips a task with its fixed origin and requester snapshot", () => {
     expect(roundTrip(ChannelTask, task).briefVersion).toBeUndefined();
     expect(roundTrip(ChannelTask, { ...task, briefVersion: 2 }).briefVersion).toBe(2);

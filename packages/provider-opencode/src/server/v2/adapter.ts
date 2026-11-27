@@ -3286,24 +3286,24 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const prepareMemory = Effect.fnUntraced(function* (
       sessionId: string,
       state: ThreadState,
-      turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+      turnInput: ProviderAdapter.ProviderAdapterV2TurnInput | undefined,
     ) {
-      const {
-        text: memory,
-        receipt,
-        uncertain,
-      } = yield* MemoryContext.promptMemory(turnInput, OPENCODE_PROVIDER);
-      const value = memory ?? "";
-      // Always replace, including empty clear; no local body survives this admission.
-      yield* client.session.instructions.entry.put({
-        sessionID: Session.ID.make(sessionId),
-        key: MEMORY_INSTRUCTIONS_KEY,
-        value,
+      const write = Effect.fnUntraced(function* (value: string) {
+        yield* client.session.instructions.entry.put({
+          sessionID: Session.ID.make(sessionId),
+          key: MEMORY_INSTRUCTIONS_KEY,
+          value,
+        });
+        state.memoryDigest = Hex.encode(
+          yield* crypto.digest(Digest.sha256, new TextEncoder().encode(value)),
+        );
       });
-      state.memoryDigest = Hex.encode(
-        yield* crypto.digest(Digest.sha256, new TextEncoder().encode(value)),
-      );
-      return { receipt, uncertain };
+      const snapshot = yield* MemoryContext.admitSnapshot(turnInput, OPENCODE_PROVIDER);
+      yield* write(snapshot ? MemoryContext.memoryContextText(snapshot) : "");
+      // The remote instructions update can outlive a pause. Clear it before starting the model.
+      const allowed = yield* MemoryContext.recheckSnapshot(turnInput, snapshot);
+      if (snapshot && !allowed) yield* write("");
+      return MemoryContext.deliveryReceipt(turnInput, allowed);
     });
 
     const submit = Effect.fnUntraced(function* (
@@ -3317,7 +3317,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (state.active !== turn || turn.interrupted) return false;
         if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return false;
         if (state.active !== turn || turn.interrupted) return false;
-        turn.unsent = false;
         return true;
       });
       const finishControl = lock.withPermit(
@@ -3331,11 +3330,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const goalCommand = supportsNativeGoals() ? parseGoalCommand(turnInput.message) : null;
       if (goalCommand?.type === "show") {
         if (!(yield* sending())) return;
+        turn.unsent = false;
         yield* readGoal(state);
         return yield* finishControl;
       }
       if (bare && text === "/compact") {
         if (!(yield* sending())) return;
+        turn.unsent = false;
         return yield* client.session.compact({ sessionID, id }).pipe(Effect.asVoid);
       }
       const location = { directory: turnInput.runtimePolicy.cwd ?? host.paths.cwd };
@@ -3352,15 +3353,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const before = newest.data[0]?.id ?? null;
           yield* markBefore(sessionId, before);
           if (state.active !== turn || turn.interrupted) return;
-          const { uncertain } = yield* prepareMemory(sessionId, state, turnInput);
           if (!(yield* sending())) return;
-          if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
+          const nativeControl = goalCommand?.type === "pause" || goalCommand?.type === "clear";
+          yield* prepareMemory(sessionId, state, nativeControl ? undefined : turnInput).pipe(
+            Effect.asVoid,
+          );
+          if (state.active !== turn || turn.interrupted) return;
+          turn.unsent = false;
+          if (nativeControl) {
             yield* client.session
               .command({ sessionID, ...command })
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          yield* uncertain;
           yield* client.session
             .command({ sessionID, ...command })
             .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
@@ -3386,11 +3391,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               readModels(location.directory),
             );
       if (state.active !== turn || turn.interrupted) return;
-      const { receipt, uncertain } = yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
       if (!(yield* sending())) return;
-      yield* uncertain;
+      const receipt = yield* prepareMemory(sessionId, state, turnInput);
+      if (state.active !== turn || turn.interrupted) return;
+      turn.unsent = false;
       turn.pendingMemoryReceipt = { id, receipt };
       return yield* client.session
         .prompt({

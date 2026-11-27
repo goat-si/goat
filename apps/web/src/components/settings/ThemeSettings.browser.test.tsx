@@ -1,3 +1,6 @@
+import { GTProvider } from "gt-react";
+import ko from "../../i18n/translations/ko.json";
+import { ThemePickerMenu } from "./ThemePickerMenu";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import { useState, type ReactNode } from "react";
@@ -156,4 +159,25 @@ it("reaches create, add, duplicate, edit, and remove from the theme menu", async
   await userEvent.click(screen.getByRole("menuitem", { name: "More actions for Dusk" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Remove…" }));
   await expect.element(screen.getByRole("alertdialog", { name: "Remove “Dusk”?" })).toBeVisible();
+});
+
+it("announces the selected themes in Korean for single and split modes", async () => {
+  const picker = (darkLabel: string) => (
+    <GTProvider locale="ko" translations={{ ko }}>
+      <ThemePickerMenu
+        choices={[]}
+        lightLabel="Grove"
+        darkLabel={darkLabel}
+        triggerSwatches={[]}
+        onCreate={() => {}}
+        onAdd={() => {}}
+      />
+    </GTProvider>
+  );
+  await using screen = await render(picker("Grove"));
+  await expect.element(screen.getByRole("button", { name: "테마: Grove" })).toBeVisible();
+  await screen.rerender(picker("Ember"));
+  await expect
+    .element(screen.getByRole("button", { name: "테마: 밝은 모드 Grove, 어두운 모드 Ember" }))
+    .toBeVisible();
 });

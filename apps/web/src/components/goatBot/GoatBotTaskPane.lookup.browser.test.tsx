@@ -22,6 +22,8 @@ const state = vi.hoisted(() => ({
   listEstablished: true,
   canUpdate: true,
   lookupSupported: false,
+  snoozeSupported: false,
+  changes: "stream:1:0",
   lookup: vi.fn(),
   showMenu: vi.fn(),
   send: vi.fn(() => true),
@@ -68,7 +70,14 @@ vi.mock("~/state/entities", () => ({
     new Map([
       [
         "env",
-        { environment: { capabilities: { goatBotTaskLookupSearch: state.lookupSupported } } },
+        {
+          environment: {
+            capabilities: {
+              goatBotTaskLookupSearch: state.lookupSupported,
+              goatBotTaskSnooze: state.snoozeSupported,
+            },
+          },
+        },
       ],
     ]),
   useThreadShell: () => ({}),
@@ -108,6 +117,7 @@ vi.mock("./GoatBotTimeline", async () => {
   };
 });
 // Each bot's own task list: main's, or the member's when a member's pane is open.
+vi.mock("./useGoatBotTaskChanges", () => ({ useGoatBotTaskChanges: () => state.changes }));
 vi.mock("./useBotRoster", () => ({
   useBotThreads: (_environmentId: string, bot: { botId: string } | null) => {
     state.lists.push(bot?.botId ?? null);
@@ -187,6 +197,8 @@ function setup() {
   state.listFailed = false;
   state.canUpdate = true;
   state.lookupSupported = false;
+  state.snoozeSupported = false;
+  state.changes = "stream:1:0";
   state.lookup.mockReset();
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
@@ -195,6 +207,103 @@ function setup() {
   state.update.mockClear();
   state.session.mockClear();
 }
+
+it("shows one accepted result while the failed Linux check still needs work", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Release check",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row },
+      codingRows: [],
+      remoteWork: [],
+      partial: false,
+      launchesTruncated: false,
+      requiredDeliverables: [
+        {
+          id: "mac",
+          criterion: "Launch the Mac build",
+          state: "accepted",
+          attempt: 1,
+          evidence: "Window opened",
+        },
+        {
+          id: "linux",
+          criterion: "Run Linux smoke tests",
+          state: "failed",
+          attempt: 2,
+          host: "linux-runner",
+        },
+      ],
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("1/2", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Window opened")).toBeVisible();
+  await expect.element(screen.getByText("Run Linux smoke tests")).toBeVisible();
+  await expect.element(screen.getByText("Attempt 2")).toBeVisible();
+  await expect.element(screen.getByText("Worker on linux-runner")).toBeVisible();
+});
+
+it("refreshes an open task's evidence after a silent task change", async () => {
+  setup();
+  state.row.status = "running";
+  state.row.unread = false;
+  state.lookupSupported = true;
+  state.snoozeSupported = true;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Review",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  if (row.kind !== "task") throw new Error("expected a task");
+  const result = (
+    summary: string,
+    state: "pending" | "accepted",
+    updatedAt = row.task.updatedAt,
+  ) => ({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row: { ...row, task: { ...row.task, updatedAt } } },
+      attemptEvidence: { summary },
+      requiredDeliverables: [{ id: "build", criterion: "Build passes", attempt: 1, state }],
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  state.lookup.mockResolvedValue(result("Before", "pending"));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Before")).toBeVisible();
+  state.lookup.mockResolvedValue(result("After", "accepted", "2026-11-04T10:01:00.000Z"));
+  state.changes = "stream:1:1";
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("After")).toBeVisible();
+  await expect.element(screen.getByText("1/1", { exact: true })).toBeVisible();
+});
 
 const decodeProfile = Schema.decodeSync(BotProfile);
 
@@ -751,4 +860,51 @@ it("shows Home guidance while the first list read is pending", async () => {
     .toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Open Home" })).toBeVisible();
   expect(state.lookup).not.toHaveBeenCalled();
+});
+
+it("shows the current worker's result next to the completion criterion", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "known",
+        row: decodeBotThreadRow({
+          kind: "task",
+          task: {
+            taskId: "task-1",
+            title: "Run the Linux regression suite",
+            doneMeans: "All regression tests pass on the Linux runner.",
+            status: "failed",
+            generation: 2,
+            updatedAt: "2026-11-04T10:00:00.000Z",
+          },
+          view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+          lastActivityAt: "2026-11-04T10:00:00.000Z",
+          unread: false,
+          mainMessagesSinceQuiet: 0,
+        }),
+      },
+      attemptEvidence: {
+        summary: "31 passed, 1 failed. The Linux smoke test could not open its fixture.",
+      },
+      approvalObservation: {
+        worker: { environmentId: "lab", threadId: "test-worker", host: "linux-runner" },
+        needsYou: [],
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByText("All regression tests pass on the Linux runner."))
+    .toBeVisible();
+  await expect.element(screen.getByText("linux-runner", { exact: false })).toBeVisible();
+  await expect.element(screen.getByText("31 passed, 1 failed.", { exact: false })).toBeVisible();
+  await expect.element(screen.getByText("Worker report missing")).not.toBeInTheDocument();
 });

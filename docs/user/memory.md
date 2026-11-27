@@ -6,6 +6,8 @@ Save useful facts and instructions for later conversations, and share them betwe
 
 Remembering conversations starts on in every new environment, which acts as its own memory hub. This applies to desktop, WSL, SSH and headless servers, and servers you use through a web browser or mobile. Your choices are kept across restarts.
 
+To pause conversation memory in the selected environment, turn off **Use GOAT memory in conversations** in **Settings → Memory**. Subsequent turns cannot read or save GOAT memories, and GOAT excludes messages from the paused period when it generates summaries, even after you resume. Turning it back on restores your existing **Remember conversations** and **Allow agent memory access** preferences. You can manage saved memories and share them with other devices while paused. Pausing applies to work that starts after it: a request that was already being sent to the provider when you paused may still finish. Pausing does not remove information already present in an ongoing conversation or control a provider’s own memory.
+
 GOAT summarizes finished conversations using the text generation model by default. If that model is an API text generator, memory selects a coding provider instead. On web or desktop, choose a separate **Memory model** in **Settings → Memory** if you prefer. Turn off **Remember conversations** there (or in mobile Memory settings) to stop creating new summaries; saved memories remain. The sharing control is separate: turning sharing off keeps memory on this device.
 
 Summaries keep lasting preferences, decisions, constraints, and verified results; a conversation with nothing lasting saves no memory. Conversations an agent starts as a delegated task or subagent are not summarized, because the conversation that started them keeps what matters. While memory sharing is on, GOAT reviews a conversation that has new messages again after a day and may save lasting decisions to **Project** memory (when the conversation's project has a project binding) and your general preferences to **All projects** memory, where other conversations find them. It never replaces a memory you edited yourself, and forgetting a conversation's memory also forgets what was saved from it.
@@ -89,6 +91,8 @@ The provider’s original conversation stays, but forgotten content is never imp
 In **Settings → Memory**, choose **Select memories**, mark the records, and choose **Forget** with the number selected. Confirm once. The results show which memories were forgotten, which are waiting to sync, and which you can retry.
 
 ### Find memories saved from a conversation
+
+When GOAT saves a preference for all projects from your conversation, choose **View** in the conversation to open its current entry in Memory settings.
 
 Use **Saved from conversation** to choose a conversation, then browse or search within the selected memory scope. GOAT matches the conversation that originally saved the memory. Older memories with no recorded conversation do not appear in the filtered results.
 

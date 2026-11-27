@@ -95,6 +95,10 @@ describe("settings access", () => {
     for (const path of paths) expect(entryAt(path)?.listing, path).toBeUndefined();
   });
 
+  it("keeps control of conversation memory with the person using the environment", () => {
+    expect(SETTINGS_ACCESS.conversationMemoryEnabled.access).toBe("person");
+  });
+
   it("keeps memory administration writes for outside MCP clients", () => {
     for (const path of [
       "memory.settings_update",

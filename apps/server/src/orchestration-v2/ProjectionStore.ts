@@ -48,7 +48,11 @@ import {
 import { olderSettledMemoryCounts, olderSettledSqlCounts } from "./olderSettledCounts.ts";
 import * as PullRequestSnapshot from "./pullRequestSnapshot.ts";
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
-import { needsRecovery, unreadSteerCandidates } from "./ProjectionRecoveryCandidates.ts";
+import {
+  needsRecovery,
+  subagentResultCandidates,
+  unreadSteerCandidates,
+} from "./ProjectionRecoveryCandidates.ts";
 import {
   matchingTimelineRows,
   boundedTimelinePage,
@@ -3749,36 +3753,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ELSE 0 END
               `;
             case "subagent-results":
-              return sql`
-                SELECT child.thread_id FROM orchestration_v2_projection_threads AS child
-                WHERE CASE WHEN json_valid(child.payload_json) THEN
-                  json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-                  AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
-                  AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
-                  ELSE 0 END
-                  AND (EXISTS (
-                    SELECT 1 FROM orchestration_v2_projection_runs AS requested
-                    JOIN orchestration_v2_projection_subagents AS task
-                      ON task.subagent_id = json_extract(requested.payload_json, '$.delegatedTaskId')
-                    WHERE requested.thread_id = child.thread_id
-                      AND requested.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
-                      AND task.child_thread_id = child.thread_id
-                      AND json_extract(task.payload_json, '$.origin') = 'app_owned'
-                      AND json_extract(task.payload_json, '$.result') IS NULL
-                  ) OR (
-                    -- The original task still waits for the latest unheld work.
-                    (SELECT status FROM orchestration_v2_projection_runs
-                     WHERE thread_id = child.thread_id
-                       AND NOT (status = 'queued' AND json_extract(payload_json, '$.queueHeld') IS 1)
-                     ORDER BY ordinal DESC LIMIT 1
-                    ) IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
-                    AND NOT EXISTS (
-                    SELECT 1 FROM orchestration_v2_projection_context_transfers
-                    WHERE source_thread_id = child.thread_id
-                      AND target_thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
-                      AND type = 'subagent_result'
-                  )))
-              `;
+              return subagentResultCandidates(sql);
             case "runtime":
             case "runtime-cleanup":
               return sql`

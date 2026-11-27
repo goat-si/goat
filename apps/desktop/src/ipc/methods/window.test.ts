@@ -4,6 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
@@ -31,6 +32,7 @@ import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopHeadlessServer from "../../backend/DesktopHeadlessServer.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
+import * as DesktopShellEnvironment from "../../shell/DesktopShellEnvironment.ts";
 import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
 import { toLocalBackendPath } from "./folderPaths.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
@@ -296,7 +298,25 @@ describe("showContextMenu", () => {
 });
 
 describe("getRelayTelemetryEnabled", () => {
-  it.effect("reads the desktop host opt-out before returning the renderer policy", () =>
+  it.effect("keeps relay tracing off until shell discovery settles and honors kill switches", () =>
+    Effect.gen(function* () {
+      const discovered = yield* Deferred.make<void>();
+      const shell = Layer.mock(DesktopShellEnvironment.DesktopShellEnvironment)({
+        discoverySettled: Deferred.isDone(discovered),
+      });
+      const read = (env: NodeJS.ProcessEnv) =>
+        getRelayTelemetryEnabled
+          .handler()
+          .pipe(Effect.provideService(HostProcess.Environment, env), Effect.provide(shell));
+      const optedIn = { GOAT_TELEMETRY_ENABLED: "true" };
+      assert.isFalse(yield* read(optedIn));
+      yield* Deferred.succeed(discovered, undefined);
+      assert.isTrue(yield* read(optedIn));
+      assert.isFalse(yield* read({ ...optedIn, OTEL_SDK_DISABLED: "true" }));
+      assert.isFalse(yield* read({ ...optedIn, GOAT_OTEL_SDK_DISABLED: "true" }));
+    }),
+  );
+  it.effect("allows relay tracing only after the desktop host opts in", () =>
     Effect.gen(function* () {
       assert.isFalse(
         yield* getRelayTelemetryEnabled.handler().pipe(
@@ -305,12 +325,25 @@ describe("getRelayTelemetryEnabled", () => {
           }),
         ),
       );
-      assert.isTrue(
+      assert.isFalse(
         yield* getRelayTelemetryEnabled
           .handler()
           .pipe(Effect.provideService(HostProcess.Environment, {})),
       );
-    }),
+      assert.isTrue(
+        yield* getRelayTelemetryEnabled.handler().pipe(
+          Effect.provideService(HostProcess.Environment, {
+            GOAT_TELEMETRY_ENABLED: "true",
+          }),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mock(DesktopShellEnvironment.DesktopShellEnvironment)({
+          discoverySettled: Effect.succeed(true),
+        }),
+      ),
+    ),
   );
 });
 

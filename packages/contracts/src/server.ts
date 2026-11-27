@@ -362,6 +362,8 @@ export const ServerObservability = Schema.Struct({
   otlpLogsSource: Schema.optional(OtlpEndpointSource),
   otlpLogsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** GOAT_TELEMETRY_ENABLED on the server decides usage data whatever `telemetryConsent` says. */
+  telemetryOverride: Schema.optional(Schema.Literals(["enabled", "disabled"])),
 });
 export type ServerObservability = typeof ServerObservability.Type;
 

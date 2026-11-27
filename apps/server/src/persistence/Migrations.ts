@@ -198,12 +198,14 @@ import Migration0182 from "./Migrations/182_SlackConversationBot.ts";
 import Migration0183 from "./Migrations/183_ChannelInputSessionAuthority.ts";
 import Migration0184 from "./Migrations/184_RemoteDispatchEnvironment.ts";
 import Migration0185 from "./Migrations/185_TurnMemoryReceipts.ts";
-import Migration0186 from "./Migrations/186_ProviderTurnAttemptIndex.ts";
-import Migration0187 from "./Migrations/187_BackgroundRecoveryIndexes.ts";
-import Migration0188 from "./Migrations/188_TurnStartReadIndexes.ts";
-import Migration0189 from "./Migrations/189_ThreadItemCounts.ts";
-import Migration0190 from "./Migrations/190_WorktreePathKeyIndex.ts";
-import Migration0191 from "./Migrations/191_DeferredSlashCommandIndex.ts";
+import Migration0186 from "./Migrations/186_ConversationMemoryPolicy.ts";
+import Migration0187 from "./Migrations/187_ConversationMemoryExcludedMessages.ts";
+import Migration0188 from "./Migrations/188_ProviderTurnAttemptIndex.ts";
+import Migration0189 from "./Migrations/189_BackgroundRecoveryIndexes.ts";
+import Migration0190 from "./Migrations/190_TurnStartReadIndexes.ts";
+import Migration0191 from "./Migrations/191_ThreadItemCounts.ts";
+import Migration0192 from "./Migrations/192_WorktreePathKeyIndex.ts";
+import Migration0193 from "./Migrations/193_DeferredSlashCommandIndex.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -395,12 +397,14 @@ export const migrationEntries = [
   [183, "ChannelInputSessionAuthority", Migration0183],
   [184, "RemoteDispatchEnvironment", Migration0184],
   [185, "TurnMemoryReceipts", Migration0185],
-  [186, "ProviderTurnAttemptIndex", Migration0186],
-  [187, "BackgroundRecoveryIndexes", Migration0187],
-  [188, "TurnStartReadIndexes", Migration0188],
-  [189, "ThreadItemCounts", Migration0189],
-  [190, "WorktreePathKeyIndex", Migration0190],
-  [191, "DeferredSlashCommandIndex", Migration0191],
+  [186, "ConversationMemoryPolicy", Migration0186],
+  [187, "ConversationMemoryExcludedMessages", Migration0187],
+  [188, "ProviderTurnAttemptIndex", Migration0188],
+  [189, "BackgroundRecoveryIndexes", Migration0189],
+  [190, "TurnStartReadIndexes", Migration0190],
+  [191, "ThreadItemCounts", Migration0191],
+  [192, "WorktreePathKeyIndex", Migration0192],
+  [193, "DeferredSlashCommandIndex", Migration0193],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

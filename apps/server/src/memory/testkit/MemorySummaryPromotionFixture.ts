@@ -158,7 +158,12 @@ export const runSummaryPromotionFixture = Effect.fn("test.runSummaryPromotionFix
     );
     yield* store.putProjectBinding({ ...binding, version: 2, projectKey: null }, 1, 1);
   }
+  const savedPreference = service.savedThreadPreference(
+    { memorySpaceId: space, threadId: thread.threadId },
+    Effect.void,
+  );
   const eligible = store.readEligibleOutbox(space, 0, 100);
+  assert.isNull(yield* savedPreference);
   assert.isUndefined((yield* store.loadAggregate(space, summary.memoryId)).item);
   assert.isUndefined((yield* store.loadAggregate(space, promotionId)).item);
   assert.isFalse((yield* eligible).some((row) => row.work.memoryId === promotionId));
@@ -175,6 +180,7 @@ export const runSummaryPromotionFixture = Effect.fn("test.runSummaryPromotionFix
     "active",
   );
   assert.isUndefined((yield* store.loadAggregate(space, promotionId)).item);
+  assert.isNull(yield* savedPreference);
   const eligibleAfterSummary = yield* eligible;
   for (const row of eligibleAfterSummary) {
     if (row.work.memoryId !== projectPromotion) continue;
@@ -204,6 +210,16 @@ export const runSummaryPromotionFixture = Effect.fn("test.runSummaryPromotionFix
     "accepted",
   );
   assert.propertyVal((yield* store.loadAggregate(space, promotionId)).item, "status", "active");
+  assert.deepStrictEqual(yield* savedPreference, { memorySpaceId: space, memoryId: promotionId });
+  yield* sql`INSERT INTO memory_revision_marks VALUES (${space},${promotion.revision.revisionId},'unverified')`;
+  assert.isNull(yield* savedPreference);
+  yield* sql`DELETE FROM memory_revision_marks WHERE space=${space} AND revision_id=${promotion.revision.revisionId}`;
+  assert.isNull(
+    yield* service.savedThreadPreference(
+      { memorySpaceId: space, threadId: M.ThreadId.make("other-thread") },
+      Effect.void,
+    ),
+  );
   assert.propertyVal(
     (yield* hub.push(
       { ...pushInput(forget(firstOp)), features, environmentId: otherEnv },
@@ -212,6 +228,7 @@ export const runSummaryPromotionFixture = Effect.fn("test.runSummaryPromotionFix
     "outcome",
     "deleted",
   );
+  assert.isNull(yield* savedPreference);
   for (const memoryId of [summary.memoryId, promotionId])
     assert.propertyVal((yield* store.loadAggregate(space, memoryId)).item, "status", "blocked");
 });

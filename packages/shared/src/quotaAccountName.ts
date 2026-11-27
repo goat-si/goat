@@ -3,13 +3,17 @@
  * privacy label such as `p61e549` and the plan, so the name is built from those; the opaque
  * `accountRef` is cut to a short tag only when no label exists.
  */
-export function quotaPoolAccountName(account: {
-  readonly label?: string | undefined;
-  readonly plan?: string | undefined;
-  readonly accountRef?: string | undefined;
-}): string {
+export function quotaPoolAccountName(
+  account: {
+    readonly label?: string | undefined;
+    readonly plan?: string | undefined;
+    readonly accountRef?: string | undefined;
+  },
+  formatTitle: (plan: string | undefined) => string = (plan) =>
+    plan ? `${plan} account` : "Account",
+): string {
   const plan = account.plan?.trim();
-  const title = plan ? `${plan[0]?.toUpperCase() ?? ""}${plan.slice(1)} account` : "Account";
+  const title = formatTitle(plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined);
   const ref = account.accountRef?.replace(/^acct_/, "").slice(0, 6);
   const handle = account.label?.trim() || (ref ? `#${ref}` : undefined);
   return handle ? `${title} · ${handle}` : title;

@@ -260,6 +260,101 @@ describe("connection catalog host", () => {
       expect(inputs).toEqual([]);
     }),
   );
+  it.effect("refuses an alias that now answers as a different environment (#3914)", () =>
+    Effect.gen(function* () {
+      const entry = sshEntry();
+      const { result, inputs, removed, entries } = yield* run(
+        {
+          type: "add_ssh",
+          host: "devbox",
+          addedBy,
+          reachedEnvironmentId: EnvironmentId.make("replacement"),
+        },
+        [entry],
+      );
+      expect(result).toMatchObject({
+        type: "failure",
+        reason: "refused",
+        message: expect.stringMatching(/devbox.*replacement.*Saved box.*saved/s),
+      });
+      if (result.type === "failure") {
+        expect(result.message).toContain("Remove from this device");
+        expect(result.message).toContain("pairing, credentials and cached threads");
+        expect(result.message).toContain("add devbox again");
+        expect(result.message).toContain("while the hub still lists");
+        expect(result.message.length).toBeLessThanOrEqual(2000);
+      }
+      expect(inputs).toEqual([]);
+      expect(removed).toEqual([]);
+      expect([...entries.values()]).toEqual([entry]);
+    }),
+  );
+  it.effect("reuses the matching reached identity among matching aliases", () =>
+    Effect.gen(function* () {
+      const secondId = EnvironmentId.make("second");
+      const second = sshEntry();
+      const secondEntry = {
+        ...second,
+        target: new SshConnectionTarget({
+          environmentId: secondId,
+          label: "Second",
+          connectionId: "ssh:second",
+        }),
+      };
+      const { result, inputs } = yield* run(
+        { type: "add_ssh", host: "devbox", addedBy, reachedEnvironmentId: secondId },
+        [sshEntry(), secondEntry],
+      );
+      expect(result).toMatchObject({
+        type: "add_ssh",
+        created: false,
+        connection: { environmentId: secondId },
+      });
+      expect(inputs).toEqual([]);
+    }),
+  );
+  it.effect("reuses the saved identity when it matches", () =>
+    Effect.gen(function* () {
+      const { result, inputs } = yield* run(
+        { type: "add_ssh", host: "devbox", addedBy, reachedEnvironmentId: id },
+        [sshEntry()],
+      );
+      expect(result).toMatchObject({
+        type: "add_ssh",
+        created: false,
+        connection: { environmentId: id },
+      });
+      expect(inputs).toEqual([]);
+    }),
+  );
+  it.effect("refuses two stale matches naming the first", () =>
+    Effect.gen(function* () {
+      const second = {
+        ...sshEntry(),
+        target: new SshConnectionTarget({
+          environmentId: EnvironmentId.make("second"),
+          label: "Second",
+          connectionId: "ssh:second",
+        }),
+      };
+      const { result, inputs, removed } = yield* run(
+        {
+          type: "add_ssh",
+          host: "devbox",
+          addedBy,
+          reachedEnvironmentId: EnvironmentId.make("replacement"),
+        },
+        [sshEntry(), second],
+      );
+      expect(result).toMatchObject({
+        type: "failure",
+        reason: "refused",
+        message: expect.stringMatching(/Saved box.*saved/s),
+      });
+      expect(inputs).toEqual([]);
+      expect(removed).toEqual([]);
+    }),
+  );
   it.effect("saves new SSH entries with key-only authentication and attribution", () =>
     Effect.gen(function* () {
       const { result, inputs } = yield* run(

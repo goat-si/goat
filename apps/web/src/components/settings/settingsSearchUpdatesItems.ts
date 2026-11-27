@@ -47,4 +47,11 @@ export const UPDATES_SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
     searchTerms: ["macos memory ram oom process kill automatic gib"],
   },
+  {
+    id: "usage-data",
+    title: msg("Share usage data"),
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["telemetry analytics privacy tracking consent opt in opt out ingest"],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;

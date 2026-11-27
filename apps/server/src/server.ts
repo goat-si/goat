@@ -285,7 +285,6 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(Observability.layer),
   Layer.provideMerge(layerResourceAttribution),
 );
-
 const layerPtyAdapter = NodePtyAdapter.layer;
 
 export const layerServerSettings = ServerSettings.layer.pipe(
@@ -873,7 +872,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
-  Layer.provideMerge(AnalyticsService.layer),
+  Layer.provideMerge(AnalyticsService.layer.pipe(Layer.provide(layerServerSettings))),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
@@ -982,6 +981,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // SshHostSetup routes approvals of agent-requested provider syncs to ProviderHostSync.
   Layer.provide(
     SshDeviceAdd.layer.pipe(
+      Layer.provide(SshRemoteDispatchLive.layerWithPenRoutes),
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
           Layer.provide(

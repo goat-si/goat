@@ -69,6 +69,10 @@ vi.mock("./GoatBotTimeline", async () => {
   const { createContext } = await import("react");
   return { GoatBotActivityContext: createContext(null) };
 });
+vi.mock("./GoatBotRightPanel", () => ({
+  GoatBotRightPanelFrame: (props: { children: (controls: null) => unknown }) =>
+    props.children(null),
+}));
 vi.mock("./goatBotHooks", () => ({ useLegacyGlobalAgentRoute: () => null }));
 vi.mock("./useGoatBotWaitingCount", () => ({ refreshGoatBotWaitingCount: vi.fn() }));
 vi.mock("~/lib/archivedThreadsState", () => ({

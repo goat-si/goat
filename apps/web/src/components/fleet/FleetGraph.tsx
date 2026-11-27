@@ -1,7 +1,9 @@
+import { useGT } from "gt-react";
 import type { FleetMachine, FleetSnapshot, FleetThread } from "@goat/client-runtime/state/fleet";
 import {
   NO_FLEET_HEAT,
   type FleetHeatTier,
+  formatFleetHeatSummary,
   type FleetMachineHeat,
 } from "@goat/client-runtime/state/fleet-heat";
 import {
@@ -22,7 +24,10 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { BoatIcon } from "../Icons";
 import { GoatWordmark } from "../GoatWordmark";
 import { renderProviderGlyph } from "../chat/ProviderInstanceIcon";
-import { fleetMachineSubtitle } from "@goat/client-runtime/state/fleet-machine-description";
+import {
+  fleetMachineSubtitle,
+  fleetMachineWork,
+} from "@goat/client-runtime/state/fleet-machine-description";
 import {
   fleetConnectionVisual,
   UNKNOWN_FLEET_CONNECTION,
@@ -60,7 +65,6 @@ const MACHINE_RADIUS = 18;
 const AGENT_RADIUS = 11;
 /** The status mark sits on the machine's ring, lower right, like an avatar's presence dot. */
 const STATUS_OFFSET = Math.round(MACHINE_RADIUS * Math.SQRT1_2);
-const THIS_MACHINE = "This machine";
 /** A card-coloured outline under label text, so an edge passing behind a label leaves it legible. */
 const LABEL_HALO = "stroke-card stroke-3 [paint-order:stroke] [stroke-linejoin:round]";
 
@@ -385,15 +389,6 @@ const truncateName = (text: string, max: number) =>
     ? text.slice(0, Math.ceil((max - 1) / 2)) + "…" + text.slice(-Math.floor((max - 1) / 2))
     : text;
 
-function workSummary(work: { running: number; attention: number; reported: number }): string {
-  const parts = [
-    work.running > 0 ? work.running + " running" : null,
-    work.attention > 0 ? work.attention + " need you" : null,
-    work.reported > 0 ? work.reported + " reported" : null,
-  ].filter((part) => part !== null);
-  return parts.length === 0 ? "idle" : parts.join(", ");
-}
-
 const machineKey = (machineId: string) => "machine\u0000" + machineId;
 const agentKey = (machineId: string, agent: string) => "agent\u0000" + machineId + "\u0000" + agent;
 
@@ -429,6 +424,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
   /** Connection attempts that have run long: their edges stop moving and say so. */
   readonly slowMachineIds?: ReadonlySet<string>;
 }) {
+  const gt = useGT();
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
   const slow = props.slowMachineIds;
@@ -511,14 +507,14 @@ export const FleetGraph = memo(function FleetGraph(props: {
             viewBox={"0 0 " + width + " " + height}
             className="relative block h-auto w-full select-none"
             role="group"
-            aria-label={
-              snapshot.totals.machines +
-              " machines, " +
-              snapshot.totals.running +
-              " running, " +
-              snapshot.totals.attention +
-              " need you"
-            }
+            aria-label={gt(
+              "{machines, plural, one {# machine} other {# machines}}, {running} running, {attention} need you",
+              {
+                machines: snapshot.totals.machines,
+                running: snapshot.totals.running,
+                attention: snapshot.totals.attention,
+              },
+            )}
           >
             <HeatDefs paint={paint} />
             <HaloDefs info={infoHalo} primary={primaryHalo} />
@@ -614,7 +610,9 @@ export const FleetGraph = memo(function FleetGraph(props: {
                   entry.layout.id === null ? undefined : machinesById.get(entry.layout.id);
                 const data = machine?.agents.find((item) => item.key === agent.layout.key);
                 const work = data ?? agent.layout.aggregate!;
-                const label = data ? data.label : agent.layout.aggregate!.count + " more";
+                const label = data
+                  ? data.label
+                  : gt("{count} more", { count: agent.layout.aggregate!.count });
                 const labelY = agent.layout.labelBelow ? AGENT_RADIUS + 13 : -(AGENT_RADIUS + 7);
                 return (
                   <g
@@ -623,7 +621,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
                     className="cursor-grab touch-none active:cursor-grabbing"
                     {...nodeHandlers(agent.key)}
                   >
-                    <title>{label + " · " + workSummary(work)}</title>
+                    <title>{label + " · " + fleetMachineWork(work, gt, ", ")}</title>
                     {work.attention > 0 ? (
                       <circle
                         r={AGENT_RADIUS + 6}
@@ -794,6 +792,7 @@ function MachineNode(props: {
   readonly onSelect: (machineId: string) => void;
   readonly handlers: NodeHandlers;
 }) {
+  const gt = useGT();
   const { at, machine, connection, heat, current, selected, reduced, onSelect, handlers } = props;
   const busy = machine.running + machine.attention;
   const { quiet } = fleetConnectionVisual(connection.state);
@@ -807,25 +806,28 @@ function MachineNode(props: {
   };
   // The user knows their own hardware; naming the machine is what matters here.
   const sub = current
-    ? THIS_MACHINE
-    : (fleetMachineSubtitle(machine) ??
-      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh"));
+    ? gt("This machine")
+    : (fleetMachineSubtitle(machine, gt) ??
+      (machine.kind === "environment" ? null : machine.kind === "cloud" ? gt("cloud") : "SSH"));
   const status =
     connection.state === "unknown"
       ? []
       : [
-          (props.slow ? "Still connecting" : connection.label) +
-            (connection.reason === null ? "" : ": " + connection.reason),
+          (props.slow ? gt("Still connecting") : gt(connection.label)) +
+            (connection.reason === null
+              ? ""
+              : ": " +
+                (machine.boat?.status === "stopped" ? gt(connection.reason) : connection.reason)),
         ];
   const description = [
-    current ? THIS_MACHINE : null,
-    machine.boat === null ? null : "Boat machine",
+    current ? gt("This machine") : null,
+    machine.boat === null ? null : gt("Boat machine"),
     ...status,
-    workSummary(machine),
+    fleetMachineWork(machine, gt, ", "),
   ].filter((part) => part !== null);
   // Only heat is worth announcing; a normal reading stays in the tooltip.
-  const spoken =
-    heated === null ? description : [...description, heat.summary.replaceAll(" · ", ", ")];
+  const summary = formatFleetHeatSummary(heat, gt);
+  const spoken = heated === null ? description : [...description, summary.replaceAll(" · ", ", ")];
   return (
     <g
       role="button"
@@ -838,7 +840,7 @@ function MachineNode(props: {
       transform={"translate(" + at.x + " " + at.y + ")"}
       {...handlers}
     >
-      <title>{[machine.label, ...description, heat.summary].join("\n")}</title>
+      <title>{[machine.label, ...description, summary].join("\n")}</title>
       {busy > 0 && !reduced && !glowing ? (
         <circle
           r={MACHINE_RADIUS + 8}
@@ -939,6 +941,7 @@ function AggregateNode(props: {
   readonly node: FleetLayoutMachine;
   readonly handlers: NodeHandlers;
 }) {
+  const gt = useGT();
   const work = props.node.aggregate!;
   return (
     <g
@@ -946,7 +949,13 @@ function AggregateNode(props: {
       className="cursor-grab touch-none active:cursor-grabbing"
       {...props.handlers}
     >
-      <title>{work.count + " more machines · " + workSummary(work)}</title>
+      <title>
+        {gt("{count, plural, one {# more machine} other {# more machines}}", {
+          count: work.count,
+        }) +
+          " · " +
+          fleetMachineWork(work, gt, ", ")}
+      </title>
       <circle
         r={MACHINE_RADIUS}
         className="fill-background stroke-muted-foreground/60"
@@ -957,7 +966,7 @@ function AggregateNode(props: {
         {"+" + work.count}
       </text>
       <text y={MACHINE_RADIUS + 13} textAnchor="middle" className="fill-muted-foreground text-4xs">
-        {workSummary(work)}
+        {fleetMachineWork(work, gt, ", ")}
       </text>
     </g>
   );

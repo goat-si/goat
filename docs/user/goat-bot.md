@@ -125,6 +125,11 @@ Open the task in full to see **Done means**, the bot's completion criterion, and
 Activity lists the latest status changes, worker launches, linked PRs, and questions. Each worker
 opens in its own thread.
 
+The bot's chat on web and desktop also has the right panel that threads have: use the panel
+button at the top right or the right panel shortcut. It offers a browser, a terminal in the bot's
+folder on its server, and devices. Files, diffs and pull requests live in the threads that do the
+work, so open those from **Go to thread**.
+
 Use **Snooze** to set a task aside for an hour, until tomorrow, or until next week. Find it under
 **Snoozed** on Home and choose **Unsnooze** to bring it back early. It also returns when the snooze
 ends or the task changes status. Questions and approvals still appear in **Needs you**.
@@ -210,6 +215,19 @@ again from a trusted session to authorize future work.
 On web and desktop, open **Deliveries** on the trigger under **Home → Routines** or in Scheduled tasks to see why
 unsigned, duplicate, and own-work events were skipped. Failed GitHub checks without a pull request are skipped unless you allow
 them in the trigger. You can pause or resume a configured trigger on mobile.
+
+### Required results
+
+For work with multiple required outputs, tell the bot what would count as success on each machine.
+For example, ask it to launch a Mac build and run the Linux regression suite, and to report success
+only after the window opens and the tests pass. When the bot declares those two results before
+dispatch, the task details on web, desktop and mobile show both criteria and the number accepted.
+
+A worker can finish its run while its result still awaits acceptance. The coordinating bot checks
+the report against the criterion and records its evidence. If the Mac build is accepted and Linux
+fails, the count stays at **1/2**. While the parent task is active, the bot can retry the Linux item
+on its original target and keep the Mac evidence. The count reaches **2/2** when the bot accepts
+the new Linux result. A late report from the first Linux attempt cannot satisfy the retry.
 
 ## Going back to an older GOAT
 

@@ -34,6 +34,7 @@ import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironm
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopPrimaryPaste from "../../app/DesktopPrimaryPaste.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
+import * as DesktopShellEnvironment from "../../shell/DesktopShellEnvironment.ts";
 import * as DesktopWslBackend from "../../wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
 import * as ElectronApp from "../../electron/ElectronApp.ts";
@@ -92,6 +93,9 @@ export const getRelayTelemetryEnabled = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL,
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.window.getRelayTelemetryEnabled")(function* () {
+    const shell = yield* DesktopShellEnvironment.DesktopShellEnvironment;
+    // The login shell may still contain a telemetry kill switch.
+    if (!(yield* shell.discoverySettled)) return false;
     return isRelayTracingEnabled(yield* HostProcess.Environment);
   }),
 });

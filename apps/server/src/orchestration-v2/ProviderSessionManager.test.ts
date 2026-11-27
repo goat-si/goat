@@ -5057,6 +5057,11 @@ it.effect.each(turnStartMemoryCases)(
                   Layer.mock(ChannelLedger.ChannelLedger)({
                     getTask: () => Effect.succeed(channelTask),
                     latestTaskBrief: () => Effect.undefined,
+                    preserveInputMemoryPause: (thread, _message, origin) =>
+                      Effect.sync(() => {
+                        assert.equal(thread, threadId);
+                        assert.equal(origin, channelTask.task.originInputId);
+                      }),
                     isForwardPending: (sequence) =>
                       Effect.succeed(sequence === 1 && forwardPending),
                     completeForward: ({ sequence }) =>
@@ -5486,9 +5491,9 @@ it.effect("drops a Home instance reservation after open fails", () =>
   }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 keeps a thread's MCP token through a memory policy change mid-turn",
-  () =>
+it.effect.each(["enableAgentMemoryAccess", "conversationMemoryEnabled"] as const)(
+  "ProviderSessionManagerV2 keeps a thread's MCP token through a %s change mid-turn",
+  (setting) =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const settingsLayer = ServerSettings.layerTest();
@@ -5549,7 +5554,7 @@ it.effect(
           Stream.runForEach(() => Deferred.succeed(memoryOff, undefined)),
           Effect.forkScoped({ startImmediately: true }),
         );
-        yield* settings.updateSettings({ enableAgentMemoryAccess: false });
+        yield* settings.updateSettings({ [setting]: false });
         // Before the manager re-prepares, the stale epoch withdraws only memory.
         const drifted = yield* registry.resolve(heldToken);
         assert.isDefined(drifted, "a memory policy change must not end the thread's credential");
@@ -5565,7 +5570,7 @@ it.effect(
         assert.deepEqual(scope?.grantedScopes, ["orchestration:read"]);
         assert.equal(scope?.memoryPolicy?.grant, "none");
 
-        yield* settings.updateSettings({ enableAgentMemoryAccess: true });
+        yield* settings.updateSettings({ [setting]: true });
         yield* manager.prepareMcpSession!({
           threadId,
           providerInstanceId: modelSelection.instanceId,

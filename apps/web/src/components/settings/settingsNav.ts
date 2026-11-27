@@ -61,41 +61,53 @@ export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, Settings
   "/settings/general": {
     text: msg("Defaults for new threads, notifications, updates, and how GOAT behaves day to day."),
   },
-  "/settings/appearance": { text: "Theme, fonts, and layout of this app on this device." },
-  "/settings/keybindings": { text: "Keyboard shortcuts for this app." },
-  "/settings/snap-shot": { text: "Capture part of your screen and attach it to a thread." },
+  "/settings/appearance": { text: msg("Theme, fonts, and layout of this app on this device.") },
+  "/settings/keybindings": { text: msg("Keyboard shortcuts for this app.") },
+  "/settings/snap-shot": { text: msg("Capture part of your screen and attach it to a thread.") },
   "/settings/providers": {
-    text: "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
-    related: [{ label: "Hub", to: "/settings/hub" }],
+    text: msg(
+      "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+    ),
+    related: [{ label: msg("Hub"), to: "/settings/hub" }],
   },
-  "/settings/memory": { text: "What agents remember across threads, and who can read it." },
+  "/settings/memory": { text: msg("What agents remember across threads, and who can read it.") },
   "/settings/integrations": {
-    text: "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    text: msg(
+      "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    ),
   },
   "/settings/source-control": {
-    text: "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    text: msg(
+      "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    ),
   },
-  "/settings/projects": { text: "Settings for the selected project." },
+  "/settings/projects": { text: msg("Settings for the selected project.") },
   "/settings/storage": {
-    text: "Where worktrees live, when they are cleaned up, and artifacts and logs.",
+    text: msg("Where worktrees live, when they are cleaned up, and artifacts and logs."),
   },
-  "/settings/archived": { text: "Threads you archived. Restore or delete them here." },
+  "/settings/archived": { text: msg("Threads you archived. Restore or delete them here.") },
   "/settings/goat-bot": {
-    text: "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    text: msg(
+      "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    ),
   },
   "/settings/decision-inbox": {
-    text: "Questions agents left for you, each with a recommendation and a deadline.",
+    text: msg("Questions agents left for you, each with a recommendation and a deadline."),
   },
-  "/settings/scheduled-tasks": { text: "Prompts that run on a schedule." },
+  "/settings/scheduled-tasks": { text: msg("Prompts that run on a schedule.") },
   "/settings/hub": {
-    text: "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    text: msg(
+      "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    ),
     related: [
-      { label: "Connect your phone", to: "/settings/connections", hash: "hub-device" },
-      { label: "OpenCodex Home for Codex", to: "/settings/providers" },
+      { label: msg("Connect your phone"), to: "/settings/connections", hash: "hub-device" },
+      { label: msg("OpenCodex Home for Codex"), to: "/settings/providers" },
     ],
   },
   "/settings/connections": {
-    text: "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
-    related: [{ label: "Hub", to: "/settings/hub" }],
+    text: msg(
+      "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+    ),
+    related: [{ label: msg("Hub"), to: "/settings/hub" }],
   },
 };

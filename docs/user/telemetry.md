@@ -1,12 +1,35 @@
 # Product usage data
 
-The GOAT server sends product usage events to GOAT's own endpoint at `ingest.trygoat.ai`,
-associated with a hashed account or installation identifier. To count how many installations one person
-uses, the server also sends hashed account identifiers: your GOAT Connect account, your OpenAI and
-Claude accounts when you are signed in, and a random identifier for each device that connects.
-Events include the provider, model, reasoning effort, permission mode, turn result, duration,
-release channel, and main-agent token totals when available. Model names are sent only when a turn
-reports one model and it appears in a provider's public model list.
+GOAT sends no product usage data until you turn it on. The first time you open GOAT on the desktop
+or in a browser, it asks whether to share; an updated GOAT asks once too. Until you answer, and
+after you choose not to share, nothing is sent.
+
+## What is sent when sharing is on
+
+The GOAT server sends events to GOAT's own endpoint at `ingest.trygoat.ai`. Every event carries a
+random identifier created for this installation when you turn sharing on (sent hashed), the GOAT
+version and release channel, and the server's operating system and processor type. These are the
+events:
+
+- **Server start**: the number of threads and projects.
+- **Turn finished**: the provider, model, reasoning effort, permission and interaction mode, result,
+  duration, and main-agent token counts. A model is named only when it appears in a provider's
+  public model list; custom and local models are left out.
+- **Client use**: when a thread is started or a message sent, the kind of client (web, desktop or
+  mobile), its version, operating system, browser, device type and model, and how it connected.
+- **Feature use**: which feature a request started, from a fixed list.
+- **Agent tools**: which GOAT tool an agent called, the calling and target provider and model, the
+  outcome and duration.
+- **ChatGPT sign-in**: whether a sign-in or profile transfer completed, how long it took, and how
+  many accounts are connected.
+- **Ownership**: the hashed GOAT Connect account and the hashed random device identifier of each
+  client that connects, so one person's installations can be counted together. Clients always
+  pass these hashes to the GOAT server they connect to; the server discards them unless sharing is
+  on.
+
+Events never include prompts, responses, file contents, file paths, project or thread names,
+credentials or tokens, conversation IDs, raw provider events, child-agent output, or device names.
+GOAT never reads Codex, Claude, or other provider login files to identify you.
 
 The endpoint runs on Cloudflare and stores events in GOAT's own database. It keeps only the events
 and fields GOAT has reviewed for collection and drops anything else. It does not store your IP
@@ -14,17 +37,44 @@ address, user agent, or location, and it forwards nothing to other services. Eac
 within 180 days; deleted data can remain in the database's point-in-time recovery for up to 30 days
 after that. If cleanup is down for more than about a day, deletion waits for it to recover.
 
-GOAT builds released before this endpoint existed send these events to the endpoint of the project GOAT was forked from, at
-`ingest.t3.codes`, which forwards them to PostHog, until you update.
+## Turn sharing on or off
 
-Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
-raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
+Open **Settings > General > Privacy** and switch **Share usage data**. On mobile, it is under
+**Settings > Maintenance**. The choice belongs to the server, so it applies to every device that
+connects to it, and each server you connect to has its own.
 
-To disable product events, set `GOAT_TELEMETRY_ENABLED=false` in the server's
-environment before starting it. This setting does not disable OpenTelemetry exports to your own
-receiver. The desktop app reads the variable from your shell profile (for example `~/.zshrc`) on
-macOS and Linux, so export it there and restart the app. On Windows, set it as a user environment
-variable. A browser or mobile client does not read the server's environment variables.
+On a server without a screen, set `GOAT_TELEMETRY_ENABLED=true` in its environment before starting
+it to share, or `GOAT_TELEMETRY_ENABLED=false` to keep sharing off. The variable overrides the
+switch, which then shows that the environment sets it. The desktop app reads the variable from your
+shell profile (for example `~/.zshrc`) on macOS and Linux, so export it there and restart the app.
+On Windows, set it as a user environment variable.
+
+Turning sharing off stops it at once: events waiting to be sent are dropped. Choosing not to share
+also deletes the installation's random identifier, so sharing again later starts with a new one.
+Turning sharing off does not stop OpenTelemetry exports to your own receiver.
+
+GOAT builds released before this change shared usage data by default. Builds released before
+GOAT's own endpoint existed send these events to the endpoint of the project GOAT was forked from,
+at `ingest.t3.codes`, which forwards them to PostHog, until you update.
+
+## Network use that is not telemetry
+
+GOAT also goes online to do what you ask and to stay current. These requests carry no usage events
+and do not depend on **Share usage data**:
+
+- **Update checks.** The desktop app checks GOAT's release feed for a new version, and the mobile
+  app checks for an app update when it opens. The server checks installed provider CLIs for newer
+  versions and fetches model list updates; turn that off with **Provider update checks** in
+  Settings.
+- **Downloads.** Installing or updating a provider CLI or Cua Driver downloads it from its
+  publisher. GOAT starts Cua Driver with its own telemetry turned off.
+- **Provider accounts.** Signing in to a provider, listing its models, and showing usage limits
+  talk to that provider with your account.
+- **Things you start**, such as voice input, cloud machines, mobile device builds, webhooks, or
+  starring GOAT on GitHub, talk to the service involved.
+
+Codex, Claude Code, and the other agents GOAT runs follow their own telemetry settings; GOAT does
+not change them.
 
 ## Mobile diagnostics
 

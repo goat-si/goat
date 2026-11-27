@@ -1,5 +1,6 @@
 import {
   CommandId,
+  ChannelWorkerObservation,
   type NodeId,
   type RunId,
   ThreadId,
@@ -10,6 +11,7 @@ import {
   type RemoteObservedRun,
   type RemoteKnownRun,
   type RemoteReport,
+  type ThreadResult,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,6 +42,7 @@ export const recordRemoteTaskResult = Effect.fn("remoteReports.recordRemoteTaskR
     readonly correlationId: string;
     readonly status: "completed" | "failed" | "cancelled" | "interrupted";
     readonly summary: string;
+    readonly attachments?: ThreadResult["attachments"];
   }) {
     const threads = yield* ThreadManagementService.ThreadManagementService;
     yield* threads
@@ -51,6 +54,7 @@ export const recordRemoteTaskResult = Effect.fn("remoteReports.recordRemoteTaskR
         correlationId: input.correlationId,
         status: input.status,
         summary: input.summary.slice(0, 4_000),
+        ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
       })
       .pipe(Effect.mapError((cause) => new RemoteTaskError({ stage: "delivery", cause })));
   },
@@ -150,7 +154,21 @@ export const waitForRemoteTask = Effect.fn("remoteReports.waitForRemoteTask")(fu
     observedRun:
       answer.runId === null || answer.status === "idle"
         ? null
-        : { runId: answer.runId, status: answer.status, summary: answer.result?.summary ?? null },
+        : {
+            runId: answer.runId,
+            status: answer.status,
+            summary: answer.result?.summary ?? null,
+            ...(answer.result?.outcome == null
+              ? {}
+              : {
+                  reported: {
+                    outcome: answer.result.outcome,
+                    ...(answer.result.attachments === undefined
+                      ? {}
+                      : { attachments: answer.result.attachments }),
+                  },
+                }),
+          },
     timedOut: answer.timedOut,
   } satisfies RemoteOriginReportsWaitResult;
 });
@@ -175,6 +193,7 @@ export const observeRemoteTask = Effect.fn("remoteReports.observeRemoteTask")(fu
     ...row,
     status: resultStatus,
     summary: run.summary ?? `The launched remote run ended with status ${run.status}.`,
+    ...(run.reported?.attachments === undefined ? {} : { attachments: run.reported.attachments }),
   });
   return resultStatus === "cancelled" ? ("cancelled" as const) : ("settled" as const);
 });
@@ -264,3 +283,23 @@ export const recoverUnknownRemoteTaskLaunch = Effect.fn(
     summary: `launch outcome unknown; inspect goat_thread_list with host ${row.host} before retrying`,
   });
 });
+
+const encodeTaskObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
+/** Save the launched run's explicit outcome separately from its runtime status. */
+export function remoteTaskObservationJson(observed: RemoteObservedRun) {
+  if (!observed.reported || observed.status !== "completed") {
+    if (!observed.observation) return null;
+    const result = observed.observation.result;
+    if (!result?.reportedOutcome) return encodeTaskObservation(observed.observation);
+    const { reportedOutcome: _outcome, ...facts } = result;
+    return encodeTaskObservation({ ...observed.observation, result: facts });
+  }
+  return encodeTaskObservation({
+    ...(observed.observation ?? { pullRequests: [], needsYou: [] }),
+    result: {
+      ...observed.observation?.result,
+      runId: observed.runId,
+      reportedOutcome: observed.reported.outcome,
+    },
+  });
+}

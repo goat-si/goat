@@ -469,6 +469,7 @@ const make = Effect.gen(function* () {
         canDispatch,
       );
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
+      yield* ledger.preserveInputMemoryPause(ids.threadId, ids.messageId, task.originInputId);
       yield* ledger.bindWorkerProviderBrief(task, ids.threadId);
       const launched = yield* launches
         .launch({

@@ -1,3 +1,4 @@
+import { useGT, useLocale } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   AuthMemoryWriteScope,
@@ -43,6 +44,37 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { Button } from "../ui/button";
 import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
 
+function translateImportProgress(message: string, gt: ReturnType<typeof useGT>) {
+  switch (message) {
+    case "Stopped future chunks. An import already sent may still be applied.":
+      return gt("Stopped future chunks. An import already sent may still be applied.");
+    case "Some items may have been applied. Check the import result.":
+      return gt("Some items may have been applied. Check the import result.");
+    case "Memory import is unavailable":
+      return gt("Memory import is unavailable");
+    case "Reconnect and check the import result.":
+      return gt("Reconnect and check the import result.");
+    case "Couldn't save import progress. Nothing was imported from this batch.":
+      return gt("Couldn't save import progress. Nothing was imported from this batch.");
+    case "Check the saved import result before importing more items.":
+      return gt("Check the saved import result before importing more items.");
+    case "The result is unknown. Reconnect and check the import result.":
+      return gt("The result is unknown. Reconnect and check the import result.");
+    case "The selection changed. Preview again before importing.":
+      return gt("The selection changed. Preview again before importing.");
+    case "Preview again before importing. Previous items may have been applied.":
+      return gt("Preview again before importing. Previous items may have been applied.");
+    case "Review the result and preview again before importing more items.":
+      return gt("Review the result and preview again before importing more items.");
+    case "The saved result is unavailable. Previous items may have been applied. Preview again.":
+      return gt(
+        "The saved result is unavailable. Previous items may have been applied. Preview again.",
+      );
+    default:
+      return message;
+  }
+}
+
 /** A mount may check a saved receipt; only the explicit Apply button admits writes. */
 export function MemoryImportSettings({
   environmentId,
@@ -51,6 +83,8 @@ export function MemoryImportSettings({
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
 }) {
+  const gt = useGT();
+  const locale = useLocale();
   const registry = useContext(RegistryContext);
   const canImport = useAtomValue(memoryEnvironment.importProvider.permissionAtom(environmentId));
   const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities;
@@ -225,10 +259,26 @@ export function MemoryImportSettings({
       progress?.phase ?? "",
     );
   return (
-    <SettingsSection title="Import memories">
+    <SettingsSection title={gt("Import memories")}>
       <SettingsRow
-        title="Provider memories"
-        description={`Import supported ${new Intl.ListFormat("en", { type: "disjunction" }).format(formats.map((f) => memoryImportFormatLabels[f]))} memories from the selected device. Other providers are not supported. Memory write and file read permissions are required.${formats.includes("aside") ? " Aside imports only the Current section of each page; project pages need a project scope." : ""}`}
+        title={gt("Provider memories")}
+        description={[
+          gt(
+            "Import supported {providers} memories from the selected device. Other providers are not supported. Memory write and file read permissions are required.",
+            {
+              providers: new Intl.ListFormat(locale, { type: "disjunction" }).format(
+                formats.map((f) => memoryImportFormatLabels[f]),
+              ),
+            },
+          ),
+          ...(formats.includes("aside")
+            ? [
+                gt(
+                  "Aside imports only the Current section of each page; project pages need a project scope.",
+                ),
+              ]
+            : []),
+        ].join(" ")}
       >
         <div className="space-y-3">
           <Select
@@ -244,8 +294,8 @@ export function MemoryImportSettings({
               workflow?.invalidate();
             }}
           >
-            <SelectTrigger aria-label="Import provider">
-              <SelectValue placeholder="Choose a provider" />
+            <SelectTrigger aria-label={gt("Import provider")}>
+              <SelectValue placeholder={gt("Choose a provider")} />
             </SelectTrigger>
             <SelectPopup>
               {formats.map((value) => (
@@ -278,7 +328,7 @@ export function MemoryImportSettings({
                 }, format ?? undefined)
               }
             >
-              Discover profiles
+              {gt("Discover profiles")}
             </Button>
             {format === "codex" && canCheck ? (
               <Button
@@ -456,7 +506,7 @@ export function MemoryImportSettings({
                 }
               }}
             >
-              Confirm selection
+              {gt("Confirm selection")}
             </Button>
           </div>
           {progress?.phase === "previewed" ? (
@@ -500,7 +550,7 @@ export function MemoryImportSettings({
                 workflow?.stop();
               }}
             >
-              Stop import
+              {gt("Stop import")}
             </Button>
             {progress?.phase === "save_failed" ? (
               <Button
@@ -518,7 +568,7 @@ export function MemoryImportSettings({
               disabled={!workflow || !canImport || busy}
               onClick={() => void run(() => workflow!.recover())}
             >
-              Check import result
+              {gt("Check import result")}
             </Button>
           </div>
         </div>
@@ -547,11 +597,11 @@ export function MemoryImportSettings({
           progress.phase,
         )) ? (
         <SettingsRow
-          title="Import progress"
+          title={gt("Import progress")}
           description={
             <span role="status">
               {busy ? "Import request in progress. " : ""}
-              {progress.message}
+              {progress.message && translateImportProgress(progress.message, gt)}
               {progress.stopped ? " Future chunks stopped. Already sent work can finish." : ""}{" "}
               {progress.phase === "applying" || progress.receipt
                 ? `${progress.settledChunks} chunks completed.`

@@ -103,27 +103,41 @@ export function shouldShowInstanceBadge(
   return false;
 }
 
+type FormatRouteText = (source: string, values?: Record<string, string>) => string;
+
+const englishRouteText: FormatRouteText = (source, values) =>
+  source.replace(/\{(\w+)\}/g, (placeholder, name: string) => values?.[name] ?? placeholder);
+
 /** Observed route status; a missing snapshot never implies a working Home link. */
-export function openCodexRouteSummary(route: ServerProvider["codexRoute"]): string | undefined {
+export function openCodexRouteSummary(
+  route: ServerProvider["codexRoute"],
+  gt: FormatRouteText = englishRouteText,
+): string | undefined {
   if (!route) return undefined;
   if (route.modelRoute === "default") {
-    return `Uses Codex's own settings · ${route.effectiveBaseUrl ?? "Endpoint not verified"}`;
+    return gt("Uses Codex's own settings · {endpoint}", {
+      endpoint: route.effectiveBaseUrl ?? gt("Endpoint not verified"),
+    });
   }
   switch (route.state) {
     case "connected":
-      return route.homeLabel ? `Home connected (${route.homeLabel})` : "Home connected";
+      return route.homeLabel
+        ? gt("Home connected ({home})", { home: route.homeLabel })
+        : gt("Home connected");
     case "home":
-      return "This machine is your OpenCodex Home.";
+      return gt("This machine is your OpenCodex Home.");
     case "reconnecting":
-      return "Reconnecting to Home…";
+      return gt("Reconnecting to Home…");
     case "failed":
-      return `Home link failed: ${route.reason ?? "Check OpenCodex and try again."}`;
+      return gt("Home link failed: {reason}", {
+        reason: route.reason ?? gt("Check OpenCodex and try again."),
+      });
     case "not_linked":
-      return "Not linked to Home.";
+      return gt("Not linked to Home.");
     case "not_running":
-      return "OpenCodex isn't running on this machine.";
+      return gt("OpenCodex isn't running on this machine.");
     default:
-      return "OpenCodex Home status not checked. Check status.";
+      return gt("OpenCodex Home status not checked. Check status.");
   }
 }
 
@@ -156,22 +170,31 @@ export function providerHomeNeedsSetup(
   return supportsProviderHome(driver) && route?.modelRoute !== "opencodex";
 }
 
-export function openCodexHomeHandoff(input: {
-  readonly environmentLabel: string;
-  readonly action: "connect" | "disconnect";
-}): { readonly title: string; readonly instruction: string } {
+export function openCodexHomeHandoff(
+  input: {
+    readonly environmentLabel: string;
+    readonly action: "connect" | "disconnect";
+  },
+  gt: FormatRouteText = englishRouteText,
+): { readonly title: string; readonly instruction: string } {
   return input.action === "connect"
     ? {
-        title: "Set up from Home",
-        instruction: `Open Hub devices on your Home and add ${input.environmentLabel}. GOAT installs OpenCodex there, links it, and verifies one request through Home.`,
+        title: gt("Set up from Home"),
+        instruction: gt(
+          "Open Hub devices on your Home and add {environment}. GOAT installs OpenCodex there, links it, and verifies one request through Home.",
+          { environment: input.environmentLabel },
+        ),
       }
     : {
-        title: "Stop using OpenCodex Home",
-        instruction: `This instance goes back to its provider's own settings and may need its own sign-in on ${input.environmentLabel}. OpenCodex stays linked to Home; remove the device in Home's Hub devices to end the link.`,
+        title: gt("Stop using OpenCodex Home"),
+        instruction: gt(
+          "This instance goes back to its provider's own settings and may need its own sign-in on {environment}. OpenCodex stays linked to Home; remove the device in Home's Hub devices to end the link.",
+          { environment: input.environmentLabel },
+        ),
       };
 }
 
-export const CODEX_ROUTE_BUSY_MESSAGE =
+const CODEX_ROUTE_BUSY_MESSAGE =
   "Wait for this instance's active turns to finish before changing its model route.";
 const CODEX_ROUTE_STALE_MESSAGE = "Settings changed on another device. Review them and try again.";
 

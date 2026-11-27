@@ -288,7 +288,8 @@ export interface PersistentThreadTerminalPanelProps {
   surface: Extract<RightPanelSurface, { kind: "terminal" }>;
   launchContext: PersistentTerminalLaunchContext | null;
   keybindings: ResolvedKeybindingsConfig;
-  onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  /** Omitted where no chat composer takes terminal selections. */
+  onAddTerminalContext?: ((selection: TerminalContextSelection) => void) | undefined;
   onSplitTerminal: () => void;
   onSplitTerminalVertical: () => void;
   onNewTerminal: () => void;

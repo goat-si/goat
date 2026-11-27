@@ -43,6 +43,7 @@ export const SETTINGS_ACCESS = {
   worktreeCleanup: agent,
   storageCleanup: agent,
   worktreesDirectory: agent,
+  conversationMemoryEnabled: person(GRANTS_AGENTS),
   enableAgentMemoryAccess: person(GRANTS_AGENTS),
   agentMemoryLimitGiB: person(
     "It is this machine's memory safety limit for agents; a person sets it.",
@@ -140,6 +141,9 @@ export const SETTINGS_ACCESS = {
   reviewGuideInstructions: agent,
   pullRequestMergeMethod: agent,
   observability: person("It sends telemetry from this machine to an outside address."),
+  telemetryConsent: person(
+    "It decides whether usage data leaves this machine; only the person it describes may answer.",
+  ),
   sourceControlHosts: person(HOLDS_SECRETS),
   completionWebhook: person("It sends reports to an outside address and holds a signing secret."),
   providerInstances: path("provider.update"),

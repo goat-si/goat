@@ -48,7 +48,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -1202,6 +1201,7 @@ const runtimeFixture = (
         }),
     }),
     Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+      identifyTarget: () => Effect.succeed(null),
       publishSetupOutcome: () => Effect.succeed(true),
       beginSetupOperation: (_host, { operationId }) =>
         Effect.succeed({ operationId, generation: 1, stage: "runtime" }),

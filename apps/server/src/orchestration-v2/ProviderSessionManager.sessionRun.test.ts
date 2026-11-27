@@ -69,6 +69,8 @@ it.effect.each([
   { session: true, driver: "codex", perRun: true },
   { session: true, driver: "claudeAgent", perRun: true },
   { session: true, driver: "cursor", perRun: false },
+  { session: false, driver: "opencode", perRun: true },
+  { session: true, driver: "opencode", perRun: false },
   { session: false, driver: "codex", perRun: false },
 ])(
   "session=$session driver=$driver: rotates per-run credentials and preserves other reuse",
@@ -105,7 +107,9 @@ it.effect.each([
           ).toBe("run-b");
           yield* prepare("run-b");
           expect((yield* sessions.read(threadId))?.providerSessionId).toBe(b!.providerSessionId);
-          expect((yield* sessions.read(threadId))?.nativeSubagentLimit).toBe(0);
+          expect((yield* sessions.read(threadId))?.nativeSubagentLimit).toBe(
+            session ? 0 : undefined,
+          );
         } else expect(b!.providerSessionId).toBe(a!.providerSessionId);
       }),
     ).pipe(Effect.provide(testLayer(driver))),

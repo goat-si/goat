@@ -2580,11 +2580,16 @@ const make = Effect.gen(function* () {
           : before.failure instanceof AuthorityLost
             ? yield* refuseLost
             : undefined;
+      const senderInput =
+        event.payload.sender?.inputId ??
+        (event.actor === "user" ? event.payload.inputId : undefined);
+      const paused = yield* ledger.inputMemoryPaused(stored.task.originInputId, senderInput);
       const sent = yield* callHost(
         {
           host: state.host,
           tool: "goat_thread_send",
           ...connectionFor(state),
+          ...(paused ? { memoryGrantCeiling: "none" as const } : {}),
           arguments: {
             threadId: worker.threadId,
             message:

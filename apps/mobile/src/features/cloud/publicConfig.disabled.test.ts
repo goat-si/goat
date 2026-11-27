@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   hasCloudPublicConfig,
-  hasTracingPublicConfig,
   resolveCloudPublicConfig,
   resolveRelayClerkTokenOptions,
 } from "./publicConfig";
@@ -30,7 +29,6 @@ describe("default-off mobile public config", () => {
       observability: { tracesUrl: null, tracesDataset: null, tracesToken: null },
     });
     expect(hasCloudPublicConfig()).toBe(false);
-    expect(hasTracingPublicConfig()).toBe(false);
     expect(() => resolveRelayClerkTokenOptions()).toThrow(
       "GOAT_CLERK_PUBLISHABLE_KEY is not configured.",
     );

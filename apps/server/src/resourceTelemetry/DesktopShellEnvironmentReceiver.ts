@@ -23,6 +23,7 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
   platform: NodeJS.Platform,
   /** Runs when a snapshot changes PATH or ends login-shell discovery, not on every snapshot. */
   onPathChanged: Effect.Effect<void> = Effect.void,
+  onDiscoverySettled: Effect.Effect<void> = Effect.void,
 ) {
   let baseCertificates: Array<string> | undefined;
   return Effect.fn("resourceTelemetry.desktopTelemetryReceiver.applyShellEnvironment")(function* (
@@ -88,7 +89,10 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
         ),
       );
     }
-    if (message.discovered) delete environment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
+    if (message.discovered) {
+      delete environment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
+      yield* onDiscoverySettled;
+    }
     // Windows keeps its existing behavior: statuses follow the periodic health check there.
     if (
       platform !== "win32" &&

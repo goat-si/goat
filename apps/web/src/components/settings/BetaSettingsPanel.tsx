@@ -1,7 +1,7 @@
 import { useAuth } from "@clerk/react";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import { Link } from "@tanstack/react-router";
-import { useGT, useMessages } from "gt-react";
+import { useGT } from "gt-react";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { useGoatConnectAuthPrompt } from "../clerk/useGoatConnectAuthPrompt";
@@ -14,27 +14,29 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { ToolCallVisibilityRow } from "./ToolCallVisibilityRow";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 /** Features that are still settling in. Some are on by default; each can be turned off here. */
 export function BetaSettingsPanel() {
   const gt = useGT();
-  const m = useMessages();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const workingShelf = searchableSetting("working-shelf");
+  const workingShelf = setting("working-shelf");
   return (
     <SettingsPageContainer>
-      <SettingsSection id="beta" title="Beta">
+      <SettingsSection id="beta" title={gt("Beta")}>
         <SettingsRow
-          {...searchableSetting("new-design")}
-          description="A true black dark mode, dimmer read threads, and simpler composer controls. Turn it off for the classic look."
+          {...setting("new-design")}
+          description={gt(
+            "A true black dark mode, dimmer read threads, and simpler composer controls. Turn it off for the classic look.",
+          )}
           resetAction={
             settings.redesignEnabled !== DEFAULT_UNIFIED_SETTINGS.redesignEnabled ? (
               <SettingResetButton
-                label="new design"
+                label={setting("new-design").title}
                 onClick={() =>
                   updateSettings({ redesignEnabled: DEFAULT_UNIFIED_SETTINGS.redesignEnabled })
                 }
@@ -45,19 +47,20 @@ export function BetaSettingsPanel() {
             <Switch
               checked={settings.redesignEnabled}
               onCheckedChange={(checked) => updateSettings({ redesignEnabled: Boolean(checked) })}
-              aria-label="New design"
+              aria-label={gt("New design")}
             />
           }
         />
         <SettingsRow
           {...workingShelf}
-          title={m(workingShelf.title)}
-          description="Order active threads by when each last came back to you. Running work stays in Priority."
+          description={gt(
+            "Order active threads by when each last came back to you. Running work stays in Priority.",
+          )}
           resetAction={
             settings.sidebarWorkingShelfEnabled !==
             DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled ? (
               <SettingResetButton
-                label={m(workingShelf.title)}
+                label={workingShelf.title}
                 onClick={() =>
                   updateSettings({
                     sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
@@ -86,17 +89,26 @@ export function BetaSettingsPanel() {
 
 /** Signed out of GOAT Connect, the row offers to sign in instead of its switch. */
 function GuestLinksRowWithSignIn() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const { isSignedIn } = useAuth();
   const { openAuthPrompt } = useGoatConnectAuthPrompt();
   // `isSignedIn` is undefined until Clerk loads.
   if (isSignedIn !== false) return <GuestLinksRow />;
   return (
     <SettingsRow
-      {...searchableSetting("guest-links")}
-      description="Share a thread with a guest who watches it live in their browser and sends messages you approve. Sign in to GOAT Connect to use guest links."
+      {...setting("guest-links")}
+      description={
+        <>
+          {gt(
+            "Share a thread with a guest who watches it live in their browser and sends messages you approve.",
+          )}{" "}
+          {gt("Sign in to GOAT Connect to use guest links.")}
+        </>
+      }
       control={
         <Button size="sm" variant="outline" onClick={openAuthPrompt}>
-          Sign in
+          {gt("Sign in")}
         </Button>
       }
     />
@@ -104,21 +116,26 @@ function GuestLinksRowWithSignIn() {
 }
 
 function GuestLinksRow() {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   return (
     <SettingsRow
       serverScoped
-      {...searchableSetting("guest-links")}
+      {...setting("guest-links")}
       settingKeys={["guestSharingEnabled"]}
       description={
         <>
-          Share a thread with a guest who watches it live in their browser and sends messages you
-          approve. Needs GOAT Connect: sign in and link this machine in{" "}
+          {gt(
+            "Share a thread with a guest who watches it live in their browser and sends messages you approve.",
+          )}{" "}
+          {gt(
+            "To use guest links, sign in to GOAT Connect and link this machine. Turning this off disables every guest link.",
+          )}{" "}
           <Link to="/settings/connections" className="underline underline-offset-2">
-            Connections
+            {gt("Open Connections")}
           </Link>
-          . While it is off, every guest link stops working.
         </>
       }
       control={
@@ -126,7 +143,7 @@ function GuestLinksRow() {
           settingKeys={["guestSharingEnabled"]}
           checked={settings.guestSharingEnabled}
           onCheckedChange={(checked) => updateSettings({ guestSharingEnabled: Boolean(checked) })}
-          aria-label="Guest links"
+          aria-label={setting("guest-links").title}
         />
       }
     />

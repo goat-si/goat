@@ -217,8 +217,9 @@ The copy starts with its automation paused, because it would otherwise act as a
 second copy of the same machine: scheduled tasks, channel bots such as Slack,
 goals and Fleet work, memory sync, and hub and remote links stay off, and agent
 work that was in progress when the copy was made does not continue. Your own
-threads and commands work as usual. A notice at the top of **Settings** explains
-this; choose **Resume automation on this app** there to turn it on. If both apps
+threads and commands work as usual, but delegated task completions wait to wake
+their parent threads until automation resumes. A notice at the top of **Settings**
+explains this; choose **Resume automation on this app** there to turn it on. If both apps
 run with automation on, each runs it: scheduled tasks and channel replies happen
 twice.
 

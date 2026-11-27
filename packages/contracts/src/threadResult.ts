@@ -7,8 +7,18 @@ import {
   RunId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
-export { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
+import { ThreadResultAttachmentRef, ThreadResultAttachments } from "./threadResultAttachments.ts";
+export { ThreadResultAttachments } from "./threadResultAttachments.ts";
+import {
+  ThreadResultObservedCheck,
+  ThreadResultTests,
+  ThreadResultOutcome,
+} from "./threadResultEvidence.ts";
+export {
+  ThreadResultObservedCheck,
+  ThreadResultTests,
+  ThreadResultOutcome,
+} from "./threadResultEvidence.ts";
 
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 
@@ -16,8 +26,6 @@ import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
  * How a dispatched thread's run ended, as its agent reported it. The run's own
  * status settles failed and cancelled runs that never reported.
  */
-export const ThreadResultOutcome = Schema.Literals(["succeeded", "failed", "blocked", "cancelled"]);
-export type ThreadResultOutcome = typeof ThreadResultOutcome.Type;
 
 export const THREAD_RESULT_SUMMARY_MAX_CHARS = 4000;
 
@@ -35,6 +43,12 @@ const CommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{7,64}$/i));
 export const ThreadResultReport = Schema.Struct({
   runId: Schema.optional(RunId),
   expectedAttemptId: Schema.optional(RunAttemptId),
+  attachmentRefs: Schema.optional(
+    Schema.Array(ThreadResultAttachmentRef).check(Schema.isMaxLength(8)),
+  ).annotate({
+    description:
+      "Existing attachments on messages in this thread. Supply runId and expectedAttemptId from the current run. References from earlier attempts remain available.",
+  }),
   notificationRelevance: Schema.optional(Schema.Literals(["important", "no_update"])),
   outcome: ThreadResultOutcome,
   summary: Schema.optional(
@@ -58,6 +72,7 @@ export type ThreadResultReport = typeof ThreadResultReport.Type;
 export const ThreadResult = Schema.Struct({
   runId: RunId,
   runStatus: OrchestrationV2RunStatus,
+  attachments: Schema.optional(ThreadResultAttachments),
   /**
    * The reported outcome; without a report, failed or cancelled when the run's
    * status says so, otherwise null.

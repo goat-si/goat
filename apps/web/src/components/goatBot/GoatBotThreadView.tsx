@@ -23,6 +23,7 @@ import { useUiStateStore } from "~/uiStateStore";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ThreadVisitWatermark } from "../chat/ThreadVisitWatermark";
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotRightPanelFrame } from "./GoatBotRightPanel";
 import { GoatBotStepsProvider } from "./GoatBotStepsProvider";
 import { GoatBotActivityContext } from "./GoatBotTimeline";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
@@ -197,51 +198,56 @@ function GoatBotThreadSession({
         visibleTurnItems={visibleTurnItems}
         environmentId={removal === null ? environmentId : null}
       >
-        <GoatBotChatView
-          {...session}
-          projectionRef={threadRef}
-          environmentId={environmentId}
-          unreadSince={unreadSince}
-          openHome={openHome}
-          onHomeHandled={() => setOpenHome(null)}
-          homeMove={
-            moveTarget
-              ? {
-                  label: moveTarget.label,
-                  busy: homeSettings.busy,
-                  onMove: () => homeSettings.changeHome(moveTarget.environmentId),
-                }
-              : undefined
-          }
-          homeMoveError={homeSettings.error}
-          rows={rows}
-          removal={removal}
-          canOpenCurrentBot={canOpenCurrentBot}
-          onRestore={
-            member !== null && manage.canManage ? () => void manage.restore(member) : undefined
-          }
-          onUnarchive={
-            member === null && removal === "archived" && session.canOperate
-              ? () =>
-                  void unarchive({ environmentId, input: { threadId } }).then((result) => {
-                    if (result._tag === "Failure") {
-                      toastManager.add({
-                        type: "error",
-                        title: `Couldn't unarchive ${botName}`,
-                        description: "It may have been deleted. Check again in a moment.",
-                      });
+        <GoatBotRightPanelFrame threadRef={threadRef}>
+          {(panelControls) => (
+            <GoatBotChatView
+              {...session}
+              panelControls={panelControls}
+              projectionRef={threadRef}
+              environmentId={environmentId}
+              unreadSince={unreadSince}
+              openHome={openHome}
+              onHomeHandled={() => setOpenHome(null)}
+              homeMove={
+                moveTarget
+                  ? {
+                      label: moveTarget.label,
+                      busy: homeSettings.busy,
+                      onMove: () => homeSettings.changeHome(moveTarget.environmentId),
                     }
-                    refreshArchivedThreadsForEnvironment(environmentId);
-                  })
-              : undefined
-          }
-          onCheckAgain={
-            removal === "unchecked"
-              ? () => refreshArchivedThreadsForEnvironment(environmentId)
-              : undefined
-          }
-          legacyAgentRoute={legacyAgentRoute}
-        />
+                  : undefined
+              }
+              homeMoveError={homeSettings.error}
+              rows={rows}
+              removal={removal}
+              canOpenCurrentBot={canOpenCurrentBot}
+              onRestore={
+                member !== null && manage.canManage ? () => void manage.restore(member) : undefined
+              }
+              onUnarchive={
+                member === null && removal === "archived" && session.canOperate
+                  ? () =>
+                      void unarchive({ environmentId, input: { threadId } }).then((result) => {
+                        if (result._tag === "Failure") {
+                          toastManager.add({
+                            type: "error",
+                            title: `Couldn't unarchive ${botName}`,
+                            description: "It may have been deleted. Check again in a moment.",
+                          });
+                        }
+                        refreshArchivedThreadsForEnvironment(environmentId);
+                      })
+                  : undefined
+              }
+              onCheckAgain={
+                removal === "unchecked"
+                  ? () => refreshArchivedThreadsForEnvironment(environmentId)
+                  : undefined
+              }
+              legacyAgentRoute={legacyAgentRoute}
+            />
+          )}
+        </GoatBotRightPanelFrame>
       </GoatBotStepsProvider>
     </GoatBotActivityContext>
   );

@@ -117,7 +117,6 @@ import {
 } from "./ClaudeToolFrames.ts";
 import {
   appendClaudeUserText,
-  withFreshMemory,
   handoffSkillOffset,
   makeClaudeUserMessage,
 } from "./ClaudeUserMessage.ts";
@@ -9548,34 +9547,38 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfReservation.commit();
               if (appContext !== undefined) context.appContextOffered = appContext.snapshot;
             };
-            const offerUserMessage = Effect.fnUntraced(function* (message: SDKUserMessage) {
+            const offerUserMessage = Effect.fnUntraced(function* (
+              message: SDKUserMessage,
+              start = false,
+            ) {
               if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
-              yield* startUserTurnForWakeReports(nativeThreadId).pipe(
-                Effect.andThen(
-                  Effect.uninterruptibleMask((restore) =>
-                    restore(
-                      querySession.query.offer(message, () => {
-                        commitOffer();
-                      }),
-                    ).pipe(
-                      Effect.tap(() =>
-                        Effect.sync(() => {
-                          commitOffer();
-                        }),
-                      ),
-                    ),
+              const selected =
+                start && !nativeControl
+                  ? yield* MemoryContext.selectSnapshot(turnInput, CLAUDE_PROVIDER)
+                  : undefined;
+              if (start) yield* attachTurn;
+              yield* startUserTurnForWakeReports(nativeThreadId);
+              const snapshot = yield* MemoryContext.admitSelected(turnInput, selected);
+              const offer = snapshot
+                ? appendClaudeUserText(message, MemoryContext.memoryContextText(snapshot))
+                : message;
+              context.rootMemoryReceipt = MemoryContext.deliveryReceipt(turnInput, snapshot);
+              yield* Effect.uninterruptibleMask((restore) =>
+                restore(
+                  querySession.query.offer(offer, () => {
+                    commitOffer();
+                  }),
+                ).pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      commitOffer();
+                    }),
                   ),
                 ),
-                Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void),
               );
+              yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
             });
             if (userMessage !== null && !turnInput.resume) {
-              const admitted = nativeControl
-                ? { message: userMessage, receipt: Effect.void, uncertain: Effect.void }
-                : yield* withFreshMemory(userMessage, turnInput);
-              const admittedMessage = nativeControl
-                ? admitted.message
-                : yield* withCuaNotice(admitted.message, querySession, turnInput.threadId);
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;
                 context.memoryRelease = yield* derivedCache
@@ -9587,9 +9590,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   })
                   .pipe(Effect.provideService(Scope.Scope, sessionScope));
               }
-              context.rootMemoryReceipt = admitted.receipt;
-              yield* admitted.uncertain.pipe(Effect.andThen(attachTurn));
-              yield* offerUserMessage(admittedMessage);
+              const message = nativeControl
+                ? userMessage
+                : yield* withCuaNotice(userMessage, querySession, turnInput.threadId);
+              yield* offerUserMessage(message, true);
               return;
             }
             // Transcript reads suspend replay; hold SDK frames until the buffer is applied to preserve order.
@@ -9975,9 +9979,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 detail: `Claude provider turn ${turnInput.providerTurnId} ended before the steer was sent.`,
               });
             }
-            const admitted = yield* withFreshMemory(
-              appContext?.apply(userMessage) ?? userMessage,
+            const selected = yield* MemoryContext.selectSnapshot(
               currentTurn.input,
+              CLAUDE_PROVIDER,
             );
             const marker = Symbol();
             yield* Ref.update(steeredTurns, (current) =>
@@ -9998,7 +10002,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 else next.delete(turnInput.providerTurnId);
                 return next;
               });
-            yield* admitted.uncertain;
             if (currentTurn.steersClosed) {
               yield* settleSteer(false);
               return yield* new ProviderAdapter.ProviderAdapterProtocolError({
@@ -10011,15 +10014,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const messageId = turnInput.message.messageId;
             currentTurn.steerUuids.add(steerUuid);
             const appContextBefore = currentTurn.appContextOffered;
-            currentTurn.pendingSteers.set(steerUuid, {
+            const pendingSteer = {
               pdfReservation,
               appContextOffered: appContext?.snapshot,
               appContextBefore,
               messageId,
               text: turnInput.message.text,
               liveQuery: existing,
-              receipt: admitted.receipt,
-            });
+              receipt: Effect.void,
+            };
+            currentTurn.pendingSteers.set(steerUuid, pendingSteer);
             yield* emitSteerStatus(currentTurn, messageId, "pending");
             let committed = false;
             const commitOffer = () => {
@@ -10028,11 +10032,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfReservation.commit();
               if (appContext !== undefined) currentTurn.appContextOffered = appContext.snapshot;
             };
-            yield* Effect.uninterruptibleMask((restore) =>
-              restore(existing.query.offer(admitted.message, commitOffer)).pipe(
-                Effect.tap(() => Effect.sync(commitOffer)),
-              ),
-            ).pipe(
+            yield* Effect.gen(function* () {
+              const snapshot = yield* MemoryContext.admitSelected(currentTurn.input, selected);
+              if (currentTurn.steersClosed)
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail: `Claude provider turn ${turnInput.providerTurnId} ended before the steer was sent.`,
+                });
+              const base = appContext?.apply(userMessage) ?? userMessage;
+              const message = snapshot
+                ? appendClaudeUserText(base, MemoryContext.memoryContextText(snapshot))
+                : base;
+              pendingSteer.receipt = MemoryContext.deliveryReceipt(currentTurn.input, snapshot);
+              yield* Effect.uninterruptibleMask((restore) =>
+                restore(existing.query.offer(message, commitOffer)).pipe(
+                  Effect.tap(() => Effect.sync(commitOffer)),
+                ),
+              );
+            }).pipe(
               Effect.tap(() => settleSteer(true)),
               Effect.onError(() =>
                 settleSteer(false).pipe(

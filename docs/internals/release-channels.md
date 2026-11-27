@@ -64,7 +64,8 @@ them, so two servers answer as one machine. It therefore starts with an automati
 (`apps/server/src/automationHold.ts`), cleared only by a person from Settings. **Code that acts on
 its own** (a Scheduler source, a timer, a recovery pass at startup, an inbound hub or webhook route)
 **must check the hold** or wait for its release; Scheduler sources skip while held unless registered
-with `whileAutomationHeld: "run"`. Work a person starts on the copy is not automation and runs.
+with `whileAutomationHeld: "run"`. Work a person starts on the copy runs, but automatic
+continuations, including delegated task completion wakes, wait for the hold to clear.
 
 Both databases point at the same worktree folders. Storage cleanup ignores worktree roots inside another
 local GOAT home and keeps any worktree another home's database binds, re-reading those bindings while it

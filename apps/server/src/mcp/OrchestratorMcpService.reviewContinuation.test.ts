@@ -1,5 +1,13 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, NodeId, TurnItemId, type OrchestrationV2Subagent } from "@goat/contracts";
+import {
+  ChannelChildWorkId,
+  ChannelTaskId,
+  CommandId,
+  NodeId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2Subagent,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -484,24 +492,38 @@ it.effect("an unrelated run after the round blocks continuing it", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("a channel-owned caller is refused and its child-work reservation returns", () =>
+it.effect("refuses a channel-owned caller before reserving child work", () =>
   Effect.gen(function* () {
     const fixture = yield* makeFixture;
-    const released: Array<unknown> = [];
-    const record = { id: "child-work-1" } as unknown as Parameters<
-      ChannelChildWork.ChannelChildWork["Service"]["releaseReserved"]
-    >[0];
     const refused = yield* continued(fixture).pipe(
       Effect.provide(
         Layer.mock(ChannelChildWork.ChannelChildWork)({
-          admit: () => Effect.succeed({ _tag: "admitted", record, requestKey: "round-2" }),
-          releaseReserved: (reserved) => Effect.sync(() => void released.push(reserved)),
+          ownershipForCaller: (threadId) => {
+            assert.equal(threadId, parentId);
+            return Effect.succeed({
+              _tag: "child",
+              record: {
+                childWorkId: ChannelChildWorkId.make("child-work-1"),
+                ownerId: "owner",
+                taskId: ChannelTaskId.make("channel-task-1"),
+                generation: 1,
+                surface: "delegate_local",
+                callerThreadId: ThreadId.make("channel-worker"),
+                requestKey: "round-1",
+                promptDigest: "review",
+                state: "bound",
+                destination: { threadId },
+                createdAt: "2026-10-30T00:00:00.000Z",
+                updatedAt: "2026-10-30T00:00:00.000Z",
+              },
+            });
+          },
         }),
       ),
       Effect.flip,
     );
+    assert.equal(refused.code, "invalid_request");
     assert.include(refused.message, "channel-owned");
-    assert.deepEqual(released, [record]);
     assert.lengthOf((yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents, 1);
     assert.lengthOf(yield* childRuns(fixture.childThreadId), 1);
   }).pipe(Effect.provide(layerTest)),

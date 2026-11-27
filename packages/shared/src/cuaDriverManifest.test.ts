@@ -37,7 +37,7 @@ vi.mock("node:child_process", { spy: true });
  * pin moves to a version not in `verified`.
  */
 const PINNED_DRIVER_TOOLS = {
-  verified: ["0.47.24-goat.1"],
+  verified: ["0.62.0-goat.1"],
   tools: [
     // `cua-driver list-tools` of the macOS binary.
     "bring_to_front",
@@ -45,6 +45,7 @@ const PINNED_DRIVER_TOOLS = {
     "browser_dialog",
     "browser_download",
     "browser_fill_secret",
+    "browser_motion_policy",
     "browser_navigate",
     "browser_pointer",
     "browser_prepare",
@@ -59,7 +60,6 @@ const PINNED_DRIVER_TOOLS = {
     "double_click",
     "drag",
     "end_session",
-    "escalate_session",
     "get_accessibility_tree",
     "get_agent_cursor_state",
     "get_browser_state",
@@ -70,7 +70,6 @@ const PINNED_DRIVER_TOOLS = {
     "get_recording_state",
     "get_screen_size",
     "get_session",
-    "get_session_state",
     "get_window_state",
     "health_report",
     "hotkey",
@@ -236,8 +235,7 @@ describe("cuaDriverManifest", () => {
       "replay_trajectory",
       "parse_visual_regions",
       "page",
-      "escalate_session",
-      "get_session_state",
+      "browser_motion_policy",
       "browser_download",
       "browser_fill_secret",
       "browser_set_input_files",

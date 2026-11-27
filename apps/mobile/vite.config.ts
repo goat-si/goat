@@ -158,6 +158,7 @@ const reactTests = [
   "src/features/goat-bot/useMobileGoatBotSession.offline.test.tsx",
   "src/features/goat-bot/useReplying.test.tsx",
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
+  "src/features/settings/ConversationMemorySettings.test.tsx",
   "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
   "src/features/settings/SettingsGoatBotRouteScreen.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
@@ -212,6 +213,7 @@ const reactTests = [
   "src/features/terminal/useTerminalExitNavigation.test.tsx",
   "src/features/workspace/useSearchScrollRestoration.test.tsx",
   "src/state/entities.threadLinks.test.tsx",
+  "src/AppProviders.test.tsx",
 ];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;

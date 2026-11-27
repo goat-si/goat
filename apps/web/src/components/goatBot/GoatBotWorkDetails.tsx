@@ -5,6 +5,7 @@ import {
   botWorkerPullRequests,
   resolveRemoteBotWork,
   type HomeCurrentOpenableLink,
+  type BotWorkTask,
 } from "@goat/client-runtime/goatBot";
 import type {
   BotRemoteWork,
@@ -55,6 +56,34 @@ function GoatBotWorkerLink({
         {label}
       </Link>
       {pullRequests && <GoatBotPullRequestChips row={pullRequests} />}
+    </span>
+  );
+}
+
+/** Local delegation reserves a thread ID before launch. Only a known shell has a thread to open. */
+function GoatBotSubagent({
+  agent,
+  onHomeNavigate,
+}: {
+  agent: BotWorkTask["subagents"][number];
+  onHomeNavigate?: ((event: React.MouseEvent) => void) | undefined;
+}) {
+  const thread = agent.thread;
+  const shell = useThreadShell(
+    thread ? scopeThreadRef(thread.environmentId, thread.threadId) : null,
+  );
+  return (
+    <span className="max-w-full rounded-full border border-border px-2 py-1">
+      {thread && shell ? (
+        <GoatBotWorkerLink
+          thread={thread}
+          label={workThreadName(shell.title)}
+          onHomeNavigate={onHomeNavigate}
+        />
+      ) : (
+        (agent.host ?? agent.destinationHint ?? "Subagent")
+      )}{" "}
+      · {agent.label}
     </span>
   );
 }
@@ -167,9 +196,7 @@ export function GoatBotWorkDetails({
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       {task.subagents.map((agent) => (
-        <span key={agent.childWorkId} className="rounded-full border border-border px-2 py-1">
-          {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
-        </span>
+        <GoatBotSubagent key={agent.childWorkId} agent={agent} onHomeNavigate={onHomeNavigate} />
       ))}
       {threads.map((thread) => (
         <GoatBotWorkerLink

@@ -6,6 +6,7 @@ import {
   disposableConsentEnded,
   disposableSwitchSaveError,
   hubDeviceList,
+  missingCliLabel,
 } from "@goat/client-runtime/hub-devices";
 import {
   canRemoveHubNode,
@@ -460,8 +461,8 @@ function HubDevicesList({
             )}
             {missingClis === null ? null : (
               <Text className="text-sm text-warning-foreground">
-                {missingClis}. Install from the hub's Settings → Connections → Providers on your
-                machines.
+                {missingCliLabel(missingClis)}. Install from the hub's Settings → Connections →
+                Providers on your machines.
               </Text>
             )}
             {childSetup === null ? null : (

@@ -208,6 +208,7 @@ function environment(environmentId: string, label: string) {
       environment: {
         capabilities: { projectSettingsOverrides: true, threadAutoSettlement: true },
       },
+      observability: {},
     },
   };
 }

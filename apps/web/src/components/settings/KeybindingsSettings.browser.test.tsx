@@ -1,3 +1,6 @@
+import ko from "../../i18n/translations/ko.json";
+import { GTProvider } from "gt-react";
+import chinese from "../../i18n/translations/zh.json";
 import { RegistryProvider } from "@effect/atom-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent, type Locator } from "vite-plus/test/browser";
@@ -174,4 +177,46 @@ it("filters actions and allows additional shortcuts for assigned commands", asyn
   await expect
     .element(screen.getByRole("combobox", { name: "Command", exact: true }))
     .toHaveTextContent("Composer: Cycle Host");
+});
+
+it("finds a localized shortcut by its display name, English label, or command ID", async () => {
+  await using screen = await render(
+    <GTProvider locale="zh" translations={{ zh: chinese }}>
+      <KeybindingsSettingsPanel />
+    </GTProvider>,
+  );
+  const search = screen.getByRole("searchbox", { name: "搜索快捷键" });
+  for (const query of ["切换命令面板", "Command Palette: Toggle", "commandPalette.toggle"]) {
+    await search.fill(query);
+    await expect.element(screen.getByText("切换命令面板", { exact: true })).toBeVisible();
+    await expect
+      .element(screen.getByText("打开首选编辑器", { exact: true }))
+      .not.toBeInTheDocument();
+  }
+  await search.fill("复制路径");
+  await expect.element(screen.getByText("文件：复制路径", { exact: true })).toBeVisible();
+  await screen
+    .getByRole("button", { name: /文件：复制路径/ })
+    .filter({ hasText: "fileViewFocus" })
+    .click();
+  await expect
+    .element(page.getByRole("button", { name: "条件组", exact: true }).first())
+    .toBeVisible();
+});
+
+it("announces shortcut and condition controls in Korean", async () => {
+  await using screen = await render(
+    <GTProvider locale="ko" translations={{ ko }}>
+      <KeybindingsSettingsPanel />
+    </GTProvider>,
+  );
+  const command = "명령 팔레트 표시 전환";
+  await expect.element(screen.getByRole("button", { name: `조건 편집: ${command}` })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: `작업: ${command}` }))
+    .toBeInTheDocument();
+  const shortcut = screen.getByRole("button", { name: new RegExp(`^단축키 편집: ${command}:`) });
+  await expect.element(shortcut).toBeVisible();
+  await shortcut.click();
+  await expect.element(screen.getByRole("textbox", { name: `단축키: ${command}` })).toBeVisible();
 });

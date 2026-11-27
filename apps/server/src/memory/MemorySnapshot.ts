@@ -1,3 +1,4 @@
+import { issueConversationRunCheck } from "./conversationRunEligibility.ts";
 import { markTurnMemoryIncomplete, recordTurnMemory } from "./TurnMemoryReceipts.ts";
 import * as M from "@goat/contracts";
 import * as Renderer from "@goat/provider-core/server/memoryContext";
@@ -36,6 +37,7 @@ export class MemorySnapshotError extends Schema.TaggedError<MemorySnapshotError>
 export class MemorySnapshot extends Context.Service<
   MemorySnapshot,
   {
+    readonly canDeliver?: (snapshot: M.MemoryContextSnapshot) => Effect.Effect<boolean>;
     readonly recordDelivery?: (
       threadId: M.ThreadId,
       runId: M.RunId,
@@ -342,6 +344,20 @@ const make = Effect.gen(function* () {
       if (!permits(yield* currentPolicy, policy) || policy.grant === "none") return undefined;
       const initial = yield* capture(threadId);
       if (!initial) return undefined;
+      const runCheck = (yield* issueConversationRunCheck(sql, {
+        threadId,
+        runId: initial.runId,
+      })).pipe(Effect.orElseSucceed(() => false));
+      if (!(yield* runCheck)) return undefined;
+      if (policy.finalAuthority) {
+        const original = policy.finalAuthority;
+        policy = {
+          ...policy,
+          finalAuthority: runCheck.pipe(
+            Effect.flatMap((allowed) => (allowed ? original : Effect.succeed(false))),
+          ),
+        };
+      }
       // Preserve existing explicit/repository mapping semantics, including discovery outside SQL.
       const projectKey = yield* service.resolveProjectKey(initial.space, initial.project);
       const view = yield* capture(threadId);
@@ -622,6 +638,13 @@ const make = Effect.gen(function* () {
     Effect.mapError((cause) => new MemorySnapshotError({ cause })),
   );
   return MemorySnapshot.of({
+    canDeliver: Effect.fnUntraced(function* (snapshot) {
+      const key = associations.get(snapshot);
+      if (key === undefined) return false;
+      const entry = entries.get(key);
+      if (!entry?.finalAuthority || entry.expires <= (yield* Clock.currentTimeMillis)) return false;
+      return (yield* entry.finalAuthority) && entries.get(key) === entry;
+    }),
     recordDeliveryUncertain: (threadId, runId, space) =>
       markTurnMemoryIncomplete(sql, threadId, runId, space),
     recordDelivery: (threadId, runId, space, refs) =>

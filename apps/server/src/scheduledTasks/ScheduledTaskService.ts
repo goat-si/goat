@@ -78,6 +78,7 @@ import {
 import { describeFailedWebhookFilter, findFailedWebhookFilter } from "./webhookFilter.ts";
 import { redactHeaders, redactQuery, renderWebhookPrompt } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
+import { withLocalTracing } from "@goat/shared/relayTracing";
 import {
   BOT_ROUTINE_NEEDS_OWNER,
   makeScheduledBotRoutines,
@@ -2069,6 +2070,7 @@ export const layer = Layer.effect(
           yield* runWebhookDelivery(task, deliveryId, rendered.prompt).pipe(
             permit.withPermits(1),
             Effect.ensuring(release),
+            withLocalTracing,
             Effect.forkIn(serviceScope),
           );
           // Dispatch owns the accepted delivery now; retries must keep its claim.

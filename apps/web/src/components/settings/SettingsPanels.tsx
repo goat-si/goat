@@ -1,6 +1,7 @@
 import { AutoSettleDaysInput } from "./AutoSettleDaysInput";
 import { resolvePastedPath } from "@goat/shared/path";
 import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
+import { TelemetryConsentSetting } from "./TelemetryConsentSetting";
 import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
 import { RestartContinuationSettings } from "./RestartContinuationSettings";
 import { NotificationSettings } from "./NotificationSettings";
@@ -1030,6 +1031,10 @@ export function GeneralSettingsPanel() {
         <BackgroundActivitySettingsRow />
       </SettingsSection>
 
+      <SettingsSection id="privacy" title={gt("Privacy")}>
+        <TelemetryConsentSetting />
+      </SettingsSection>
+
       <SettingsSection id="projects-and-threads" title={gt("Projects and worktrees")}>
         <SettingsRow
           serverScoped
@@ -1268,7 +1273,7 @@ export function GeneralSettingsPanel() {
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                   {...(textGenerationModelSelection === NO_PROVIDER_MODEL_SELECTION
-                    ? { triggerLabel: "Unavailable" }
+                    ? { triggerLabel: gt("Unavailable") }
                     : mixedTextGenerationModel
                       ? { triggerLabel: gt("Mixed") }
                       : {})}

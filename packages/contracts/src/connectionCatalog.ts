@@ -59,6 +59,8 @@ export const ConnectionCatalogOperation = Schema.Union([
     host: TrimmedNonEmptyString,
     label: Schema.optionalKey(TrimmedNonEmptyString),
     addedBy: ConnectionAddedBy,
+    /** The GOAT environment the host answers as now, read by the server; absent when it could not be read. */
+    reachedEnvironmentId: Schema.optionalKey(EnvironmentId),
   }),
   Schema.Struct({ type: Schema.Literal("remove"), environmentId: EnvironmentId }),
 ]);

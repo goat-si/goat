@@ -1,11 +1,14 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT } from "gt-react";
 import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { GoatBotModelSettings } from "./GoatBotModelSettings";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 
 /** The bot's cluster-wide home, independent of the settings page's selected environment. */
 export function GoatBotSettings() {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const { supported, resolution, targets, environments, writableIds, busy, error, changeHome } =
     useGoatBotHomeSettings();
   if (!supported) return null;
@@ -28,8 +31,8 @@ export function GoatBotSettings() {
   return (
     <SettingsSection id="goat-bot" title="GOAT Bot">
       <SettingsRow
-        {...searchableSetting("goat-bot-home")}
-        description="The computer where GOAT Bot answers and receives work."
+        {...localizedSetting("goat-bot-home")}
+        description={gt("The computer where GOAT Bot answers and receives work.")}
         status={error}
         control={
           <Select
@@ -44,7 +47,7 @@ export function GoatBotSettings() {
               if (target) changeHome(target.environmentId);
             }}
           >
-            <SelectTrigger size="sm" aria-label="GOAT Bot runs on">
+            <SelectTrigger size="sm" aria-label={gt("GOAT Bot runs on")}>
               <SelectValue>{valueLabel}</SelectValue>
             </SelectTrigger>
             <SelectPopup>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 import {
   ChannelWorkerObservation,
+  ChannelWorkerResult,
   channelWorkerObservationEquals,
 } from "./channelWorkerObservation.ts";
 import { ThreadResultReport } from "./threadResult.ts";
@@ -23,6 +24,42 @@ describe("channel run evidence contract", () => {
     at: "2026-10-12T00:00:00.000Z",
     outputTail: "failed",
   };
+  it("decodes old observations and lets an older reader ignore new result evidence", () => {
+    const {
+      reportedOutcome: _outcome,
+      observedCheck: _check,
+      observedCheckPending: _pending,
+      ...oldResultFields
+    } = ChannelWorkerResult.fields;
+    const old = Schema.decodeUnknownSync(
+      Schema.Struct({
+        ...ChannelWorkerObservation.fields,
+        result: Schema.optional(Schema.Struct(oldResultFields)),
+      }),
+    );
+    const legacy = {
+      pullRequests: [],
+      needsYou: [],
+      result: { runId: "run-1", tests: { ok: true } },
+    };
+    const newer = {
+      ...legacy,
+      result: {
+        ...legacy.result,
+        reportedOutcome: "succeeded",
+        observedCheck: check,
+        observedCheckPending: false,
+      },
+    };
+    expect(decode(legacy)).toEqual(legacy);
+    expect(decode(newer)).toEqual(newer);
+    expect(old(newer)).toEqual(legacy);
+  });
+  it("recognizes the formal outcome of a remote worker", () => {
+    const before = decode(base);
+    const after = decode({ ...base, result: { ...base.result, reportedOutcome: "succeeded" } });
+    expect(channelWorkerObservationEquals(before, after)).toBe(false);
+  });
   it("round-trips independent claims and checks, and recognizes a late result", () => {
     const before = decode(base);
     const after = decode({

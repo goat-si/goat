@@ -763,14 +763,25 @@ const main = async () => {
     return 2;
   }
   const implemented = {
-    fixtures: new Set(Object.keys(FIXTURES)),
-    checks: new Set(Object.keys(CHECKS)),
+    fixtures: new Set([...Object.keys(FIXTURES), "botOutcome"]),
+    checks: new Set([...Object.keys(CHECKS), "botOutcome"]),
   };
-  const taskSet = validateTaskSet(
-    JSON.parse(NodeFS.readFileSync(new URL("./tasks.json", import.meta.url), "utf8")),
-    implemented,
-  );
   const only = argument("--tasks")?.split(",");
+  const baseTaskSet = JSON.parse(
+    NodeFS.readFileSync(new URL("./tasks.json", import.meta.url), "utf8"),
+  );
+  const runBotTask = only?.includes("delegated-bot-outcome");
+  if (runBotTask && only?.length !== 1)
+    throw new CampaignError("Run the Bot outcome task by itself");
+  const rawTaskSet = runBotTask
+    ? (() => {
+        const { version, task } = JSON.parse(
+          NodeFS.readFileSync(new URL("./bot-outcome.task.json", import.meta.url), "utf8"),
+        );
+        return { version, tasks: [...baseTaskSet.tasks, task] };
+      })()
+    : baseTaskSet;
+  const taskSet = validateTaskSet(rawTaskSet, implemented);
   const includeManual = process.argv.includes("--include-manual");
   const unknown = (only ?? []).filter((id) => !taskSet.tasks.some((task) => task.id === id));
   if (unknown.length > 0) throw new CampaignError("no such task: " + unknown.join(", "));
@@ -787,6 +798,16 @@ const main = async () => {
     taskSet,
     selected,
   );
+  if (
+    runBotTask &&
+    (campaign.gate === "listing" ||
+      campaign.listingSettings !== null ||
+      campaign.arms.some(
+        (arm) =>
+          arm.listing !== null || arm.forbidTools.length > 0 || arm.forbidItemTypes.length > 0,
+      ))
+  )
+    throw new CampaignError("The Bot outcome task compares models, not tool listings or filters");
   const steps = schedule(selected, campaign);
   if (!process.argv.includes("--live")) {
     for (const task of taskSet.tasks.filter((task) => !selected.includes(task)))
@@ -801,6 +822,60 @@ const main = async () => {
       );
     for (const step of steps) console.log(JSON.stringify({ kind: "plan", ...step }));
     return 0;
+  }
+  const botTask = selected.find((task) => task.fixture.kind === "botOutcome");
+  if (botTask) {
+    const {
+      GOAT_EVAL_BOT_ORIGIN: origin,
+      GOAT_EVAL_BOT_BEARER_FILE: bearerFile,
+      GOAT_EVAL_BOT_DB: database,
+    } = process.env;
+    const workspace = campaign.values["workspace"];
+    if (!origin || !bearerFile || !database || !workspace)
+      throw new CampaignError(
+        "Bot outcome requires isolated origin, bearer file, database and workspace",
+      );
+    const { runBotOutcome } = await import("./bot-outcome.ts");
+    const campaignId = "c" + Date.now().toString(36);
+    const prompt = render(botTask.prompt, {
+      ...campaign.values,
+      fixtureModel: campaign.fixtureModel.instanceId + " / " + campaign.fixtureModel.model,
+    });
+    const bearer = NodeFS.readFileSync(bearerFile, "utf8").trim();
+    let allPassed = true;
+    for (const step of steps) {
+      const arm = campaign.arms.find((candidate) => candidate.id === step.armId);
+      if (!arm) throw new CampaignError("Unknown scheduled arm " + step.armId);
+      const started = Date.now();
+      const evidence = await runBotOutcome({
+        origin,
+        bearer,
+        database,
+        workspace,
+        prompt,
+        parentModel: arm.modelSelection,
+        workerModel: campaign.fixtureModel,
+        deadlineMs: botTask.deadlineMs,
+      });
+      const ok = evidence.verdict === "reported-failed";
+      allPassed &&= ok;
+      console.log(
+        JSON.stringify({
+          ...rowHead(campaignId, campaign, botTask, arm, step),
+          threadId: evidence.parentThreadId,
+          ok,
+          failures: ok ? [] : [evidence.verdict],
+          contamination:
+            evidence.verdict === "unverified" ? ["worker fixture or observation unverified"] : [],
+          metrics: null,
+          wallMs: Date.now() - started,
+          at: new Date().toISOString(),
+          botOutcome: evidence,
+        }),
+      );
+      if (!evidence.observationComplete) return 1;
+    }
+    return allPassed ? 0 : 1;
   }
   const endpoint = process.env.GOAT_EVAL_ENDPOINT;
   const authorization = process.env.GOAT_EVAL_AUTHORIZATION;

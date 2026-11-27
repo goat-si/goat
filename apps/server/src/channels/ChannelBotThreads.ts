@@ -10,6 +10,7 @@ import {
   type BotThreadRow,
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
   CHANNEL_BOT_TASK_APPROVAL_LIMIT,
+  CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH,
   CHANNEL_BOT_THREADS_SNOOZED_LIMIT,
   ChannelTaskId,
   type ChannelListBotThreadsInput,
@@ -45,7 +46,9 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import { makeThreadFollowService } from "./channelThreadFollowService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { readRequiredDeliverables } from "./channelDeliverables.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import { clipText } from "./ChannelBotEvents.ts";
 import { listChildWork } from "./listChildWork.ts";
 import {
   botRowPullRequests,
@@ -352,6 +355,7 @@ const make = Effect.gen(function* () {
             title: task.title,
             ...(task.doneMeans === undefined ? {} : { doneMeans: task.doneMeans }),
             status: task.status,
+            version: task.version,
             updatedAt: task.updatedAt,
             ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
             ...(task.generation > 1 ? { generation: task.generation } : {}),
@@ -740,6 +744,7 @@ const make = Effect.gen(function* () {
       ...cutBotWorkTitle(task.title),
       ...(task.doneMeans === undefined ? {} : { doneMeans: task.doneMeans }),
       status: task.status,
+      version: task.version,
       updatedAt: task.updatedAt,
       ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
       ...(task.generation > 1 ? { generation: task.generation } : {}),
@@ -777,13 +782,21 @@ const make = Effect.gen(function* () {
               ...botRowPullRequests([], observedPullRequestSource(task)),
             },
           ];
+    const requiredDeliverables = yield* readRequiredDeliverables(sql, task).pipe(
+      Effect.mapError(failed),
+    );
     const activity = yield* ledger.readTaskActivity({
       task,
       ownerId: owner.ownerId,
       environmentId: bot.bot.environmentId,
     });
+    const update = task.resultSummary?.trim();
     return {
       activity,
+      attemptEvidence: {
+        ...(update ? { summary: clipText(update, CHANNEL_BOT_ATTEMPT_SUMMARY_LENGTH) } : {}),
+        ...(task.completionReport === undefined ? {} : { report: task.completionReport }),
+      },
       task:
         known && row?.kind === "task"
           ? { state: "known" as const, row: { ...row, task: summary } }
@@ -793,6 +806,7 @@ const make = Effect.gen(function* () {
           ? [{ ...item, ...(item.title === undefined ? {} : cutBotWorkTitle(item.title)) }]
           : [],
       ),
+      ...(requiredDeliverables ? { requiredDeliverables } : {}),
       remoteWork: [...remotePrimary, ...built.remoteWork],
       launchesTruncated: built.launchesTruncated.length > 0,
       partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,

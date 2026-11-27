@@ -1,12 +1,14 @@
+import { AddProjectSourceSetupBadge } from "./AddProjectSourceSetupBadge";
 import { webThreadFollowPaletteItems } from "./goatBot/goatBotThreadFollowMenu";
 import { topLevelThreadCandidates } from "./sidebar/topLevelThreadCandidates";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { useCommandPaletteSettingsItems } from "./useCommandPaletteSettingsItems";
 import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
 import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { resolvePastedPath } from "@goat/shared/path";
 import { browserClaimPaletteItem } from "./preview/browserClaimPaletteItem";
+import { rightPanelPaletteItems } from "./commandPaletteRightPanelItem";
 import { validateMemorySettingsSearch } from "./settings/MemorySettings.logic";
 import { threadPullRequestLinkMode } from "@goat/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
@@ -275,9 +277,7 @@ import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog } from "./ui/command";
-import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
@@ -445,6 +445,7 @@ function OpenCommandPaletteDialog(props: {
   readonly openTemplates: (environmentId: EnvironmentId) => void;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const paletteRouteTarget = useThreadRouteTarget();
@@ -1029,9 +1030,10 @@ function OpenCommandPaletteDialog(props: {
       {
         kind: "action",
         value: `action:add-project:${environmentId}:local`,
-        searchTerms: ["local", "folder", "directory", "browse"],
-        title: "Local folder",
-        description: "Browse a folder on disk",
+        searchTerms: ["Local folder", "local", "folder", "directory", "browse"],
+        searchNameCount: 1,
+        title: gt("Local folder"),
+        description: gt("Browse a folder on disk"),
         icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
         keepOpen: true,
         run: async () => {
@@ -1044,9 +1046,10 @@ function OpenCommandPaletteDialog(props: {
       sourceItems.unshift({
         kind: "action",
         value: `action:add-project:${environmentId}:new`,
-        searchTerms: ["new project", "create", "empty", "repository", "git init"],
-        title: "New project",
-        description: "Start a new Git repository from a name",
+        searchTerms: ["New project", "create", "empty", "repository", "git init"],
+        searchNameCount: 1,
+        title: gt("New project"),
+        description: gt("Start a new Git repository from a name"),
         icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
         keepOpen: true,
         run: async () => {
@@ -1062,42 +1065,39 @@ function OpenCommandPaletteDialog(props: {
 
     for (const source of orderedSources) {
       const label = addProjectRemoteSourceLabel(source);
-      const title = source === "url" ? "Git URL" : `${label} repository`;
+      const englishTitle = source === "url" ? "Git URL" : `${label} repository`;
+      const title =
+        source === "url" ? gt("Git URL") : gt("{provider} repository", { provider: label });
       const description =
         source === "url"
-          ? "Clone from a remote URL"
-          : `Clone ${label} ${addProjectRemoteSourcePathHint(source)}`;
+          ? gt("Clone from a remote URL")
+          : gt("Clone {provider} {path}", {
+              provider: label,
+              path: addProjectRemoteSourcePathHint(source),
+            });
       const readiness = readinessBySource(source);
-      const disabledHint = readiness.hint;
-
       const titleTrailingContent = readiness.ready ? undefined : (
-        <span className="ml-auto">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="warning-outline"
-                  size="micro"
-                  onClick={() => {
-                    openSourceControlSettings();
-                  }}
-                >
-                  Setup Required
-                </Button>
-              }
-            />
-            <TooltipPopup align="end" side="left">
-              {disabledHint ?? "Open Settings -> Source control to configure this provider."}
-            </TooltipPopup>
-          </Tooltip>
-        </span>
+        <AddProjectSourceSetupBadge
+          hint={readiness.hint}
+          onOpenSettings={openSourceControlSettings}
+        />
       );
 
       if (!readiness.ready) {
         sourceItems.push({
           kind: "action",
           value: `action:add-project:${environmentId}:${source}:not-ready`,
-          searchTerms: ["clone", "remote", "repository", "repo", "git", label, "setup required"],
+          searchTerms: [
+            englishTitle,
+            "clone",
+            "remote",
+            "repository",
+            "repo",
+            "git",
+            label,
+            "setup required",
+          ],
+          searchNameCount: 1,
           title,
           description,
           disabled: true,
@@ -1111,7 +1111,8 @@ function OpenCommandPaletteDialog(props: {
       sourceItems.push({
         kind: "action",
         value: `action:add-project:${environmentId}:${source}`,
-        searchTerms: ["clone", "remote", "repository", "repo", "git", label],
+        searchTerms: [englishTitle, "clone", "remote", "repository", "repo", "git", label],
+        searchNameCount: 1,
         title,
         description,
         icon: remoteProjectSourceIcon(source, ITEM_ICON_CLASS),
@@ -1123,7 +1124,7 @@ function OpenCommandPaletteDialog(props: {
       });
     }
 
-    return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
+    return [{ value: `sources:${environmentId}`, label: gt("Sources"), items: sourceItems }];
   };
 
   const startAddProjectSourceSelection = (environmentId: EnvironmentId): void => {
@@ -1216,6 +1217,7 @@ function OpenCommandPaletteDialog(props: {
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
     browserClaimPaletteItem(),
+    ...rightPanelPaletteItems(routeThreadRef !== null),
   ];
   actionItems.push({
     kind: "action",
@@ -2459,7 +2461,7 @@ function OpenCommandPaletteDialog(props: {
     newProjectFlow !== null
       ? "Project name"
       : (remoteProjectInputPlaceholder(addProjectCloneFlow) ??
-        getCommandPaletteInputPlaceholder(paletteMode));
+        m(getCommandPaletteInputPlaceholder(paletteMode)));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canWriteSourceControl = useEnvironmentScope(
@@ -2930,9 +2932,9 @@ function OpenCommandPaletteDialog(props: {
   return (
     <CommandPaletteContent
       key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${newProjectFlow ? "new-project" : (addProjectCloneFlow?.step ?? "none")}`}
-      aria-label="Command palette"
+      aria-label={gt("Command palette")}
       autoHighlight={autoHighlightsFirstRow ? "always" : false}
-      footerActionLabel={footerActionLabel}
+      footerActionLabel={footerActionLabel === undefined ? undefined : m(footerActionLabel)}
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
@@ -2954,7 +2956,7 @@ function OpenCommandPaletteDialog(props: {
                 <button
                   type="button"
                   className="flex cursor-pointer items-center"
-                  aria-label="Back"
+                  aria-label={gt("Back")}
                   onClick={popView}
                 >
                   <ArrowLeftIcon />

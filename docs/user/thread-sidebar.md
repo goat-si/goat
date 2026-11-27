@@ -453,7 +453,8 @@ is open, it shows beneath the thread that started it until you navigate away.
 A subagent delegated to another machine folds under the thread that delegated it, like a
 launched thread (see below), but only its approvals and questions raise that thread. It enters
 **Priority** on its own only while it waits for you. When this app is not connected to the
-delegating machine, it keeps an ordinary row in the list.
+delegating machine, it keeps an ordinary row in the list. In the delegating thread, its row
+opens it once this app is connected to the machine it runs on.
 
 On mobile, open a subagent from its conversation card or **Agents**. On iOS
 layouts with an inspector, its thread opens beside the parent. Maximize it to

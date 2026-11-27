@@ -344,6 +344,26 @@ describe("bot thread contracts", () => {
     expect(newResult.readAt).toBe("2026-11-04T09:00:00.000Z");
     expect(decodeRows(encoded).snoozedRevision).toBe("example-revision");
   });
+  it("decodes task summaries with and without versions across peers", () => {
+    const list = (task: object) => ({ rows: [{ ...taskRow, task }], mainMessageCount: 0 });
+    const lookup = (task: object) => ({
+      task: { state: "unavailable", task },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    });
+    const decodeLookup = Schema.decodeUnknownSync(BotWorkResult);
+    expect(decodeRows(list(taskRow.task)).rows[0]).toEqual(taskRow);
+    expect(decodeLookup(lookup(taskRow.task)).task).toEqual({
+      state: "unavailable",
+      task: taskRow.task,
+    });
+    const versioned = { ...taskRow.task, version: 2 };
+    expect(decodeRows(list(versioned)).rows[0]).toEqual({ ...taskRow, task: versioned });
+    expect(decodeLookup(lookup(versioned)).task).toEqual({ state: "unavailable", task: versioned });
+    expect(decodeShippedTaskRow({ ...taskRow, task: versioned })).toEqual(taskRow);
+  });
   it("bounds a row's pull requests at five", () => {
     const six = Array.from({ length: 6 }, (_, index) => ({
       repository: "goat-si/goat",

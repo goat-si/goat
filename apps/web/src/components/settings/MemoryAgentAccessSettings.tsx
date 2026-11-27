@@ -1,4 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { useGT } from "gt-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useRef, useState } from "react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -9,10 +10,15 @@ import { MemorySitesSettings } from "./MemorySitesSettings";
 import { Switch } from "../ui/switch";
 
 export function MemoryAgentAccessSettings({ environmentId }: { environmentId: EnvironmentId }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const enabled = useEnvironmentSettings(
     environmentId,
     (settings) => settings.enableAgentMemoryAccess,
+  );
+  const paused = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.conversationMemoryEnabled === false,
   );
   const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -27,15 +33,17 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
   }, []);
   return (
     <>
-      <SettingsSection title="Agent access">
+      <SettingsSection title={gt("Agent access")}>
         <SettingsRow
-          title="Allow agent memory access"
-          description="Allow agents on this device to use memory within their granted scope. This is separate from sharing memories between devices."
+          title={gt("Allow agent memory access")}
+          description={gt(
+            "Allow agents in this environment to use memory within their granted scope. This is separate from sharing memories between devices.",
+          )}
           control={
             <Switch
-              aria-label="Allow agent memory access"
+              aria-label={gt("Allow agent memory access")}
               checked={enabled}
-              disabled={!canUpdate || busy}
+              disabled={!canUpdate || busy || paused}
               onCheckedChange={(value) => {
                 if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
                   return;
@@ -49,8 +57,8 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
                   setBusy(false);
                   setMessage(
                     result._tag === "Success"
-                      ? "Agent memory access updated."
-                      : "Could not update agent memory access.",
+                      ? gt("Agent memory access updated.")
+                      : gt("Could not update agent memory access."),
                   );
                 });
               }}

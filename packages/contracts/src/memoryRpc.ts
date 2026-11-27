@@ -19,6 +19,7 @@ export const MEMORY_WS_METHODS = {
   memorySearch: "memory.search",
   memoryList: "memory.list",
   memoryRead: "memory.read",
+  memoryThreadPreference: "memory.thread.preference",
   memoryTurnInspect: "memory.turn.inspect",
   memoryHistory: "memory.history",
   memoryHubDiagnostics: "memory.hub.diagnostics",
@@ -99,6 +100,11 @@ export const WsMemoryListRpc = Rpc.make(MEMORY_WS_METHODS.memoryList, {
 export const WsMemoryReadRpc = Rpc.make(MEMORY_WS_METHODS.memoryRead, {
   payload: Memory.MemoryReadInput,
   success: Memory.MemoryItem,
+  error: MemoryRpcErrors,
+});
+const WsMemoryThreadPreferenceRpc = Rpc.make(MEMORY_WS_METHODS.memoryThreadPreference, {
+  payload: TurnMemory.ThreadMemoryInput,
+  success: TurnMemory.SavedThreadPreference,
   error: MemoryRpcErrors,
 });
 const WsMemoryTurnInspectRpc = Rpc.make(MEMORY_WS_METHODS.memoryTurnInspect, {
@@ -222,6 +228,7 @@ export const MemoryCoreRpcs = RpcGroup.make(
   WsMemorySearchRpc,
   WsMemoryListRpc,
   WsMemoryReadRpc,
+  WsMemoryThreadPreferenceRpc,
   WsMemoryTurnInspectRpc,
   WsMemoryHistoryRpc,
   WsMemorySyncStatusRpc,

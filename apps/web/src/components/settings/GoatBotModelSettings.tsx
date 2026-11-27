@@ -1,3 +1,5 @@
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
+import { useGT } from "gt-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 
@@ -8,7 +10,6 @@ import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";
 import { useGoatBotModel } from "../goatBot/useGoatBotModel";
 import { Switch } from "../ui/switch";
 import { SETTINGS_PICKER_TRIGGER_CLASSNAME, SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 
 /** The model GOAT Bot's own turns run on, saved on the computer GOAT Bot runs on. */
 export function GoatBotModelSettings() {
@@ -18,6 +19,8 @@ export function GoatBotModelSettings() {
 }
 
 function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
+  const gt = useGT();
+  const localizedSetting = useTranslatedSearchableSetting();
   const {
     activeEntry,
     automaticLabel,
@@ -34,8 +37,10 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
   return (
     <>
       <SettingsRow
-        {...searchableSetting("goat-bot-model")}
-        description="The model GOAT Bot uses when it looks into something itself. Automatic follows the default model for new threads."
+        {...localizedSetting("goat-bot-model")}
+        description={gt(
+          "The model GOAT Bot uses when it looks into something itself. Automatic follows the default model for new threads.",
+        )}
         control={
           <div className="flex flex-wrap items-center justify-end gap-2">
             {!separate ? (
@@ -51,7 +56,7 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
                   instanceEntries={entries}
                   modelOptionsByInstance={options}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  triggerAriaLabel="GOAT Bot model"
+                  triggerAriaLabel={gt("GOAT Bot model")}
                   disabled={!allowed}
                   onInstanceModelChange={(instanceId, model) =>
                     save({
@@ -90,7 +95,7 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
               </>
             ) : null}
             <Switch
-              aria-label="Choose a model for GOAT Bot"
+              aria-label={gt("Choose a model for GOAT Bot")}
               checked={separate}
               disabled={!allowed || (!separate && initialSelection === null)}
               onCheckedChange={(checked) =>
@@ -104,11 +109,13 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
         status={message ? <span role="alert">{message}</span> : undefined}
       />
       <SettingsRow
-        {...searchableSetting("goat-bot-session-routing")}
-        description="Use the bot session to understand and answer messages. Turn off to use reception first."
+        {...localizedSetting("goat-bot-session-routing")}
+        description={gt(
+          "Use the bot session to understand and answer messages. Turn off to use reception first.",
+        )}
         control={
           <Switch
-            aria-label="Answer with the bot session"
+            aria-label={gt("Answer with the bot session")}
             checked={settings.goatBotSessionRouting === "session"}
             disabled={!allowed}
             onCheckedChange={(checked) =>
@@ -118,11 +125,13 @@ function GoatBotModelRow({ environmentId }: { environmentId: EnvironmentId }) {
         }
       />
       <SettingsRow
-        {...searchableSetting("channel-auto-placement")}
-        description="Let channel workers use connected SSH computers with the same repository and requested model, based on quota and active work. Worker instructions, notes and named skills go to the selected computer. Off keeps unnamed work here."
+        {...localizedSetting("channel-auto-placement")}
+        description={gt(
+          "Let channel workers use connected SSH computers with the same repository and requested model, based on quota and active work. Worker instructions, notes and named skills go to the selected computer. Off keeps unnamed work here.",
+        )}
         control={
           <Switch
-            aria-label="Automatically choose a worker computer"
+            aria-label={gt("Automatically choose a worker computer")}
             checked={settings.channelAutoPlacement}
             disabled={!allowed}
             onCheckedChange={(checked) => save({ channelAutoPlacement: checked })}

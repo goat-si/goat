@@ -1,17 +1,13 @@
+import { msg, useGT, useLocale, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
-import {
-  CHILD_SETUP_PERMISSION_NOTE,
-  CHILD_SETUP_QUOTA_NOTE,
-  CHILD_STEP_OUTCOME_LABEL,
-  type ChildSetup,
-} from "@goat/client-runtime/hub-devices";
+import { type ChildSetup } from "@goat/client-runtime/hub-devices";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId } from "@goat/contracts";
 import { useRef, useState } from "react";
 
+import { relativeTimeElapsedMs } from "~/timestampFormat";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
 import type { HubActions } from "./HubDeviceActions";
@@ -23,9 +19,12 @@ const TONE_TEXT: Record<ChildSetup["tone"], string> = {
   destructive: "text-destructive-foreground",
 };
 
-const relative = (at: number) => formatRelativeTimeLabel(new Date(at).toISOString());
-const SETUP_FAILED = "Setup could not start. Try again.";
-
+const STEP_OUTCOME: Record<ChildSetup["steps"][number]["outcome"], string> = {
+  pending: msg("Waiting"),
+  running: msg("In progress"),
+  succeeded: msg("Done"),
+  failed: msg("Failed"),
+};
 /**
  * A hub device's Child setup: the step the Home reports, what failed, and one next action. Repair
  * goes through the device actions so an approval it needs can be continued there.
@@ -41,6 +40,19 @@ export function HubChildSetup({
   readonly actions: HubActions;
   readonly onRefresh: () => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
+  const locale = useLocale();
+  const relative = (at: number) => {
+    const minutes = (relativeTimeElapsedMs(new Date(at).toISOString()) ?? 0) / 60_000;
+    if (!minutes) return gt("just now");
+    const format = new Intl.RelativeTimeFormat(locale, { style: "narrow" });
+    return minutes < 60
+      ? format.format(-minutes, "minute")
+      : minutes < 1440
+        ? format.format(-Math.floor(minutes / 60), "hour")
+        : format.format(-Math.floor(minutes / 1440), "day");
+  };
   const setupAllowed = useAtomValue(
     serverEnvironment.setupOpenCodexChild.permissionAtom(environmentId),
   );
@@ -62,7 +74,7 @@ export function HubChildSetup({
     onRefresh();
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      return failure instanceof Error ? failure.message : SETUP_FAILED;
+      return failure instanceof Error ? failure.message : gt("Setup could not start. Try again.");
     }
     return result.value.kind === "error" ? result.value.failure.message : null;
   };
@@ -74,7 +86,7 @@ export function HubChildSetup({
     setError(null);
     // React Compiler cannot lower try/finally, so the promise carries the failure instead.
     const failure = await attempt(host).catch((cause: unknown) =>
-      cause instanceof Error ? cause.message : SETUP_FAILED,
+      cause instanceof Error ? cause.message : gt("Setup could not start. Try again."),
     );
     inFlight.current = false;
     setPending(false);
@@ -88,19 +100,20 @@ export function HubChildSetup({
       {setup.detail === null ? null : <p className="text-muted-foreground">{setup.detail}</p>}
       {setup.proof === null ? null : (
         <p className="text-muted-foreground">
-          Verified with {setup.proof.model} {relative(setup.proof.completedAt)}
+          {gt("Verified with {model} {time}", {
+            model: setup.proof.model,
+            time: relative(setup.proof.completedAt),
+          })}
         </p>
       )}
       {setup.steps.length === 0 ? null : (
         <details>
-          <summary className="cursor-pointer text-muted-foreground">Setup steps</summary>
+          <summary className="cursor-pointer text-muted-foreground">{gt("Setup steps")}</summary>
           <ol className="mt-1 space-y-0.5">
             {setup.steps.map((step) => (
               <li key={step.label}>
                 {step.label}:{" "}
-                <span className="text-muted-foreground">
-                  {CHILD_STEP_OUTCOME_LABEL[step.outcome]}
-                </span>
+                <span className="text-muted-foreground">{m(STEP_OUTCOME[step.outcome])}</span>
               </li>
             ))}
           </ol>
@@ -113,10 +126,14 @@ export function HubChildSetup({
             disabled={!allowed || pending || moving || setup.host === null}
             onClick={() => void run()}
           >
-            {pending ? "Working…" : setup.actionLabel}
+            {pending ? gt("Working…") : setup.actionLabel}
           </Button>
           <span className="text-muted-foreground">
-            {allowed ? (repairs ? null : CHILD_SETUP_QUOTA_NOTE) : CHILD_SETUP_PERMISSION_NOTE}
+            {allowed
+              ? repairs
+                ? null
+                : gt("Setup ends with one small request through Home, using its shared quota.")
+              : gt("Managing this device needs permission on the selected Home.")}
           </span>
         </div>
       )}

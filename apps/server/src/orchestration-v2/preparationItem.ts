@@ -1,3 +1,4 @@
+import { ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE } from "@goat/contracts";
 import type {
   OrchestrationV2ServerCommand,
   OrchestrationV2ThreadProjection,
@@ -55,3 +56,11 @@ export const preparedRunState = (
   }
   return { run, attempt, rootNode, providerThread, preparationItem } as const;
 };
+
+export function isRetiredWorkspacePreparationFailure(item: OrchestrationV2TurnItem): boolean {
+  return (
+    item.type === "error" &&
+    item.status === "cancelled" &&
+    item.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE
+  );
+}

@@ -305,7 +305,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     modelSelection,
     investigate,
     attachments,
-  }: TextGenerationOperations.Request<S>): Effect.fn.Return<
+  }: TextGenerationOperations.Request<S, string | Effect.Effect<string>>): Effect.fn.Return<
     { readonly result: S["Type"]; readonly effectiveModel: string },
     TextGenerationError,
     S["DecodingServices"]
@@ -396,7 +396,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       ? []
       : yield* readImageBlocks(attachments, operation);
     const imageStdin =
-      imageBlocks.length > 0
+      imageBlocks.length > 0 && typeof prompt === "string"
         ? `${yield* encodeJsonForOperation(
             operation,
             {
@@ -489,7 +489,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         cwd: workingDirectory,
         shell: spawnCommand.shell,
         stdin: {
-          stream: Stream.encodeText(Stream.make(stdin)),
+          stream: Stream.encodeText(
+            typeof stdin === "string" ? Stream.make(stdin) : Stream.fromEffect(stdin),
+          ),
         },
         forceKillAfter: "1 second",
       });
@@ -624,26 +626,24 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     return { result, effectiveModel };
   });
 
-  return TextGenerationOperations.fromRunner(
-    "ClaudeTextGeneration",
-    (request) => runClaudeJson(request).pipe(Effect.map((selected) => selected.result)),
-    {
-      memory: {
-        capabilities: memoryRunnerCapabilities("claudeAgent", memoryRunnerContext, {
-          available: resolveClaudeEnvironment.pipe(
-            Effect.flatMap((environment) =>
-              requireClaudeMemory("generateMemorySummary", environment),
-            ),
-            Effect.isSuccess,
+  const run: TextGenerationOperations.Runner<string | Effect.Effect<string>> = (request) =>
+    runClaudeJson(request).pipe(Effect.map((selected) => selected.result));
+  return TextGenerationOperations.fromRunner("ClaudeTextGeneration", run, {
+    memory: {
+      capabilities: memoryRunnerCapabilities("claudeAgent", memoryRunnerContext, {
+        available: resolveClaudeEnvironment.pipe(
+          Effect.flatMap((environment) =>
+            requireClaudeMemory("generateMemorySummary", environment),
           ),
-        }),
-        run: withMemoryExecution(
-          memoryRunnerContext,
-          ProviderDriverKind.make("claudeAgent"),
-          runClaudeJson,
+          Effect.isSuccess,
         ),
-      },
-      channelReception: true,
+      }),
+      run: withMemoryExecution(
+        memoryRunnerContext,
+        ProviderDriverKind.make("claudeAgent"),
+        runClaudeJson,
+      ),
     },
-  );
+    channelReception: run,
+  });
 });

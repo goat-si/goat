@@ -57,10 +57,13 @@ it.effect("retires an ACP runtime after a silent initialize", () =>
   }).pipe(Effect.scoped),
 );
 
-it.effect("lets an ACP prompt finish after more than the finite request budgets", () =>
+it.effect("revalidates an ACP prompt after the outgoing log and lets slow prompts finish", () =>
   Effect.gen(function* () {
     const inbound = yield* Queue.unbounded<Uint8Array>();
     const promptRequests = yield* Queue.unbounded<number>();
+    const logged = yield* Deferred.make<void>();
+    const releaseLog = yield* Deferred.make<void>();
+    const writes: string[] = [];
     const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
     const finished = yield* Deferred.make<void>();
     const respond = (id: number, result: unknown) =>
@@ -90,6 +93,7 @@ it.effect("lets an ACP prompt finish after more than the finite request budgets"
               case "session/new":
                 return respond(request.id, { sessionId: "long-prompt" });
               case "session/prompt":
+                writes.push(new TextDecoder().decode(chunk));
                 return Queue.offer(promptRequests, request.id);
               default:
                 return Effect.die(`Unexpected request: ${request.method}`);
@@ -113,12 +117,29 @@ it.effect("lets an ACP prompt finish after more than the finite request budgets"
         spawn: { command: "fake-acp", args: [], shell: false },
         cwd: "/repo",
         clientInfo: { name: "test", version: "0" },
+        requestLogger: (event) =>
+          event.method === "session/prompt" && event.status === "started"
+            ? Deferred.succeed(logged, undefined).pipe(Effect.andThen(Deferred.await(releaseLog)))
+            : Effect.void,
       });
       yield* runtime.start();
+      let allowed = true;
       const prompt = yield* runtime
-        .prompt({ prompt: [{ type: "text", text: "Keep working." }] })
+        .prompt(
+          { prompt: [{ type: "text", text: "private fact" }] },
+          {
+            prepareForDispatch: Effect.sync(() => [
+              { type: "text", text: allowed ? "private fact" : "Keep working." },
+            ]),
+          },
+        )
         .pipe(Effect.ensuring(Deferred.succeed(finished, undefined)), Effect.forkScoped);
+      yield* Deferred.await(logged);
+      allowed = false;
+      yield* Deferred.succeed(releaseLog, undefined);
       const requestId = yield* Queue.take(promptRequests);
+      assert.include(writes[0], "Keep working.");
+      assert.notInclude(writes[0], "private fact");
       yield* TestClock.adjust("2 minutes");
       assert.isFalse(yield* Deferred.isDone(finished));
       yield* respond(requestId, { stopReason: "end_turn" });

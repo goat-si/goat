@@ -6,7 +6,10 @@ import { expect, it, vi } from "vite-plus/test";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 const spoken = vi.hoisted(() => ({ lines: [] as string[] }));
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
 const platform = vi.hoisted(() => ({ OS: "ios" }));
+vi.mock("../../i18n/I18nProvider", () => ({ useGT: () => (source: string) => source }));
+
 vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
   Platform: platform,
@@ -108,6 +111,7 @@ const knownTask = {
 const container = document.createElement("div");
 const retry = vi.fn();
 const openHome = vi.fn();
+const openThread = vi.fn();
 async function render(
   lookup: MobileTaskLookup,
   enabled = true,
@@ -135,7 +139,7 @@ async function render(
         failed={false}
         childError={false}
         onRetryRead={() => {}}
-        onOpenThread={() => {}}
+        onOpenThread={openThread}
         onOpenHome={openHome}
         card={card as never}
       />,
@@ -442,6 +446,93 @@ it("shows the bot's criterion and uses readable worker names in Activity", async
   await act(async () => current.unmount());
 });
 
+it.each(["present", "missing"] as const)(
+  "renders the recorded report on the task, %s",
+  async (report) => {
+    const current = await render({
+      state: "known",
+      task: knownTask,
+      result: result(
+        { state: "known", row: knownTask.row },
+        {
+          attemptEvidence: { report, summary: "The packaging step finished." },
+          approvalObservation: {
+            worker: {
+              host: "linux-builder",
+              environmentId: EnvironmentId.make("linux"),
+              threadId: ThreadId.make("worker"),
+            },
+            needsYou: [],
+          },
+        },
+      ),
+    });
+    expect(text()).toContain("Latest update The packaging step finished.");
+    expect(text()).toContain("Worker machine linux-builder");
+    expect(text()).toContain(
+      report === "present" ? "Worker report received" : "Worker report missing",
+    );
+    await act(async () => current.unmount());
+  },
+);
+
+it("hides the previous attempt's result when the current list has a retry", async () => {
+  const retryTask = {
+    ...knownTask,
+    row: { ...knownTask.row, task: { ...knownTask.row.task, generation: 2 } },
+  };
+  const current = await render(
+    {
+      state: "known",
+      task: knownTask,
+      result: result(
+        { state: "known", row: knownTask.row },
+        {
+          attemptEvidence: { report: "missing", summary: "Nothing delivered." },
+        },
+      ),
+    },
+    true,
+    null,
+    undefined,
+    undefined,
+    retryTask,
+  );
+  expect(text()).not.toContain("Nothing delivered.");
+  expect(text()).not.toContain("Worker report missing");
+  await act(async () => current.unmount());
+});
+
+it("opens a readable local delegate thread and leaves an unknown thread as text", async () => {
+  openThread.mockClear();
+  const delegate = (id: string, title: string) => ({
+    childWorkId: id as BotWorkTask["subagents"][number]["childWorkId"],
+    state: "bound" as const,
+    label: "bound",
+    destinationHint: title,
+    thread: { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make(id) },
+  });
+  const task = {
+    ...knownTask,
+    subagents: [
+      delegate("channel-worker:local", "Local delegate"),
+      delegate("missing", "Other delegate"),
+    ],
+  };
+  const current = await render({
+    state: "known",
+    task,
+    result: result({ state: "known", row: knownTask.row }),
+  });
+  const link = button("Review the release notes · bound");
+  expect(link).toBeDefined();
+  await act(async () => link?.click());
+  expect(openThread).toHaveBeenCalledWith({ environmentId: "env", id: "channel-worker:local" });
+  expect(text()).toContain("Other delegate · bound");
+  expect(button("Other delegate · bound")).toBeUndefined();
+  await act(async () => current.unmount());
+});
+
 it.each([
   ["ios", "iOS"],
   ["android", "Android"],
@@ -508,4 +599,48 @@ it("keeps every listed worker when Activity arrives with capped worker details",
     [...container.querySelectorAll("button")].filter((item) => item.textContent === "Remote work"),
   ).toHaveLength(21);
   await act(async () => root.unmount());
+});
+
+it("counts only accepted required results and hides the previous generation's checklist", async () => {
+  const work = result(
+    { state: "known", row: knownTask.row },
+    {
+      requiredDeliverables: [
+        {
+          id: "mac",
+          criterion: "Launch the Mac build",
+          state: "accepted",
+          attempt: 1,
+          evidence: "Window opened",
+        },
+        {
+          id: "linux",
+          criterion: "Run Linux smoke tests",
+          state: "awaiting_acceptance",
+          attempt: 1,
+        },
+      ],
+    },
+  );
+  const lookup = { state: "known" as const, task: knownTask, result: work };
+  const root = await render(lookup);
+  try {
+    expect(text()).toContain("1/2");
+    expect(text()).toContain("Window opened");
+    expect(text()).toContain("Awaiting acceptance");
+  } finally {
+    await act(() => root.unmount());
+  }
+
+  const retried = {
+    ...knownTask,
+    row: { ...knownTask.row, task: { ...knownTask.row.task, generation: 2 } },
+  };
+  const next = await render(lookup, true, null, new Map(), undefined, retried);
+  try {
+    expect(text()).not.toContain("Window opened");
+    expect(text()).not.toContain("Required results accepted");
+  } finally {
+    await act(() => next.unmount());
+  }
 });

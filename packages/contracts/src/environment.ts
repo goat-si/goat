@@ -105,7 +105,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
     Schema.Struct({
       protocolVersion: Schema.Int,
       derivedCap: Schema.optionalKey(Schema.Literal(1000)),
+      conversationMemoryControl: Schema.optionalKey(Schema.Boolean),
       turnMemory: Schema.optionalKey(Schema.Boolean),
+      savedThreadPreference: Schema.optionalKey(Schema.Boolean),
       scopeMoves: Schema.optionalKey(Schema.Boolean),
       scopeMoveReceipts: Schema.optionalKey(Schema.Boolean),
       provenanceProjection: Schema.optionalKey(Schema.Boolean),
@@ -251,6 +253,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `telemetryConsent` and sends no usage data before it. Older servers drop the key. */
+  telemetryConsent: Schema.optionalKey(Schema.Boolean),
   /** Subscribe to command output only when advertised; older servers never send it. */
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */

@@ -86,8 +86,6 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
   replay_trajectory: "re-runs recorded actions read from disk",
   parse_visual_regions: "needs the optional perception extension GOAT does not ship",
   page: "deprecated browser compatibility tool",
-  escalate_session: "deprecated capture-scope escalation",
-  get_session_state: "deprecated capture-scope read",
   start_recording: "writes recordings to disk; the manifest grants no file paths",
   stop_recording: "writes recordings to disk; the manifest grants no file paths",
   get_recording_state: "recording is not offered",
@@ -96,6 +94,7 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
   clipboard_write: "replaces the person's clipboard and can load local files into it",
   browser_prepare:
     "browser tools need per-origin grants a launch-time manifest cannot know, and logged-in profiles are never granted; agents drive browsers as ordinary apps or use GOAT's browser",
+  browser_motion_policy: "browser tools need per-origin grants",
   browser_navigate: "browser tools need per-origin grants",
   browser_click: "browser tools need per-origin grants",
   browser_type: "browser tools need per-origin grants",

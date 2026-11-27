@@ -33,6 +33,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
+import { stableStringify } from "@goat/shared/relaySigning";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -85,6 +86,7 @@ export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkEr
       "depth_exceeded",
       "owner_terminal",
       "run_not_attributable",
+      "invalid_deliverable",
       "storage",
     ]),
     detail: Schema.String,
@@ -152,6 +154,7 @@ export class ChannelChildWork extends Context.Service<
       readonly prompt: string;
       /** The launch target's canonical parts: host, cwd/workspace, model. */
       readonly destinationKey: string;
+      readonly launchOptions?: string | undefined;
       readonly destinationHint?: string | undefined;
       readonly clientRequestId?: string | undefined;
     }) => Effect.Effect<ChannelChildWorkAdmission, ChannelChildWorkError>;
@@ -337,6 +340,7 @@ const make = Effect.gen(function* () {
     readonly surface: ChannelChildWorkSurface;
     readonly prompt: string;
     readonly destinationKey: string;
+    readonly launchOptions?: string | undefined;
     readonly destinationHint?: string | undefined;
     readonly clientRequestId?: string | undefined;
   }) {
@@ -403,7 +407,15 @@ const make = Effect.gen(function* () {
     };
     const capacity = channelChildWorkCapacityFor(input.surface);
     const result = yield* store
-      .admitReserved(record, capacity)
+      .admitReserved(
+        record,
+        capacity,
+        requestKey.startsWith("required:")
+          ? childWorkPromptDigestFor(
+              stableStringify([input.surface, input.destinationKey, input.launchOptions ?? null]),
+            )
+          : undefined,
+      )
       .pipe(Effect.mapError((error) => toError("Unable to record child work.", error)));
     if (result._tag === "owner_settled") {
       return yield* new ChannelChildWorkError({
@@ -411,6 +423,11 @@ const make = Effect.gen(function* () {
         detail: "This work finished or was retried, so it no longer launches subagents or threads.",
       });
     }
+    if (result._tag === "invalid_deliverable")
+      return yield* new ChannelChildWorkError({
+        reason: "invalid_deliverable",
+        detail: result.detail,
+      });
     if (result._tag === "at_capacity") {
       return yield* new ChannelChildWorkError({
         reason: "at_capacity",
@@ -420,14 +437,11 @@ const make = Effect.gen(function* () {
           " active subagents or threads. Let one finish, or stop it, before launching more.",
       });
     }
-    if (result._tag === "existing") {
-      return {
-        _tag: "existing",
-        record: result.record,
-        requestKey,
-      } as const satisfies ChannelChildWorkAdmission;
-    }
-    return { _tag: "admitted", record, requestKey } as const satisfies ChannelChildWorkAdmission;
+    return {
+      _tag: result._tag,
+      record: result.record,
+      requestKey: result.record.launchDigest ? result.record.childWorkId : requestKey,
+    } as const satisfies ChannelChildWorkAdmission;
   });
 
   /** Compare-and-set; false when another writer moved the record first or the write failed. */

@@ -1,8 +1,9 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection, pickModelSelection } from "@goat/shared/model";
 import { resolveMemoryModelSelection, supportsMemoryGeneration } from "@goat/shared/serverSettings";
-import { useContext, useState } from "react";
+import { useContext, useId, useState } from "react";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance, selectsPlanAgent } from "../../modelSelection";
@@ -11,7 +12,7 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { useEnvironmentProviders } from "../../state/environments";
+import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
@@ -26,8 +27,13 @@ export function MemoryGenerationSettings({
   environmentId: EnvironmentId;
   hideModelWhenDisabled?: boolean;
 }) {
+  const gt = useGT();
+  const pauseDescriptionId = useId();
   const registry = useContext(RegistryContext);
   const settings = useEnvironmentSettings(environmentId);
+  const supportsPause =
+    useEnvironment(environmentId)?.serverConfig?.environment.capabilities.memory
+      ?.conversationMemoryControl === true;
   const providers = useEnvironmentProviders().get(environmentId) ?? [];
   const canUpdate = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
@@ -63,34 +69,63 @@ export function MemoryGenerationSettings({
     setBusy(true);
     setMessage(null);
     void update({ environmentId, input: { patch } }).then((result) => {
-      setMessage(result._tag === "Success" ? null : "Could not update memory settings.");
+      setMessage(result._tag === "Success" ? null : gt("Could not update memory settings."));
       setBusy(false);
     });
   }
   return (
-    <SettingsSection title="Memory">
+    <SettingsSection title={gt("Memory")}>
+      {supportsPause && (
+        <SettingsRow
+          title={gt("Use GOAT memory in conversations")}
+          description={
+            <span id={pauseDescriptionId}>
+              {gt(
+                "While paused, agents cannot read or save GOAT memories in this environment. Messages from this period are excluded from future summaries. A request that was already being sent when you paused may still finish.",
+              )}
+            </span>
+          }
+          control={
+            <Switch
+              aria-label={gt("Use GOAT memory in conversations")}
+              aria-describedby={pauseDescriptionId}
+              checked={settings.conversationMemoryEnabled}
+              disabled={!allowed}
+              onCheckedChange={(checked) => save({ conversationMemoryEnabled: checked })}
+            />
+          }
+        />
+      )}
       <SettingsRow
-        title="Remember conversations"
-        description="GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories."
+        title={gt("Remember conversations")}
+        description={gt(
+          "GOAT summarizes finished conversations into memory. Turning this off stops new summaries and keeps saved memories.",
+        )}
         control={
           <Switch
-            aria-label="Remember conversations"
+            aria-label={gt("Remember conversations")}
             checked={settings.memoryEnabled}
-            disabled={!allowed}
+            disabled={!allowed || settings.conversationMemoryEnabled === false}
             onCheckedChange={(checked) => save({ memoryEnabled: checked })}
           />
         }
       />
       {(!hideModelWhenDisabled || settings.memoryEnabled) && (
         <SettingsRow
-          title="Memory model"
-          description="Automatic follows the text generation model. Choose a separate model for memory summaries."
+          title={gt("Memory model")}
+          description={gt(
+            "Automatic follows the text generation model. Choose a separate model for memory summaries.",
+          )}
           control={
             <div className="flex flex-wrap items-center justify-end gap-2">
               {selection === null ? (
-                <span className="text-sm text-muted-foreground">No memory model available.</span>
+                <span className="text-sm text-muted-foreground">
+                  {gt("No memory model available.")}
+                </span>
               ) : !separate ? (
-                <span className="text-sm text-muted-foreground">Automatic · {selection.model}</span>
+                <span className="text-sm text-muted-foreground">
+                  {gt("Automatic · {model}", { model: selection.model })}
+                </span>
               ) : null}
               {selection && activeEntry && separate ? (
                 <>
@@ -103,7 +138,7 @@ export function MemoryGenerationSettings({
                     instanceEntries={entries}
                     modelOptionsByInstance={options}
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    triggerAriaLabel="Memory model"
+                    triggerAriaLabel={gt("Memory model")}
                     disabled={!allowed}
                     onInstanceModelChange={(instanceId, model) =>
                       save({
@@ -140,7 +175,7 @@ export function MemoryGenerationSettings({
                 </>
               ) : null}
               <Switch
-                aria-label="Use a separate memory model"
+                aria-label={gt("Use a separate memory model")}
                 checked={separate}
                 disabled={!allowed || (!separate && !activeEntry)}
                 onCheckedChange={(checked) => {
@@ -150,9 +185,9 @@ export function MemoryGenerationSettings({
               />
             </div>
           }
-          status={message ? <span role="alert">{message}</span> : undefined}
         />
       )}
+      {message && <p role="alert">{message}</p>}
     </SettingsSection>
   );
 }

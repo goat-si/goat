@@ -1,3 +1,11 @@
+import {
+  makeMemoryProviderPolicy,
+  MemoryProviderCommittedPolicy,
+} from "./memory/MemoryProviderPolicy.ts";
+export {
+  MemoryProviderCommittedPolicy,
+  type MemoryProviderPolicy,
+} from "./memory/MemoryProviderPolicy.ts";
 import { normalizeChangedAcpCustomModels } from "./provider/goat/AcpCustomModelSettings.ts";
 import * as SpeechSettingsChanges from "./speech/SpeechSettingsChanges.ts";
 import { clearRetargetedSettingsSecrets } from "./settingsSecretDestinations.ts";
@@ -91,6 +99,7 @@ import {
   agentWorkspaceTerminalSettingsMethods,
   rejectAgentWorkspaceTerminalPolicyChange,
 } from "./AgentWorkspaceTerminalPolicy.ts";
+import { makeConversationMemorySettings } from "./memory/conversationMemorySettings.ts";
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
 import { preserveSecretReferences } from "./provider/preserveSecretReferences.ts";
 import { makeCuaCommittedPolicy, type CuaCommittedPolicyRead } from "./cuaCommittedPolicy.ts";
@@ -337,64 +346,6 @@ export class MemoryHubCommittedSettings extends Context.Service<
     readonly readPublication?: Effect.Effect<import("@goat/contracts").MemoryHubPublication>;
   }
 >()("goat/serverSettings/MemoryHubCommittedSettings") {}
-
-/** SQL-free committed policy. An unready producer denies even the default-on setting. */
-export interface MemoryProviderPolicy {
-  readonly policyReady: boolean;
-  readonly enableAgentMemoryAccess: boolean;
-  /** Process-local; never a durable credential authority after a restart. */
-  readonly epoch: number;
-}
-
-/** L2 subscribes before preparing credentials, and rotates on every published epoch. */
-export class MemoryProviderCommittedPolicy extends Context.Service<
-  MemoryProviderCommittedPolicy,
-  {
-    readonly read: Effect.Effect<MemoryProviderPolicy>;
-    readonly subscribeRotations: Effect.Effect<
-      Stream.Stream<MemoryProviderPolicy>,
-      never,
-      Scope.Scope
-    >;
-  }
->()("goat/serverSettings/MemoryProviderCommittedPolicy") {}
-
-const makeMemoryProviderPolicy = Effect.gen(function* () {
-  const current = yield* Ref.make<MemoryProviderPolicy>(
-    Object.freeze({
-      policyReady: false,
-      enableAgentMemoryAccess: false,
-      epoch: 0,
-    }),
-  );
-  // Rotation needs the newest committed epoch, not a backlog of obsolete credentials.
-  const rotations = yield* PubSub.sliding<MemoryProviderPolicy>(1);
-  const publish = (enableAgentMemoryAccess: boolean) =>
-    Effect.uninterruptible(
-      Effect.gen(function* () {
-        const changed = yield* Ref.modify(current, (previous) => {
-          if (previous.policyReady && previous.enableAgentMemoryAccess === enableAgentMemoryAccess)
-            return [null, previous] as const;
-          const next = Object.freeze({
-            policyReady: true,
-            enableAgentMemoryAccess,
-            epoch: previous.epoch + 1,
-          });
-          return [next, next] as const;
-        });
-        if (changed !== null) yield* PubSub.publish(rotations, changed);
-      }),
-    );
-  const service = {
-    read: Ref.get(current),
-    subscribeRotations: Effect.gen(function* () {
-      const subscription = yield* PubSub.subscribe(rotations);
-      const snapshot = yield* Ref.get(current);
-      return Stream.make(snapshot).pipe(Stream.concat(Stream.fromSubscription(subscription)));
-    }),
-  } satisfies MemoryProviderCommittedPolicy["Service"];
-  return { publish, service };
-});
 
 export interface MemoryOwnerSourceReadCommitted {
   readonly policy: MemoryOwnerSourceReadPolicy;
@@ -789,6 +740,7 @@ export class ServerSettingsService extends Context.Service<
 
     /** Subscribe before reading a snapshot to retain changes before lazy stream startup. */
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
+    readonly changesRevision?: Effect.Effect<number>;
     readonly speechChangesRevision?: Effect.Success<typeof SpeechSettingsChanges.make>["revision"];
     readonly subscribeSpeechChanges?: Effect.Success<
       typeof SpeechSettingsChanges.make
@@ -830,7 +782,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   const ownerPublication = yield* makeOwnerPolicyPublication;
   yield* ownerPublication.initialize(initialSettings);
   const ownerIdentity = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
-  yield* providerPolicy.publish(initialSettings.enableAgentMemoryAccess);
+  yield* providerPolicy.publish(initialSettings);
   const writeSemaphore = yield* Semaphore.make(1);
   const checkpointAdmission = makeCheckpointReplicationAdmission();
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
@@ -855,7 +807,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
             Effect.andThen(cuaPolicy.publish(nextSettings, Option.none())),
             Effect.andThen(hubConsent.committed(nextSettings.hub)),
             Effect.andThen(speechChanges.publish(nextSettings.speech)),
-            Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
+            Effect.andThen(providerPolicy.publish(nextSettings)),
             Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
           ),
         ),
@@ -997,6 +949,7 @@ export function layerTest(
   services: "memoryHub",
 ): Layer.Layer<
   | ServerSettingsService
+  | MemoryProviderCommittedPolicy
   | MemoryHubCommittedSettings
   | MemoryOwnerSourceReadCommittedPolicy
   | MemoryOwnerSourceReadPolicyAdministration
@@ -1042,14 +995,18 @@ const ServerSettingsJson = fromLenientJson(
 );
 const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
 // Inspect field presence separately from decoding defaults for external replacements.
-const decodeCommittedHubJson = Schema.decodeUnknownExit(
+const decodeCommittedMemorySettingsJson = Schema.decodeUnknownExit(
   fromLenientJson(
     Schema.Struct({
       memoryHub: ServerSettings.fields.memoryHub,
       memoryHubVersion: Schema.optionalKey(Schema.Number),
+      conversationMemoryEnabled: Schema.optionalKey(Schema.Boolean),
       memoryHubProvenance: ServerSettings.fields.memoryHubProvenance,
     }),
   ),
+);
+const decodeConversationMemoryPause = Schema.decodeUnknownExit(
+  fromLenientJson(Schema.Struct({ conversationMemoryEnabled: Schema.Literal(false) })),
 );
 const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
 
@@ -1229,6 +1186,7 @@ const make = Effect.gen(function* () {
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
+  const conversationMemory = makeConversationMemorySettings(sql, fs, settingsPath);
   const writeSemaphore = yield* Semaphore.make(1);
   const cuaPolicy = yield* makeCuaCommittedPolicy;
   const publishCua = cuaPolicy.commit;
@@ -1269,6 +1227,7 @@ const make = Effect.gen(function* () {
   const cacheKey = "settings" as const;
   const hubConsent = yield* makeHubConsentGenerations;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+  const changesRevision = yield* Ref.make(0);
   const speechChanges = yield* SpeechSettingsChanges.make;
   const providerChangesPubSub = yield* PubSub.unbounded<{
     readonly settings: ServerSettings;
@@ -1285,7 +1244,9 @@ const make = Effect.gen(function* () {
       yield* Ref.set(blockedBrowserHostsRef, settings.blockedBrowserHosts);
       yield* hubConsent.committed(settings.hub);
       yield* speechChanges.publish(settings.speech);
-      yield* PubSub.publish(changesPubSub, settings);
+      yield* Ref.update(changesRevision, (revision) => revision + 1).pipe(
+        Effect.andThen(PubSub.publish(changesPubSub, settings)),
+      );
       if (Option.isSome(routeState))
         yield* PubSub.publish(providerChangesPubSub, {
           settings,
@@ -1323,7 +1284,7 @@ const make = Effect.gen(function* () {
   const publishExternalHub = (raw: string, publishConnectPolicy = true) =>
     Effect.gen(function* () {
       const decoded = decodeServerSettingsJsonExit(raw);
-      const projection = decodeCommittedHubJson(raw);
+      const projection = decodeCommittedMemorySettingsJson(raw);
       const legacy = decodeLegacyProviderSettingsJsonExit(raw);
       const current = yield* Ref.get(committedHubRef);
       if (
@@ -1332,14 +1293,24 @@ const make = Effect.gen(function* () {
         Exit.isFailure(legacy) ||
         (projection.value.memoryHubVersion === undefined && hasCommittedHubEpoch(current))
       ) {
-        // Withdrawing Connect hub access never waits on the memory-hub projection.
-        if (
+        yield* retainCommittedHub("invalid_settings");
+        const pauseMemory = Exit.isSuccess(decodeConversationMemoryPause(raw));
+        if (pauseMemory) {
+          yield* providerPolicy.publish({
+            ...(yield* providerPolicy.configured),
+            conversationMemoryEnabled: false,
+          });
+        }
+        // Each opt-out must take effect even if persisting the other one fails.
+        const withdrawConnect =
           publishConnectPolicy &&
           Exit.isSuccess(decoded) &&
           !(decoded.value.hub.enabled && decoded.value.hub.connectDevicesHubProxy)
-        )
-          yield* connectAccess.commit(decoded.value.hub, Effect.void);
-        yield* retainCommittedHub("invalid_settings");
+            ? connectAccess.commit(decoded.value.hub, Effect.void)
+            : Effect.void;
+        yield* withdrawConnect.pipe(
+          Effect.onExit(() => (pauseMemory ? conversationMemory.reconcile(false) : Effect.void)),
+        );
         yield* Effect.logWarning(
           "invalid external settings projection, retaining committed memory hub",
           {
@@ -1368,7 +1339,11 @@ const make = Effect.gen(function* () {
           ? provenance
           : null;
       yield* publishCommittedHub({ ...decoded.value, memoryHubProvenance: trustedProvenance });
-      yield* providerPolicy.publish(decoded.value.enableAgentMemoryAccess);
+      // A settings file from an older client cannot opt an already-paused environment back in.
+      const enabled =
+        projection.value.conversationMemoryEnabled ?? (yield* conversationMemory.read);
+      yield* conversationMemory.reconcile(enabled);
+      yield* providerPolicy.publish({ ...decoded.value, conversationMemoryEnabled: enabled });
       return true;
     });
 
@@ -1411,11 +1386,11 @@ const make = Effect.gen(function* () {
           // Publish immediately after the rename, before atomicWrite's asynchronous
           // temp cleanup. No cancellation may split durable commit from its Ref epoch.
           rename: (from, to) =>
-            fs.rename(from, to).pipe(
+            conversationMemory.rename(from, to, settings.conversationMemoryEnabled).pipe(
               Effect.tap(() =>
                 publishCua(settings).pipe(
                   Effect.andThen(publishCommittedHub(settings)),
-                  Effect.andThen(providerPolicy.publish(settings.enableAgentMemoryAccess)),
+                  Effect.andThen(providerPolicy.publish(settings)),
                   Effect.andThen(ownerPublication.publish(ownerProjection(settings))),
                 ),
               ),
@@ -1531,12 +1506,15 @@ const make = Effect.gen(function* () {
         yield* publishCommittedHub(DEFAULT_SERVER_SETTINGS);
       else yield* retainCommittedHub("settings_unavailable");
       if (!(yield* providerPolicy.service.read).policyReady)
-        yield* providerPolicy.publish(DEFAULT_SERVER_SETTINGS.enableAgentMemoryAccess);
+        yield* providerPolicy.publish({
+          ...DEFAULT_SERVER_SETTINGS,
+          conversationMemoryEnabled: yield* conversationMemory.read,
+        });
       else settingsFileTrusted = false;
     }
     yield* ownerPublication.initialize(settings);
     const committedOwner = yield* ownerPublication.read;
-    const committedProviderPolicy = yield* providerPolicy.service.read;
+    const conversationControls = yield* providerPolicy.configured;
 
     const committedHub = yield* Ref.get(committedHubRef);
     if (!settingsExists && hasCommittedHubEpoch(committedHub)) {
@@ -1548,7 +1526,7 @@ const make = Effect.gen(function* () {
     // Full settings and migrations must not turn a rejected projection into a new commit.
     settings = {
       ...settings,
-      enableAgentMemoryAccess: committedProviderPolicy.enableAgentMemoryAccess,
+      ...conversationControls,
       memoryHub: committedHub.settings,
       memoryHubVersion: committedHub.version,
       memoryHubProvenance: committedHub.provenance,
@@ -2206,30 +2184,25 @@ const make = Effect.gen(function* () {
     withStoredSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => writeSemaphore.withPermits(1)(cachedLocked.pipe(Effect.flatMap(use))),
-    get subscribeProviderChanges() {
-      return PubSub.subscribe(providerChangesPubSub).pipe(
-        Effect.map((subscription) =>
-          Stream.fromSubscription(subscription).pipe(
-            Stream.mapEffect((event) =>
-              materializeSettingsSecrets(event.settings).pipe(
-                Effect.map((settings) => ({
-                  ...event,
-                  settings: resolveTextGenerationProvider(settings),
-                })),
-              ),
+    subscribeProviderChanges: PubSub.subscribe(providerChangesPubSub).pipe(
+      Effect.map((subscription) =>
+        Stream.fromSubscription(subscription).pipe(
+          Stream.mapEffect((event) =>
+            materializeSettingsSecrets(event.settings).pipe(
+              Effect.map((settings) => ({
+                ...event,
+                settings: resolveTextGenerationProvider(settings),
+              })),
             ),
           ),
         ),
-      );
-    },
-    get streamChanges() {
-      return materializeChanges(Stream.fromPubSub(changesPubSub));
-    },
-    get subscribeChanges() {
-      return PubSub.subscribe(changesPubSub).pipe(
-        Effect.map((subscription) => materializeChanges(Stream.fromSubscription(subscription))),
-      );
-    },
+      ),
+    ),
+    streamChanges: materializeChanges(Stream.fromPubSub(changesPubSub)),
+    subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
+      Effect.map((subscription) => materializeChanges(Stream.fromSubscription(subscription))),
+    ),
+    changesRevision: Ref.get(changesRevision),
     speechChangesRevision: speechChanges.revision,
     subscribeSpeechChanges: speechChanges.subscribe,
   } satisfies ServerSettingsService["Service"] &

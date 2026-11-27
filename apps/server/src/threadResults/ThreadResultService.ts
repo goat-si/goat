@@ -12,10 +12,12 @@ import {
   type ThreadResultObservedCheck,
   type ThreadResultPullRequest,
   ThreadResultReport,
+  ThreadResultAttachments,
 } from "@goat/contracts";
 import {
   botReportAwaitsDelegates,
   clearBotReportDue,
+  missingDeliverablesForRun,
   markBotReportDue,
   settlementReportRun,
 } from "./delegatedBotReports.ts";
@@ -33,11 +35,30 @@ import { readObservedCheck, readObservedCheckState } from "./ObservedCheckServic
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
   {
-    reason: Schema.Literals(["run_not_found", "run_mismatch", "delegates_pending", "storage"]),
+    reason: Schema.Literals([
+      "run_not_found",
+      "run_mismatch",
+      "delegates_pending",
+      "deliverables_pending",
+      "attachment_invalid",
+      "attachment_limit",
+      "storage",
+    ]),
     cause: Schema.optional(Schema.Defect()),
+    missing: Schema.optionalKey(Schema.Array(Schema.String)),
   },
 ) {
   override get message(): string {
+    if (this.reason === "deliverables_pending")
+      return (
+        "Required results still need acceptance: " +
+        this.missing?.join(", ") +
+        ". Review each current worker result with channel.task_report before reporting success."
+      );
+    if (this.reason === "attachment_invalid")
+      return "Reference an existing attachment in this thread with its messageId, the runId and current attempt id.";
+    if (this.reason === "attachment_limit")
+      return "A run may retain at most 128 attachment references.";
     if (this.reason === "delegates_pending")
       return "Delegated results are outstanding. Wait for their notifications or read the results with task.status, then report what each task returned.";
     return this.reason === "run_not_found"
@@ -48,8 +69,11 @@ export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   }
 }
 
+const isThreadResultError = Schema.is(ThreadResultError);
+
 const StoredReport = ThreadResultReport.mapFields((fields) => ({
   ...fields,
+  attachments: Schema.optional(ThreadResultAttachments),
   notificationRelevance: Schema.optional(Schema.String),
 }));
 
@@ -107,6 +131,7 @@ export function buildThreadResult(input: {
       ? {}
       : { notificationRelevance: report.notificationRelevance }),
     pullRequests,
+    ...(report?.attachments?.length ? { attachments: report.attachments } : {}),
     ...(report?.tests === undefined ? {} : { tests: report.tests }),
     ...(input.observedCheck == null ? {} : { observedCheck: input.observedCheck }),
     commits: report?.commits ?? [],
@@ -141,7 +166,7 @@ const ReportRow = Schema.Struct({
   reportedAt: Schema.String,
 });
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
-const encodeReport = Schema.encodeEffect(Schema.fromJsonString(ThreadResultReport));
+const encodeReport = Schema.encodeEffect(Schema.fromJsonString(StoredReport));
 
 /** The agent's report is independent of any check the host runs. */
 const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =>
@@ -265,22 +290,69 @@ const make = Effect.gen(function* () {
       return yield* new ThreadResultError({ reason: "delegates_pending" });
     }
     const reportedAt = DateTime.formatIso(yield* DateTime.now);
-    const reportJson = yield* encodeReport(input).pipe(Effect.mapError(storage));
-    const write = sql`
-      INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
-      VALUES (${threadId}, ${run.id}, ${reportJson}, ${reportedAt})
-      ON CONFLICT (thread_id, run_id) DO UPDATE SET
-        report_json = excluded.report_json,
-        reported_at = excluded.reported_at
-    `;
-    yield* (
-      bot ? sql.withTransaction(write.pipe(Effect.andThen(clearBotReportDue(sql, run.id)))) : write
-    ).pipe(Effect.mapError(storage));
+    const { attachmentRefs = [], ...fields } = input;
+    const attemptId = input.expectedAttemptId;
+    const additions: Array<(typeof ThreadResultAttachments.Type)[number]> = [];
+    if (attachmentRefs.length) {
+      if (!input.runId || !attemptId || run.activeAttemptId !== attemptId)
+        return yield* new ThreadResultError({ reason: "attachment_invalid" });
+      const messages = yield* threads
+        .getMessagesById(threadId, [...new Set(attachmentRefs.map((ref) => ref.messageId))])
+        .pipe(Effect.mapError(storage));
+      for (const ref of attachmentRefs) {
+        const attachment = messages
+          .get(ref.messageId)
+          ?.attachments.find((item) => item.id === ref.attachmentId);
+        if (!attachment) return yield* new ThreadResultError({ reason: "attachment_invalid" });
+        additions.push({ ...ref, attemptId, name: redactGoatCredentialsDeep(attachment.name) });
+      }
+    }
+    const report = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          if (bot && input.outcome === "succeeded") {
+            const missing = yield* missingDeliverablesForRun(sql, threadId, run, records.runs);
+            if (missing.length)
+              return yield* new ThreadResultError({
+                reason: "deliverables_pending",
+                missing: missing.map((row) => row.id),
+              });
+          }
+          const previous = yield* readStoredThreadResultReport(threadId, run.id).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
+          const attachments = [...(previous?.report.attachments ?? [])];
+          for (const ref of additions) {
+            if (
+              !attachments.some(
+                (item) =>
+                  item.attemptId === ref.attemptId &&
+                  item.messageId === ref.messageId &&
+                  item.attachmentId === ref.attachmentId,
+              )
+            )
+              attachments.push(ref);
+          }
+          if (attachments.length > 128)
+            return yield* new ThreadResultError({ reason: "attachment_limit" });
+          const stored = { ...fields, ...(attachments.length ? { attachments } : {}) };
+          const reportJson = yield* encodeReport(stored).pipe(Effect.mapError(storage));
+          yield* sql`
+        INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+        VALUES (${threadId}, ${run.id}, ${reportJson}, ${reportedAt})
+        ON CONFLICT (thread_id, run_id) DO UPDATE SET
+          report_json = excluded.report_json, reported_at = excluded.reported_at
+      `;
+          if (bot) yield* clearBotReportDue(sql, run.id);
+          return stored;
+        }),
+      )
+      .pipe(Effect.mapError((error) => (isThreadResultError(error) ? error : storage(error))));
     yield* PubSub.publish(reports, threadId);
     return buildThreadResult({
       thread: records.thread,
       run,
-      stored: { report: input, reportedAt },
+      stored: { report, reportedAt },
       observedCheck: yield* observedCheck(threadId, run.id),
     });
   });

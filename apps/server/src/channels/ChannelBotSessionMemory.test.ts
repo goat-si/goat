@@ -7,6 +7,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { setConversationMemoryEnabled } from "../memory/conversationMemoryPolicy.ts";
+import { issueConversationRunCheck } from "../memory/conversationRunEligibility.ts";
+import { eligibleSourceMessages, scanWholeSource } from "../memory/memorySourceScan.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -20,6 +23,7 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { taskIdFor } from "./channelIds.ts";
@@ -29,6 +33,7 @@ import { dispatchBarrier } from "./testkit/dispatchRace.ts";
 import {
   environmentId,
   goatInput,
+  makeHarness,
   owner,
   projectId,
   rpcContext,
@@ -140,6 +145,96 @@ const sendOf = (harness: ReturnType<typeof sessionHarness>, needle: string) => {
 };
 
 describe("GOAT Bot session runs after the first at the requester's memory ceiling", () => {
+  it.effect.each(["session", "worker"] as const)(
+    "keeps an input accepted while paused out of a %s that starts after resume",
+    (route) => {
+      const harness =
+        route === "session"
+          ? sessionHarness({ realWorkerLaunch: true, botWorkspaceRoot: import.meta.dirname })
+          : makeHarness({ realWorkerLaunch: true, workspaceRoot: import.meta.dirname });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* setConversationMemoryEnabled(sql, false);
+        yield* gateway.ingest(
+          goatInput("do: use my private preference", "paused-intake"),
+          withScopes(rpcContext, ["memory:read", "memory:write"]),
+        );
+        yield* setConversationMemoryEnabled(sql, true);
+        yield* runtime.drain;
+        const launch = harness.world.launches[0]!;
+        const threadId = launch.threadId!;
+        const prompt = launch.initialMessage!;
+        const records = yield* (yield* Orchestrator.OrchestratorV2).getThreadRecords(threadId, [
+          "runs",
+        ]);
+        const run = records.runs.find((candidate) => candidate.userMessageId === prompt.messageId)!;
+        const permit = yield* issueConversationRunCheck(sql, { threadId, runId: run.id });
+        assert.isFalse(yield* permit);
+        assert.notInclude(
+          eligibleSourceMessages(yield* scanWholeSource(sql, threadId), {}).map((row) => row.id),
+          prompt.messageId,
+        );
+        assert.isUndefined(prompt.memoryGrantCeiling);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each(["main chat", "finished task"] as const)(
+    "resumes Bot memory without copying paused history from the %s into the next session",
+    (source) => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const sql = yield* SqlClient.SqlClient;
+        const requester = withScopes(rpcContext, ["memory:read", "memory:write"]);
+        yield* setConversationMemoryEnabled(sql, false);
+        const earlier = yield* gateway.ingest(
+          goatInput("private blueprint", "paused-brief"),
+          requester,
+        );
+        yield* runtime.drain;
+        const previous = (yield* ledger.getTask(taskIdFor(earlier.inputId, 0)))!;
+        if (source === "finished task") {
+          yield* commitTransition(
+            ledger,
+            previous,
+            {
+              type: "task.completed",
+              payload: { generation: previous.task.generation, summary: "private result" },
+            },
+            { owner: runtime.ownerToken },
+          );
+        }
+        yield* setConversationMemoryEnabled(sql, true);
+        const fresh = yield* gateway.ingest(
+          {
+            ...goatInput("current diagram", "resumed-brief"),
+            ...(source === "finished task" ? { taskId: previous.task.taskId } : {}),
+          },
+          requester,
+        );
+        const routing = yield* ChannelSessionFirst.ChannelSessionFirst;
+        assert.isTrue(yield* routing.offer(fresh.inputId, runtime.ownerToken));
+        yield* runtime.drain;
+        const taskId = taskIdFor(fresh.inputId, 0);
+        const task = (yield* ledger.getTask(taskId))!.task;
+        const brief = (yield* ledger.latestTaskBrief(taskId))!;
+        assert.strictEqual(task.target?.memoryGrantCeiling, "read_write");
+        assert.include(brief.deliveredText, "current diagram");
+        assert.notInclude(brief.deliveredText, "private blueprint");
+        assert.notInclude(brief.deliveredText, "private result");
+        assert.notInclude(task.instruction, "private blueprint");
+        assert.notInclude(task.instruction, "private result");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect.each(["launch", "queue"] as const)(
     "refuses a Slack default session %s when memory access is revoked at dispatch",
     (boundary) => {
@@ -331,12 +426,15 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
       const ledger = yield* ChannelLedger.ChannelLedger;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
-      const followUp = (text: string, key: string) =>
+      const sql = yield* SqlClient.SqlClient;
+      const followUp = (text: string, key: string, pausedAtIntake = false) =>
         Effect.gen(function* () {
+          if (pausedAtIntake) yield* setConversationMemoryEnabled(sql, false);
           const input = yield* gateway.ingest(
             slackInput("more:" + task.taskId + " " + text, key, "1760000000.000900", "U2"),
             slackMemoryContext,
           );
+          if (pausedAtIntake) yield* setConversationMemoryEnabled(sql, true);
           yield* reception.receive(input.inputId, runtime.ownerToken);
           for (const pending of yield* ledger.listPendingForwards(10))
             yield* dispatcher.forward(pending, runtime.ownerToken);
@@ -345,7 +443,14 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
       const steered = sendOf(harness, "check logs");
       assert.strictEqual(steered.mode, "steer");
       assert.strictEqual(steered.memoryGrantCeiling, "read_write");
-      const sql = yield* SqlClient.SqlClient;
+      yield* followUp("paused update", "memory-follow-pause", true);
+      const paused = sendOf(harness, "paused update");
+      assert.strictEqual(paused.mode, "queue");
+      assert.isUndefined(paused.memoryGrantCeiling);
+      assert.lengthOf(
+        yield* sql`SELECT 1 FROM conversation_memory_excluded_messages WHERE thread_id=${threadId} AND message_id=${paused.messageId}`,
+        1,
+      );
       yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate","memory:read"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
       yield* followUp("check disks", "memory-follow-3");
       // The running run may still write memory, so the lowered follow-up waits as its own run.
@@ -353,9 +458,10 @@ describe("GOAT Bot session runs after the first at the requester's memory ceilin
       assert.strictEqual(queued.mode, "queue");
       assert.strictEqual(queued.memoryGrantCeiling, "read");
       const runs = harness.world.runs.get(threadId)!;
-      assert.lengthOf(runs, 2);
+      assert.lengthOf(runs, 3);
       assert.strictEqual(runs[1]!.status, "queued");
-      assert.strictEqual((yield* ledger.getTask(task.taskId))!.task.worker?.runId, runs[1]!.id);
+      assert.strictEqual(runs[2]!.status, "queued");
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.task.worker?.runId, runs[2]!.id);
     }).pipe(Effect.provide(harness.layer));
   });
 

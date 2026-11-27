@@ -445,7 +445,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     modelSelection,
     attachments,
     investigate,
-  }: TextGenerationOperations.Request<S>): Effect.fn.Return<
+  }: TextGenerationOperations.Request<S, string | Effect.Effect<string>>): Effect.fn.Return<
     { readonly result: S["Type"]; readonly effectiveModel: string },
     TextGenerationError,
     S["DecodingServices"]
@@ -619,7 +619,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         cwd: workingDirectory,
         shell: spawnCommand.shell,
         stdin: {
-          stream: Stream.encodeText(Stream.make(prompt)),
+          stream: Stream.encodeText(
+            typeof prompt === "string" ? Stream.make(prompt) : Stream.fromEffect(prompt),
+          ),
         },
         forceKillAfter: "1 second",
       });
@@ -710,17 +712,15 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     }).pipe(Effect.ensuring(cleanup));
   });
 
-  return TextGenerationOperations.fromRunner(
-    "CodexTextGeneration",
-    (request) => runCodexJson(request).pipe(Effect.map((selected) => selected.result)),
-    {
-      memory: {
-        capabilities: memoryRunnerCapabilities("codex", memoryRunnerContext, {
-          available: canIsolateMemoryHome,
-        }),
-        run: withMemoryExecution(memoryRunnerContext, CODEX_DRIVER, runCodexJson),
-      },
-      channelReception: true,
+  const run: TextGenerationOperations.Runner<string | Effect.Effect<string>> = (request) =>
+    runCodexJson(request).pipe(Effect.map((selected) => selected.result));
+  return TextGenerationOperations.fromRunner("CodexTextGeneration", run, {
+    memory: {
+      capabilities: memoryRunnerCapabilities("codex", memoryRunnerContext, {
+        available: canIsolateMemoryHome,
+      }),
+      run: withMemoryExecution(memoryRunnerContext, CODEX_DRIVER, runCodexJson),
     },
-  );
+    channelReception: run,
+  });
 });

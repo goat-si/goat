@@ -1,4 +1,5 @@
 import { ComposerContextReferenceNodeView } from "./composerReadOnlyContextChip";
+import { useGT } from "gt-react";
 import { revealComposerCaret } from "./revealComposerCaret";
 import { caretLineRect } from "./composerCaretLineRect";
 import {
@@ -123,10 +124,9 @@ import { isThreadNavigationShortcut } from "~/keybindings";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasCommandForKeyDown } from "~/shortcuts/dispatcher";
-import { SkillChipIcon } from "./chat/SkillInlineText";
+import { SkillDetailsPopover } from "./chat/SkillInlineText";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import { getTimelinePageScrollKey } from "./chat/pageScrollController";
-import { ContextChipPopover } from "./contextChipParts";
 import { Button } from "./ui/button";
 import {
   ComposerContextActionsContext,
@@ -297,6 +297,7 @@ function composerSkillMeta(
 }
 
 function ComposerSkillNodeView({ node }: NodeViewProps) {
+  const gt = useGT();
   const actions = use(ComposerContextActionsContext);
   const skills = use(RichComposerSkillsContext);
   const skillName = (node.attrs.skillName as string) ?? "";
@@ -313,22 +314,13 @@ function ComposerSkillNodeView({ node }: NodeViewProps) {
     : (node.attrs.skillLabel as string) || skillName;
   return (
     <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
-      <ContextChipPopover
-        kind="skill"
-        icon={<SkillChipIcon />}
-        label={skillLabel}
-        accessibleLabel={`Skill ${skillLabel}`}
-      >
-        <div className="space-y-3 p-2 text-sm">
-          <p className="font-medium">{skillLabel}</p>
-          <p>{description || "No description is available for this skill."}</p>
-          {skill?.path && actions.environmentId ? (
-            <Button variant="outline" size="sm" onClick={() => actions.openMention(skill.path)}>
-              View instructions
-            </Button>
-          ) : null}
-        </div>
-      </ContextChipPopover>
+      <SkillDetailsPopover label={skillLabel} description={description}>
+        {skill?.path && actions.environmentId ? (
+          <Button variant="outline" size="sm" onClick={() => actions.openMention(skill.path)}>
+            {gt("View instructions")}
+          </Button>
+        ) : null}
+      </SkillDetailsPopover>
     </NodeViewWrapper>
   );
 }

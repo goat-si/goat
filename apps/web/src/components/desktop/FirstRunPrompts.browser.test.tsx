@@ -35,7 +35,9 @@ vi.mock("../../state/server", async () => {
   const { Atom } = await import("effect/reactivity");
   const allowed = Atom.make(true);
   return {
-    primaryServerConfigAtom: Atom.make({ environment: { environmentId: "local" } }),
+    primaryServerConfigAtom: Atom.make({
+      environment: { environmentId: "local", capabilities: {} },
+    }),
     providersIgnoringCheckedAtAtom: () => Atom.make([]),
     serverEnvironment: {
       updateSettings: {

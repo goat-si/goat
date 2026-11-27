@@ -1,3 +1,5 @@
+import { useGT } from "gt-react";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import {
   AuthAccessWriteScope,
@@ -44,7 +46,6 @@ import {
   connectReachabilityStep,
   tailscaleUnreachableMessage,
 } from "./ConnectReachabilityNotice";
-import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { heldOrGranted } from "./hubAccessScopes";
@@ -74,9 +75,10 @@ type IssuedPhoneQr = {
 };
 
 function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
+  const gt = useGT();
   const expired = useDeadlinePassed(DateTime.toEpochMillis(issued.result.expiresAt));
   if (expired) {
-    return <p role="status">This QR has expired. Close this dialog and show a new QR.</p>;
+    return <p role="status">{gt("This QR has expired. Close this dialog and show a new QR.")}</p>;
   }
   return (
     <div className="space-y-3">
@@ -84,8 +86,8 @@ function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
       {issued.target.kind !== "tailscale-https" ? (
         <p className="text-xs text-muted-foreground">
           {issued.target.kind === "tailnet"
-            ? "Keep your phone connected to the same tailnet."
-            : "Keep your phone on the same local network."}
+            ? gt("Keep your phone connected to the same tailnet.")
+            : gt("Keep your phone on the same local network.")}
         </p>
       ) : null}
       <div className="flex justify-center">
@@ -94,14 +96,14 @@ function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
           size={240}
           level="M"
           marginSize={4}
-          title="Scan to pair the GOAT app"
+          title={gt("Scan to pair the GOAT app")}
         />
       </div>
       {issued.hubAccess === null ? null : (
         <p className="text-xs text-muted-foreground">
           {issued.hubAccess
-            ? "This QR also opens the hub's devices."
-            : "This QR opens only this computer. To add hub devices later, pair again."}
+            ? gt("This QR also opens the hub's devices.")
+            : gt("This QR opens only this computer. To add hub devices later, pair again.")}
         </p>
       )}
     </div>
@@ -121,6 +123,9 @@ export function HubDeviceCard({
   networkAccessError,
   onPairingLinkCreated,
 }: HubDeviceCardProps) {
+  const gt = useGT();
+  const setting = useTranslatedSearchableSetting();
+  const hubAccessLabel = gt("Also open hub devices");
   const [dialogOpen, setDialogOpen] = useState(false);
   // A relaunch for Network access or Tailscale HTTPS reopens the dialog; it stays open, showing
   // loading state, until the user closes it, so a remount while state loads keeps it.
@@ -191,7 +196,7 @@ export function HubDeviceCard({
     setIsCreating(false);
     if (settled._tag === "Failure") {
       const cause = Cause.squash(settled.cause);
-      setError(cause instanceof Error ? cause.message : "Could not create a phone QR.");
+      setError(cause instanceof Error ? cause.message : "");
       return;
     }
     onPairingLinkCreated(settled.value);
@@ -222,15 +227,15 @@ export function HubDeviceCard({
   const serveOn = exposure?.tailscaleServeEnabled ?? false;
   const tailscaleRow = showTailscaleRow ? (
     <SettingsRow
-      title={searchableSetting("tailscale-https").title}
+      title={setting("tailscale-https").title}
       description={
         tailscaleHttpsEndpoint?.status === "available"
           ? tailscaleHttpsEndpoint.httpBaseUrl
           : serveOn
-            ? tailscaleUnreachableMessage(tailscaleHttpsEndpoint)
+            ? tailscaleUnreachableMessage(tailscaleHttpsEndpoint, gt)
             : tailscaleHttpsEndpoint
-              ? "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-              : missingTailscaleEndpointDescription(exposureState)
+              ? gt("Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL.")
+              : missingTailscaleEndpointDescription(exposureState, gt)
       }
       control={
         tailscaleHttpsEndpoint || serveOn ? (
@@ -242,7 +247,7 @@ export function HubDeviceCard({
               else if (tailscaleHttpsEndpoint)
                 connectActions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint);
             }}
-            aria-label="Enable Tailscale HTTPS"
+            aria-label={setting("tailscale-https").title}
           />
         ) : connectReachabilityStep(exposure, null) === "network-access" ? (
           <Button
@@ -251,7 +256,7 @@ export function HubDeviceCard({
             disabled={isNetworkAccessPending}
             onClick={connectActions.onTurnOnNetworkAccess}
           >
-            Turn on Network access
+            {gt("Turn on Network access")}
           </Button>
         ) : null
       }
@@ -260,24 +265,28 @@ export function HubDeviceCard({
 
   const phoneDescription = !isDesktop ? (
     <>
-      To use this server as a hub, run <code>goat serve --tailscale-serve</code> on the server.{" "}
-      Create a pairing link under Authorized clients.
+      {gt(
+        "To use this server as a hub, run {command} on the server. Create a pairing link under Authorized clients.",
+        { command: "goat serve --tailscale-serve" },
+      )}
     </>
   ) : primaryEnvironmentId === null ? (
-    "Connect an environment to pair your phone."
+    gt("Connect an environment to pair your phone.")
   ) : !canManageLocalBackend ? (
-    "Phone QR needs access to this device’s network settings. Create a link under Authorized clients."
+    gt(
+      "Phone QR needs access to this device’s network settings. Create a link under Authorized clients.",
+    )
   ) : !allowed ? (
-    "This connection cannot create pairing links."
+    gt("This connection cannot create pairing links.")
   ) : (
-    "Scan a QR with your phone to pair the GOAT app."
+    gt("Scan a QR with your phone to pair the GOAT app.")
   );
 
   return (
-    <SettingsSection {...searchableSetting("hub-device")}>
+    <SettingsSection {...setting("hub-device")}>
       {tailscaleRow}
       <SettingsRow
-        title="Phone pairing"
+        title={gt("Phone pairing")}
         description={phoneDescription}
         status={networkAccessError ? <span role="alert">{networkAccessError}</span> : undefined}
         control={
@@ -287,36 +296,36 @@ export function HubDeviceCard({
                 render={<Button size="sm" variant="outline" disabled={!allowed || unavailable} />}
               >
                 <QrCodeIcon aria-hidden />
-                Show phone QR
+                {gt("Show phone QR")}
               </DialogTrigger>
               <DialogPopup showCloseButton={!isCreating}>
                 <DialogHeader>
-                  <DialogTitle>Pair your phone</DialogTitle>
+                  <DialogTitle>{gt("Pair your phone")}</DialogTitle>
                   <DialogDescription>
-                    Scan with the GOAT app on your phone: Connect hub → Scan QR code.
+                    {gt("Scan with the GOAT app on your phone: Connect hub → Scan QR code.")}
                   </DialogDescription>
                 </DialogHeader>
                 <DialogPanel>
                   {isNetworkAccessPending ? (
                     <p role="status">
-                      <Spinner size="sm" /> Checking network settings…
+                      <Spinner size="sm" /> {gt("Checking network settings…")}
                     </p>
                   ) : networkAccessError !== null ? (
                     <p role="status">
-                      Could not read network settings. Close this dialog and try again.
+                      {gt("Could not read network settings. Close this dialog and try again.")}
                     </p>
                   ) : !allowed ? (
-                    <p role="status">This connection cannot create pairing links.</p>
+                    <p role="status">{gt("This connection cannot create pairing links.")}</p>
                   ) : isCreating ? (
                     <p role="status">
-                      <Spinner size="sm" /> Creating phone QR…
+                      <Spinner size="sm" /> {gt("Creating phone QR…")}
                     </p>
                   ) : issued ? (
                     issuedTargetIsCurrent ? (
                       <HubPhoneQrView issued={issued} />
                     ) : (
                       <p role="status">
-                        The network address changed. Close this dialog and show a new QR.
+                        {gt("The network address changed. Close this dialog and show a new QR.")}
                       </p>
                     )
                   ) : (
@@ -325,17 +334,18 @@ export function HubDeviceCard({
                         <label className="flex items-start justify-between gap-3">
                           <span className="min-w-0">
                             <span className="block text-sm font-medium text-foreground">
-                              Also open hub devices
+                              {hubAccessLabel}
                             </span>
                             <span className="block text-xs text-muted-foreground">
-                              This phone can open threads on the machines this hub lists, within
-                              what the hub allows. Revoke it anytime under Authorized clients.
+                              {gt(
+                                "This phone can open threads on the machines this hub lists, within what the hub allows. Revoke it anytime under Authorized clients.",
+                              )}
                             </span>
                           </span>
                           <Switch
                             checked={hubAccess}
                             onCheckedChange={(checked) => setHubAccess(checked)}
-                            aria-label="Also open hub devices"
+                            aria-label={hubAccessLabel}
                           />
                         </label>
                       ) : null}
@@ -350,8 +360,9 @@ export function HubDeviceCard({
                           />
                         ) : (
                           <p className="text-sm text-muted-foreground">
-                            Start Tailscale on this computer and your phone for a secure HTTPS
-                            address.
+                            {gt(
+                              "Start Tailscale on this computer and your phone for a secure HTTPS address.",
+                            )}
                           </p>
                         )
                       ) : null}
@@ -362,31 +373,37 @@ export function HubDeviceCard({
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {target.kind === "tailnet"
-                              ? "Your phone must be on the same tailnet."
-                              : "Your phone must be on the same local network. This address will not work away from it."}
+                              ? gt("Your phone must be on the same tailnet.")
+                              : gt(
+                                  "Your phone must be on the same local network. This address will not work away from it.",
+                                )}
                           </p>
                           <Button onClick={() => void issueCredential(target)}>
                             {target.kind === "tailnet"
-                              ? "Use tailnet address"
-                              : "Use local network"}
+                              ? gt("Use tailnet address")
+                              : gt("Use local network")}
                           </Button>
                         </>
                       ) : target?.kind === "tailscale-https" ? (
                         <Button onClick={() => void issueCredential(target)}>
-                          Create phone QR
+                          {gt("Create phone QR")}
                         </Button>
                       ) : exposure?.mode === "local-only" ? null : (
                         <p className="text-xs text-muted-foreground">
-                          No reachable address is available yet.
+                          {gt("No reachable address is available yet.")}
                         </p>
                       )}
                     </div>
                   )}
-                  {error ? <p role="alert">Could not create a phone QR. {error}</p> : null}
+                  {error !== null ? (
+                    <p role="alert">
+                      {gt("Could not create a phone QR.")} {error}
+                    </p>
+                  ) : null}
                 </DialogPanel>
                 <DialogFooter>
                   <Button variant="outline" disabled={isCreating} onClick={() => changeOpen(false)}>
-                    Done
+                    {gt("Done")}
                   </Button>
                 </DialogFooter>
               </DialogPopup>
