@@ -114,6 +114,7 @@ describe("preview guest input", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       () => !released,
     );
     expect(guest.webContents.sendInputEvent).not.toHaveBeenCalled();
