@@ -2147,7 +2147,7 @@ export function computeStableMessagesTimelineRows(
 }
 
 function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean {
-  if (a.kind !== b.kind || a.id !== b.id) return false;
+  if (a.kind !== b.kind || a.id !== b.id || a.continuesWorkLog !== b.continuesWorkLog) return false;
 
   switch (a.kind) {
     case "working":
@@ -2161,8 +2161,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.label === bt.label
       );
     }
-    case "worktree-setup":
-      return a.snapshot === (b as typeof a).snapshot;
+    case "worktree-setup": {
+      const bw = b as typeof a;
+      return a.snapshot === bw.snapshot && a.embedded === bw.embedded;
+    }
     case "cloud-run":
       return a.card === (b as typeof a).card;
 
