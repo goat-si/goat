@@ -315,7 +315,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     heading,
     detail,
     installationDetail && !detail?.includes(installationDetail) ? installationDetail : null,
-    transferFailure?.detail,
+    transferFailure && !detail?.includes(transferFailure.detail) ? transferFailure.detail : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -712,7 +712,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         createPortal(
           <aside
             aria-label={gt("Update available")}
-            className="fixed bottom-4 left-16 z-40 w-72 max-w-[calc(100vw-5rem)] rounded-xl border bg-popover p-3.5 text-sm text-popover-foreground shadow-lg"
+            className="fixed bottom-4 left-16 z-40 w-72 max-w-[calc(100vw-5rem)] rounded-xl border bg-popover p-3.5 text-sm text-popover-foreground shadow-lg [overflow-wrap:anywhere]"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -742,11 +742,6 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
               </button>
             </div>
             <p className="mt-1 text-muted-foreground">{getDesktopUpdateButtonTooltip(state, gt)}</p>
-            {transferFailure ? (
-              <p className="mt-1 text-muted-foreground [overflow-wrap:anywhere]">
-                {transferFailure.detail}
-              </p>
-            ) : null}
             {isDownloading ? (
               <progress
                 className="mt-2 w-full"

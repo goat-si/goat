@@ -110,7 +110,10 @@ export function getDesktopUpdateButtonTooltip(
   const installationNotice = state.installationNotice
     ? translateDesktopUpdateMessage(state.installationNotice, gt)
     : null;
-  return installationNotice ? `${actionTooltip}\n${installationNotice}` : actionTooltip;
+  const failureDetail = state.message?.trim()
+    ? getDesktopUpdateTransferFailure(state, gt)?.detail
+    : null;
+  return [actionTooltip, failureDetail, installationNotice].filter(Boolean).join("\n");
 }
 
 function getDesktopUpdateActionTooltip(

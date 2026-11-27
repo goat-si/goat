@@ -30,7 +30,9 @@ it("shows a refused install as failed when the updater returns to downloaded", (
     errorContext: "install",
     canRetry: true,
   };
-  expect(getDesktopUpdateButtonTooltip(state)).toBe("Install failed for 1.1.0. Click to retry.");
+  expect(getDesktopUpdateButtonTooltip(state)).toBe(
+    "Install failed for 1.1.0. Click to retry.\nInstall refused",
+  );
 });
 
 it("reports an install refused after the desktop accepts it", async () => {
@@ -149,9 +151,11 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
-    expect(getDesktopUpdateButtonTooltip(state)).toBe("Download failed for 1.1.0. Click to retry.");
+    expect(getDesktopUpdateButtonTooltip(state)).toBe(
+      "Download failed for 1.1.0. Click to retry.\nnetwork timeout",
+    );
     expect(getDesktopUpdateButtonTooltip({ ...state, notAppliedVersion: "1.1.0" })).toBe(
-      "Update 1.1.0 did not apply. Click to retry.",
+      "Update 1.1.0 did not apply. Click to retry.\nnetwork timeout",
     );
   });
 
