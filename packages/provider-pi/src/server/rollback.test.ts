@@ -26,7 +26,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { makePiAdapterV2, PI_PROVIDER } from "./adapter.ts";
-import { makeFakePiWithResponses, recordedIdleState } from "./test/fakePi.ts";
+import { makeFakePi, makeFakePiWithResponses, recordedIdleState } from "./test/fakePi.ts";
 
 const layerTest = Layer.mergeAll(
   NodeServices.layer,
@@ -513,5 +513,133 @@ it.effect.each([
       assertRestored(yield* rewind);
       assert.deepEqual(requests(), expectedRequests);
     }
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect.each([
+  {
+    checkpoint: "strong",
+    ordinal: 2,
+    handoff: "command",
+    returnedPrompt: false,
+    discarded: true,
+  },
+  { checkpoint: "strong", ordinal: 2, handoff: "prompt", returnedPrompt: true, discarded: true },
+  {
+    checkpoint: "command",
+    ordinal: 2,
+    handoff: "prompt",
+    returnedPrompt: false,
+    discarded: false,
+  },
+  { checkpoint: "weak", ordinal: 2, handoff: "prompt", returnedPrompt: false, discarded: false },
+  {
+    checkpoint: "command",
+    ordinal: 1,
+    handoff: "prompt",
+    returnedPrompt: false,
+    discarded: false,
+  },
+  { checkpoint: "weak", ordinal: 1, handoff: "prompt", returnedPrompt: true, discarded: true },
+] as const)("restores the Pi checkpoint after a session round trip %j", (scenario) =>
+  Effect.gen(function* () {
+    const fake = yield* makeFakePi;
+    const instanceId = ProviderInstanceId.make("pi");
+    const adapter = yield* makePiAdapterV2({
+      instanceId,
+      settings: { enabled: true, binaryPath: "pi", launchArgs: "", customModels: [] },
+      environment: {},
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner));
+    const threadId = ThreadId.make("pi-roundtrip-rollback");
+    const modelSelection = { instanceId, model: "default" };
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("pi-roundtrip-rollback"),
+      modelSelection,
+      runtimePolicy,
+    });
+    yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+    const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+    const sessionFile = providerThread.nativeThreadRef?.nativeId;
+    if (sessionFile == null) return assert.fail("missing sessionFile");
+    const forkFile = "/fake/rewound.jsonl";
+    const turn = (
+      ordinal: number,
+      nativeTurnRef: OrchestrationV2ProviderTurn["nativeTurnRef"],
+      file = sessionFile,
+    ): OrchestrationV2ProviderTurn => ({
+      id: ProviderTurnId.make(`turn-${ordinal}`),
+      providerThreadId: providerThread.id,
+      nodeId: NodeId.make(`node-${ordinal}`),
+      runAttemptId: null,
+      nativeTurnRef,
+      nativeThreadRef: ref(file),
+      ordinal,
+      status: "completed",
+      startedAt: time(ordinal * 50 - 50),
+      completedAt: time(ordinal * 50),
+    });
+    const target = turn(
+      scenario.ordinal,
+      scenario.checkpoint === "strong"
+        ? ref("u2")
+        : scenario.checkpoint === "weak"
+          ? ref("uncaptured", "weak")
+          : null,
+    );
+    const retained =
+      scenario.ordinal === 1 || scenario.checkpoint === "command"
+        ? TURN_ONE_ENTRIES
+        : [...TURN_ONE_ENTRIES, entry("u2", "a1b", "user", 60), entry("a2", "u2", "assistant", 80)];
+    const retainedHead = retained.at(-1)?.id;
+    if (retainedHead === undefined) return assert.fail("missing retainedHead");
+    const entries = [
+      ...retained,
+      ...(scenario.discarded
+        ? [
+            entry("discarded", retainedHead, "user", 110),
+            entry("discarded-answer", "discarded", "assistant", 120),
+          ]
+        : []),
+      ...(scenario.returnedPrompt ? [entry("u5", "discarded-answer", "user", 210)] : []),
+    ];
+    fake.setSessionEntries(entries, forkFile);
+    const restored = yield* runtime.rollbackThread({
+      providerThread,
+      target: {
+        type: "provider_turn",
+        checkpointId: CheckpointId.make("checkpoint-1"),
+        appRunOrdinal: target.ordinal,
+        providerTurn: target,
+      },
+      providerThreadTurns: [
+        ...(target.ordinal === 2 ? [turn(1, ref("u1"))] : []),
+        target,
+        turn(
+          target.ordinal + 1,
+          scenario.handoff === "prompt" ? ref("away") : null,
+          "/fake/other.jsonl",
+        ),
+        turn(target.ordinal + 2, null, "/fake/clone.jsonl"),
+        turn(target.ordinal + 3, null),
+        ...(scenario.returnedPrompt ? [turn(target.ordinal + 4, ref("u5"))] : []),
+      ],
+    });
+    const requests = fake.allRequests();
+    assert.isFalse(requests.some((request) => request["type"] === "switch_session"));
+    assert.deepEqual(
+      requests.filter((request) => request["type"] === "fork").map((request) => request["entryId"]),
+      scenario.discarded ? ["discarded"] : [],
+    );
+    assert.equal(
+      restored.providerThread.nativeThreadRef?.nativeId,
+      scenario.discarded ? forkFile : sessionFile,
+    );
+    assert.equal(restored.providerThread.nativeConversationHeadRef?.nativeId, retainedHead);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );

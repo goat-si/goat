@@ -32,6 +32,10 @@ export interface FakePi {
   readonly emit: (record: PiRpcRecord, chunkBytes?: number) => Effect.Effect<void>;
   readonly takeRequest: (type: string) => Effect.Effect<PiRpcRecord>;
   readonly queueEntries: (data: unknown) => void;
+  readonly setSessionEntries: (
+    entries: ReadonlyArray<{ readonly id: string } & Record<string, unknown>>,
+    forkFile: string,
+  ) => void;
   readonly queueMessages: (data: unknown) => void;
   readonly vetoNextSwitch: () => void;
   readonly failNextFork: () => void;
@@ -93,6 +97,8 @@ export const makeFakePiWithResponses = Effect.fnUntraced(function* (
   const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
+  let sessionEntries: ReadonlyArray<{ readonly id: string } & Record<string, unknown>> | undefined;
+  let forkFile: string | undefined;
   const messagesQueue: Array<unknown> = [];
   const stateQueue: Array<Record<string, unknown>> = [];
   const statsQueue: Array<unknown> = [];
@@ -200,7 +206,11 @@ export const makeFakePiWithResponses = Effect.fnUntraced(function* (
       case "get_entries":
         return {
           ...base,
-          data: entriesQueue.shift() ?? { entries: [], leafId: null, hasMore: false },
+          data: entriesQueue.shift() ?? {
+            entries: sessionEntries ?? [],
+            leafId: sessionEntries?.at(-1)?.id ?? null,
+            hasMore: false,
+          },
         };
       case "get_messages":
         return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
@@ -210,6 +220,13 @@ export const makeFakePiWithResponses = Effect.fnUntraced(function* (
         if (failFork) {
           failFork = false;
           return { ...base, success: false, error: "Invalid entry ID for forking" };
+        }
+        if (sessionEntries !== undefined && forkFile !== undefined) {
+          const index = sessionEntries.findIndex((entry) => entry.id === record["entryId"]);
+          if (index === -1)
+            return { ...base, success: false, error: "Invalid entry ID for forking" };
+          sessionEntries = sessionEntries.slice(0, index);
+          sessionFile = forkFile;
         }
         return { ...base, data: { text: "Hello pi", cancelled: false } };
       case "clear_queue":
@@ -298,6 +315,10 @@ export const makeFakePiWithResponses = Effect.fnUntraced(function* (
     emit,
     takeRequest,
     queueEntries: (data) => entriesQueue.push(data),
+    setSessionEntries: (entries, file) => {
+      sessionEntries = entries;
+      forkFile = file;
+    },
     queueMessages: (data) => messagesQueue.push(data),
     deferNextState: () => {
       deferState = true;
