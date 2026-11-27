@@ -75,7 +75,11 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as MemorySnapshot from "../../memory/MemorySnapshot.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
-import { revertCodexThread, revertCodexThreadAfterTurn } from "../../provider/CodexThreadRevert.ts";
+import {
+  revertCodexThread,
+  revertCodexThreadAfterTurn,
+  revertCodexThreadFromKnownTurns,
+} from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
@@ -271,7 +275,7 @@ import {
   providerGoalsEqual,
   validateCodexGoalObjective,
 } from "./CodexGoals.ts";
-import { resolveCodexForkBoundary, resolveCodexRollbackTurnCount } from "./CodexForkBoundary.ts";
+import { resolveCodexForkBoundary, resolveCodexRollbackPlan } from "./CodexForkBoundary.ts";
 export { resolveCodexForkBoundary, resolveCodexRollbackTurnCount } from "./CodexForkBoundary.ts";
 import {
   approvalDecisionToLegacyReviewDecision,
@@ -8015,11 +8019,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           rollbackThread: Effect.fn("CodexAdapterV2.rollbackThread")(
             function* (threadInput) {
               const threadId = yield* getNativeThreadId(threadInput.providerThread);
-              const numTurns = yield* resolveCodexRollbackTurnCount(threadInput);
-              const nativeConversationHeadRef =
-                threadInput.target.type === "provider_turn"
-                  ? threadInput.target.providerTurn.nativeTurnRef
-                  : null;
+              const { numTurns, nativeConversationHeadRef, keptNativeTurnId, nativeTurnIds } =
+                yield* resolveCodexRollbackPlan(threadInput, threadId);
               if (numTurns === 0) {
                 return {
                   providerThread: {
@@ -8061,11 +8062,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 });
                 recordLoaded(threadId, loadRuntime, loadMcp);
               }
-              const keptNativeTurnId = nativeConversationHeadRef?.nativeId ?? null;
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
                   keptNativeTurnId === null
-                    ? revertCodexThread(client, threadId, numTurns)
+                    ? revertCodexThreadFromKnownTurns(client, threadId, nativeTurnIds)
                     : revertCodexThreadAfterTurn(client, threadId, keptNativeTurnId, numTurns),
                 ),
               );
