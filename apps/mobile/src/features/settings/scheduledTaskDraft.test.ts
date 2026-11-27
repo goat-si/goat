@@ -19,6 +19,7 @@ import {
   hasScheduledTaskDraftChanges,
   scheduledTaskContextFields,
   offersImportantUpdates,
+  withProject,
   withThreadMode,
 } from "./scheduledTaskDraft";
 
@@ -336,4 +337,29 @@ it("leaving the thread drops Important updates, which needs one, and says so", (
     notificationPolicy: "important_updates",
   });
   expect(offersImportantUpdates(editDraft(routine()))).toBe(false);
+});
+
+it("clears the old project's base branch and checkout when the project changes", () => {
+  const other = ProjectId.make("other");
+  const worktree = editDraft(
+    routine({
+      workspaceStrategy: { type: "worktree", baseRef: "release", startFromOrigin: false },
+    }),
+  );
+  expect(withProject(worktree, ProjectId.make("removed-project"))).toBe(worktree);
+  expect(withProject(worktree, other)).toMatchObject({
+    projectId: other,
+    workspace: "worktree",
+    baseRef: "",
+    startFromOrigin: false,
+  });
+  const checkout = editDraft(
+    routine({
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/work/project-a" },
+    }),
+  );
+  expect(withProject(checkout, other)).toMatchObject({
+    workspace: "existing_worktree",
+    checkoutPath: "",
+  });
 });

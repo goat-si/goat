@@ -369,10 +369,12 @@ export const withThreadMode = (
 export const withProject = (
   draft: ScheduledTaskDraft,
   projectId: ProjectId,
+  threadModes = true,
 ): ScheduledTaskDraft => {
-  const moved = { ...draft, projectId };
-  return keepsThread(draft) &&
-    !keepsThread(moved) &&
+  if (projectId === draft.projectId) return draft;
+  const moved = { ...draft, projectId, baseRef: "", checkoutPath: "" };
+  return keepsThread(draft, threadModes) &&
+    !keepsThread(moved, threadModes) &&
     draft.notificationPolicy === "important_updates"
     ? { ...moved, notificationPolicy: "all_runs", notificationPolicyReset: true }
     : settleNotice(moved);
