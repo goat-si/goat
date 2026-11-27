@@ -38,6 +38,7 @@ import {
   resolveThreadListV2Status,
   resolveThreadListV2WokeAt,
   threadListV2ListItemsAreEqual,
+  threadListV2ShowMoreAccessibilityLabel,
   threadHasUnseenCompletion,
   type ThreadListV2ListItem,
 } from "./threadListV2";
@@ -134,6 +135,16 @@ describe("resolveThreadListV2Status", () => {
       expect(threadHasUnseenCompletion(thread)).toBe(true);
     },
   );
+});
+
+describe("threadListV2ShowMoreAccessibilityLabel", () => {
+  it.each([
+    [1, "Show 1 more settled thread"],
+    [2, "Show 2 more settled threads"],
+    [26, "Show 25 more settled threads"],
+  ])("announces the next page for %i hidden settled threads", (hiddenCount, expected) => {
+    expect(threadListV2ShowMoreAccessibilityLabel(hiddenCount)).toBe(expected);
+  });
 });
 
 describe("queued messages keep a settled thread active", () => {
