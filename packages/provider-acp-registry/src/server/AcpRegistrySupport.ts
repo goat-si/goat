@@ -1,4 +1,5 @@
 import { makeRegistryResolveWithRefresh } from "./registryResolveRefresh.ts";
+import { resolveAbsoluteLocalCommand } from "./localCommandPath.ts";
 import { makeRegistryRuntimeTemp, prepareRegistryRuntimeSpawn } from "./registryRuntimeTemp.ts";
 import type * as Scope from "effect/Scope";
 import { withoutNpmPrefix, withPreferredPath } from "./managedCommandPath.ts";
@@ -1752,9 +1753,10 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }
       yield* validateLocalExecutable(command);
       const env = options?.spawnEnvironment ?? environment ?? hostEnvironment;
+      const absoluteCommand = resolveAbsoluteLocalCommand(path, command);
       return {
         distribution: "local",
-        spawn: { command, args: settings.commandArgs, cwd, env, shell: false },
+        spawn: { command: absoluteCommand, args: settings.commandArgs, cwd, env, shell: false },
       } satisfies ResolvedAcpRegistryAgent;
     }
     const agentId = settings.agentId.trim();

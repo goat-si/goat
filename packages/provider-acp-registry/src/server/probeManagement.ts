@@ -39,7 +39,7 @@ export interface AcpRegistryManagementInput {
   readonly environment: NodeJS.ProcessEnv;
 }
 
-const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagementRuntime")(
+export const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagementRuntime")(
   function* (input: AcpRegistryManagementInput) {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

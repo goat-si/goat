@@ -17,7 +17,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { AcpRegistryAdapterV2Driver, type AcpRegistryAdapterV2DriverEnv } from "./adapter.ts";
-import { makeUnsupportedTextGeneration } from "./unsupportedTextGeneration.ts";
+import { makeAcpRegistryTextGeneration } from "./textGeneration.ts";
 import { ProviderDriverError } from "@goat/provider-core/server/errors";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -694,7 +694,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
       ),
       orchestrationAdapter,
-      textGeneration: makeUnsupportedTextGeneration(),
+      textGeneration: yield* makeAcpRegistryTextGeneration({
+        instanceId,
+        settings: effectiveConfig,
+        environment: processEnvironment,
+      }),
       acpSessionManagement: {
         listSessions: ({ cwd, cursor }) =>
           provideAcpManagementServices(

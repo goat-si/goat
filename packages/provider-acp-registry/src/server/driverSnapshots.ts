@@ -59,7 +59,6 @@ export function baseSnapshot(
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
-    supportsTextGeneration: false,
     supportsStructuredCustomModels: true,
     enabled: input.settings.enabled,
     installed: input.installed,
