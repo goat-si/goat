@@ -52,6 +52,7 @@ import { getPenMembers, issuePenMemberSession } from "./methods/penMembers.ts";
 import {
   checkForUpdate,
   downloadUpdate,
+  confirmUpdateWorkspaceReady,
   getUpdateState,
   installUpdate,
   setUpdateChannel,
@@ -203,6 +204,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(syncHtmlFullscreen);
   yield* ipc.handle(probeRemoteEditors);
   yield* ipc.handle(getUpdateState);
+  yield* ipc.handle(confirmUpdateWorkspaceReady);
   yield* ipc.handle(setUpdateChannel);
   yield* ipc.handle(setUpdateInstallPolicy);
   yield* ipc.handle(downloadUpdate);

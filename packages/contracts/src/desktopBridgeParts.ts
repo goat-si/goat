@@ -15,6 +15,11 @@ export interface DesktopPrimaryPasteBridge {
   getPrimaryPasteEnabled?: () => boolean;
 }
 
+interface DesktopUpdateWorkspaceBridge {
+  /** Called once the main workspace mounts. Older desktop shells omit this method. */
+  confirmUpdateWorkspaceReady?: () => Promise<void>;
+}
+
 interface DesktopFileActionsBridge {
   toLocalBackendPath?: (backendId: string, path: string) => Promise<string | null>;
   startFileDrag?: (input: { environmentId: EnvironmentId; path: string }) => Promise<boolean>;
@@ -22,6 +27,7 @@ interface DesktopFileActionsBridge {
 
 /** Desktop bridge methods that live in their own modules, so ipc.ts stays within its budget. */
 export type DesktopBridgeParts = DesktopPrimaryPasteBridge &
+  DesktopUpdateWorkspaceBridge &
   DesktopWindowMaterialBridge &
   DesktopPreviewSessionStackHost &
   DesktopHeadlessServerBridge &

@@ -142,6 +142,7 @@ export class DesktopUpdates extends Context.Service<
   DesktopUpdates,
   {
     readonly getState: Effect.Effect<DesktopUpdateState>;
+    readonly confirmWorkspaceReady: Effect.Effect<void>;
     readonly isActionActive: Effect.Effect<boolean>;
     readonly isInstallActive: Effect.Effect<boolean>;
     readonly subscribe: Effect.Effect<
@@ -585,8 +586,7 @@ export const make = Effect.gen(function* () {
     removeTunnelRestartMarker,
   } = yield* makeUpdateRestartMarkers();
 
-  const { writeInstallRecord, removeInstallRecord, readNotAppliedInstallVersion } =
-    yield* makeUpdateInstallRecord(updateRestartMarkerDir);
+  const installRecord = yield* makeUpdateInstallRecord(updateRestartMarkerDir);
 
   const baseUpdateState = (channel: DesktopUpdateChannel, disabledReason: Option.Option<string>) =>
     Effect.gen(function* () {
@@ -609,7 +609,7 @@ export const make = Effect.gen(function* () {
       Ref.set(desktopState.quitting, false),
       Ref.set(installRunningBackendsRef, []),
       removeTunnelRestartMarker,
-      removeInstallRecord,
+      installRecord.removeInstallRecord,
     ],
     { discard: true },
   );
@@ -626,7 +626,7 @@ export const make = Effect.gen(function* () {
 
     yield* Ref.set(desktopState.quitting, false);
     yield* removeTunnelRestartMarker;
-    yield* removeInstallRecord;
+    yield* installRecord.removeInstallRecord;
     yield* Effect.gen(function* () {
       const runningInstances = yield* Ref.getAndSet(installRunningBackendsRef, []);
       const instances = (yield* pool.list).filter((instance) =>
@@ -700,7 +700,7 @@ export const make = Effect.gen(function* () {
         return yield* Effect.gen(function* () {
           yield* updateState(clearDesktopUpdateInstallError);
           yield* writeUpdateRestartMarker;
-          yield* writeInstallRecord(expectedVersion);
+          yield* installRecord.writeInstallRecord(expectedVersion);
           // Stop pooled backends and SSH tunnels before quitAndInstall can outrun their scope finalizers.
           const instances = yield* pool.list;
           // stop clears desiredRunning, so retain the recovery set beforehand.
@@ -1224,6 +1224,7 @@ export const make = Effect.gen(function* () {
 
   return DesktopUpdates.of({
     getState: Ref.get(updateStateRef),
+    confirmWorkspaceReady: installRecord.confirmWorkspaceReady,
     isActionActive: activeUpdateAction.pipe(Effect.map(Option.isSome)),
     isInstallActive: activeUpdateAction.pipe(
       Effect.map((action) => Option.isSome(action) && action.value === "install"),
@@ -1245,14 +1246,7 @@ export const make = Effect.gen(function* () {
 
       yield* loadFeed;
 
-      const notAppliedVersion = yield* readNotAppliedInstallVersion;
-      yield* Ref.set(notAppliedVersionRef, notAppliedVersion);
-      if (Option.isSome(notAppliedVersion)) {
-        yield* logUpdaterWarning("the last update install did not apply", {
-          version: environment.appVersion,
-          targetVersion: notAppliedVersion.value,
-        });
-      }
+      yield* Ref.set(notAppliedVersionRef, yield* installRecord.readNotAppliedInstallVersion);
 
       let settings = yield* desktopSettings.get;
       let pendingPersistenceFailed = false;

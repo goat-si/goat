@@ -119,6 +119,7 @@ const initialUpdateState = createInitialDesktopUpdateState(
 );
 function layerUpdates(input: Partial<DesktopUpdates.DesktopUpdates["Service"]> = {}) {
   return Layer.succeed(DesktopUpdates.DesktopUpdates, {
+    confirmWorkspaceReady: Effect.void,
     getState: Effect.succeed(initialUpdateState),
     isActionActive: Effect.succeed(false),
     isInstallActive: Effect.succeed(false),

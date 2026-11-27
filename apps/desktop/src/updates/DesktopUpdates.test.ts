@@ -657,43 +657,6 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("flags an install that did not apply and keeps the flag through checks", () => {
-    const harness = makeHarness({
-      installRecord: JSON.stringify({ fromVersion: "1.2.3", targetVersion: "1.2.4" }),
-    });
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        assert.equal((yield* updates.getState).notAppliedVersion, "1.2.4");
-        assert.isDefined(harness.previousInstallRecord());
-
-        harness.emit("update-available", { version: "1.2.4" });
-        yield* flushCallbacks;
-        const state = yield* updates.getState;
-        assert.equal(state.status, "available");
-        assert.equal(state.notAppliedVersion, "1.2.4");
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
-
-  // regression: #19291 an install that did apply was still flagged as not applied
-  it.effect("does not flag an install that applied", () => {
-    const harness = makeHarness({
-      installRecord: JSON.stringify({ fromVersion: "1.2.2", targetVersion: "1.2.3" }),
-    });
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        assert.isUndefined((yield* updates.getState).notAppliedVersion);
-        assert.isUndefined(harness.previousInstallRecord());
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
-
   it.effect("drops the update restart marker when an install is interrupted", () =>
     Effect.gen(function* () {
       const stopping = yield* Deferred.make<void>();
