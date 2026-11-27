@@ -51,7 +51,12 @@ const state = vi.hoisted(() => ({
   worktreeThreadIds: [] as ThreadId[],
 }));
 
-vi.mock("react", () => ({
+vi.mock("gt-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("gt-react")>();
+  return { ...actual, useGT: () => actual.gtFallback };
+});
+vi.mock("react", async (original) => ({
+  ...(await original<typeof import("react")>()),
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
   useRef: (current: unknown) => ({ current }),

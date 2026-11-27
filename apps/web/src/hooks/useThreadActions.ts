@@ -1,3 +1,5 @@
+import { threadDeleteConfirmation } from "../components/threadDeleteConfirmation";
+import { useGT } from "gt-react";
 import { usePaletteHiddenParentKeys } from "../components/sidebar/usePaletteVisibility";
 import { topOfPinnedRunOrderKey } from "./threadPinOrder";
 import {
@@ -274,6 +276,7 @@ function threadOperationFailure(target: ScopedThreadRef) {
 }
 
 export function useThreadActions() {
+  const gt = useGT();
   const hiddenParentKeys = usePaletteHiddenParentKeys();
   const archiveThreadMutation = useOrchestrationCommand(threadEnvironment.archive, {
     reportFailure: false,
@@ -950,7 +953,7 @@ export function useThreadActions() {
     let keepWorktree = false;
 
     if (confirmThreadDelete && localApi) {
-      const title = resolved?.thread.title ?? knownTitle ?? "this thread";
+      const title = resolved?.thread.title ?? knownTitle ?? gt("this thread");
       const holders = resolved?.thread.worktreePath
         ? await settlePromise(() => readWorktreeConfirmation(target, resolved.thread))
         : AsyncResult.success({ lines: [], keepWorktree: false });
@@ -958,11 +961,7 @@ export function useThreadActions() {
       keepWorktree = holders.value.keepWorktree;
       const confirmationResult = await settlePromise(() =>
         localApi.dialogs.confirm(
-          [
-            `Delete thread "${title}"?`,
-            "This permanently clears conversation history for this thread.",
-            ...holders.value.lines,
-          ].join("\n"),
+          [threadDeleteConfirmation(gt, title), ...holders.value.lines].join("\n"),
           { variant: "destructive" },
         ),
       );

@@ -1,3 +1,4 @@
+import { gtFallback, type useGT } from "gt-react";
 import type { ContextMenuItem } from "@goat/contracts";
 import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
@@ -44,29 +45,33 @@ export type DraftActionMenuId =
   | "discard";
 
 export function buildDraftActionMenuItems(options: {
+  readonly gt?: ReturnType<typeof useGT>;
   readonly hasPath: boolean;
   readonly hasBranch: boolean;
   readonly hasProject: boolean;
 }): ReadonlyArray<ContextMenuItem<DraftActionMenuId>> {
+  const gt = options.gt ?? gtFallback;
   return [
     {
       id: "copy",
-      label: "Copy",
+      label: gt("Copy"),
       icon: "copy",
       disabled: !options.hasPath && !options.hasBranch,
       children: [
-        ...(options.hasPath ? [{ id: "copy-path" as const, label: "Path", icon: "folder" }] : []),
+        ...(options.hasPath
+          ? [{ id: "copy-path" as const, label: gt("Path"), icon: "folder" }]
+          : []),
         ...(options.hasBranch
-          ? [{ id: "copy-branch" as const, label: "Branch", icon: "git-branch" }]
+          ? [{ id: "copy-branch" as const, label: gt("Branch"), icon: "git-branch" }]
           : []),
       ],
     },
     ...(options.hasProject
-      ? [{ id: "project-settings" as const, label: "Project settings", icon: "settings" }]
+      ? [{ id: "project-settings" as const, label: gt("Project settings"), icon: "settings" }]
       : []),
     {
       id: "discard",
-      label: "Discard draft",
+      label: gt("Discard draft"),
       icon: "trash",
       destructive: true,
       separatorBefore: true,
@@ -75,6 +80,7 @@ export function buildDraftActionMenuItems(options: {
 }
 
 export interface ThreadActionMenuState {
+  readonly gt?: ReturnType<typeof useGT>;
   readonly canOperate: boolean;
   /** The active chat owns the SSH host dialog. */
   readonly canOpenSshHandoff?: boolean | undefined;
@@ -132,19 +138,20 @@ export interface ThreadForkMenuState {
 export function buildForkMenuItems(
   fork: ThreadForkMenuState | null | undefined,
   canOperate = true,
+  gt: ReturnType<typeof useGT> = gtFallback,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   if (!fork) return [];
-  const currentLabel = fork.inWorktree ? "Fork thread in same worktree" : "Fork thread";
+  const currentLabel = fork.inWorktree ? gt("Fork thread in same worktree") : gt("Fork thread");
   if (fork.canForkIntoWorktree) {
     return [
       {
         id: "fork",
-        label: "Fork thread",
+        label: gt("Fork thread"),
         icon: "git-fork",
         disabled: !fork.canFork || !canOperate,
         children: [
           { id: "fork:current", label: currentLabel },
-          { id: "fork:worktree", label: "Fork thread in new worktree" },
+          { id: "fork:worktree", label: gt("Fork thread in new worktree") },
         ],
       },
     ];
@@ -152,7 +159,9 @@ export function buildForkMenuItems(
   return [
     {
       id: "fork:current",
-      label: fork.needsServerUpdate ? `${currentLabel} (update this server)` : currentLabel,
+      label: fork.needsServerUpdate
+        ? gt("{action} (update this server)", { action: currentLabel })
+        : currentLabel,
       icon: "git-fork",
       disabled: !fork.canFork || !canOperate,
     },
@@ -190,50 +199,51 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
 export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  const gt = state.gt ?? gtFallback;
   const allItems: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
     ...(state.canFollowWithBot && state.canOperate && !state.globalAgent
       ? [
-          { id: "bot-follow" as const, label: "Ask a bot to follow…" },
-          { id: "bot-stop-following" as const, label: "Stop following" },
+          { id: "bot-follow" as const, label: gt("Ask a bot to follow…") },
+          { id: "bot-stop-following" as const, label: gt("Stop following") },
         ]
       : []),
     ...(state.canPromote
       ? [
           {
             id: "promote" as const,
-            label: "Promote to thread",
+            label: gt("Promote to thread"),
             icon: "arrow-up-from-line",
           },
         ]
       : []),
     ...(state.canFind
-      ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
+      ? [{ id: "find" as const, label: gt("Find in thread"), icon: "text-search" }]
       : []),
     ...(state.branch
       ? [
           {
             id: "new-thread-on-branch" as const,
-            label: `New thread on ${state.branch}`,
+            label: gt("New thread on {branch}", { branch: state.branch }),
             icon: "message-square-plus",
           },
         ]
       : []),
-    ...buildForkMenuItems(state.fork),
+    ...buildForkMenuItems(state.fork, true, gt),
     ...(state.canOpenSshHandoff
-      ? [{ id: "continue-on-ssh" as const, label: "Continue on SSH host…", icon: "terminal" }]
+      ? [{ id: "continue-on-ssh" as const, label: gt("Continue on SSH host…"), icon: "terminal" }]
       : []),
     ...(state.supports.pinning
       ? [
           state.isPinned
-            ? { id: "unpin" as const, label: "Unpin thread", icon: "pin-off" }
-            : { id: "pin" as const, label: "Pin thread", icon: "pin" },
+            ? { id: "unpin" as const, label: gt("Unpin thread"), icon: "pin-off" }
+            : { id: "pin" as const, label: gt("Pin thread"), icon: "pin" },
         ]
       : []),
     ...(state.supports.settlement
       ? [
           state.isSettled
-            ? { id: "unsettle" as const, label: "Un-settle thread", icon: "circle-check" }
-            : { id: "settle" as const, label: "Settle thread", icon: "circle-check" },
+            ? { id: "unsettle" as const, label: gt("Un-settle thread"), icon: "circle-check" }
+            : { id: "settle" as const, label: gt("Settle thread"), icon: "circle-check" },
         ]
       : []),
     ...(state.supports.snooze
@@ -266,7 +276,7 @@ export function buildThreadActionMenuItems(
       : []),
     {
       id: "rename",
-      label: "Rename thread",
+      label: gt("Rename thread"),
       icon: "pencil",
       disabled: state.canRename === false,
       separatorBefore: true,
@@ -275,23 +285,23 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "regenerate-title" as const,
-            label: state.isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
+            label: state.isRegeneratingTitle ? gt("Regenerating…") : gt("Regenerate title"),
             icon: "refresh-cw",
             disabled: state.isRegeneratingTitle,
           },
         ]
       : []),
-    { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+    { id: "mark-unread", label: gt("Mark unread"), icon: "mail-open" },
     ...(state.canShareWithGuest
-      ? [{ id: "share-guest" as const, label: "Share with guest", icon: "user-plus" }]
+      ? [{ id: "share-guest" as const, label: gt("Share with guest"), icon: "user-plus" }]
       : []),
     ...(state.projectFilter
       ? [
           {
             id: "filter-by-project" as const,
             label: state.projectFilter.isActive
-              ? "Show all projects"
-              : `Filter by ${state.projectFilter.label}`,
+              ? gt("Show all projects")
+              : gt("Filter by {project}", { project: state.projectFilter.label }),
             icon: "folder-tree",
           },
         ]
@@ -300,7 +310,7 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "turn-into-project" as const,
-            label: "Turn into project",
+            label: gt("Turn into project"),
             icon: "folder-plus",
             disabled: state.isRunning,
           },
@@ -310,17 +320,17 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "auto-settle" as const,
-            label: "Auto-settle behavior",
+            label: gt("Auto-settle behavior"),
             icon: "timer",
             children: [
               {
                 id: "auto-settle:enabled" as const,
-                label: "Follow settings",
+                label: gt("Follow settings"),
                 checked: state.autoSettleEnabled,
               },
               {
                 id: "auto-settle:disabled" as const,
-                label: "Never",
+                label: gt("Never"),
                 checked: !state.autoSettleEnabled,
               },
             ],
@@ -329,29 +339,29 @@ export function buildThreadActionMenuItems(
       : []),
     {
       id: "copy",
-      label: "Copy",
+      label: gt("Copy"),
       icon: "copy",
       separatorBefore: true,
       children: [
-        { id: "copy-path", label: "Path", icon: "folder" },
+        { id: "copy-path", label: gt("Path"), icon: "folder" },
         ...(state.branch
-          ? [{ id: "copy-branch" as const, label: "Branch", icon: "git-branch" }]
+          ? [{ id: "copy-branch" as const, label: gt("Branch"), icon: "git-branch" }]
           : []),
-        { id: "copy-thread", label: "Thread", icon: "hash" },
-        { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
+        { id: "copy-thread", label: gt("Thread"), icon: "hash" },
+        { id: "copy-thread-id", label: gt("Thread ID"), icon: "hash" },
       ],
     },
-    { id: "project-settings", label: "Project settings", icon: "settings" },
+    { id: "project-settings", label: gt("Project settings"), icon: "settings" },
     {
       id: "archive",
-      label: "Archive thread",
+      label: gt("Archive thread"),
       icon: "archive",
       disabled: state.isRunning,
       separatorBefore: true,
     },
     {
       id: "delete",
-      label: "Delete",
+      label: gt("Delete"),
       destructive: true,
       icon: "trash",
     },
