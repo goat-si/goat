@@ -6,6 +6,7 @@ import { seedCodexHistory } from "./codexUsageHistory.testkit.ts";
 import { cursorSource, cursorSources, totalOutputTokens } from "./UsageAssertions.testkit.ts";
 import { WINDOW, registerUnpricedTest } from "./usageUnpriced.testkit.ts";
 import { registerPiHistoryTest } from "./usagePiHistory.testkit.ts";
+import { registerAntigravityRemovedProfileTest } from "./usageAntigravityRemovedProfile.testkit.ts";
 import { registerMusePendingTest } from "./usageMusePending.testkit.ts";
 import { registerCacheUpgradeTest } from "./usageCacheUpgrade.testkit.ts";
 import { registerCompressedRolloutTest } from "./usageCompressedRollout.testkit.ts";
@@ -1094,6 +1095,7 @@ describe("UsageService", () => {
   );
 
   registerPiHistoryTest(setup, layerService);
+  registerAntigravityRemovedProfileTest(setup, layerService);
 
   it.effect("reads shared managed default and disabled extra account history once", () =>
     Effect.gen(function* () {
