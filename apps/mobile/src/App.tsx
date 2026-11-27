@@ -15,17 +15,15 @@ import {
   getStateFromPath,
 } from "@react-navigation/native";
 
-import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
-import { CloudAuthProvider, installCloudAccountService } from "./features/cloud/CloudAuthProvider";
+import { installCloudAccountService } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
-import {
-  AppearancePreferencesProvider,
-  useAppearancePreferences,
-} from "./features/settings/appearance/AppearancePreferencesProvider";
+import { useAppearancePreferences } from "./features/settings/appearance/AppearancePreferencesProvider";
+import { AppProviders } from "./AppProviders";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { installKeptSummaryPersistence } from "./features/goat-bot/keptPerComputerStore";
@@ -178,13 +176,9 @@ export default function App() {
   );
 
   return (
-    <RegistryContext.Provider value={appAtomRegistry}>
-      <CloudAuthProvider>
-        <AppearancePreferencesProvider>
-          <AppContent />
-        </AppearancePreferencesProvider>
-      </CloudAuthProvider>
-    </RegistryContext.Provider>
+    <AppProviders>
+      <AppContent />
+    </AppProviders>
   );
 }
 

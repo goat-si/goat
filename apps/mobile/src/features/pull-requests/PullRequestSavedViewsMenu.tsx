@@ -4,7 +4,7 @@ import {
 } from "@goat/client-runtime/pull-request-saved-views";
 import { useState } from "react";
 import { Alert } from "react-native";
-import { I18nProvider, useGT } from "../../i18n/I18nProvider";
+import { useGT } from "../../i18n/I18nProvider";
 
 import {
   confirm as showConfirmation,
@@ -17,18 +17,7 @@ import { ListFilterMenu } from "../workspace/ListFilterMenu";
 import { pullRequestViewMatches, type PullRequestSavedViewScope } from "./pullRequestSavedViews";
 import { usePullRequestSavedViews } from "./usePullRequestListControls";
 
-export function PullRequestSavedViewsMenu(props: {
-  scope: PullRequestSavedViewScope;
-  onApply: (view: PullRequestSavedView) => Promise<void>;
-}) {
-  return (
-    <I18nProvider>
-      <TranslatedSavedViewsMenu {...props} />
-    </I18nProvider>
-  );
-}
-
-function TranslatedSavedViewsMenu({
+export function PullRequestSavedViewsMenu({
   scope,
   onApply,
 }: {
