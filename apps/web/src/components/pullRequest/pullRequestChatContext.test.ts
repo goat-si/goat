@@ -4,6 +4,8 @@ import { reviewCommentContextLabel } from "~/lib/composerContextRecords";
 import {
   appendHandoff,
   buildAskAboutPullRequestHandoff,
+  buildFixFindingHandoff,
+  buildFixFindingsHandoff,
   buildPullRequestCommentContext,
   checkoutFailureDescription,
 } from "./pullRequestDetail.logic";
@@ -194,5 +196,41 @@ describe("adding a remark to the chat", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("Fix handoff visible review remarks", () => {
+  const base = {
+    number: 42,
+    title: "Add the pull requests page",
+    url: "https://github.com/goat-si/goat/pull/42",
+    headBranch: "feat/page",
+    baseBranch: "main",
+    reviewThreads: [],
+    checks: [],
+    commentsTruncated: false,
+  };
+  const annotatedReview: PullRequestComment = {
+    id: "r1",
+    kind: "review",
+    author: { login: "reviewer", name: null, avatarUrl: null },
+    body: `<!--${"x".repeat(1_200)}-->\nFix wrong total`,
+    createdAt: "2026-07-01T00:00:00Z",
+    url: null,
+    path: null,
+    reviewState: "CHANGES_REQUESTED",
+  };
+
+  it("strips hidden HTML comments before bounding loose review remarks in Fix handoffs", () => {
+    const batch = buildFixFindingsHandoff({ ...base, comments: [annotatedReview] });
+    expect(batch.prompt).toContain("> reviewer: Fix wrong total");
+    expect(batch.prompt).not.toContain("<!--");
+
+    const single = buildFixFindingHandoff({
+      ...base,
+      finding: { kind: "comment", comment: annotatedReview },
+    });
+    expect(single.prompt).toContain("> reviewer: Fix wrong total");
+    expect(single.prompt).not.toContain("<!--");
   });
 });
