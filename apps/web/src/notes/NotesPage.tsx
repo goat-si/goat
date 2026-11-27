@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -38,6 +39,7 @@ import { noteErrorMessage } from "./noteState";
 import { useCreateNote } from "./useCreateNote";
 
 export function NotesPage(props: { path?: string; create?: boolean }) {
+  const gt = useGT();
   const environmentId = usePrimaryEnvironmentId();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   return (
@@ -45,12 +47,14 @@ export function NotesPage(props: { path?: string; create?: boolean }) {
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
         <WorkspacePageHeader electron={isElectron}>
           {environmentId ? <NotesListToggle keybindings={keybindings} /> : null}
-          <h1>Notes</h1>
+          <h1>{gt("Notes")}</h1>
         </WorkspacePageHeader>
         {environmentId ? (
           <EnvironmentNotes key={environmentId} {...props} environmentId={environmentId} />
         ) : (
-          <p className="p-6 text-sm text-muted-foreground">Connect to your hub to open notes.</p>
+          <p className="p-6 text-sm text-muted-foreground">
+            {gt("Connect to your hub to open notes.")}
+          </p>
         )}
       </div>
     </SidebarInset>
@@ -72,6 +76,7 @@ function EnvironmentNotes(props: {
   path?: string;
   create?: boolean;
 }) {
+  const gt = useGT();
   const list = useEnvironmentQuery(
     notesSubscription({ environmentId: props.environmentId, input: {} }),
   );
@@ -204,28 +209,29 @@ function EnvironmentNotes(props: {
           <div role="alert" className="grid gap-2 px-3 py-2 text-sm text-destructive-foreground">
             {list.error}
             <Button size="sm" variant="outline" onClick={list.refresh}>
-              Reconnect
+              {gt("Reconnect")}
             </Button>
           </div>
         )}
         {!ready && !list.error && (
           <p role="status" className="px-3 py-2 text-sm text-muted-foreground">
-            Loading notes…
+            {gt("Loading notes…")}
           </p>
         )}
         {createError && (
           <div role="alert" className="grid gap-2 px-3 py-2 text-sm text-destructive-foreground">
-            Couldn’t create a note. {createError}
+            {gt("Couldn’t create a note. {error}", { error: createError })}
             <Button size="sm" variant="outline" onClick={create}>
-              Try again
+              {gt("Try again")}
             </Button>
           </div>
         )}
         {empty && <div className="md:hidden">{emptyState}</div>}
         {list.data?.truncated && (
           <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
-            Showing the notes that fit in one list. Type a path such as folder/note.md to open
-            another.
+            {gt(
+              "Showing the notes that fit in one list. Type a path such as folder/note.md to open another.",
+            )}
           </p>
         )}
       </NoteList>
@@ -262,23 +268,26 @@ function NotesEmpty(props: {
   shortcut: string | null;
   onCreate: () => void;
 }) {
+  const gt = useGT();
   return (
     <Empty size="compact">
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <FileTextIcon aria-hidden />
         </EmptyMedia>
-        <EmptyTitle>{props.kind === "none" ? "No notes yet" : "No note open"}</EmptyTitle>
+        <EmptyTitle>{props.kind === "none" ? gt("No notes yet") : gt("No note open")}</EmptyTitle>
         <EmptyDescription>
           {props.kind === "none"
-            ? "Capture plans, checklists, and context. You and your agents can both read and edit them."
-            : "Pick a note from the list, or start a new one."}
+            ? gt(
+                "Capture plans, checklists, and context. You and your agents can both read and edit them.",
+              )
+            : gt("Pick a note from the list, or start a new one.")}
         </EmptyDescription>
       </EmptyHeader>
       {props.canCreate && (
         <EmptyContent>
           <Button onClick={props.onCreate}>
-            New note
+            {gt("New note")}
             {props.shortcut ? <Kbd className="ms-1">{props.shortcut}</Kbd> : null}
           </Button>
         </EmptyContent>

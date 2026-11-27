@@ -1,18 +1,21 @@
+import { useGT } from "gt-react";
 import { useState } from "react";
 
 import { Spinner } from "../ui/spinner";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 
 // Toggling relaunches the desktop app, so the switch reflects the value this process started
 // with. Turning it off only hides the server here; it keeps running for SSH clients that use it.
 export function HeadlessServerSetting() {
+  const gt = useGT();
   const bridge = window.desktopBridge;
   const setEnabled = bridge?.setHeadlessServerAttachEnabled;
   const [enabled] = useState(() => bridge?.getHeadlessServerAttachEnabled?.() !== false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const setting = useTranslatedSearchableSetting()("headless-server");
   if (!setEnabled) return null;
 
   const toggle = async () => {
@@ -21,19 +24,23 @@ export function HeadlessServerSetting() {
     try {
       await setEnabled(!enabled);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Couldn't change this setting.");
+      setError(cause instanceof Error ? cause.message : gt("Couldn't change this setting."));
       setIsUpdating(false);
     }
   };
 
   return (
     <SettingsRow
-      {...searchableSetting("headless-server")}
+      {...setting}
       description={
         error ??
         (enabled
-          ? "Show the background GOAT server that SSH work started on this computer as its own environment. Changing this restarts GOAT."
-          : "Hidden. GOAT uses only this app's own server here; SSH clients can still use the background server.")
+          ? gt(
+              "Show the background GOAT server that SSH work started on this computer as its own environment. Changing this restarts GOAT.",
+            )
+          : gt(
+              "Hidden. GOAT uses only this app's own server here; SSH clients can still use the background server.",
+            ))
       }
       control={
         isUpdating ? (
@@ -42,7 +49,7 @@ export function HeadlessServerSetting() {
           <Switch
             checked={enabled}
             onCheckedChange={() => void toggle()}
-            aria-label="Headless server on this computer"
+            aria-label={setting.title}
           />
         )
       }

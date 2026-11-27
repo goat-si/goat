@@ -202,6 +202,12 @@ it("finds a localized shortcut by its display name, English label, or command ID
   await expect
     .element(page.getByRole("button", { name: "条件组", exact: true }).first())
     .toBeVisible();
+  const expression = page.getByRole("textbox", { name: "条件表达式" });
+  await expect.element(expression).toHaveValue("fileViewFocus && !editableFocus");
+  const viewer = page.getByRole("combobox").filter({ hasText: "焦点在文件查看器" });
+  await viewer.click();
+  await page.getByRole("option", { name: "焦点在终端", exact: true }).click();
+  await expect.element(expression).toHaveValue("terminalFocus && !editableFocus");
 });
 
 it("announces shortcut and condition controls in Korean", async () => {

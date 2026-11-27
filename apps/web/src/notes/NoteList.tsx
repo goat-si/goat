@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import type { NoteSummary } from "@goat/contracts";
 import { PinIcon, PlusIcon, SearchIcon } from "~/components/solar";
 import { useRef, type KeyboardEvent } from "react";
@@ -9,8 +10,6 @@ import { cn } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { filterNotes, openablePath, orderNotes } from "./noteState";
 import { NOTES_LIST_ID } from "./notesListCollapse";
-
-const STATUS_LABEL = { doing: "Doing", done: "Done" } as const;
 
 export function NoteList(props: {
   notes: ReadonlyArray<NoteSummary>;
@@ -26,6 +25,7 @@ export function NoteList(props: {
   hidden?: boolean;
   children?: React.ReactNode;
 }) {
+  const gt = useGT();
   const listRef = useRef<HTMLUListElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const matches = filterNotes(props.notes, props.query);
@@ -70,7 +70,7 @@ export function NoteList(props: {
         <span className="flex min-w-0 items-baseline gap-2">
           {note.pinned && (
             <PinIcon
-              aria-label="Pinned"
+              aria-label={gt("Pinned")}
               className="size-3 shrink-0 self-center text-muted-foreground"
             />
           )}
@@ -99,7 +99,7 @@ export function NoteList(props: {
                   note.status === "done" ? "text-success-foreground" : "text-info-foreground",
                 )}
               >
-                {STATUS_LABEL[note.status]}
+                {note.status === "done" ? gt("Done") : gt("Doing")}
               </span>
             )}
           </span>
@@ -110,7 +110,7 @@ export function NoteList(props: {
   return (
     <nav
       id={NOTES_LIST_ID}
-      aria-label="Notes"
+      aria-label={gt("Notes")}
       hidden={props.hidden}
       className={cn("flex min-h-0 flex-col", props.className)}
     >
@@ -122,8 +122,8 @@ export function NoteList(props: {
           <InputGroupInput
             ref={searchRef}
             type="search"
-            aria-label="Search notes"
-            placeholder="Search notes"
+            aria-label={gt("Search notes")}
+            placeholder={gt("Search notes")}
             value={props.query}
             onChange={(event) => props.onQueryChange(event.target.value)}
             onKeyDown={(event) => {
@@ -150,7 +150,7 @@ export function NoteList(props: {
                 <Button
                   size="icon"
                   variant="outline"
-                  aria-label="New note"
+                  aria-label={gt("New note")}
                   onClick={props.onCreate}
                 />
               }
@@ -158,7 +158,7 @@ export function NoteList(props: {
               <PlusIcon aria-hidden />
             </TooltipTrigger>
             <TooltipPopup side="bottom">
-              New note
+              {gt("New note")}
               {props.createShortcut ? <Kbd className="ms-2">{props.createShortcut}</Kbd> : null}
             </TooltipPopup>
           </Tooltip>
@@ -172,24 +172,24 @@ export function NoteList(props: {
             className="w-full truncate rounded-lg px-3 py-2 text-left text-sm text-primary outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={() => props.onSelect(pathToOpen)}
           >
-            Open {pathToOpen}
+            {gt("Open {path}", { path: pathToOpen })}
           </button>
         )}
         {props.notes.length > 0 && ordered.length === 0 && !pathToOpen && (
           <p role="status" className="px-3 py-6 text-center text-sm text-muted-foreground">
-            No notes match “{props.query.trim()}”.
+            {gt("No notes match “{query}”.", { query: props.query.trim() })}
           </p>
         )}
         <ul ref={listRef} className="grid gap-px">
           {pinned.length > 0 && rest.length > 0 && (
             <li aria-hidden className="px-3 pt-1 pb-1 text-xs font-medium text-muted-foreground">
-              Pinned
+              {gt("Pinned")}
             </li>
           )}
           {pinned.map((note, index) => renderRow(note, index))}
           {pinned.length > 0 && rest.length > 0 && (
             <li aria-hidden className="px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">
-              Notes
+              {gt("Notes")}
             </li>
           )}
           {rest.map((note, index) => renderRow(note, pinned.length + index))}
