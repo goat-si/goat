@@ -2,6 +2,8 @@ import type { ContextMenuItem } from "@goat/contracts";
 import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
+  | "bot-actions"
+  | "project-actions"
   | "bot-follow"
   | "bot-stop-following"
   | "continue-on-ssh"
@@ -85,6 +87,7 @@ export interface ThreadActionMenuState {
   readonly projectFilter: {
     readonly label: string;
     readonly isActive: boolean;
+    readonly menuLabel?: string;
   } | null;
   readonly isPinned: boolean;
   readonly isSettled: boolean;
@@ -359,7 +362,7 @@ export function buildThreadActionMenuItems(
   const items = state.globalAgent
     ? allItems.filter((item) => !GLOBAL_AGENT_HIDDEN_ACTIONS.has(item.id))
     : allItems;
-  return state.canOperate
+  const available = state.canOperate
     ? items
     : items.map((item) =>
         threadActionRequiresOperate(item.id)
@@ -372,4 +375,35 @@ export function buildThreadActionMenuItems(
             }
           : item,
       );
+
+  return arrangeThreadMenu(available, state.projectFilter?.menuLabel);
+}
+
+function arrangeThreadMenu(
+  items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>>,
+  projectLabel: string | undefined,
+): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  const bots = items.filter((item) => item.id === "bot-follow" || item.id === "bot-stop-following");
+  const project = items.filter((item) =>
+    ["filter-by-project", "turn-into-project", "project-settings"].includes(item.id),
+  );
+  const groupProject = projectLabel !== undefined && project.length > 1;
+  const settle = items.find((item) => item.id === "settle" || item.id === "unsettle");
+  const autoSettle = items.find((item) => item.id === "auto-settle");
+  return items.flatMap((item): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> => {
+    if (settle && autoSettle) {
+      if (item === settle) return [settle, autoSettle];
+      if (item === autoSettle) return [];
+    }
+    if (bots.includes(item)) return [];
+    if (item.id === "mark-unread" && bots.length > 0) {
+      return [item, { id: "bot-actions", label: "GOAT Bot", children: bots }];
+    }
+    if (groupProject && project.includes(item)) {
+      return item.id === "project-settings"
+        ? [{ id: "project-actions", label: projectLabel, icon: "folder", children: project }]
+        : [];
+    }
+    return [item];
+  });
 }

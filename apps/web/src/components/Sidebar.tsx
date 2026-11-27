@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { olderSettledScopes } from "./sidebar/olderSettledScopes";
 import { scrollSidebarToTop, threadShellKey } from "./sidebar/sidebarKeys";
 import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
@@ -724,6 +725,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const gt = useGT();
   const { resolveSnoozePresets, pickSnoozePreset, snoozeLabels, bulkSnoozeLabel } =
     useSidebarSnooze(timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -2467,14 +2469,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           : snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         const snoozePresets = resolveSnoozePresets(new Date(), thread.environmentId);
-        const threadProjectGroup =
-          projectGroupsRef.current.find((project) =>
-            project.memberProjectRefs.some(
-              (projectRef) =>
-                projectRef.environmentId === thread.environmentId &&
-                projectRef.projectId === thread.projectId,
-            ),
-          ) ?? null;
+        const threadProjectGroup = projectGroupsRef.current.find((project) =>
+          project.memberProjectRefs.some(
+            (projectRef) =>
+              projectRef.environmentId === thread.environmentId &&
+              projectRef.projectId === thread.projectId,
+          ),
+        );
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
@@ -2488,6 +2489,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 threadProjectGroup && !threadProjectGroup.archived
                   ? {
                       label: threadProjectGroup.displayName,
+                      menuLabel: gt("Project"),
                       isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
                     }
                   : null,
