@@ -6653,17 +6653,20 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
         const roster = providerThreadRosterEvents(harness.events).at(-1)?.providerThread
           .pendingBackgroundTasks;
-        assert.deepEqual(roster, [
-          {
-            taskId: longRunning.taskId,
-            kind: "monitor",
-            awaited: true,
-            description: "Monitor 0",
-            nativeItemId: "toolu_monitor_0",
-            command: "sleep 8 && echo MONITOR_DONE",
-            startedAt: "1970-01-01T00:00:00.000Z",
-          },
-        ]);
+        assert.deepEqual(roster?.[0], {
+          taskId: longRunning.taskId,
+          kind: "monitor",
+          awaited: true,
+          description: "Monitor 0",
+          nativeItemId: "toolu_monitor_0",
+          command: "sleep 8 && echo MONITOR_DONE",
+          startedAt: "1970-01-01T00:00:00.000Z",
+        });
+        // The last monitor's notice came after the final tool round, so its wake turn is owed.
+        assert.deepEqual(
+          roster?.map((task) => task.taskId),
+          [longRunning.taskId, "monitor-task-65"],
+        );
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );

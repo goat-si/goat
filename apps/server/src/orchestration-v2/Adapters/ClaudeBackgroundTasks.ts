@@ -1,5 +1,6 @@
 import type { OrchestrationV2PendingBackgroundTask } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Ref from "effect/Ref";
 
 // background_tasks_changed can include subagents already counted by their lifecycle.
 const CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS: ReadonlyMap<
@@ -219,3 +220,53 @@ export function upsertClaudeRosterTask(
   roster.set(task.taskId, task);
   return [startedWait, new Map(current).set(nativeThreadId, roster)] as const;
 }
+
+export const taskIdSetForNativeThread = (
+  all: ReadonlyMap<string, Set<string>>,
+  nativeThreadId: string,
+): Set<string> => all.get(nativeThreadId) ?? new Set<string>();
+
+export const addTaskIdsToNativeThreadSet = (
+  ref: Ref.Ref<Map<string, Set<string>>>,
+  nativeThreadId: string,
+  taskIds: ReadonlyArray<string>,
+) =>
+  Ref.update(ref, (current) => {
+    if (taskIds.length === 0) return current;
+    const next = new Set(taskIdSetForNativeThread(current, nativeThreadId));
+    let changed = false;
+    for (const taskId of taskIds) {
+      if (!next.has(taskId)) {
+        next.add(taskId);
+        changed = true;
+      }
+    }
+    return changed ? new Map(current).set(nativeThreadId, next) : current;
+  });
+
+export const clearTaskIdFromNativeThreadSet = (
+  ref: Ref.Ref<Map<string, Set<string>>>,
+  nativeThreadId: string,
+  taskId: string,
+) =>
+  Ref.update(ref, (current) => {
+    const existing = taskIdSetForNativeThread(current, nativeThreadId);
+    if (!existing.has(taskId)) return current;
+    const next = new Set(existing);
+    next.delete(taskId);
+    const updated = new Map(current);
+    if (next.size === 0) updated.delete(nativeThreadId);
+    else updated.set(nativeThreadId, next);
+    return updated;
+  });
+
+export const clearNativeThreadTaskIdSet = (
+  ref: Ref.Ref<Map<string, Set<string>>>,
+  nativeThreadId: string,
+) =>
+  Ref.update(ref, (current) => {
+    if (!current.has(nativeThreadId)) return current;
+    const updated = new Map(current);
+    updated.delete(nativeThreadId);
+    return updated;
+  });
