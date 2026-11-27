@@ -1,4 +1,10 @@
-import { CheckpointId, RunAttemptId, MessageId, RunId } from "@goat/contracts";
+import {
+  CheckpointId,
+  MessageId,
+  type OrchestrationV2ProviderThread,
+  RunAttemptId,
+  RunId,
+} from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as DateTime from "effect/DateTime";
@@ -20,6 +26,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeWakeHarnessWithOptions();
+        const noteSetAt = "2026-11-23T14:02:17.000Z";
         const start = Effect.fnUntraced(function* (ordinal: number, text: string, note: string) {
           yield* harness.runtime.startTurn({
             ...makeClaudeTestTurnInput({
@@ -31,7 +38,7 @@ it.effect(
               attachments: [],
               providerTurnOrdinal: ordinal,
             }),
-            appContext: [{ key: "mcp_app_1", text: note }],
+            appContext: [{ key: "mcp_app_1", text: note, updatedAt: noteSetAt }],
           });
           const content = harness.offeredMessages.at(-1)?.message.content;
           return typeof content === "string"
@@ -77,13 +84,68 @@ it.effect(
           }),
         );
         yield* finish(4);
+        // The resent note says when it was set, so it does not read as news.
         assert.include(
           yield* start(5, "Continue", "Updated example issue"),
-          "Updated example issue",
+          `<external_mcp_app_1 updated_at="${noteSetAt}">Updated example issue`,
         );
         yield* finish(5);
       }).pipe(Effect.provide(layerClaudeAdapterTest)),
     ),
+);
+
+// regression: #42982 a server restart resent every stored note to a session that already had it
+it.effect("does not resend an MCP app note Claude already has after the adapter restarts", () =>
+  Effect.gen(function* () {
+    const note = "Slack draft card: the message was sent.";
+    const startTurn = Effect.fnUntraced(function* (
+      harness: Effect.Success<ReturnType<typeof makeWakeHarnessWithOptions>>,
+      providerThread: OrchestrationV2ProviderThread,
+      ordinal: number,
+    ) {
+      yield* harness.runtime.startTurn({
+        ...makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make(`mcp-app-restart-${ordinal}`),
+          providerTurnOrdinal: ordinal,
+          text: "Anything new?",
+          attachments: [],
+        }),
+        appContext: [{ key: "mcp_app_item-1", text: note }],
+      });
+      const content = harness.offeredMessages.at(-1)?.message.content;
+      return typeof content === "string"
+        ? content
+        : (content ?? [])
+            .flatMap((block) => (block.type === "text" ? [block.text] : []))
+            .join("\n");
+    });
+
+    const before = yield* makeWakeHarnessWithOptions({
+      close: (sdkMessages) => Queue.shutdown(sdkMessages),
+      freshQueueOnReopen: true,
+    });
+    assert.include(yield* startTurn(before, before.providerThread, 0), note);
+    yield* Queue.offer(
+      before.sdkMessages,
+      makeResultFrame({ uuid: "mcp-app-restart-result-0", result: "Done." }),
+    );
+    yield* Queue.take(before.terminalReceipts);
+    const persisted = before.events
+      .filter((event) => event.type === "provider_thread.updated")
+      .at(-1)?.providerThread;
+    assert.isDefined(persisted);
+    if (persisted === undefined) return;
+
+    // A new adapter resumes the same native session, whose history already holds the note.
+    const after = yield* makeWakeHarnessWithOptions({
+      close: (sdkMessages) => Queue.shutdown(sdkMessages),
+      freshQueueOnReopen: true,
+    });
+    assert.notInclude(yield* startTurn(after, persisted, 1), note);
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
 
 it.effect("reoffers app context after a failed Claude turn and quotes untrusted tags", () =>

@@ -2760,6 +2760,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 },
               };
             }
+            event = {
+              ...event,
+              providerThread: appContextDelivery.applyNativeMetadata(event.providerThread),
+            };
             const nativeSessionId = clearedNativeSessions.get(
               event.providerThread.nativeThreadRef?.nativeId ?? "",
             );
@@ -9348,6 +9352,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const used = turnInput.providerThread.nativeMetadata?.claudeAttachmentBudget;
               pdfBudgets.set(nativeThreadId, makeClaudeAttachmentBudget(used));
             }
+            appContextDelivery.hydrate(
+              nativeThreadId,
+              turnInput.providerThread.nativeMetadata?.claudeDeliveredAppContext,
+            );
             const [skills, queryPolicy] = yield* Effect.all(
               [
                 promptUuid === null || turnInput.resume
@@ -10569,7 +10577,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
               return {
                 providerThread: {
-                  ...rollbackInput.providerThread,
+                  ...appContextDelivery.clearNativeMetadata(rollbackInput.providerThread),
                   providerSessionId: input.providerSessionId,
                   nativeConversationHeadRef:
                     resumeSessionAt === null

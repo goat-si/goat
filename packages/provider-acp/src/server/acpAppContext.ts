@@ -5,7 +5,7 @@ const MAX_SESSIONS = 64;
 const MAX_ENTRIES = 64;
 const MAX_BYTES = 256 * 1024;
 
-type Entry = { readonly key: string; readonly text: string };
+type Entry = { readonly key: string; readonly text: string; readonly updatedAt?: string };
 type Session = {
   readonly entries: Map<string, string>;
   nextSequence: number;
@@ -80,14 +80,17 @@ export function createAcpAppContext() {
       inputBytes += bytes(key) + bytes(text);
       if (inputBytes > MAX_BYTES) throw new RangeError("ACP app context exceeds its size limit");
     }
-    const prepared = entries.map(({ key, text }) => ({
-      key,
-      hash: fingerprint(text),
-      block: {
-        type: "text" as const,
-        text: `<external_${key}>${escapeXml(text)}</external_${key}>`,
-      },
-    }));
+    const prepared = entries.map(({ key, text, updatedAt }) => {
+      const updatedAttr = updatedAt === undefined ? "" : ` updated_at="${escapeXml(updatedAt)}"`;
+      return {
+        key,
+        hash: fingerprint(text),
+        block: {
+          type: "text" as const,
+          text: `<external_${key}${updatedAttr}>${escapeXml(text)}</external_${key}>`,
+        },
+      };
+    });
     if (
       prepared.reduce((total, entry) => total + bytes(entry.block.text), bytes(input.sessionId)) >
       MAX_BYTES
