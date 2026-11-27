@@ -2207,6 +2207,7 @@
   "90aadd4da681521f": "Activez l’accès réseau pour détecter Tailscale.",
   "90c19958052b0685": "Impossible de charger les tâches planifiées",
   "90c7d27c15d7d4b9": "À vérifier",
+  "90d1efbdea5f026b": "{count, plural, one {{formatted} téléchargement} other {{formatted} téléchargements}}",
   "90eae6ed93306de1": "Impossible d’ouvrir les réglages système",
   "90ff799ec26fc8b9": "La mise à jour téléchargée s’installe à la fermeture de l’application.",
   "9117614b480952cd": "Impossible d'oublier cet hôte. Vérifiez vos autorisations et réessayez.",

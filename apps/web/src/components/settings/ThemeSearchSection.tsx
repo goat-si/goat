@@ -438,9 +438,13 @@ export function ThemeSearchSection({
                       <h4 className="truncate text-sm font-medium">{extension.name}</h4>
                       <p className="truncate text-muted-foreground text-xs">
                         {extension.publisher} ·{" "}
-                        {gt("{count} downloads", {
-                          count: downloads.format(extension.downloadCount),
-                        })}
+                        {gt(
+                          "{count, plural, one {{formatted} download} other {{formatted} downloads}}",
+                          {
+                            count: extension.downloadCount,
+                            formatted: downloads.format(extension.downloadCount),
+                          },
+                        )}
                       </p>
                     </div>
                   </div>

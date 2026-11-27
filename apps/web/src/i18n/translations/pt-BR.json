@@ -2207,6 +2207,7 @@
   "90aadd4da681521f": "Ative o acesso à rede para detectar o Tailscale.",
   "90c19958052b0685": "Não foi possível carregar as tarefas agendadas",
   "90c7d27c15d7d4b9": "Requer revisão",
+  "90d1efbdea5f026b": "{count, plural, one {{formatted} download} other {{formatted} downloads}}",
   "90eae6ed93306de1": "Não foi possível abrir os ajustes do sistema",
   "90ff799ec26fc8b9": "A atualização baixada será instalada ao sair do aplicativo.",
   "9117614b480952cd": "Não foi possível esquecer este host. Verifique suas permissões e tente novamente.",

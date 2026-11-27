@@ -2207,6 +2207,7 @@
   "90aadd4da681521f": "Aktiviere den Netzwerkzugriff, um Tailscale zu erkennen.",
   "90c19958052b0685": "Geplante Aufgaben konnten nicht geladen werden",
   "90c7d27c15d7d4b9": "Prüfung erforderlich",
+  "90d1efbdea5f026b": "{count, plural, one {{formatted} Download} other {{formatted} Downloads}}",
   "90eae6ed93306de1": "Systemeinstellungen konnten nicht geöffnet werden",
   "90ff799ec26fc8b9": "Das heruntergeladene Update wird beim Beenden der App installiert.",
   "9117614b480952cd": "Dieser Host konnte nicht vergessen werden. Überprüfen Sie Ihre Berechtigungen und versuchen Sie es erneut.",
