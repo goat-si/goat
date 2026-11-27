@@ -597,6 +597,12 @@ export function pullRequestListReviewStatus(
   return null;
 }
 
+export function pullRequestListDiffStatsLabel(
+  entry: Pick<PullRequestListEntry, "additions" | "deletions">,
+) {
+  return `${entry.additions} ${entry.additions === 1 ? "addition" : "additions"}, ${entry.deletions} ${entry.deletions === 1 ? "deletion" : "deletions"}`;
+}
+
 export function pullRequestLabelColor(color: string | null) {
   const hex = color?.replace(/^#/, "");
   return hex && /^[\da-f]{6}$/i.test(hex) ? `#${hex}` : null;
