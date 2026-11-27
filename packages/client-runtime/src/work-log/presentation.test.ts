@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 
 import {
   formatCommandActionsLabel,
+  resolveViewedImageAsset,
   resolveWorkEntryToolPresentation,
   toolItemForDisplay,
   type WorkLogPresentationEntry,
@@ -401,5 +402,25 @@ describe("workEntryViewedImagePath", () => {
     expect(workEntryViewedImagePath({ ...base, toolLifecycleStatus: "completed" })).toBe(
       "screenshots/missing.png",
     );
+  });
+});
+
+describe("resolveViewedImageAsset", () => {
+  it("requests the file the agent read when its name holds %, # or ?", () => {
+    const path = "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fproject/shot #1?/1.jpg";
+    expect(
+      resolveViewedImageAsset(path, { threadId: ThreadId.make("thread"), workspaceRoot: "/repo" }),
+    ).toEqual({
+      resource: { _tag: "media-file", threadId: ThreadId.make("thread"), path },
+      alt: "1.jpg",
+      srcFragment: "",
+    });
+  });
+
+  it("still decodes a file URL", () => {
+    expect(
+      resolveViewedImageAsset("file:///repo/my%20shot.png", { threadId: ThreadId.make("thread") })
+        ?.resource.path,
+    ).toBe("/repo/my shot.png");
   });
 });

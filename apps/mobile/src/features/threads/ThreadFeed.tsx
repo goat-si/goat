@@ -99,7 +99,10 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { classifyMarkdownImageSource } from "@goat/client-runtime/markdown-images";
-import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
+import {
+  resolveViewedImageAsset,
+  viewedImageMarkdownSource,
+} from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -2288,7 +2291,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       workspaceRoot: props.workspaceRoot,
     });
     const media = viewedImage
-      ? resolveMarkdownMediaPreview(image.href, {
+      ? resolveMarkdownMediaPreview(viewedImageMarkdownSource(image.href), {
           environmentId: props.environmentId,
           threadId: props.threadId,
           workspaceRoot: props.workspaceRoot,
