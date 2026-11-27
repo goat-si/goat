@@ -6,8 +6,10 @@ import {
   formatComposerContextReference,
   replaceComposerContextReferences,
 } from "@goat/shared/composerContextReferences";
+import { restorePastedMarkdownLinks } from "~/markdown-clipboard";
 import { readSnapshotClipboardWrapper } from "./snapshotClipboardFingerprint";
 
+// Matches ProseMirror's default clipboard parser, which a custom handlePaste bypasses.
 export function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">): string {
   return clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
 }
@@ -39,30 +41,39 @@ export function readPastedComposerContext(
   };
 }
 
-export function importPastedComposerText(
+export function readPastedComposerClipboard(
   clipboardData: Pick<DataTransfer, "getData">,
+  plainTextOnly = false,
+) {
+  const plain = readPastedPlainText(clipboardData);
+  if (plainTextOnly || !plain) return { text: plain, context: null };
+  const html = clipboardData.getData("text/html");
+  const text = restorePastedMarkdownLinks(plain, html);
+  const context = readPastedComposerContext(clipboardData);
+  return { text, context };
+}
+
+export type PastedComposerClipboard = ReturnType<typeof readPastedComposerClipboard>;
+
+export function importPastedComposerText(
+  { text: pastedText, context: fragment }: PastedComposerClipboard,
   importContextFragment?: (
     fragment: ComposerContextClipboardFragment,
   ) => ReadonlyMap<string, string>,
 ): string {
-  const pastedText = readPastedPlainText(clipboardData);
-  const fragment = importContextFragment ? readPastedComposerContext(clipboardData) : null;
   const rewrittenIds =
-    fragment && fragment.records.length > 0 ? importContextFragment!(fragment) : null;
-  const text =
-    rewrittenIds && rewrittenIds.size > 0
-      ? replaceComposerContextReferences(pastedText, (occurrence) => {
-          const nextId = rewrittenIds.get(occurrence.contextId);
-          return nextId
-            ? formatComposerContextReference({
-                ...occurrence,
-                contextId: ComposerContextId.make(nextId),
-                kind: occurrence.kind === "element" ? "preview-annotation" : occurrence.kind,
-              })
-            : occurrence.source;
+    fragment && fragment.records.length > 0 ? importContextFragment?.(fragment) : null;
+  if (!rewrittenIds || rewrittenIds.size === 0) return pastedText;
+  return replaceComposerContextReferences(pastedText, (occurrence) => {
+    const nextId = rewrittenIds.get(occurrence.contextId);
+    return nextId
+      ? formatComposerContextReference({
+          ...occurrence,
+          contextId: ComposerContextId.make(nextId),
+          kind: occurrence.kind === "element" ? "preview-annotation" : occurrence.kind,
         })
-      : pastedText;
-  return text;
+      : occurrence.source;
+  });
 }
 
 export function readSnapshotPngPaste(clipboard: Pick<DataTransfer, "getData" | "files">) {

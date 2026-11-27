@@ -13,6 +13,7 @@ export function Composer({
   richTextEnabled,
   skills,
   disabled = false,
+  editorRef = createRef<ComposerPromptEditorHandle>(),
   onChange,
   onCommandKeyDown = () => false,
 }: {
@@ -20,13 +21,14 @@ export function Composer({
   richTextEnabled: boolean;
   skills: ReadonlyArray<ServerProviderSkill>;
   disabled?: boolean;
+  editorRef?: ComposerPromptEditorProps["editorRef"];
   onChange?: ComposerPromptEditorProps["onChange"] | undefined;
   onCommandKeyDown?: ComposerPromptEditorProps["onCommandKeyDown"] | undefined;
 }) {
   const [prompt, setPrompt] = useState({ value, cursor: value.length });
   return (
     <ComposerPromptEditor
-      editorRef={createRef<ComposerPromptEditorHandle>()}
+      editorRef={editorRef}
       value={prompt.value}
       cursor={prompt.cursor}
       richTextEnabled={richTextEnabled}

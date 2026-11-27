@@ -20,7 +20,13 @@ import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tip
 import StarterKit from "@tiptap/starter-kit";
 import { newlineInCode, splitBlockKeepMarks } from "@tiptap/pm/commands";
 import { isHistoryTransaction } from "@tiptap/pm/history";
-import { NodeSelection, Plugin, TextSelection, type Transaction } from "@tiptap/pm/state";
+import {
+  NodeSelection,
+  Plugin,
+  Selection,
+  TextSelection,
+  type Transaction,
+} from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import type { ResolvedPos } from "@tiptap/pm/model";
 import type {
@@ -138,6 +144,8 @@ import { resolveAssistantCitationCommentDismissal } from "./chat/assistantCitati
 import { composerCodeBlockHighlight } from "./composerCodeBlockHighlight";
 import {
   importPastedComposerText,
+  type PastedComposerClipboard,
+  readPastedComposerClipboard,
   readPastedPlainText,
   readSnapshotPngPaste,
 } from "./composerInlineTokenPaste";
@@ -153,6 +161,7 @@ export interface ComposerPromptEditorHandle {
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
+  pasteAtCodeBlockEnd: (clipboardData: DataTransfer) => boolean;
   readSelectionRange: () => { start: number; end: number };
   captureAttachmentInsertion: () => ComposerAttachmentInsertion | undefined;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
@@ -208,6 +217,7 @@ export interface ComposerPromptEditorProps {
   onPaste: (
     event: React.ClipboardEvent<HTMLElement>,
     importSnapshot?: (ownsDestination: () => boolean) => Promise<boolean>,
+    readClipboard?: (plainTextOnly: boolean) => PastedComposerClipboard,
   ) => void;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
@@ -882,13 +892,15 @@ function ComposerPromptEditorTiptapInner(
     "aria-placeholder": placeholder,
   };
 
+  const capturedPastes = useRef(new WeakMap<ClipboardEvent, PastedComposerClipboard>());
+
   /** `newLineAt` inserts on a fresh line created at that block boundary, in the same undo step. */
   const pasteComposerText = (
     view: EditorView,
-    clipboardData: Pick<DataTransfer, "getData">,
+    paste: PastedComposerClipboard,
     newLineAt?: number,
   ): boolean => {
-    const pastedText = readPastedPlainText(clipboardData);
+    const { text: pastedText } = paste;
     if (!pastedText) return false;
     const onNewLine = newLineAt !== undefined;
     const importFragment = !literalText && readCallbacks().importContextFragment;
@@ -909,6 +921,7 @@ function ComposerPromptEditorTiptapInner(
     if (
       !onNewLine &&
       sourceType?.isInSet($pasteFrom.marks()) &&
+      !paste.context?.records.length &&
       !pastedText.includes("\n") &&
       collectComposerPromptInlineTokens(`${pastedText}\n`).length === 0
     ) {
@@ -920,9 +933,7 @@ function ComposerPromptEditorTiptapInner(
       );
       return true;
     }
-    let text = importFragment
-      ? importPastedComposerText(clipboardData, importFragment)
-      : pastedText;
+    let text = importFragment ? importPastedComposerText(paste, importFragment) : pastedText;
     const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
     const isChip = (token: (typeof tokens)[number] | undefined) =>
       token?.type === "mention" || (token?.type === "skill" && skillLabelFor(token.value) !== null);
@@ -1280,10 +1291,17 @@ function ComposerPromptEditorTiptapInner(
           return true;
         },
         handlePaste: (view, event) => {
-          const clipboard = event.clipboardData;
-          return (
-            clipboard !== null && clipboard.files.length === 0 && pasteComposerText(view, clipboard)
-          );
+          const clipboardData = event.clipboardData;
+          if (!clipboardData) return false;
+          const captured = capturedPastes.current.get(event);
+          capturedPastes.current.delete(event);
+          if (clipboardData.files.length > 0) return false;
+          const paste =
+            captured ??
+            readPastedComposerClipboard(clipboardData, literalText || isInCodeBlock(view));
+          if (!pasteComposerText(view, paste)) return false;
+          event.preventDefault();
+          return true;
         },
         handleDrop: (view, event, _slice, moved) => {
           const data = event.dataTransfer;
@@ -1307,13 +1325,16 @@ function ComposerPromptEditorTiptapInner(
               if (!paragraph || !$target.parent.canReplaceWith(index, index, paragraph))
                 return false;
               view.focus();
-              return pasteComposerText(view, data, pos);
+              return pasteComposerText(view, readPastedComposerClipboard(data, literalText), pos);
             }
           }
           view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)));
           // Handling the drop skips ProseMirror's own focus call.
           view.focus();
-          return pasteComposerText(view, data);
+          return pasteComposerText(
+            view,
+            readPastedComposerClipboard(data, literalText || isInCodeBlock(view)),
+          );
         },
       },
       onUpdate: ({ editor: updated, transaction }) => {
@@ -1594,6 +1615,22 @@ function ComposerPromptEditorTiptapInner(
               ),
         );
       },
+      pasteAtCodeBlockEnd: (clipboardData) => {
+        if (!editor?.isEditable) return false;
+        const { view } = editor;
+        const end = Selection.atEnd(view.state.doc);
+        if (!end.$from.parent.type.spec.code) return false;
+        const text = readPastedPlainText(clipboardData);
+        if (!text) return false;
+        view.focus();
+        view.dispatch(
+          markAsClipboardEdit(
+            view.state.tr.setSelection(end).insertText(text),
+            "paste",
+          ).scrollIntoView(),
+        );
+        return true;
+      },
       readSelectionRange: () => {
         readSnapshot();
         return selectionRangeRef.current;
@@ -1660,29 +1697,41 @@ function ComposerPromptEditorTiptapInner(
 
   const capturePaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const view = mountedEditorView(editor);
+    const readClipboard = (plainTextOnly: boolean) => {
+      const paste = readPastedComposerClipboard(
+        event.clipboardData,
+        plainTextOnly || literalText || (view !== null && isInCodeBlock(view)),
+      );
+      capturedPastes.current.set(event.nativeEvent, paste);
+      return paste;
+    };
     const snapshot =
       !literalText && importContextFragment && view?.editable && !isInCodeBlock(view)
         ? readSnapshotPngPaste(event.clipboardData)
         : null;
     if (!view || !snapshot) {
-      onPaste(event);
+      onPaste(event, undefined, readClipboard);
       return;
     }
     const { doc, selection } = view.state;
-    onPaste(event, async (ownsDestination) => {
-      const fingerprint = await fingerprintSnapshotPng(snapshot.file);
-      if (
-        fingerprint !== snapshot.fingerprint ||
-        view.isDestroyed ||
-        !view.editable ||
-        view.state.doc !== doc ||
-        !view.state.selection.eq(selection) ||
-        !readCallbacks().importContextFragment ||
-        !ownsDestination()
-      )
-        return false;
-      return pasteComposerText(view, snapshot.clipboardData);
-    });
+    onPaste(
+      event,
+      async (ownsDestination) => {
+        const fingerprint = await fingerprintSnapshotPng(snapshot.file);
+        if (
+          fingerprint !== snapshot.fingerprint ||
+          view.isDestroyed ||
+          !view.editable ||
+          view.state.doc !== doc ||
+          !view.state.selection.eq(selection) ||
+          !readCallbacks().importContextFragment ||
+          !ownsDestination()
+        )
+          return false;
+        return pasteComposerText(view, readPastedComposerClipboard(snapshot.clipboardData));
+      },
+      readClipboard,
+    );
   };
 
   const handleCopyCut = (event: React.ClipboardEvent, cut: boolean) => {

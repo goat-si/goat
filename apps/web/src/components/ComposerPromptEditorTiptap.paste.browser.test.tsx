@@ -1,10 +1,12 @@
 import type { Editor } from "@tiptap/core";
+import { createRef } from "react";
 import { expect, it } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
-import { act } from "../../test/render";
+import { act, render } from "../../test/render";
 import { serializeEditorDoc } from "~/composer-rich-text-doc";
-import { mountEditor } from "./ComposerPromptEditorTiptap.input.test-support";
+import { Composer, editorIn, mountEditor } from "./ComposerPromptEditorTiptap.input.test-support";
+import type { ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 
 it.each([
   ["**DEV**", "**DEV**!"],
@@ -193,4 +195,42 @@ it("keeps replacement behavior at a prose mention boundary", async () => {
     typeText(editor, 7, 12, "(");
   });
   expect(serializeEditorDoc(editor.state.doc).value).toBe("echo @prod(");
+});
+
+it("does not paste at the end of a disabled code block", async () => {
+  const editorRef = createRef<ComposerPromptEditorHandle>();
+  const value = "```text\nExisting answer\n```";
+  await using screen = await render(
+    <Composer value={value} richTextEnabled skills={[]} disabled editorRef={editorRef} />,
+  );
+  const editor = editorIn(screen.container);
+  const clipboard = new DataTransfer();
+  clipboard.setData("text/plain", " should not appear");
+  await act(async () => {
+    expect(editorRef.current?.pasteAtCodeBlockEnd(clipboard)).toBe(false);
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe(value);
+});
+
+it("keeps the destination of a link dropped from a web page", async () => {
+  await using screen = await mountEditor("");
+  const { editor } = screen;
+  await act(async () => {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/plain", "Setup guide");
+    dataTransfer.setData("text/html", '<a href="https://example.com/setup">Setup guide</a>');
+    const { left, top } = editor.view.coordsAtPos(1);
+    editor.view.dom.dispatchEvent(
+      new DragEvent("drop", {
+        dataTransfer,
+        clientX: left,
+        clientY: top + 1,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe(
+    "[Setup guide](https://example.com/setup)",
+  );
 });
