@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Junction fixtures work without symlink privileges on Windows.
+import * as NodeFSP from "node:fs/promises";
+
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -457,8 +460,11 @@ it.effect("resolves home-relative project paths and preserves exact IDs", () =>
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-thread-home-" });
     const workspaceRoot = path.join(home, "My Project");
     yield* fs.makeDirectory(workspaceRoot);
+    const aliasRoot = path.join(home, "My Project Alias");
+    yield* Effect.promise(() => NodeFSP.symlink(workspaceRoot, aliasRoot, "junction"));
     const projects = [
       { id: "project-1", title: "Project", workspaceRoot },
+      { id: "alias", title: "Alias", workspaceRoot: aliasRoot },
       { id: "~/literal-id", title: "ID", workspaceRoot: home },
     ];
     const tools = {
@@ -466,6 +472,7 @@ it.effect("resolves home-relative project paths and preserves exact IDs", () =>
     } as unknown as ThreadTools;
     for (const [identifier, expected] of [
       ["~/My Project", "project-1"],
+      [aliasRoot, "alias"],
       ["~/literal-id", "~/literal-id"],
     ] as const) {
       const project = yield* resolveProject(tools, identifier).pipe(
