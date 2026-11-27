@@ -16,6 +16,7 @@ import {
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
+  translateDesktopUpdateMessage,
   resolveDesktopUpdateButtonAction,
 } from "./desktopUpdate.logic";
 
@@ -402,4 +403,12 @@ it("passes a braced diagnostic through unchanged without an ICU error", () => {
   expect(getDesktopUpdateCheckError(state, gt)).toBe(diagnostic);
   expect(getDesktopUpdateStatusText(state, gt)).toBe(diagnostic);
   expect(getDesktopUpdateIdleTooltip(state, gt).detail).toContain(diagnostic);
+});
+
+it("translates the download failure prefix without parsing provider diagnostics as ICU", () => {
+  const gt: DesktopUpdateTranslate = (source, args) =>
+    gtFallback(source === "Download failed: {error}" ? "下载失败：{error}" : source, args);
+  expect(translateDesktopUpdateMessage("Download failed: net::ERR_RESET {request-id}", gt)).toBe(
+    "下载失败：net::ERR_RESET {request-id}",
+  );
 });

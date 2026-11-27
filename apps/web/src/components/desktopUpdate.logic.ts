@@ -313,6 +313,10 @@ export function translateDesktopUpdateMessage(
   message: string | null | undefined,
   gt: DesktopUpdateTranslate,
 ): string | null {
+  const downloadPrefix = "Download failed: ";
+  if (message?.startsWith(downloadPrefix)) {
+    return gt("Download failed: {error}", { error: message.slice(downloadPrefix.length) });
+  }
   switch (message) {
     case "Automatic updates are not available because no update feed is configured.":
       return gt("Automatic updates are not available because no update feed is configured.");

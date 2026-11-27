@@ -3816,5 +3816,6 @@
   "9c4a6d9d6080c00a": "Reintentar la instalación",
   "86c1d328fe309dd7": "Buscar el instalador en GitHub",
   "0ad2a52cc57493b3": "Se ha denegado el acceso al instalador. Revisa los permisos de GOAT y de su carpeta o consulta con un administrador antes de volver a intentarlo.",
-  "f23baf6efecfb207": "El instalador ha encontrado un sistema de archivos de solo lectura. Comprueba que se pueda escribir en la ubicación de instalación antes de volver a intentarlo."
+  "f23baf6efecfb207": "El instalador ha encontrado un sistema de archivos de solo lectura. Comprueba que se pueda escribir en la ubicación de instalación antes de volver a intentarlo.",
+  "e22d35d70b137e22": "Error en la descarga: {error}"
 }

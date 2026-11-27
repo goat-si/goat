@@ -3816,5 +3816,6 @@
   "9c4a6d9d6080c00a": "Tentar instalar novamente",
   "86c1d328fe309dd7": "Encontrar o instalador no GitHub",
   "0ad2a52cc57493b3": "O acesso do instalador foi negado. Verifique as permissões do GOAT e de sua pasta ou peça ajuda a um administrador antes de tentar novamente.",
-  "f23baf6efecfb207": "O instalador encontrou um sistema de arquivos somente leitura. Verifique se o local de instalação permite gravação antes de tentar novamente."
+  "f23baf6efecfb207": "O instalador encontrou um sistema de arquivos somente leitura. Verifique se o local de instalação permite gravação antes de tentar novamente.",
+  "e22d35d70b137e22": "Falha no download: {error}"
 }

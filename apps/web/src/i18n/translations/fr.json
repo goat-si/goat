@@ -3816,5 +3816,6 @@
   "9c4a6d9d6080c00a": "Réessayer l’installation",
   "86c1d328fe309dd7": "Trouver le programme d’installation sur GitHub",
   "0ad2a52cc57493b3": "L’accès a été refusé au programme d’installation. Vérifiez les autorisations de GOAT et de son dossier ou contactez un administrateur avant de réessayer.",
-  "f23baf6efecfb207": "Le programme d’installation a rencontré un système de fichiers en lecture seule. Vérifiez que le dossier d’installation est accessible en écriture avant de réessayer."
+  "f23baf6efecfb207": "Le programme d’installation a rencontré un système de fichiers en lecture seule. Vérifiez que le dossier d’installation est accessible en écriture avant de réessayer.",
+  "e22d35d70b137e22": "Échec du téléchargement : {error}"
 }

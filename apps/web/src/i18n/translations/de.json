@@ -3816,5 +3816,6 @@
   "9c4a6d9d6080c00a": "Installation erneut versuchen",
   "86c1d328fe309dd7": "Installationspaket auf GitHub finden",
   "0ad2a52cc57493b3": "Dem Installationsprogramm wurde der Zugriff verweigert. Prüfe die Berechtigungen für GOAT und den zugehörigen Ordner oder wende dich vor dem nächsten Versuch an einen Administrator.",
-  "f23baf6efecfb207": "Das Installationsprogramm ist auf ein schreibgeschütztes Dateisystem gestoßen. Prüfe vor dem nächsten Versuch, ob der Installationsort beschreibbar ist."
+  "f23baf6efecfb207": "Das Installationsprogramm ist auf ein schreibgeschütztes Dateisystem gestoßen. Prüfe vor dem nächsten Versuch, ob der Installationsort beschreibbar ist.",
+  "e22d35d70b137e22": "Download fehlgeschlagen: {error}"
 }

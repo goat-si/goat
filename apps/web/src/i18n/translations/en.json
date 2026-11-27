@@ -3816,5 +3816,6 @@
   "9c4a6d9d6080c00a": "Retry installation",
   "86c1d328fe309dd7": "Find installer on GitHub",
   "0ad2a52cc57493b3": "The installer was denied access. Check the permissions on GOAT and its folder, or ask an administrator before retrying.",
-  "f23baf6efecfb207": "The installer encountered a read-only file system. Check that the installation location is writable before retrying."
+  "f23baf6efecfb207": "The installer encountered a read-only file system. Check that the installation location is writable before retrying.",
+  "e22d35d70b137e22": "Download failed: {error}"
 }
