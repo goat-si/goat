@@ -456,12 +456,13 @@ describe("scoped SSH master", () => {
           const forward = f.commands.find(
             (c) => commandArgs(c).includes("-N") && !commandArgs(c).includes("-M"),
           )!;
-          assert.includeMembers(
-            [...commandArgs(forward)],
-            ["ControlPath=none", "ControlMaster=no", "ControlPersist=no"],
-          );
+          const joinsUserMaster = mode === "user-path" || mode === "user-master";
+          assert.include(commandArgs(forward), "ControlMaster=no");
+          for (const option of ["ControlPath=none", "ControlPersist=no"])
+            if (joinsUserMaster) assert.notInclude(commandArgs(forward), option);
+            else assert.include(commandArgs(forward), option);
           assert.notInclude(commandArgs(forward), "-S");
-          if (mode === "user-path" || mode === "user-master") {
+          if (joinsUserMaster) {
             const remote = f.commands.find((c) => commandArgs(c).includes("sh"))!;
             assert.notInclude(commandArgs(remote), "ControlPath=none");
             assert.equal(forward._tag, "StandardCommand");
@@ -472,6 +473,13 @@ describe("scoped SSH master", () => {
           }
           yield* manager.disconnectEnvironment(uploadTarget);
           assert.include(f.events, "kill-forward");
+          // Only a configured ControlPath can hold the forward in a shared master after it exits.
+          const cancel = f.commands.find((c) => commandArgs(c).includes("cancel"));
+          if (mode === "user-path") {
+            const spec = (args: ReadonlyArray<string>) => args[args.indexOf("-L") + 1];
+            assert.equal(spec(commandArgs(cancel!)), spec(commandArgs(forward)));
+            assert.isAbove(f.events.indexOf("cancel"), f.events.indexOf("kill-forward"));
+          } else assert.isUndefined(cancel);
         }),
       ),
   );
