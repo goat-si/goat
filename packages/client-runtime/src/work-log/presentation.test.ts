@@ -11,6 +11,7 @@ import {
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
+  workEntryViewedImagePath,
   toolGroupAction,
   summarizeToolGroup,
   toolGroupSummaryKind,
@@ -382,5 +383,23 @@ describe("commands that only inspect files", () => {
         },
       ]).summary,
     ).toBe("Explored 1 file, 2 searches, 1 list, ran 2 commands, and searched the web 1 time");
+  });
+});
+
+describe("workEntryViewedImagePath", () => {
+  it("omits failed image reads from viewed-image previews", () => {
+    const base: WorkLogPresentationEntry = {
+      id: "read-image",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      tone: "tool",
+      label: "Read",
+      detail: "screenshots/missing.png",
+      viewedImagePath: "screenshots/missing.png",
+      itemType: "dynamic_tool",
+    };
+    expect(workEntryViewedImagePath({ ...base, toolLifecycleStatus: "failed" })).toBeNull();
+    expect(workEntryViewedImagePath({ ...base, toolLifecycleStatus: "completed" })).toBe(
+      "screenshots/missing.png",
+    );
   });
 });

@@ -551,6 +551,9 @@ function toolGroupActions(entry: WorkLogPresentationEntry): ReadonlyArray<ToolGr
 }
 
 export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): string | null {
+  if (entry.toolLifecycleStatus === "failed") {
+    return null;
+  }
   const viewedImagePath = entry.viewedImagePath?.trim();
   if (
     viewedImagePath !== undefined &&
