@@ -379,7 +379,7 @@ function subProviderLabelFor(input: {
     : label;
 }
 
-const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
+export const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
   models
     .map((model) =>
       JSON.stringify([
@@ -654,6 +654,9 @@ export function openCode2ProviderModels(
   );
 }
 
+export const openCode2ReadyMessage = (version: string, count: number) =>
+  `OpenCode ${version} lists ${count} model${count === 1 ? "" : "s"}.`;
+
 const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
   settings: OpenCodeSettings,
   version: string,
@@ -719,10 +722,7 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
     slashCommands: [COMPACT_SLASH_COMMAND],
     probe:
       result.value.length > 0
-        ? probe(
-            "ready",
-            `OpenCode ${version} lists ${result.value.length} model${result.value.length === 1 ? "" : "s"}.`,
-          )
+        ? probe("ready", openCode2ReadyMessage(version, result.value.length))
         : probe("warning", "OpenCode 2 is running, but it did not list any models yet."),
   });
 });

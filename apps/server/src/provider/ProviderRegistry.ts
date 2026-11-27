@@ -843,6 +843,7 @@ export const layer = Layer.effect(
                   const previous = before ?? scannedFrom;
                   return input.rescan !== undefined &&
                     (!Equal.equals(next?.skills, previous?.skills) ||
+                      !Equal.equals(next?.models, previous?.models) ||
                       !Equal.equals(next?.slashCommands, previous?.slashCommands))
                     ? { ...scanned, workspaceRescannedAt: scannedAt }
                     : scanned;

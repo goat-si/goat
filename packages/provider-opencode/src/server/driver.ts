@@ -33,6 +33,7 @@ import { openCodeUsageReader, type OpenCodeUsageReaderEnv } from "./usage.ts";
 import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
 import { withGoatUsageScopes } from "./usageWindowScopes.ts";
 import { loadOpenCode2Catalog, loadOpenCode2DirectoryCatalog } from "./openCode2Catalog.ts";
+import { enrichOpenCode2Snapshot, makeOpenCode2CatalogWatch } from "./openCode2CatalogWatch.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2GlobalSkills,
@@ -46,6 +47,7 @@ import {
   openCodeCommandsToServerProviderSlashCommands,
   openCodeProviderModels,
   readSettledOpenCode2Catalog,
+  type OpenCode2Model,
 } from "./status.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -493,13 +495,15 @@ export const OpenCodeDriver: ProviderDriver<
       sessionConfigKey: yield* random.uuidV4().pipe(Effect.orDie),
       runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
+    const catalogWatch = yield* makeOpenCode2CatalogWatch();
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
       (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined, boundRead) =>
-        openCode2ProbeServer.withConnection(
-          ({ client, external }) =>
-            boundRead(loadOpenCode2Catalog(client, external ? undefined : host.paths.cwd)),
-          launch,
-        ),
+        openCode2ProbeServer.withConnection(({ client, events, external, url }) => {
+          const directory = external ? undefined : host.paths.cwd;
+          return catalogWatch
+            .follow(url, events, loadOpenCode2DirectoryCatalog(client, directory))
+            .pipe(Effect.andThen(boundRead(loadOpenCode2Catalog(client, directory))));
+        }, launch),
       openCode2ProbeServer.captureLaunch ??
         Effect.succeed(undefined as OpenCodeServerOwner.OpenCodeServerLaunch | undefined),
       (left, right) =>
@@ -832,16 +836,21 @@ export const OpenCodeDriver: ProviderDriver<
       checkProvider,
       checkUsageLimits,
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-        resolveMaintenance().pipe(
-          Effect.flatMap((maintenanceCapabilities) =>
-            enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-            }),
+        enrichOpenCode2Snapshot({
+          snapshot,
+          settings: effectiveConfig,
+          catalogChanges: catalogWatch.changes,
+          enrichAdvisory: resolveMaintenance().pipe(
+            Effect.flatMap((maintenanceCapabilities) =>
+              enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+              }),
+            ),
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
           ),
-          Effect.provideService(HttpClient.HttpClient, httpClient),
-          Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
-          Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-        ),
+          publishSnapshot,
+        }),
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -883,18 +892,34 @@ export const OpenCodeDriver: ProviderDriver<
                         [
                           snapshot.getSnapshot,
                           // A project's opencode.jsonc can define its own providers.
-                          readSettledOpenCode2Catalog(
-                            openCode2ProbeServer.withConnection(({ client }) =>
-                              loadOpenCode2DirectoryCatalog(client, pathService.resolve(cwd)),
-                            ),
-                            environment,
-                          ).pipe(
-                            Effect.map(
-                              Option.map((catalog) =>
-                                openCode2ProviderModels(effectiveConfig, catalog),
+                          openCode2ProbeServer
+                            .withConnection(({ client, events, url }) => {
+                              const read = loadOpenCode2DirectoryCatalog(
+                                client,
+                                pathService.resolve(cwd),
+                              );
+                              return readSettledOpenCode2Catalog(read, environment).pipe(
+                                Effect.tap((settled) =>
+                                  catalogWatch.follow(url, events, read, {
+                                    cwd,
+                                    ...Option.match(settled, {
+                                      onNone: () => ({}),
+                                      onSome: (catalog) => ({ settled: catalog }),
+                                    }),
+                                  }),
+                                ),
+                              );
+                            })
+                            .pipe(
+                              Effect.orElseSucceed(() =>
+                                Option.none<ReadonlyArray<OpenCode2Model>>(),
+                              ),
+                              Effect.map(
+                                Option.map((catalog) =>
+                                  openCode2ProviderModels(effectiveConfig, catalog),
+                                ),
                               ),
                             ),
-                          ),
                           listOpenCode2Workspace(cwd).pipe(
                             // Leaves room for the reads around the scan wait, which uses the same override.
                             Effect.timeout(
@@ -960,6 +985,7 @@ export const OpenCodeDriver: ProviderDriver<
                 ),
               ),
             ),
+      workspaceRescans: catalogWatch.rescans,
       invalidateCaches: forgetServers,
       afterUpdate,
       orchestrationAdapter,
