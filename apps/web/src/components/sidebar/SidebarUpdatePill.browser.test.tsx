@@ -1,10 +1,13 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
-import { gtFallback } from "gt-react";
+import { GTProvider, gtFallback } from "gt-react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../../test/render";
+import { act, render, stubGlobal } from "../../../test/render";
+import chinese from "../../i18n/translations/zh.json";
 import { clearDismissedDownloadFailure } from "../../state/desktopUpdate";
+import { AboutVersionSection } from "../settings/AboutVersionSection";
+import { ToastProvider } from "../ui/toast";
 import { installLocalUpdate, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 const mocks = vi.hoisted(() => {
@@ -80,6 +83,172 @@ function publish(update: DesktopUpdateState | null) {
 }
 
 const releaseNotes = () => document.querySelector('[aria-label="Update release notes"]');
+
+describe("manual desktop update checks", () => {
+  const current: DesktopUpdateState = {
+    ...nightlyUpdate([]),
+    status: "up-to-date",
+    channel: "latest",
+    currentVersion: "0.1.14",
+    availableVersion: null,
+    checkedAt: "2026-11-27T03:00:00Z",
+  };
+  const checking: DesktopUpdateState = {
+    ...current,
+    status: "checking",
+    checkedAt: "2026-11-27T03:10:00Z",
+  };
+  const complete = { ...current, checkedAt: "2026-11-27T03:10:03Z" };
+
+  function renderEntries(locale: "en" | "zh" = "en") {
+    setup(current);
+    return render(
+      <GTProvider locale={locale} translations={{ en: {}, zh: chinese }}>
+        <ToastProvider>
+          <SidebarUpdatePill placement="rail" />
+          <AboutVersionSection />
+        </ToastProvider>
+      </GTProvider>,
+    );
+  }
+
+  function stubUpdater(checkForUpdate: DesktopBridge["checkForUpdate"]) {
+    return stubGlobal("desktopBridge", {
+      getLocalEnvironmentBootstraps: () => [],
+      checkForUpdate,
+      getUpdateState: async () => mocks.update!,
+      onUpdateState: (listener: (state: DesktopUpdateState) => void) =>
+        mocks.subscribe(() => {
+          if (mocks.update) listener(mocks.update);
+        }),
+    });
+  }
+
+  function expectToastDescription(text: string) {
+    return vi.waitFor(() =>
+      expect(document.querySelector('[data-slot="toast-description"]')?.textContent).toBe(text),
+    );
+  }
+
+  it.each(["reply", "late event", "early event"] as const)(
+    "confirms a manual check completed via %s",
+    async (via) => {
+      const reply = Promise.withResolvers<Awaited<ReturnType<DesktopBridge["checkForUpdate"]>>>();
+      const checkForUpdate = vi.fn(() => reply.promise);
+      using _bridge = stubUpdater(checkForUpdate);
+      await using screen = await renderEntries();
+      await publish({ ...current });
+      const descriptions = () => document.querySelectorAll('[data-slot="toast-description"]');
+      expect(descriptions()).toHaveLength(0);
+
+      const button = screen.getByRole("button", { name: "Check for updates" });
+      const trigger = button.element();
+      await button.click();
+      expect(checkForUpdate).toHaveBeenCalledTimes(1);
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+      if (via === "early event") await publish(complete);
+      await act(() =>
+        reply.resolve({ checked: true, state: via === "reply" ? complete : checking }),
+      );
+      if (via === "late event") {
+        expect(descriptions()).toHaveLength(0);
+        await publish(complete);
+      }
+      await expect.element(page.getByText("GOAT 0.1.14", { exact: true })).toBeVisible();
+      await expectToastDescription("Up to date");
+      await publish(complete);
+      expect(descriptions()).toHaveLength(1);
+    },
+  );
+
+  it.each(["检查更新", "已是最新版本"])("confirms a check from %s in Chinese", async (label) => {
+    using _bridge = stubUpdater(async () => ({
+      checked: true,
+      state: {
+        ...complete,
+        installationNotice: "Administrator permissions required for installation.",
+      },
+    }));
+    await using screen = await renderEntries("zh");
+    await screen.getByRole("button", { name: label, exact: true }).click();
+    await expectToastDescription("已是最新版本");
+  });
+
+  it("shares one pending check across both entry points", async () => {
+    const reply = Promise.withResolvers<Awaited<ReturnType<DesktopBridge["checkForUpdate"]>>>();
+    const checkForUpdate = vi.fn(() => reply.promise);
+    using _bridge = stubUpdater(checkForUpdate);
+    await using screen = await renderEntries();
+    await screen.getByRole("button", { name: "Up to Date", exact: true }).click();
+    await screen.getByRole("button", { name: "Check for updates", exact: true }).click();
+    expect(checkForUpdate).toHaveBeenCalledTimes(1);
+    await act(() => reply.resolve({ checked: true, state: complete }));
+    await expectToastDescription("Up to date");
+  });
+
+  it("ignores an old snapshot and a completion from another channel", async () => {
+    const read = vi.fn(async () => current);
+    using _bridge = stubGlobal("desktopBridge", {
+      getLocalEnvironmentBootstraps: () => [],
+      checkForUpdate: async () => ({ checked: true, state: checking }),
+      getUpdateState: read,
+      onUpdateState: (listener: (state: DesktopUpdateState) => void) =>
+        mocks.subscribe(() => listener(mocks.update!)),
+    });
+    await using screen = await renderEntries();
+    const button = screen.getByRole("button", { name: "Up to Date", exact: true });
+    await button.click();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await publish({ ...complete, channel: "nightly" });
+    await expect.element(button).toBeEnabled();
+    expect(document.querySelector('[data-slot="toast-description"]')).toBeNull();
+  });
+
+  it.each(["refused", "rejected"])("reports a %s check from settings", async (reason) => {
+    const message = "Update service unavailable";
+    using _bridge = stubUpdater(async () => {
+      if (reason === "rejected") throw new Error(message);
+      return { checked: false, state: { ...current, enabled: false, message } };
+    });
+    await using screen = await renderEntries();
+    await screen.getByRole("button", { name: "Up to Date", exact: true }).click();
+    await expectToastDescription(message);
+  });
+
+  it("keeps the existing update offer when a new version is available", async () => {
+    sessionStorage.removeItem("desktop-update-notice");
+    const available: DesktopUpdateState = {
+      ...complete,
+      status: "available",
+      availableVersion: "0.1.15",
+    };
+    using _bridge = stubGlobal("desktopBridge", {
+      getLocalEnvironmentBootstraps: () => [],
+      checkForUpdate: async () => ({ checked: true, state: available }),
+    });
+    await using screen = await renderEntries();
+    await screen.getByRole("button", { name: "Check for updates" }).click();
+    await publish(available);
+    await expect
+      .element(page.getByRole("complementary", { name: "Update available" }))
+      .toBeVisible();
+    expect(document.querySelector('[data-slot="toast-description"]')).toBeNull();
+  });
+
+  it("shows the error when an accepted check fails", async () => {
+    const message = "The update service is offline.";
+    using _bridge = stubGlobal("desktopBridge", {
+      getLocalEnvironmentBootstraps: () => [],
+      checkForUpdate: async () => ({
+        checked: true,
+        state: { ...complete, status: "error", errorContext: "check", message },
+      }),
+    });
+    await using screen = await renderEntries();
+    await screen.getByRole("button", { name: "Check for updates" }).click();
+    await expect.element(page.getByText(message, { exact: true })).toBeVisible();
+  });
+});
 
 describe("SidebarUpdatePill release notes", () => {
   it("keeps a dismissed offer quiet and surfaces a subsequent download failure", async () => {

@@ -5,6 +5,9 @@ import { ArrowRightIcon } from "~/components/solar";
 import {
   type DesktopUpdateTranslate,
   getDesktopUpdateActionError,
+  getDesktopUpdateActionTooltip,
+  getDesktopUpdateCheckError,
+  getDesktopUpdateDisabledReason,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateReleaseUrl,
   shouldToastDesktopUpdateActionResult,
@@ -73,6 +76,78 @@ export function showDesktopUpdateDownloadedToast(
 export const toastUpdateError: ReportLocalUpdateError = (title, description) => {
   toastManager.add(stackedThreadToast({ type: "error", title, description }));
 };
+
+type UpdateCheckBridge = Pick<DesktopBridge, "checkForUpdate" | "getUpdateState" | "onUpdateState">;
+
+// Electron may acknowledge a check before publishing its outcome. Subscribe before
+// reading the snapshot so a completion on either side of the reply is observed.
+async function waitForCheckOutcome(bridge: UpdateCheckBridge, checking: DesktopUpdateState) {
+  const outcome = Promise.withResolvers<DesktopUpdateState | null>();
+  const observe = (state: DesktopUpdateState) => {
+    if (state.channel !== checking.channel) outcome.resolve(null);
+    else if (state.status !== "checking" && (state.checkedAt ?? "") >= (checking.checkedAt ?? ""))
+      outcome.resolve(state);
+  };
+  const unsubscribe = bridge.onUpdateState(observe);
+  // Release the manual action if the native updater stops sending events.
+  const timeout = window.setTimeout(outcome.reject, 120_000);
+  try {
+    void bridge.getUpdateState().then(observe, outcome.reject);
+    return await outcome.promise;
+  } finally {
+    window.clearTimeout(timeout);
+    unsubscribe();
+  }
+}
+
+async function reportUpdateCheck(bridge: UpdateCheckBridge, gt: DesktopUpdateTranslate) {
+  try {
+    const result = await bridge.checkForUpdate();
+    if (!result.checked) {
+      toastUpdateError(
+        gt("Could not check for updates"),
+        getDesktopUpdateDisabledReason(result.state, gt) ??
+          translateDesktopUpdateMessage(result.state.message, gt) ??
+          gt("Update check failed."),
+      );
+      return;
+    }
+    const state =
+      result.state.status === "checking"
+        ? await waitForCheckOutcome(bridge, result.state)
+        : result.state;
+    if (!state) return;
+    const error = getDesktopUpdateCheckError(state, gt);
+    if (error) {
+      toastUpdateError(gt("Could not check for updates"), error);
+    } else if (state.status === "up-to-date") {
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: `GOAT ${state.currentVersion}`,
+          description: getDesktopUpdateActionTooltip(state, gt),
+        }),
+      );
+    }
+  } catch (error) {
+    toastUpdateError(
+      gt("Could not check for updates"),
+      (error instanceof Error && error.message) || gt("Update check failed."),
+    );
+  }
+}
+
+let pendingCheck: Promise<void> | undefined;
+
+export function checkLocalUpdate(
+  bridge: UpdateCheckBridge,
+  gt: DesktopUpdateTranslate,
+): Promise<void> {
+  pendingCheck ??= reportUpdateCheck(bridge, gt).finally(() => {
+    pendingCheck = undefined;
+  });
+  return pendingCheck;
+}
 
 export async function downloadLocalUpdate(
   bridge: DesktopBridge,

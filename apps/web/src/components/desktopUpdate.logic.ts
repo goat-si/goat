@@ -113,7 +113,7 @@ export function getDesktopUpdateButtonTooltip(
   return installationNotice ? `${actionTooltip}\n${installationNotice}` : actionTooltip;
 }
 
-function getDesktopUpdateActionTooltip(
+export function getDesktopUpdateActionTooltip(
   state: DesktopUpdateState,
   gt: DesktopUpdateTranslate,
 ): string {

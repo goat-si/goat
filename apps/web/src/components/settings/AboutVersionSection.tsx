@@ -4,10 +4,9 @@ import { useState } from "react";
 
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
-import { downloadLocalUpdate } from "../desktopUpdate.toast";
+import { checkLocalUpdate, downloadLocalUpdate } from "../desktopUpdate.toast";
 import {
   canCheckForUpdate,
-  getDesktopUpdateDisabledReason,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleDescription,
   getDesktopUpdateInstallConfirmationMessage,
@@ -120,33 +119,10 @@ export function AboutVersionSection() {
         .finally(() => setIsUpdateActionPending(false));
       return;
     }
-    if (typeof bridge.checkForUpdate !== "function") return;
+    if (isUpdateActionPending || typeof bridge.checkForUpdate !== "function") return;
+    setIsUpdateActionPending(true);
     void checkProviderUpdates();
-    void bridge
-      .checkForUpdate()
-      .then((result) => {
-        if (!result.checked) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: gt("Could not check for updates"),
-              description:
-                getDesktopUpdateDisabledReason(result.state, gt) ??
-                result.state.message ??
-                gt("Automatic updates are not available in this build."),
-            }),
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: gt("Could not check for updates"),
-            description: error instanceof Error ? error.message : gt("Update check failed."),
-          }),
-        );
-      });
+    await checkLocalUpdate(bridge, gt).finally(() => setIsUpdateActionPending(false));
   };
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState, gt) : null;
