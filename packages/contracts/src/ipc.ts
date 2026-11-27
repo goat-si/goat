@@ -218,11 +218,7 @@ export type DesktopUpdateInstallPolicy = typeof DesktopUpdateInstallPolicySchema
 export interface DesktopUpdateState {
   installPolicy: DesktopUpdateInstallPolicy;
   pendingRestartReason: null | "busy" | "unknown" | "paused";
-  pendingUpdate: null | {
-    readonly version: string;
-    readonly channel: DesktopUpdateChannel;
-    readonly downloadedAt: string;
-  };
+  pendingUpdate: typeof DesktopUpdatePendingRecordSchema.Type;
   recoveryStatus: null | "restoring" | "needs-network";
   enabled: boolean;
   status: DesktopUpdateStatus;
@@ -236,6 +232,7 @@ export interface DesktopUpdateState {
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote>;
   omittedReleaseCount: number;
   downloadPercent: number | null;
+  downloadBytesPerSecond?: number | null;
   checkedAt: string | null;
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
@@ -301,6 +298,9 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   releaseNotes: Schema.Array(DesktopUpdateReleaseNoteSchema),
   omittedReleaseCount: Schema.Number,
   downloadPercent: Schema.NullOr(Schema.Number),
+  downloadBytesPerSecond: Schema.optionalKey(
+    Schema.NullOr(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
   checkedAt: Schema.NullOr(Schema.String),
   message: Schema.NullOr(Schema.String),
   errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),

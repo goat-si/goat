@@ -1,4 +1,4 @@
-import { gtFallback, useGT } from "gt-react";
+import { gtFallback, useGT, useLocale } from "gt-react";
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { TriangleAlertIcon } from "~/components/solar";
 import { type ComponentProps, useId, useRef, useState } from "react";
@@ -226,6 +226,7 @@ export function SidebarUpdatePill({
 
 function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement }) {
   const gt = useGT();
+  const locale = useLocale();
   const inRail = placement === "rail";
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
@@ -298,7 +299,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     ? describeUpdateTabs(everything.counts)
     : showUpdateDetails
       ? state
-        ? getDesktopUpdateButtonTooltip(state, gt)
+        ? getDesktopUpdateButtonTooltip(state, gt, locale)
         : gt("Update available")
       : null;
   const installationDetail =
@@ -744,7 +745,9 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
                 ×
               </button>
             </div>
-            <p className="mt-1 text-muted-foreground">{getDesktopUpdateButtonTooltip(state, gt)}</p>
+            <p className="mt-1 text-muted-foreground">
+              {getDesktopUpdateButtonTooltip(state, gt, locale)}
+            </p>
             {isDownloading ? (
               <progress
                 className="mt-2 w-full"

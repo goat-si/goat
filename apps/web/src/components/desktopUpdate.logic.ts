@@ -101,12 +101,13 @@ export function getArm64IntelBuildWarningDescription(
 export function getDesktopUpdateButtonTooltip(
   state: DesktopUpdateState,
   gt: DesktopUpdateTranslate = gtFallback,
+  locale?: string,
 ): string {
   if (!state.enabled)
     return (
       translateDesktopUpdateMessage(state.message, gt) ?? gt("Automatic updates are disabled.")
     );
-  const actionTooltip = getDesktopUpdateActionTooltip(state, gt);
+  const actionTooltip = getDesktopUpdateActionTooltip(state, gt, locale);
   const installationNotice = state.installationNotice
     ? translateDesktopUpdateMessage(state.installationNotice, gt)
     : null;
@@ -116,6 +117,7 @@ export function getDesktopUpdateButtonTooltip(
 function getDesktopUpdateActionTooltip(
   state: DesktopUpdateState,
   gt: DesktopUpdateTranslate,
+  locale?: string,
 ): string {
   if (
     state.notAppliedVersion !== undefined &&
@@ -141,9 +143,25 @@ function getDesktopUpdateActionTooltip(
       : gt("Update available to download");
   }
   if (state.status === "downloading") {
-    return typeof state.downloadPercent === "number"
-      ? gt("Downloading update ({percent}%)", { percent: Math.floor(state.downloadPercent) })
-      : gt("Downloading update");
+    const progress =
+      typeof state.downloadPercent === "number"
+        ? gt("Downloading update ({percent}%)", { percent: Math.floor(state.downloadPercent) })
+        : gt("Downloading update");
+    const rate = state.downloadBytesPerSecond;
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) return progress;
+    const units = [
+      "byte-per-second",
+      "kilobyte-per-second",
+      "megabyte-per-second",
+      "gigabyte-per-second",
+    ] as const;
+    const index = rate >= 1e9 ? 3 : rate >= 1e6 ? 2 : rate >= 1e3 ? 1 : 0;
+    const speed = new Intl.NumberFormat(locale, {
+      style: "unit",
+      unit: units[index],
+      maximumFractionDigits: 1,
+    }).format(rate / 1000 ** index);
+    return `${progress} · ${speed}`;
   }
   if (state.status === "downloaded") {
     if (state.errorContext === "install" && state.downloadedVersion) {

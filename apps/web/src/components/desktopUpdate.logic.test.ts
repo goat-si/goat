@@ -272,6 +272,30 @@ describe("canCheckForUpdate", () => {
 });
 
 describe("getDesktopUpdateButtonTooltip", () => {
+  it.each(["en", "de", "es", "fr", "ja", "ko", "pt-BR", "ru", "zh"])(
+    "formats the reported transfer rate for %s",
+    (locale) => {
+      const state = {
+        ...baseState,
+        status: "downloading" as const,
+        downloadPercent: 42,
+        downloadBytesPerSecond: 2_500_000,
+      };
+      const expected = new Intl.NumberFormat(locale, {
+        style: "unit",
+        unit: "megabyte-per-second",
+      }).format(2.5);
+      expect(getDesktopUpdateButtonTooltip(state, gtFallback, locale)).toContain(expected);
+      expect(
+        getDesktopUpdateButtonTooltip(
+          { ...state, downloadBytesPerSecond: null },
+          gtFallback,
+          locale,
+        ),
+      ).toBe("Downloading update (42%)");
+    },
+  );
+
   it("keeps administrator advice next to the app action without blocking checks", () => {
     const state: DesktopUpdateState = {
       ...baseState,

@@ -37,6 +37,7 @@ export function createInitialDesktopUpdateState(
     releaseNotes: [],
     omittedReleaseCount: 0,
     downloadPercent: null,
+    downloadBytesPerSecond: null,
     checkedAt: null,
     message: null,
     errorContext: null,
@@ -57,6 +58,7 @@ export function reduceDesktopUpdateStateOnCheckStart(
     omittedReleaseCount: hasDownloadedUpdate ? state.omittedReleaseCount : 0,
     message: null,
     downloadPercent: hasDownloadedUpdate ? 100 : null,
+    downloadBytesPerSecond: null,
     errorContext: null,
     canRetry: false,
   };
@@ -74,6 +76,7 @@ export function reduceDesktopUpdateStateOnCheckFailure(
       message: null,
       checkedAt,
       downloadPercent: 100,
+      downloadBytesPerSecond: null,
       errorContext: null,
       canRetry: true,
     };
@@ -85,6 +88,7 @@ export function reduceDesktopUpdateStateOnCheckFailure(
     message,
     checkedAt,
     downloadPercent: null,
+    downloadBytesPerSecond: null,
     errorContext: "check",
     canRetry: true,
   };
@@ -107,6 +111,7 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
     releaseNotes: preserveReleaseNotes ? state.releaseNotes : releaseNotes,
     omittedReleaseCount: preserveReleaseNotes ? state.omittedReleaseCount : omittedReleaseCount,
     downloadPercent: isDownloadedVersion ? 100 : null,
+    downloadBytesPerSecond: null,
     checkedAt,
     message: null,
     errorContext: null,
@@ -124,6 +129,7 @@ export function reduceDesktopUpdateStateOnNoUpdate(
       status: "downloaded",
       availableVersion: state.downloadedVersion,
       downloadPercent: 100,
+      downloadBytesPerSecond: null,
       checkedAt,
       message: null,
       errorContext: null,
@@ -142,6 +148,7 @@ export function reduceDesktopUpdateStateOnNoUpdate(
     releaseNotes: [],
     omittedReleaseCount: 0,
     downloadPercent: null,
+    downloadBytesPerSecond: null,
     checkedAt,
     message: null,
     errorContext: null,
@@ -156,6 +163,7 @@ export function reduceDesktopUpdateStateOnDownloadStart(
     ...state,
     status: "downloading",
     downloadPercent: 0,
+    downloadBytesPerSecond: null,
     message: null,
     errorContext: null,
     canRetry: false,
@@ -171,6 +179,7 @@ export function reduceDesktopUpdateStateOnDownloadFailure(
     status: nextStatusAfterDownloadFailure(state),
     message,
     downloadPercent: null,
+    downloadBytesPerSecond: null,
     errorContext: "download",
     canRetry: getCanRetryAfterDownloadFailure(state),
   };
@@ -197,11 +206,13 @@ export function shouldBroadcastDownloadProgress(
 export function reduceDesktopUpdateStateOnDownloadProgress(
   state: DesktopUpdateState,
   percent: number,
+  bytesPerSecond: number | null,
 ): DesktopUpdateState {
   return {
     ...state,
     status: "downloading",
     downloadPercent: percent,
+    downloadBytesPerSecond: bytesPerSecond,
     message: null,
     errorContext: null,
     canRetry: false,
@@ -218,6 +229,7 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
     availableVersion: version,
     downloadedVersion: version,
     downloadPercent: 100,
+    downloadBytesPerSecond: null,
     message: null,
     errorContext: null,
     canRetry: true,
