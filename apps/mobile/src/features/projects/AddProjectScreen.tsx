@@ -749,7 +749,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
       );
       return;
     }
-    openNewTaskDraft(
+    void openNewTaskDraft(
       {
         environmentId: environment.environmentId,
         projectId,
@@ -1039,7 +1039,7 @@ export function AddProjectDestinationScreen(props: {
             "The project was created but has not reached this device yet. It will appear in the project list once the connection catches up.",
           );
         } else {
-          openNewTaskDraft(
+          void openNewTaskDraft(
             {
               environmentId: environment.environmentId,
               projectId,
