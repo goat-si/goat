@@ -162,11 +162,19 @@ export function humanizeThemeName(raw: string): string {
     .join(" ");
 }
 
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 function resolveName(value: Record<string, unknown>): string {
   for (const candidate of [value.displayName, value.name]) {
     if (typeof candidate !== "string") continue;
     const humanized = humanizeThemeName(candidate);
-    if (humanized.length > 0) return humanized.slice(0, 48);
+    if (humanized.length > 0) {
+      return humanized.slice(0, splitsSurrogatePair(humanized, 48) ? 47 : 48);
+    }
   }
   return "VS Code theme";
 }
@@ -466,7 +474,7 @@ export function resolveThemeLabelCollisions(
 ): ReadonlyArray<ThemeDefinition> {
   const rename = (theme: ThemeDefinition, name: string): ThemeDefinition | null => {
     try {
-      return renameTheme(theme, name.slice(0, 48));
+      return renameTheme(theme, name.slice(0, splitsSurrogatePair(name, 48) ? 47 : 48));
     } catch {
       return null;
     }
