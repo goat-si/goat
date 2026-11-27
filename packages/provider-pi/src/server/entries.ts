@@ -1,7 +1,12 @@
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { PiRpcError, piRecordField, piRecordString, type PiRpcRecord } from "./rpc.ts";
+
+const decodeSessionLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 export const readPiEntries = <E>(
   paged: boolean,
@@ -49,7 +54,7 @@ export const readPiEntries = <E>(
   });
 };
 
-interface PiSessionEntry {
+export interface PiSessionEntry {
   readonly parentId: string | null;
   readonly isUserMessage: boolean;
   /** Pi's `timestamp` as epoch milliseconds; null when missing or unparsable. */
@@ -60,6 +65,50 @@ export interface PiSessionListing {
   readonly entries: ReadonlyMap<string, PiSessionEntry>;
   readonly leafId: string | null;
 }
+
+export function readPiSessionEntry(entry: unknown): [string, PiSessionEntry] | null {
+  const id = piRecordString(entry, "id");
+  const parentId = piRecordField(entry, "parentId");
+  if (id === undefined || (parentId !== null && typeof parentId !== "string")) return null;
+  const timestamp = piRecordString(entry, "timestamp");
+  return [
+    id,
+    {
+      parentId,
+      isUserMessage:
+        piRecordField(entry, "type") === "message" &&
+        piRecordString(piRecordField(entry, "message"), "role") === "user",
+      timestamp:
+        timestamp === undefined
+          ? null
+          : Option.getOrNull(Option.map(DateTime.make(timestamp), DateTime.toEpochMillis)),
+    },
+  ];
+}
+
+export const readPiSessionFile = Effect.fnUntraced(function* (
+  fileSystem: FileSystem.FileSystem,
+  file: string,
+): Effect.fn.Return<PiSessionListing | null> {
+  const entries = new Map<string, PiSessionEntry>();
+  let leafId: string | null = null;
+  const readable = yield* fileSystem.stream(file).pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.runForEach((line) =>
+      Effect.sync(() => {
+        const entry = readPiSessionEntry(Option.getOrUndefined(decodeSessionLine(line)));
+        if (entry === null) return;
+        const [id, value] = entry;
+        entries.set(id, value);
+        leafId = id;
+      }),
+    ),
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
+  return readable ? { entries, leafId } : null;
+});
 
 export function piSessionListing(data: unknown): PiSessionListing | null {
   const leafId = piRecordField(data, "leafId");
@@ -73,21 +122,9 @@ function piSessionEntries(entries: unknown): ReadonlyMap<string, PiSessionEntry>
   const byId = new Map<string, PiSessionEntry>();
   if (!Array.isArray(entries)) return null;
   for (const entry of entries) {
-    const id = piRecordString(entry, "id");
-    const parentId = piRecordField(entry, "parentId");
-    if (id === undefined || byId.has(id) || (parentId !== null && typeof parentId !== "string"))
-      return null;
-    const timestamp = piRecordString(entry, "timestamp");
-    byId.set(id, {
-      parentId,
-      isUserMessage:
-        piRecordField(entry, "type") === "message" &&
-        piRecordString(piRecordField(entry, "message"), "role") === "user",
-      timestamp:
-        timestamp === undefined
-          ? null
-          : Option.getOrNull(Option.map(DateTime.make(timestamp), DateTime.toEpochMillis)),
-    });
+    const parsed = readPiSessionEntry(entry);
+    if (parsed === null || byId.has(parsed[0])) return null;
+    byId.set(parsed[0], parsed[1]);
   }
   return byId;
 }
