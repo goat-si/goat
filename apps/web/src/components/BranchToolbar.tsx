@@ -165,6 +165,8 @@ interface RunContextSelectorProps {
   displayMode?: "toolbar" | "panel";
   workspaceRoot?: string;
   forceNewWorktree: boolean;
+  /** False when the folder has no repository a worktree could come from. */
+  offersWorkspaceModes: boolean;
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
@@ -186,7 +188,8 @@ interface RunContextSelectorProps {
 const RunContextSelector = memo(function RunContextSelector({
   displayMode = "toolbar",
   workspaceRoot,
-  forceNewWorktree,
+  forceNewWorktree: requestedForceNewWorktree,
+  offersWorkspaceModes,
   autoEnvironmentLabel,
   onAutoEnvironment,
   envLocked,
@@ -197,7 +200,7 @@ const RunContextSelector = memo(function RunContextSelector({
   showEnvironmentPicker,
   showEnvironmentIndicator,
   onEnvironmentChange,
-  effectiveEnvMode,
+  effectiveEnvMode: requestedEnvMode,
   activeWorktreePath,
   onEnvModeChange,
   sshDestination = null,
@@ -211,10 +214,13 @@ const RunContextSelector = memo(function RunContextSelector({
   const composerFloatingLayerProps = useComposerMenuProps();
   const activeEnvironment =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
+  // A folder no worktree can come from runs threads in place, whatever mode was requested.
+  const forceNewWorktree = offersWorkspaceModes && requestedForceNewWorktree;
+  const effectiveEnvMode = offersWorkspaceModes ? requestedEnvMode : "local";
   const WorkspaceIcon =
     effectiveEnvMode === "worktree"
       ? FolderGit2Icon
-      : activeWorktreePath
+      : activeWorktreePath && offersWorkspaceModes
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = resolveSshWorkspaceLabel({
@@ -228,7 +234,8 @@ const RunContextSelector = memo(function RunContextSelector({
     }),
   });
   const isPanel = displayMode === "panel";
-  const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
+  const workspaceModesLocked = envModeLocked || !offersWorkspaceModes;
+  const isLocked = envLocked || (workspaceModesLocked && (!isPanel || !showEnvironmentPicker));
   const workspacePath =
     forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
       ? null
@@ -341,7 +348,7 @@ const RunContextSelector = memo(function RunContextSelector({
         data-composer-context-control
         data-composer-shortcut={[
           showEnvironmentPicker && !envLocked ? "composer.host" : "",
-          !envModeLocked ? "composer.workspace" : "",
+          !workspaceModesLocked ? "composer.workspace" : "",
         ].join(" ")}
       >
         {triggerContent}
@@ -354,21 +361,23 @@ const RunContextSelector = memo(function RunContextSelector({
         {...(!isPanel ? composerFloatingLayerProps : {})}
       >
         {/* Workspace comes first so a long machine list cannot push it out of reach. */}
-        <WorkspaceMenuItems
-          envMode={effectiveEnvMode}
-          locked={envModeLocked}
-          forceNewWorktree={forceNewWorktree}
-          localLabel={resolveCurrentWorkspaceLabel(activeWorktreePath)}
-          sshDestination={sshDestination}
-          sshOptions={sshOptions}
-          sshDisabledReason={sshDisabledReason}
-          onEnvModeChange={onEnvModeChange}
-          onSshDestinationChange={(destination) => onSshDestinationChange?.(destination)}
-        />
+        {offersWorkspaceModes ? (
+          <WorkspaceMenuItems
+            envMode={effectiveEnvMode}
+            locked={envModeLocked}
+            forceNewWorktree={forceNewWorktree}
+            localLabel={resolveCurrentWorkspaceLabel(activeWorktreePath)}
+            sshDestination={sshDestination}
+            sshOptions={sshOptions}
+            sshDisabledReason={sshDisabledReason}
+            onEnvModeChange={onEnvModeChange}
+            onSshDestinationChange={(destination) => onSshDestinationChange?.(destination)}
+          />
+        ) : null}
         {availableEnvironments &&
         ((showEnvironmentPicker && onEnvironmentChange) || addTargets.length > 0) ? (
           <>
-            <MenuSeparator />
+            {offersWorkspaceModes ? <MenuSeparator /> : null}
             <MenuGroup>
               <MenuGroupLabel>Run on</MenuGroupLabel>
               <MenuRadioGroup
@@ -718,6 +727,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             displayMode="panel"
             workspaceRoot={activeProject.workspaceRoot}
             forceNewWorktree={forceNewWorktree}
+            offersWorkspaceModes={showGitControls}
             autoEnvironmentLabel={autoEnvironmentLabel}
             onAutoEnvironment={onAutoEnvironment}
             envLocked={envLocked}
@@ -775,6 +785,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         <div className="contents @3xl/composer-surface:hidden">
           <RunContextSelector
             forceNewWorktree={forceNewWorktree}
+            offersWorkspaceModes={showGitControls}
             autoEnvironmentLabel={autoEnvironmentLabel}
             onAutoEnvironment={onAutoEnvironment}
             envLocked={envLocked}
