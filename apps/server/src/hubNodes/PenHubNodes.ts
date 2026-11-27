@@ -34,6 +34,7 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
   const inspectAll = Effect.fn("PenHubNodes.inspectAll")(function* (
     view: Extract<PenMembershipView, { kind: "ready" }>,
     isCurrent: () => boolean,
+    cached: Map<string, PenAliasInspection>,
   ) {
     const members: Array<PenRouteBinding & { readonly name: string }> = [];
     const online = new Set<string>();
@@ -44,11 +45,20 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
       if (member.nodeId === view.snapshot.self) continue;
       if (!isCurrent()) return undefined;
       if (member.online) online.add(member.nodeId);
-      const route = yield* input.inspect(`pen-${member.nodeId}`).pipe(
-        Effect.catchTags({
-          PenAliasUnreadable: () => Effect.succeed({ refused: "unreadable" as const }),
-        }),
-      );
+      const route =
+        cached.get(member.nodeId) ??
+        (yield* input.inspect(`pen-${member.nodeId}`).pipe(
+          Effect.catchTags({
+            PenAliasUnreadable: () => Effect.succeed({ refused: "unreadable" as const }),
+          }),
+        ));
+      if (
+        !("refused" in route) ||
+        (route.refused !== "unreadable" &&
+          route.refused !== "not-in-pen-config" &&
+          route.refused !== "no-recorded-key")
+      )
+        cached.set(member.nodeId, route);
       if ("refused" in route) {
         if (route.refused === "unreadable") keep.add(member.nodeId);
         // Pen writes its ssh config after it publishes a snapshot, so a new member settles late.
@@ -75,13 +85,15 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
     // A Pen that is down says nothing about who left, but the setting off empties the list anyway.
     if (stored.value.penHubNodes && view.kind === "unavailable") return;
     const enabled = stored.value.penHubNodes && view.kind === "ready";
-    // Looks again as long as something is unsettled, at most RETRY_DELAYS' last apart; a newer
-    // member list or setting ends this pass (switchMap) and starts a fresh one.
-    for (let round = 0; ; round++) {
-      if (round > 0)
-        yield* Effect.sleep(RETRY_DELAYS[Math.min(round, RETRY_DELAYS.length) - 1] ?? "10 minutes");
+    const cached = new Map<string, PenAliasInspection>();
+    for (let round = 0; round <= RETRY_DELAYS.length; round++) {
+      if (round > 0) {
+        const delay = RETRY_DELAYS[round - 1];
+        if (delay === undefined) return;
+        yield* Effect.sleep(delay);
+      }
       const inspected = enabled
-        ? yield* inspectAll(view, isCurrent)
+        ? yield* inspectAll(view, isCurrent, cached)
         : { members: [], online: new Set<string>(), keep: new Set<string>(), unsettled: false };
       if (inspected === undefined || !isCurrent()) return;
       const result = yield* nodes.reconcilePen({

@@ -558,7 +558,7 @@ describe("PenHubNodes", () => {
     ),
   );
 
-  it.effect("an alias that can be read only after the last scheduled retry is still listed", () =>
+  it.effect("an alias that settles after the retry limit is listed on a new view", () =>
     reconcile(({ pinned, rows, pass, unreadable }) =>
       Effect.gen(function* () {
         pinned.set(alias("a"), key("a"));
@@ -567,9 +567,28 @@ describe("PenHubNodes", () => {
         yield* TestClock.adjust("13 minutes");
         expect(yield* rows).toEqual([]);
         unreadable.delete(alias("a"));
-        yield* TestClock.adjust("10 minutes");
         yield* Fiber.join(running);
+        yield* pass(ready(["a", "a"]));
         expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+      }),
+    ),
+  );
+
+  it.effect("retries only unsettled members and stops until a new view", () =>
+    reconcile(({ pinned, inspected, pass, rows }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        const running = yield* pass(ready(["a", "a"], ["b", "b"])).pipe(
+          Effect.orDie,
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust("25 minutes");
+        expect(inspected.filter((name) => name === alias("a"))).toHaveLength(1);
+        expect(inspected.filter((name) => name === alias("b"))).toHaveLength(5);
+        yield* Fiber.join(running);
+        pinned.set(alias("b"), key("b"));
+        yield* pass(ready(["a", "a"], ["b", "b"]));
+        expect(yield* rows).toHaveLength(2);
       }),
     ),
   );
