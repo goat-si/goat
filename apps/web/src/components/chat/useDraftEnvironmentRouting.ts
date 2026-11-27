@@ -28,6 +28,7 @@ import { unsilenceProjectCloneToasts } from "../../state/projectClones";
 import type { DraftSessionState } from "../../composerDraftStore";
 import { loadBalancingSendWarning } from "./composerSend.logic";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { retargetDraftWorkspace } from "../../lib/retargetDraftWorkspace";
 import { draftFanoutSelectionsAtom } from "./chatViewSend";
 
 interface DraftEnvironmentRoutingInput {
@@ -308,6 +309,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       )
         return false;
       const projectRef = scopeProjectRef(project.environmentId, project.id);
+      const workspace = retargetDraftWorkspace(currentDraft, projectRef);
       if (activeProjectIsScratch) {
         setLogicalProjectDraftThreadId(
           deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings),
@@ -317,6 +319,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
             environmentSelection: "manual",
             loadBalancedEnvironmentId: null,
             sshDestination: null,
+            ...workspace,
           },
         );
       } else {
@@ -325,6 +328,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
           sshDestination: null,
           environmentSelection: "manual",
           loadBalancedEnvironmentId: null,
+          ...workspace,
         });
       }
       return true;

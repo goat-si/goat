@@ -29,6 +29,8 @@ vi.mock("../../lib/addProjectToMachine", () => ({
 }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => [...state.projects.values()],
+  readThreadShells: () => [],
+  readProject: (ref: ScopedProjectRef) => state.projects.get(state.keyOf(ref)) ?? null,
   waitForProject: (ref: ScopedProjectRef) =>
     new Promise((resolve, reject) => {
       if (state.projectArrivalTimesOut) return reject(new Error("The project did not appear."));
@@ -305,5 +307,45 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
     // The clone is still running, so nothing claims it failed; the draft stays put.
     expect(state.toast).not.toHaveBeenCalled();
     expect(screen.draft()?.environmentId).toBe(laptop);
+  });
+
+  it("takes the destination's default workspace when the draft switches machine by hand", async () => {
+    await using screen = await setup();
+    state.setProject(onMacmini, {
+      ...SOURCE,
+      environmentId: macmini,
+      id: onMacmini.projectId,
+      defaultThreadEnvMode: "worktree" as const,
+    });
+    // The source's own default, never picked by the user.
+    useComposerDraftStore
+      .getState()
+      .setDraftThreadContext(draftId, { envMode: "local", startFromOrigin: false });
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+
+    await vi.waitFor(() => expect(screen.draft()?.environmentId).toBe(macmini));
+    expect(screen.draft()?.envMode).toBe("worktree");
+  });
+
+  it("keeps a workspace the user picked when the draft switches machine by hand", async () => {
+    await using screen = await setup();
+    state.setProject(onMacmini, {
+      ...SOURCE,
+      environmentId: macmini,
+      id: onMacmini.projectId,
+      defaultThreadEnvMode: "worktree" as const,
+    });
+    // Picked by hand, even though it is also the source's default.
+    useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+      envMode: "local",
+      startFromOrigin: false,
+      workspaceExplicit: true,
+    });
+
+    await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+
+    await vi.waitFor(() => expect(screen.draft()?.environmentId).toBe(macmini));
+    expect(screen.draft()?.envMode).toBe("local");
   });
 });

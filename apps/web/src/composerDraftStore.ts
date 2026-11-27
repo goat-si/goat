@@ -285,6 +285,7 @@ const PersistedDraftThreadState = Schema.Struct({
   // Unknown, so one malformed value cannot fail the whole-storage read; read leniently.
   checkoutPullRequest: Schema.optionalKey(Schema.Unknown),
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  workspaceExplicit: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -382,6 +383,8 @@ export interface DraftSessionState {
   envMode: DraftThreadEnvMode;
   sshDestination?: DraftSshDestination | null;
   startFromOrigin: boolean;
+  /** The user chose the workspace; without it a draft moving machine takes the new project's default. */
+  workspaceExplicit?: true;
   /** Linked to the thread when the draft is sent on this branch. */
   checkoutPullRequest?: DraftCheckoutPullRequest;
   promotedTo?: ScopedThreadRef | null;
@@ -431,6 +434,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
       sshDestination?: DraftSshDestination | null;
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
       startFromOrigin?: boolean;
+      workspaceExplicit?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -449,6 +453,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
       sshDestination?: DraftSshDestination | null;
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
       startFromOrigin?: boolean;
+      workspaceExplicit?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -466,6 +471,7 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
       sshDestination?: DraftSshDestination | null;
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
       startFromOrigin?: boolean;
+      workspaceExplicit?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -1216,6 +1222,7 @@ function createDraftThreadState(
     sshDestination?: DraftSshDestination | null;
     checkoutPullRequest?: DraftCheckoutPullRequest | null;
     startFromOrigin?: boolean;
+    workspaceExplicit?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
@@ -1282,6 +1289,9 @@ function createDraftThreadState(
       ? { environmentSelection: "manual" as const, loadBalancedEnvironmentId: null }
       : {}),
     startFromOrigin: nextStartFromOrigin,
+    ...((options?.workspaceExplicit ?? existingThread?.workspaceExplicit)
+      ? { workspaceExplicit: true as const }
+      : {}),
     ...resolvedCheckoutField(existingThread, options?.checkoutPullRequest, projectChanged),
     promotedTo: null,
   };
@@ -1318,6 +1328,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.envMode === right.envMode &&
     draftSshDestinationsEqual(left.sshDestination, right.sshDestination) &&
     left.startFromOrigin === right.startFromOrigin &&
+    left.workspaceExplicit === right.workspaceExplicit &&
     sameCheckoutPullRequest(left, right) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
@@ -1471,6 +1482,7 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        ...(candidateDraftThread.workspaceExplicit === true ? { workspaceExplicit: true } : {}),
         ...(candidateDraftThread.environmentSelection === "manual" ||
         candidateDraftThread.environmentSelection === "auto"
           ? { environmentSelection: candidateDraftThread.environmentSelection }
@@ -2247,6 +2259,7 @@ function toHydratedDraftThreadState(
     envMode: persistedDraftThread.envMode,
     sshDestination: persistedDraftThread.sshDestination ?? null,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...(persistedDraftThread.workspaceExplicit ? { workspaceExplicit: true } : {}),
     ...storedCheckoutField(persistedDraftThread.checkoutPullRequest),
     ...(persistedDraftThread.environmentSelection
       ? { environmentSelection: persistedDraftThread.environmentSelection }
@@ -2554,6 +2567,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ? { environmentSelection: "manual" as const, loadBalancedEnvironmentId: null }
                 : {}),
               startFromOrigin: nextStartFromOrigin,
+              ...((options.workspaceExplicit ?? existing.workspaceExplicit)
+                ? { workspaceExplicit: true as const }
+                : {}),
               ...resolvedCheckoutField(existing, options.checkoutPullRequest, projectChanged),
               promotedTo: existing.promotedTo ?? null,
             };
@@ -2571,6 +2587,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.envMode === existing.envMode &&
               draftSshDestinationsEqual(nextDraftThread.sshDestination, existing.sshDestination) &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              nextDraftThread.workspaceExplicit === existing.workspaceExplicit &&
               sameCheckoutPullRequest(nextDraftThread, existing) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
