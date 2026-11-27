@@ -3752,7 +3752,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
       void bridge
         .installUpdate()
         .then((result) => {
-          const actionError = getDesktopUpdateInstallError(result);
+          const actionError = getDesktopUpdateInstallError(result, gt);
           if (!actionError) return;
           toastManager.add(
             stackedThreadToast({

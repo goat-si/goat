@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 
-import { describeUpdateErrorCause } from "./updateFailures.ts";
+import { describeUpdateErrorCause, installFailureMessage } from "./updateFailures.ts";
 
 describe("describeUpdateErrorCause", () => {
   it("removes URLs, credentials, response bodies, and headers from summaries", () => {
@@ -45,5 +45,31 @@ describe("describeUpdateErrorCause", () => {
       },
     });
     assert.equal(describeUpdateErrorCause(unreadable), "UnknownError");
+  });
+});
+
+describe("installFailureMessage", () => {
+  it("uses filesystem recovery guidance only for a reported installer error code", () => {
+    const fallback = "Installer failed.";
+    for (const code of ["EACCES", "EPERM"]) {
+      assert.include(
+        installFailureMessage(Object.assign(new Error("install"), { code }), fallback),
+        "administrator",
+      );
+    }
+    assert.include(installFailureMessage({ code: "EROFS" }, fallback), "read-only");
+    assert.equal(installFailureMessage({ code: "ENOTFOUND" }, fallback), fallback);
+    assert.equal(installFailureMessage(new Error("EACCES in output"), fallback), fallback);
+    assert.equal(
+      installFailureMessage(
+        {
+          get code() {
+            throw new Error("unreadable");
+          },
+        },
+        fallback,
+      ),
+      fallback,
+    );
   });
 });

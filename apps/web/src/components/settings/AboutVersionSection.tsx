@@ -4,12 +4,13 @@ import { useState } from "react";
 
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
-import { downloadLocalUpdate } from "../desktopUpdate.toast";
+import { downloadLocalUpdate, openDesktopUpdateReleaseNotes } from "../desktopUpdate.toast";
 import {
   canCheckForUpdate,
   getDesktopUpdateDisabledReason,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleDescription,
+  getDesktopUpdateTransferFailure,
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateInstallError,
   installDesktopUpdate,
@@ -18,7 +19,7 @@ import {
   resolveDesktopUpdateButtonAction,
   translateDesktopUpdateMessage,
 } from "../desktopUpdate.logic";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -105,7 +106,7 @@ export function AboutVersionSection() {
       }
       void installDesktopUpdate(bridge)
         .then((result) => {
-          const message = getDesktopUpdateInstallError(result);
+          const message = getDesktopUpdateInstallError(result, gt);
           if (message) throw new Error(message);
         })
         .catch((error: unknown) => {
@@ -160,15 +161,38 @@ export function AboutVersionSection() {
     downloading: gt("Downloading…"),
     "up-to-date": gt("Up to Date"),
   };
+  const failure = getDesktopUpdateTransferFailure(updateState, gt);
   const buttonLabel =
-    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? gt("Check for Updates");
-  const description =
-    (updateState?.installationNotice
-      ? translateDesktopUpdateMessage(updateState.installationNotice, gt)
-      : null) ??
+    failure?.retryLabel ??
+    actionLabel[action] ??
+    statusLabel[updateState?.status ?? ""] ??
+    gt("Check for Updates");
+  const installationNotice = updateState?.installationNotice
+    ? translateDesktopUpdateMessage(updateState.installationNotice, gt)
+    : null;
+  const releaseUrl = failure?.releaseUrl;
+  const policyDescription = updateState && getDesktopUpdateStatusText(updateState, gt);
+  const description = failure ? (
+    <>
+      <span>{failure.detail}</span> {installationNotice}{" "}
+      {releaseUrl ? (
+        <InlineButton
+          render={<a href={releaseUrl} />}
+          onClick={(event) => {
+            event.preventDefault();
+            void openDesktopUpdateReleaseNotes(window.desktopBridge, releaseUrl, gt);
+          }}
+        >
+          {gt("Find installer on GitHub")}
+        </InlineButton>
+      ) : null}
+    </>
+  ) : (
+    (installationNotice ??
     (action === "download" || action === "install"
       ? gt("Update available.")
-      : getDesktopUpdateIdleDescription(updateState, gt));
+      : getDesktopUpdateIdleDescription(updateState, gt)))
+  );
 
   return (
     <>
@@ -200,7 +224,7 @@ export function AboutVersionSection() {
         <SettingsRow
           id={setting("update-install-policy").id}
           title={gt("Update installation")}
-          description={getDesktopUpdateStatusText(updateState, gt)}
+          description={policyDescription === failure?.detail ? null : policyDescription}
           control={
             <Select
               value={updateState.installPolicy}

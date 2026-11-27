@@ -21,6 +21,7 @@ import {
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
+  getDesktopUpdateTransferFailure,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
@@ -200,7 +201,7 @@ export async function installLocalUpdate(
 ): Promise<boolean> {
   try {
     const result = await installDesktopUpdate(bridge);
-    const actionError = getDesktopUpdateInstallError(result);
+    const actionError = getDesktopUpdateInstallError(result, gt);
     if (actionError) {
       reportError(gt("Could not install update"), actionError);
       return false;
@@ -309,16 +310,12 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
     (state && !state.enabled && state.message
       ? translateDesktopUpdateMessage(state.message, gt)
       : null);
-  // A failed automatic download raises no toast, so the button is where its reason shows.
-  const downloadError =
-    state?.enabled && state.errorContext === "download" && state.message
-      ? translateDesktopUpdateMessage(state.message, gt)
-      : null;
+  const transferFailure = getDesktopUpdateTransferFailure(state, gt);
   const tooltip = [
     heading,
     detail,
     installationDetail && !detail?.includes(installationDetail) ? installationDetail : null,
-    downloadError,
+    transferFailure?.detail,
   ]
     .filter(Boolean)
     .join("\n");
@@ -745,6 +742,11 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
               </button>
             </div>
             <p className="mt-1 text-muted-foreground">{getDesktopUpdateButtonTooltip(state, gt)}</p>
+            {transferFailure ? (
+              <p className="mt-1 text-muted-foreground [overflow-wrap:anywhere]">
+                {transferFailure.detail}
+              </p>
+            ) : null}
             {isDownloading ? (
               <progress
                 className="mt-2 w-full"

@@ -3811,5 +3811,10 @@
   "bb122f1d94960037": "O resultado é desconhecido. Reconecte-se e verifique o resultado da importação.",
   "4e506a7c2f37a858": "A seleção mudou. Visualize novamente antes de importar.",
   "68a5236a421d0f4c": "Verifique o resultado e visualize novamente antes de importar mais itens.",
-  "95cec271a3e79153": "O resultado salvo está indisponível. Itens anteriores podem ter sido aplicados. Visualize novamente."
+  "95cec271a3e79153": "O resultado salvo está indisponível. Itens anteriores podem ter sido aplicados. Visualize novamente.",
+  "a71729bfde45aa62": "Tentar baixar novamente",
+  "9c4a6d9d6080c00a": "Tentar instalar novamente",
+  "86c1d328fe309dd7": "Encontrar o instalador no GitHub",
+  "0ad2a52cc57493b3": "O acesso do instalador foi negado. Verifique as permissões do GOAT e de sua pasta ou peça ajuda a um administrador antes de tentar novamente.",
+  "f23baf6efecfb207": "O instalador encontrou um sistema de arquivos somente leitura. Verifique se o local de instalação permite gravação antes de tentar novamente."
 }

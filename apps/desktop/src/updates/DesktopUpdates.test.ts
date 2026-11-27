@@ -726,7 +726,7 @@ describe("DesktopUpdates", () => {
           channel: "latest",
           isSilent: true,
           isForceRunAfter: true,
-          cause: new Error("installer refused"),
+          cause: Object.assign(new Error("installer refused"), { code: "EACCES" }),
         }),
       ),
     });
@@ -741,6 +741,8 @@ describe("DesktopUpdates", () => {
 
         const result = yield* updates.install;
         assert.isTrue(result.accepted);
+        assert.include(result.state.message ?? "", "administrator");
+        assert.equal(result.state.downloadedVersion, "1.2.4");
         assert.isFalse(yield* Ref.get(desktopState.quitting));
         assert.deepEqual(harness.installSteps, [
           "closeSshTunnels",
@@ -827,8 +829,13 @@ describe("DesktopUpdates", () => {
         const { changes } = yield* updates.subscribe;
         const recovered = yield* Stream.runHead(changes).pipe(Effect.forkChild);
         yield* flushCallbacks;
-        harness.emit("error", new Error("native installer refused"));
-        assert.equal(Option.getOrThrow(yield* Fiber.join(recovered)).errorContext, "install");
+        harness.emit(
+          "error",
+          Object.assign(new Error("native installer refused"), { code: "EROFS" }),
+        );
+        const failed = Option.getOrThrow(yield* Fiber.join(recovered));
+        assert.equal(failed.errorContext, "install");
+        assert.include(failed.message ?? "", "read-only");
 
         assert.deepEqual(starts, [wsl.id]);
         assert.isFalse((yield* primary.snapshot).desiredRunning);

@@ -112,6 +112,7 @@ describe("SidebarUpdatePill release notes", () => {
     await using _screen = await render(<SidebarUpdatePill />);
     const notice = () => document.querySelector('aside[aria-label="Update available"]');
     expect(notice()?.textContent).toContain("Retry");
+    expect(notice()?.textContent).toContain("offline");
     await userEvent.click(notice()!.querySelector('button[aria-label="Close"]')!);
     await publish({ ...update, status: "downloading", downloadPercent: 20 });
     expect(notice()).toBeNull();

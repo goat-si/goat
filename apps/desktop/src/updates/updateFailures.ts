@@ -86,6 +86,20 @@ export function checkFailureMessage(reason: string): string {
   return `Could not check for updates: ${reason}`;
 }
 
+/** Use the installer's own filesystem code. Package managers and servers can return unrelated errors. */
+export function installFailureMessage(cause: unknown, fallback: string): string {
+  if (typeof cause !== "object" || cause === null) return fallback;
+  switch (Object.getOwnPropertyDescriptor(cause, "code")?.value) {
+    case "EACCES":
+    case "EPERM":
+      return "The installer was denied access. Check the permissions on GOAT and its folder, or ask an administrator before retrying.";
+    case "EROFS":
+      return "The installer encountered a read-only file system. Check that the installation location is writable before retrying.";
+    default:
+      return fallback;
+  }
+}
+
 export function downloadFailureMessage(cause: unknown): string {
   return cause instanceof UpdaterRequestStalledError
     ? `Download stopped: ${cause.message}.`

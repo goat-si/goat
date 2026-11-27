@@ -3811,5 +3811,10 @@
   "bb122f1d94960037": "Le résultat est inconnu. Reconnectez-vous et vérifiez le résultat de l’importation.",
   "4e506a7c2f37a858": "La sélection a changé. Vérifiez à nouveau l’aperçu avant d’importer.",
   "68a5236a421d0f4c": "Vérifiez le résultat et l’aperçu avant d’importer d’autres éléments.",
-  "95cec271a3e79153": "Le résultat enregistré est indisponible. Des éléments précédents ont peut-être été appliqués. Vérifiez à nouveau l’aperçu."
+  "95cec271a3e79153": "Le résultat enregistré est indisponible. Des éléments précédents ont peut-être été appliqués. Vérifiez à nouveau l’aperçu.",
+  "a71729bfde45aa62": "Réessayer le téléchargement",
+  "9c4a6d9d6080c00a": "Réessayer l’installation",
+  "86c1d328fe309dd7": "Trouver le programme d’installation sur GitHub",
+  "0ad2a52cc57493b3": "L’accès a été refusé au programme d’installation. Vérifiez les autorisations de GOAT et de son dossier ou contactez un administrateur avant de réessayer.",
+  "f23baf6efecfb207": "Le programme d’installation a rencontré un système de fichiers en lecture seule. Vérifiez que le dossier d’installation est accessible en écriture avant de réessayer."
 }

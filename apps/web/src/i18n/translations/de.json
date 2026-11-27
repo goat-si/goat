@@ -3811,5 +3811,10 @@
   "bb122f1d94960037": "Das Ergebnis ist unbekannt. Stelle die Verbindung wieder her und prüfe das Importergebnis.",
   "4e506a7c2f37a858": "Die Auswahl hat sich geändert. Prüfe die Vorschau vor dem Import erneut.",
   "68a5236a421d0f4c": "Prüfe das Ergebnis und die Vorschau erneut, bevor du weitere Elemente importierst.",
-  "95cec271a3e79153": "Das gespeicherte Ergebnis ist nicht verfügbar. Frühere Elemente wurden möglicherweise angewendet. Prüfe die Vorschau erneut."
+  "95cec271a3e79153": "Das gespeicherte Ergebnis ist nicht verfügbar. Frühere Elemente wurden möglicherweise angewendet. Prüfe die Vorschau erneut.",
+  "a71729bfde45aa62": "Download erneut versuchen",
+  "9c4a6d9d6080c00a": "Installation erneut versuchen",
+  "86c1d328fe309dd7": "Installationspaket auf GitHub finden",
+  "0ad2a52cc57493b3": "Dem Installationsprogramm wurde der Zugriff verweigert. Prüfe die Berechtigungen für GOAT und den zugehörigen Ordner oder wende dich vor dem nächsten Versuch an einen Administrator.",
+  "f23baf6efecfb207": "Das Installationsprogramm ist auf ein schreibgeschütztes Dateisystem gestoßen. Prüfe vor dem nächsten Versuch, ob der Installationsort beschreibbar ist."
 }
