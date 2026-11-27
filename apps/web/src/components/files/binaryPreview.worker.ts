@@ -51,6 +51,14 @@ function tarEntries(bytes: Uint8Array<ArrayBuffer>) {
     if (!/^[0-7]*$/.test(value)) throw new Error("This TAR uses an unsupported numeric format.");
     return Number.parseInt(value || "0", 8);
   };
+  const timestamp = (offset: number, length: number) => {
+    const first = bytes[offset] ?? 0;
+    if ((first & 0x80) === 0) return number(offset, length);
+    let value = BigInt(first & 0x40 ? first - 0x100 : first & 0x7f);
+    for (let index = 1; index < length; index++)
+      value = (value << 8n) | BigInt(bytes[offset + index] ?? 0);
+    return Number(value);
+  };
   let longPath: string | null = null;
   const globalPax: Record<string, string> = {};
   let localPax: Record<string, string> = {};
@@ -122,7 +130,7 @@ function tarEntries(bytes: Uint8Array<ArrayBuffer>) {
       if (attributes.mtime && !/^[+-]?\d+(?:\.\d+)?$/.test(attributes.mtime))
         throw new Error("The TAR metadata is damaged.");
       const modified =
-        (attributes.mtime ? Number(attributes.mtime) : number(offset + 136, 12)) * 1000;
+        (attributes.mtime ? Number(attributes.mtime) : timestamp(offset + 136, 12)) * 1000;
       const date = new Date(modified);
       entries.push({
         path,
