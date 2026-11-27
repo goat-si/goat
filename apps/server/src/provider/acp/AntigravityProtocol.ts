@@ -643,3 +643,57 @@ export function antigravitySubagentOutput(toolCall: AcpToolCallState): string | 
   const output = toolCall.data.rawOutput;
   return typeof output === "string" && output.trim() ? boundText(output.trim()) : undefined;
 }
+
+function antigravityUpdateSteps(
+  rawInput: unknown,
+):
+  | Extract<EffectAcpSchema.SessionUpdate, { readonly sessionUpdate: "plan" }>["entries"]
+  | undefined {
+  if (!Predicate.isObject(rawInput) || !Array.isArray(rawInput.steps)) return undefined;
+  const steps: ReadonlyArray<unknown> = rawInput.steps;
+  return steps.flatMap((step) =>
+    Predicate.isObject(step) && typeof step.title === "string"
+      ? [
+          {
+            content: step.title,
+            priority: "medium",
+            status:
+              step.status === "done"
+                ? "completed"
+                : typeof step.status === "string"
+                  ? step.status
+                  : "pending",
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * agy reports its update_steps checklist only as tool calls, never as ACP `plan` updates. Each
+ * call carrying steps becomes a plan update; its other updates name it by id only and are dropped.
+ */
+export function makeAntigravityUpdateStepsPlans() {
+  const calls = new Set<string>();
+  return (
+    notification: EffectAcpSchema.SessionNotification,
+  ): EffectAcpSchema.SessionNotification | undefined => {
+    const update = notification.update;
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+      return notification;
+    }
+    const key = `${notification.sessionId}\u0000${update.toolCallId}`;
+    if (
+      update.title === "Run update_steps" &&
+      (update.kind === undefined || update.kind === null || update.kind === "other")
+    ) {
+      calls.add(key);
+    }
+    if (!calls.has(key)) return notification;
+    if (update.status === "completed" || update.status === "failed") calls.delete(key);
+    const entries = antigravityUpdateSteps(update.rawInput);
+    return entries === undefined
+      ? undefined
+      : { ...notification, update: { sessionUpdate: "plan", entries } };
+  };
+}
