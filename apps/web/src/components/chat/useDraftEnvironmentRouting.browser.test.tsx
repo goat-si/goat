@@ -1,5 +1,11 @@
-import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type ProjectReadFileResult,
+  type ScopedProjectRef,
+} from "@goat/contracts";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
@@ -7,11 +13,25 @@ import { act, render } from "../../../test/render";
 const state = vi.hoisted(() => {
   const projects = new Map<string, unknown>();
   const listeners = new Map<string, Set<() => void>>();
+  const projectListeners = new Set<(projects: ReadonlyArray<unknown>) => void>();
   const keyOf = (ref: ScopedProjectRef) => `${ref.environmentId}:${ref.projectId}`;
+  const notifyProjects = () => {
+    const snapshot = [...projects.values()];
+    for (const listener of projectListeners) listener(snapshot);
+  };
   return {
     projects,
     listeners,
+    projectListeners,
     keyOf,
+    getProjectFileQueryAtom:
+      vi.fn<
+        (
+          environmentId: EnvironmentId,
+          root: string,
+          relativePath?: string,
+        ) => Atom.Atom<AsyncResult.AsyncResult<ProjectReadFileResult, never>>
+      >(),
     addProjectToMachine: vi.fn(),
     toast: vi.fn(),
     unsilenceProjectCloneToasts: vi.fn(),
@@ -19,6 +39,11 @@ const state = vi.hoisted(() => {
     setProject(ref: ScopedProjectRef, project: unknown) {
       projects.set(keyOf(ref), project);
       for (const listener of listeners.get(keyOf(ref)) ?? []) listener();
+      notifyProjects();
+    },
+    deleteProject(ref: ScopedProjectRef) {
+      projects.delete(keyOf(ref));
+      notifyProjects();
     },
   };
 });
@@ -29,6 +54,11 @@ vi.mock("../../lib/addProjectToMachine", () => ({
 }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => [...state.projects.values()],
+  readProjects: () => [...state.projects.values()],
+  subscribeProjects: (listener: (projects: ReadonlyArray<unknown>) => void) => {
+    state.projectListeners.add(listener);
+    return () => state.projectListeners.delete(listener);
+  },
   readThreadShells: () => [],
   readProject: (ref: ScopedProjectRef) => state.projects.get(state.keyOf(ref)) ?? null,
   waitForProject: (ref: ScopedProjectRef) =>
@@ -67,6 +97,21 @@ vi.mock("./chatViewSend", async () => {
   const { Atom } = await import("effect/reactivity");
   return { draftFanoutSelectionsAtom: Atom.family(() => Atom.make([])) };
 });
+vi.mock(import("../files/projectFilesQueryState"), async (original) => ({
+  ...(await original()),
+  getProjectFileQueryAtom: state.getProjectFileQueryAtom,
+}));
+
+function projectFileAtom(contents: string) {
+  return Atom.make(
+    AsyncResult.success<ProjectReadFileResult>({
+      relativePath: "goat.json",
+      byteLength: new TextEncoder().encode(contents).byteLength,
+      contents,
+      truncated: false,
+    }),
+  );
+}
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
@@ -107,6 +152,8 @@ const clonedRef = (): ScopedProjectRef =>
 async function setup() {
   state.projects.clear();
   state.listeners.clear();
+  state.projectListeners.clear();
+  state.getProjectFileQueryAtom.mockReset().mockReturnValue(projectFileAtom("{}"));
   state.addProjectToMachine
     .mockReset()
     .mockImplementation((input: { readonly projectId: string }) =>
@@ -348,4 +395,68 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
     await vi.waitFor(() => expect(screen.draft()?.environmentId).toBe(macmini));
     expect(screen.draft()?.envMode).toBe("local");
   });
+
+  it.each(["deleted", "moved"] as const)(
+    "checks the destination again when the project was %s during the default read",
+    async (change) => {
+      await using screen = await setup();
+      const pending = Atom.make(AsyncResult.initial<ProjectReadFileResult, never>());
+      const moved = projectFileAtom('{"defaultThreadEnvMode":"worktree"}');
+      state.getProjectFileQueryAtom.mockImplementation((environmentId, root) =>
+        environmentId === macmini && root === "/workspace/moved" ? moved : pending,
+      );
+      useComposerDraftStore
+        .getState()
+        .setDraftThreadContext(draftId, { envMode: "local", startFromOrigin: false });
+
+      await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+      await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(true));
+
+      await act(() => {
+        if (change === "deleted") {
+          state.deleteProject(onMacmini);
+        } else {
+          state.setProject(onMacmini, {
+            ...SOURCE,
+            environmentId: macmini,
+            id: onMacmini.projectId,
+            workspaceRoot: "/workspace/moved",
+          });
+        }
+      });
+
+      await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(false));
+      expect(screen.draft()).toMatchObject({
+        environmentId: change === "moved" ? macmini : laptop,
+        envMode: change === "moved" ? "worktree" : "local",
+      });
+    },
+  );
+
+  it.each(["leave the draft", "choose automatic routing", "switch to another machine"] as const)(
+    "stops watching the destination when users %s before the default loads",
+    async (action) => {
+      await using screen = await setup();
+      const pending = Atom.make(AsyncResult.initial<ProjectReadFileResult, never>());
+      const settled = projectFileAtom("{}");
+      state.getProjectFileQueryAtom.mockImplementation((environmentId) =>
+        environmentId === macmini ? pending : settled,
+      );
+
+      await act(() => screen.routing.current?.onEnvironmentChangeStable(macmini));
+      await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(true));
+      expect(state.projectListeners.size).toBe(1);
+
+      if (action === "leave the draft") {
+        await screen.unmount();
+      } else if (action === "choose automatic routing") {
+        await act(() => screen.routing.current?.onAutoEnvironmentStable());
+        await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(false));
+      } else {
+        await act(() => screen.routing.current?.onEnvironmentChangeStable(laptop));
+        await vi.waitFor(() => expect(screen.routing.current?.isEnvironmentChanging).toBe(false));
+      }
+      expect(state.projectListeners.size).toBe(0);
+    },
+  );
 });

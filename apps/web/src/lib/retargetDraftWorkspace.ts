@@ -1,30 +1,42 @@
-import { DEFAULT_SERVER_SETTINGS, type ScopedProjectRef } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type GoatProjectFile,
+  type ScopedProjectRef,
+} from "@goat/contracts";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@goat/shared/projectSettings";
 
 import type { DraftSessionState } from "../composerDraftStore";
-import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readProject, readThreadShells } from "../state/entities";
 import { readEnvironment } from "../state/environments";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
-import { environmentSummaries } from "../state/presentation";
 import { resolveNewDraftStartFromOrigin } from "./chatThreadActions";
-import { peekGoatProjectFile } from "./goatProjectFileDefaults";
+import { loadGoatProjectFile, peekGoatProjectFile } from "./goatProjectFileDefaults";
 
-function newThreadWorkspace(projectRef: ScopedProjectRef) {
+function readWorkspaceContext(projectRef: ScopedProjectRef) {
   const project = readProject(projectRef);
   const serverConfig = readEnvironment(projectRef.environmentId)?.serverConfig;
-  const settings = serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
-  const consultProjectFile =
-    project !== null &&
+  return { project, serverConfig, settings: serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS };
+}
+
+async function newThreadWorkspace(projectRef: ScopedProjectRef, signal: AbortSignal) {
+  let { project, serverConfig, settings } = readWorkspaceContext(projectRef);
+  let projectFile: GoatProjectFile | null = null;
+  const workspaceRoot = project?.workspaceRoot;
+  if (
+    workspaceRoot &&
     resolveProjectSettings(settings, projectRef.projectId, project).settings
-      .defaultThreadEnvMode === null &&
-    appAtomRegistry
-      .get(environmentSummaries.connectedEnvironmentIdsAtom)
-      .includes(projectRef.environmentId);
-  const projectFileLookup = consultProjectFile
-    ? peekGoatProjectFile(projectRef.environmentId, project.workspaceRoot)
-    : null;
-  const projectFile = projectFileLookup?.known ? projectFileLookup.file : null;
+      .defaultThreadEnvMode === null
+  ) {
+    const cached = peekGoatProjectFile(projectRef.environmentId, workspaceRoot);
+    if (!cached.known) {
+      // A paired project can appear before its connection summary reports connected.
+      const loaded = await loadGoatProjectFile(projectRef.environmentId, workspaceRoot, { signal });
+      projectFile = loaded.known ? loaded.file : null;
+      ({ project, serverConfig, settings } = readWorkspaceContext(projectRef));
+    } else {
+      projectFile = cached.file;
+    }
+  }
   const projectSettings = resolveProjectSettings(
     settings,
     projectRef.projectId,
@@ -59,11 +71,12 @@ function newThreadWorkspace(projectRef: ScopedProjectRef) {
  * The workspace for a draft moving to another project or machine: the default a new thread
  * there starts with, unless the user chose one, which carries over.
  */
-export function retargetDraftWorkspace(
+export async function retargetDraftWorkspace(
   draft: Pick<DraftSessionState, "workspaceExplicit" | "worktreePath">,
   projectRef: ScopedProjectRef,
-): { envMode?: DraftSessionState["envMode"]; startFromOrigin?: boolean } {
+  signal: AbortSignal,
+): Promise<{ envMode?: DraftSessionState["envMode"]; startFromOrigin?: boolean }> {
   return draft.workspaceExplicit || draft.worktreePath !== null
     ? {}
-    : newThreadWorkspace(projectRef);
+    : newThreadWorkspace(projectRef, signal);
 }
