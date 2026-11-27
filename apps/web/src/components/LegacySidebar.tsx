@@ -2216,6 +2216,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked === "new-thread-on-branch") {
+        if (isMobile) setOpenMobile(false);
         await startThreadOnBranch(handleNewThread, thread);
         return;
       }
@@ -3823,7 +3824,10 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
         projectSortOrder={sidebarProjectSortOrder}
         threadSortOrder={sidebarThreadSortOrder}
         threadPreviewCount={sidebarThreadPreviewCount}
-        openAddProject={openAddProjectCommandPalette}
+        openAddProject={() => {
+          if (isMobile) setOpenMobile(false);
+          openAddProjectCommandPalette();
+        }}
         isManualProjectSorting={isManualProjectSorting}
         projectDnDSensors={projectDnDSensors}
         projectCollisionDetection={projectCollisionDetection}

@@ -876,7 +876,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } | null>(null);
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
-  const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
+  const openAddProjectCommandPalette = () => {
+    if (isMobile) setOpenMobile(false);
+    openCommandPalette({ open: "add-project" });
+  };
   const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const readOpensPullRequestsInRightPanel = useStableCallback(() => routeThreadRef !== null);
@@ -1001,9 +1004,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const openProjectSettings = useStableCallback(
     (projectGroup: SidebarProjectSnapshot, projectRef?: ScopedProjectRef) => {
-      if (isMobile) {
-        setOpenMobile(false);
-      }
+      if (isMobile) setOpenMobile(false);
       void router.navigate({
         to: "/projects/$projectKey",
         params: {
@@ -1180,9 +1181,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    if (isMobile) {
-      setOpenMobile(false);
-    }
+    if (isMobile) setOpenMobile(false);
     return router.navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -1213,9 +1212,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const navigateToDraft = (draftId: DraftId) => {
     clearSelection();
-    if (isMobile) {
-      setOpenMobile(false);
-    }
+    if (isMobile) setOpenMobile(false);
     void router.navigate({ to: "/draft/$draftId", params: { draftId } });
   };
 
@@ -2554,6 +2551,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               });
             return;
           case "new-thread-on-branch":
+            if (isMobile) setOpenMobile(false);
             await startThreadOnBranch(handleNewThread, thread);
             return;
           case "fork:current":
