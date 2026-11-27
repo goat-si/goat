@@ -44,7 +44,6 @@ export interface ThreadDetailScreenProps {
   readonly cloudState: CloudTaskState;
   readonly cloudRun?: CloudRunCard | null;
   readonly onRetryCloudRun?: (() => void) | null;
-  readonly header?: React.ReactNode;
   readonly draftMode?: {
     readonly content: (
       headerInset: number,

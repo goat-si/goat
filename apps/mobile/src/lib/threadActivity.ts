@@ -1607,7 +1607,7 @@ export function buildThreadFeed(
     readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
     readonly cache?: ThreadFeedCache;
   },
-): ThreadFeedEntry[] {
+): ReadonlyArray<ThreadFeedEntry> {
   const anchoredMessages = options?.anchoredMessages ?? [];
   const attemptByRootNodeId = new Map(
     (options?.attempts ?? []).map((attempt) => [attempt.rootNodeId, attempt] as const),
@@ -1660,6 +1660,10 @@ export function buildThreadFeed(
     while (restartIndex >= 0 && previous.restarts[restartIndex]!.row > firstChanged) {
       restartIndex -= 1;
     }
+  }
+  // Unchanged rows rebuild the same feed; returning it keeps the screen's props equal.
+  if (restartIndex !== -1 && previous !== null && previous.rows === visibleTurnItems) {
+    return previous.feed;
   }
   const restart = restartIndex === -1 ? null : previous!.restarts[restartIndex]!;
   const prefix = restart === null ? [] : previous!.feed.slice(0, restart.feedLength);

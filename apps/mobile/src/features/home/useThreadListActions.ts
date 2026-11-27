@@ -36,6 +36,7 @@ import { threadListV2ReorderExcludedKeys } from "../threads/threadListV2LaunchFo
 import { hiddenGoatBotThreadKeysAtom } from "../threads/goatBotThreadVisibility";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
+import { useStableCallback } from "../../lib/useStableCallback";
 
 /** Older servers default the settlement capability to false; never send them settle/unsettle. */
 function environmentSupportsSettlement(environmentId: EnvironmentThreadShell["environmentId"]) {
@@ -847,21 +848,44 @@ export function useThreadListActions(): {
   const confirmDeleteThread = (thread: EnvironmentThreadShell) =>
     confirmThreadDeletion(executeAction, thread);
 
+  // Stable, so a list that re-renders does not re-render every row these reach.
   // `moveThread` plans from the live rows itself.
   return {
-    archiveThread: (thread) => archiveThread(liveThread(thread)),
-    confirmDeleteThread: (thread) => confirmDeleteThread(liveThread(thread)),
-    settleThread: (thread) => settleThread(liveThread(thread)),
-    snoozeThread: (thread, snoozedUntil) => snoozeThread(liveThread(thread), snoozedUntil),
-    unsnoozeThread: (thread) => unsnoozeThread(liveThread(thread)),
-    unsettleThread: (thread) => unsettleThread(liveThread(thread)),
-    pinThread: (thread) => pinThread(liveThread(thread)),
-    unpinThread: (thread) => unpinThread(liveThread(thread)),
-    setThreadAutoSettle: (thread, enabled) => setThreadAutoSettle(liveThread(thread), enabled),
-    moveThread,
-    renameThread: (thread) => renameThread(liveThread(thread)),
-    regenerateThreadTitle: (thread) => regenerateThreadTitle(liveThread(thread)),
-    markThreadUnread: (thread) => markThreadUnread(liveThread(thread)),
+    archiveThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      archiveThread(liveThread(thread)),
+    ),
+    confirmDeleteThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      confirmDeleteThread(liveThread(thread)),
+    ),
+    settleThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      settleThread(liveThread(thread)),
+    ),
+    snoozeThread: useStableCallback((thread: EnvironmentThreadShell, snoozedUntil: string) =>
+      snoozeThread(liveThread(thread), snoozedUntil),
+    ),
+    unsnoozeThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      unsnoozeThread(liveThread(thread)),
+    ),
+    unsettleThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      unsettleThread(liveThread(thread)),
+    ),
+    pinThread: useStableCallback((thread: EnvironmentThreadShell) => pinThread(liveThread(thread))),
+    unpinThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      unpinThread(liveThread(thread)),
+    ),
+    setThreadAutoSettle: useStableCallback((thread: EnvironmentThreadShell, enabled: boolean) =>
+      setThreadAutoSettle(liveThread(thread), enabled),
+    ),
+    moveThread: useStableCallback(moveThread),
+    renameThread: useStableCallback((thread: EnvironmentThreadShell) =>
+      renameThread(liveThread(thread)),
+    ),
+    regenerateThreadTitle: useStableCallback((thread: EnvironmentThreadShell) =>
+      regenerateThreadTitle(liveThread(thread)),
+    ),
+    markThreadUnread: useStableCallback((thread: EnvironmentThreadShell) =>
+      markThreadUnread(liveThread(thread)),
+    ),
   };
 }
 

@@ -52,7 +52,7 @@ import { type PullRequestDetail } from "@goat/contracts";
 import { PullRequestOverviewLoading } from "./PullRequestOverviewLoading";
 import { copyPullRequestLink, sharePullRequestLink } from "./pullRequestLink";
 import { PullRequestIdentity } from "./PullRequestIdentity";
-import { use, useEffect, useMemo, useRef, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Platform, RefreshControl, StyleSheet, View } from "react-native";
 import { PullRequestTabScrollView } from "./PullRequestTabScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -113,6 +113,7 @@ import { usePullRequestEnvironmentFallback } from "./usePullRequestEnvironmentFa
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 
 const EMPTY_IDS: readonly string[] = [];
+const NO_TAB_ROWS: ReadonlyArray<{ readonly key: string; readonly content: ReactNode }> = [];
 
 function PullRequestOverview(props: {
   readonly pr: PullRequestDetail;
@@ -302,6 +303,66 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
       if (filesY.current > 0) requestAnimationFrame(jumpToFiles);
     }
   };
+  // Built outside the tab map: an update that leaves a tab's body as it was hands its list the
+  // same element, so the list skips re-rendering the body.
+  const overviewBody = (
+    <View>
+      {identity ? (
+        <View>
+          {pr ? (
+            <PullRequestOverview
+              pr={pr}
+              description={description}
+              params={params}
+              stack={stack}
+              descriptionExpanded={descriptionExpanded}
+              onDescriptionExpandedChange={setDescriptionExpanded}
+              onDescriptionLayout={(y) => {
+                descriptionY.current = y;
+              }}
+              onDescriptionCollapse={() => {
+                pendingDescriptionJump.current = true;
+              }}
+            />
+          ) : summary ? (
+            <PullRequestOverviewLoading summary={summary} params={params} stack={stack} />
+          ) : null}
+          <View
+            className="mt-8 border-t border-border-subtle pt-3"
+            onLayout={(event) => {
+              filesY.current = event.nativeEvent.layout.y;
+              if (pendingFilesJump.current) {
+                requestAnimationFrame(() => {
+                  if (requestedSection.current === "overview") jumpToFiles();
+                });
+              }
+            }}
+          >
+            {filesContent.header}
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+  const guideBody = guidesEnabled ? (
+    <View>
+      <PullRequestGuideContent params={params} visible={section === "guide"} />
+    </View>
+  ) : null;
+  const activityBody = (
+    <View>
+      <PullRequestActivityFilters
+        value={activityFilter}
+        onChange={activityFilterState.setFilter}
+        hiddenCount={tabContent.hiddenCount}
+      />
+      <PullRequestReadStatus
+        pending={tabContent.pending}
+        error={tabContent.error}
+        terminology={terminology}
+      />
+    </View>
+  );
   return (
     <PullRequestMarkdownRepository params={params} changeRequest={pr}>
       <View className={Platform.OS === "android" ? "flex-1 bg-header" : "flex-1 bg-screen"}>
@@ -607,87 +668,25 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                   data={[
                     {
                       key: `${tab}:body`,
-                      content: (
-                        <View>
-                          {tab === "overview" && identity ? (
-                            <View>
-                              {pr ? (
-                                <PullRequestOverview
-                                  pr={pr}
-                                  description={description}
-                                  params={params}
-                                  stack={stack}
-                                  descriptionExpanded={descriptionExpanded}
-                                  onDescriptionExpandedChange={setDescriptionExpanded}
-                                  onDescriptionLayout={(y) => {
-                                    descriptionY.current = y;
-                                  }}
-                                  onDescriptionCollapse={() => {
-                                    pendingDescriptionJump.current = true;
-                                  }}
-                                />
-                              ) : summary ? (
-                                <PullRequestOverviewLoading
-                                  summary={summary}
-                                  params={params}
-                                  stack={stack}
-                                />
-                              ) : null}
-                              <View
-                                className="mt-8 border-t border-border-subtle pt-3"
-                                onLayout={(event) => {
-                                  filesY.current = event.nativeEvent.layout.y;
-                                  if (pendingFilesJump.current) {
-                                    requestAnimationFrame(() => {
-                                      if (requestedSection.current === "overview") jumpToFiles();
-                                    });
-                                  }
-                                }}
-                              >
-                                {filesContent.header}
-                              </View>
-                            </View>
-                          ) : null}
-                          {tab === "guide" ? (
-                            <PullRequestGuideContent
-                              params={params}
-                              visible={section === "guide"}
-                            />
-                          ) : null}
-                          {tab === "activity" ? (
-                            <PullRequestActivityFilters
-                              value={activityFilter}
-                              onChange={activityFilterState.setFilter}
-                              hiddenCount={tabContent.hiddenCount}
-                            />
-                          ) : null}
-                          {tab === "activity" ? (
-                            <PullRequestReadStatus
-                              pending={tabContent.pending}
-                              error={tabContent.error}
-                              terminology={terminology}
-                            />
-                          ) : null}
-                        </View>
-                      ),
+                      content:
+                        tab === "overview"
+                          ? overviewBody
+                          : tab === "guide"
+                            ? guideBody
+                            : activityBody,
                     },
+                    // Each tab has its own list, so rows keep their own keys and, unchanged,
+                    // their identity: a list re-renders only the rows that changed.
                     ...(tab === "overview"
                       ? identity
                         ? filesContent.rows
-                        : []
+                        : NO_TAB_ROWS
                       : tab === "activity"
                         ? tabContent.rows
-                        : []
-                    ).map((row) => ({
-                      ...row,
-                      key: `${tab}:${row.key}`,
-                      content: row.content,
-                    })),
+                        : NO_TAB_ROWS),
                   ]}
                   keyExtractor={(row) => row.key}
-                  getItemType={(row) =>
-                    row.key.endsWith(":body") ? row.key : row.key.split(":")[0]
-                  }
+                  getItemType={(row) => (row.key === `${tab}:body` ? row.key : tab)}
                   // Animating overview fights clipped markdown and collapse scroll correction; file rows can still fade.
                   itemLayoutAnimation={tab === "overview" ? undefined : PR_ROW_LAYOUT}
                   onLoad={() => setListAnimationsReady(true)}
@@ -695,12 +694,10 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     <Animated.View
                       key={item.key}
                       entering={
-                        listAnimationsReady && !item.key.endsWith(":body")
-                          ? PR_ROW_ENTER
-                          : undefined
+                        listAnimationsReady && item.key !== `${tab}:body` ? PR_ROW_ENTER : undefined
                       }
                       exiting={
-                        listAnimationsReady && !item.key.endsWith(":body") ? PR_ROW_EXIT : undefined
+                        listAnimationsReady && item.key !== `${tab}:body` ? PR_ROW_EXIT : undefined
                       }
                     >
                       <PullRequestMediaVisibleContext value={section === tab}>

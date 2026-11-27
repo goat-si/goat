@@ -8,7 +8,7 @@ import {
   type StaticScreenProps,
 } from "@react-navigation/native";
 import type { PullRequestChangeBreakdown } from "@goat/contracts";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Platform, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
@@ -96,19 +96,20 @@ function describeFiles(
     .join(" · ");
 }
 
-function FileRow(props: {
+// Memoized: a pull request's rows rebuild as its detail, diff and viewed reads land.
+const FileRow = memo(function FileRow(props: {
   readonly file: ReviewRenderableFile;
   readonly viewed: boolean;
   /** Shown under the file name where files aren't grouped by directory. */
   readonly directory?: string;
-  readonly onPress: () => void;
+  readonly onPress: (path: string) => void;
 }) {
   const { file } = props;
   return (
     <RowPressable
       accessibilityRole="button"
       accessibilityLabel={`View diff for ${file.path}, ${file.additions} additions, ${file.deletions} deletions${props.viewed ? ", viewed" : ""}`}
-      onPress={props.onPress}
+      onPress={() => props.onPress(file.path)}
       className="min-h-14 flex-row items-center gap-3 border-b border-border-subtle py-3 active:opacity-70"
     >
       <PierreEntryIcon kind="file" path={file.path} size={20} />
@@ -138,7 +139,7 @@ function FileRow(props: {
       <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-muted" />
     </RowPressable>
   );
-}
+});
 
 function FileRowSkeleton(props: { readonly index: number }) {
   return (
@@ -263,6 +264,7 @@ export function usePullRequestFilesSection(params: PullRequestParams) {
     composerPullRequests.changeBreakdown(pullRequestTarget(params)),
   ).data;
   const expected = pr ?? params.initialSummary;
+  const openFile = (path: string) => navigation.navigate("PullRequestFile", { ...params, path });
   return {
     refresh: diff.refresh,
     header: (
@@ -331,7 +333,7 @@ export function usePullRequestFilesSection(params: PullRequestParams) {
               file={file}
               directory={fileDirectory(file.path)}
               viewed={viewed.isViewed(file.path)}
-              onPress={() => navigation.navigate("PullRequestFile", { ...params, path: file.path })}
+              onPress={openFile}
             />
           ),
         })),
@@ -463,11 +465,11 @@ export function PullRequestFilesSheet({ route }: StaticScreenProps<PullRequestDi
                 <FileRow
                   file={item.file}
                   viewed={viewed.isViewed(item.file.path)}
-                  onPress={() =>
+                  onPress={(path) =>
                     navigation.dispatch(
                       StackActions.popTo("PullRequestFile", {
                         ...params,
-                        path: item.file.path,
+                        path,
                         fileSelectionId,
                       }),
                     )
