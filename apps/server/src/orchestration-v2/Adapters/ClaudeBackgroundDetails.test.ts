@@ -131,6 +131,78 @@ it.effect("preserves a background command and its start time across roster snaps
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
+it.effect("marks finite background sleep timers as awaited so a restart wakes the agent", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeWakeHarnessWithOptions();
+    yield* harness.runtime.startTurn(
+      makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        attemptId: RunAttemptId.make("background-sleep-timers"),
+        text: "Wait before checking",
+        attachments: [],
+      }),
+    );
+    const sleeps = [
+      ["timer", "sleep 1740; date", true],
+      ["computed_timer", "sleep $((29 * 60)); date", true],
+      ["quoted_timer", 'sleep "60" && date', true],
+      ["single_quoted_timer", "sleep '60'; date", true],
+      ["quoted_computed_timer", 'sleep "$((29 * 60))"; date', true],
+      ["expanded_timer", 'sleep "${DELAY:-60}"; date', true],
+      ["unit_timer", 'sleep 5m && echo "Time to check the build"', true],
+      ["quoted_note_timer", 'sleep 60 && echo "Timer finished; check build"', true],
+      ["endless_sleep", "sleep infinity", false],
+      ["delayed_server", "sleep 5 && npm run dev", false],
+      ["substituted_server", 'sleep 60; echo "$(npm run dev)"', false],
+    ] as const;
+    yield* harness.offerAndWait(
+      frame({
+        type: "assistant",
+        message: {
+          model: "claude-sonnet-4-6",
+          id: "msg_background_timer",
+          type: "message",
+          role: "assistant",
+          content: sleeps.map(([taskId, command]) => ({
+            type: "tool_use",
+            id: `toolu_${taskId}`,
+            name: "Bash",
+            input: { command, run_in_background: true },
+          })),
+        },
+        parent_tool_use_id: null,
+        uuid: "background-timer-launch",
+        session_id: "native-thread-claude-wake",
+      }),
+    );
+    for (const [index, [taskId]] of sleeps.entries()) {
+      yield* harness.offerAndWait(
+        frame({
+          type: "system",
+          subtype: "task_started",
+          task_id: taskId,
+          tool_use_id: `toolu_${taskId}`,
+          description: "Wait before the next check",
+          is_backgrounded: true,
+          task_type: "local_bash",
+          uuid: `00000000-0000-4000-8000-00000000021${index}`,
+          session_id: "native-thread-claude-wake",
+        }),
+      );
+    }
+    const last = harness.events.filter((event) => event.type === "provider_thread.updated").at(-1);
+    assert.deepEqual(
+      (last?.providerThread.pendingBackgroundTasks ?? []).map((task) => [
+        task.taskId,
+        task.awaited === true,
+      ]),
+      sleeps.map(([taskId, , awaited]) => [taskId, awaited]),
+    );
+  }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
 it.effect("records the model reported by Claude init on the completed delegated turn", () =>
   Effect.gen(function* () {
     const harness = yield* makeWakeHarnessWithOptions();

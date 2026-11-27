@@ -128,6 +128,7 @@ import {
   mergeClaudeBackgroundTasks,
   parseClaudeBackgroundTaskEntry,
   makeClaudeTaskLaunches,
+  upsertClaudeRosterTask,
 } from "./ClaudeBackgroundTasks.ts";
 import { claudeForkedSkillModels } from "./ClaudeForkedSkillModel.ts";
 import {
@@ -3185,32 +3186,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           });
 
-        const upsertPendingBackgroundTask =
-          /* Provider events include streaming deltas; avoid a span for each update. */
-          Effect.fnUntraced(function* (
-            nativeThreadId: string,
-            task: OrchestrationV2PendingBackgroundTask,
+        const upsertPendingBackgroundTask = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          task: OrchestrationV2PendingBackgroundTask,
+        ) {
+          if (
+            yield* Ref.modify(pendingBackgroundTasksByNativeThread, (current) =>
+              upsertClaudeRosterTask(current, nativeThreadId, task),
+            )
           ) {
-            const startedMonitor = yield* Ref.modify(
-              pendingBackgroundTasksByNativeThread,
-              (current) => {
-                const roster = new Map(rosterForNativeThread(current, nativeThreadId));
-                const startedMonitor =
-                  task.kind === "monitor" && roster.get(task.taskId)?.kind !== "monitor";
-                roster.set(task.taskId, task);
-                return [startedMonitor, new Map(current).set(nativeThreadId, roster)] as const;
-              },
+            yield* addTaskIdsToNativeThreadSet(
+              awaitedBackgroundTasksByNativeThread,
+              nativeThreadId,
+              [task.taskId],
             );
-            if (startedMonitor) {
-              yield* addTaskIdsToNativeThreadSet(
-                awaitedBackgroundTasksByNativeThread,
-                nativeThreadId,
-                [task.taskId],
-              );
-            }
-            yield* rememberOpaqueTasks([task]);
-            yield* markWakeEligibleOpaqueBackgroundTasks(nativeThreadId, [task.taskId]);
-          });
+          }
+          yield* rememberOpaqueTasks([task]);
+          yield* markWakeEligibleOpaqueBackgroundTasks(nativeThreadId, [task.taskId]);
+        });
 
         const clearPendingBackgroundTask = (nativeThreadId: string, taskId: string) =>
           Ref.modify(pendingBackgroundTasksByNativeThread, (current) => {
