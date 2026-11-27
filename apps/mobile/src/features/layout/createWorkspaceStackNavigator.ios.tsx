@@ -48,7 +48,7 @@ import { isNewTaskRoute, workspaceRoutesOf } from "./workspace-overlay-routes";
 import { setNativelyPoppingWorkspaceRoute } from "../workspace/workspace-detail-selection";
 import { useCollapsedSplitColumn } from "./useCollapsedSplitColumn";
 import { useDeviceType, useNativeLayoutMetrics } from "../../native/native-layout-metrics";
-import { nativeInspectorColumnWidth } from "../../lib/layout";
+import { INSPECTOR_MIN_MAIN_WIDTH, nativeInspectorColumnWidth } from "../../lib/layout";
 
 import { useAdaptiveWorkspaceLayout } from "./AdaptiveWorkspaceLayout";
 import { WorkspacePaneDivider } from "./workspace-pane-divider";
@@ -375,7 +375,7 @@ function WorkspaceColumns(
           ? primaryColumnWidth
           : Math.max(380, primaryColumnWidth),
         preferredPrimaryColumnWidthOrFraction: primaryColumnWidth,
-        minimumSecondaryColumnWidth: 320,
+        minimumSecondaryColumnWidth: INSPECTOR_MIN_MAIN_WIDTH,
         // UIKit can retain its automatic width despite a new preference; constrain both edges.
         minimumInspectorColumnWidth: inspectorWidth,
         maximumInspectorColumnWidth: inspectorWidth,

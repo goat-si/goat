@@ -23,6 +23,7 @@ import Animated, {
 import { AsyncResult } from "effect/reactivity";
 
 import {
+  constrainAuxiliaryPaneWidth,
   deriveFileInspectorPaneLayout,
   alignListPaneToHinge,
   deriveLayout,
@@ -262,12 +263,8 @@ function AdaptiveWorkspaceLayoutContent(
         layout,
         viewportWidth: width,
         preferredWidth: fileInspectorPreferredWidth ?? undefined,
-        reservedLeadingWidth:
-          shouldRenderPrimarySidebar && showPrimarySidebar && !layout.primarySidebarOverlaysContent
-            ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0)
-            : 0,
       }),
-    [fileInspectorPreferredWidth, layout, showPrimarySidebar, shouldRenderPrimarySidebar, width],
+    [fileInspectorPreferredWidth, layout, width],
   );
   const auxiliaryPaneRole: WorkspaceAuxiliaryPaneRole =
     focusedAuxiliaryPaneRole ?? (/\/files(?:\/|$)/.test(pathname) ? "inspector" : "supplementary");
@@ -420,10 +417,17 @@ function AdaptiveWorkspaceLayoutContent(
   };
   const setAuxiliaryPaneWidth = (nextWidth: number) => {
     if (auxiliaryPaneRole === "inspector") {
-      setFileInspectorPreferredWidth(nextWidth);
+      setFileInspectorPreferredWidth(
+        constrainAuxiliaryPaneWidth({ preferredWidth: nextWidth, viewportWidth: width }),
+      );
       return;
     }
-    setSupplementaryPanePreferredWidth(nextWidth);
+    setSupplementaryPanePreferredWidth(
+      constrainAuxiliaryPaneWidth({
+        preferredWidth: nextWidth,
+        viewportWidth: panes.contentPaneWidth,
+      }),
+    );
   };
   /**
    * The one way to open a workspace tab: replaces the workspace with the tab's list and, when the
