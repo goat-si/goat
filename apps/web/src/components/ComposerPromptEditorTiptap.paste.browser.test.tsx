@@ -1,3 +1,4 @@
+import type { Editor } from "@tiptap/core";
 import { expect, it } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -155,4 +156,41 @@ it("drops text on a rule's edge without replacing the rule", async () => {
   const value = serializeEditorDoc(editor.state.doc).value;
   expect(value).toContain("---");
   expect(value).toContain("dropped");
+});
+
+function typeText(editor: Editor, from: number, to: number, text: string) {
+  const insert = () => editor.state.tr.insertText(text, from, to);
+  if (
+    !editor.view.someProp("handleTextInput", (handler) =>
+      handler(editor.view, from, to, text, insert),
+    )
+  ) {
+    editor.view.dispatch(insert());
+  }
+}
+
+it.each([
+  { code: "echo @prod next", from: 11, to: 16, expected: "echo @prod( next)" },
+  { code: "echo next @prod", from: 1, to: 11, expected: "(echo next )@prod" },
+])(
+  "wraps selected code next to a literal mention in $code",
+  async ({ code, from, to, expected }) => {
+    await using screen = await mountEditor(`\`\`\`\n${code}\n\`\`\``);
+    const { editor } = screen;
+    await act(async () => {
+      editor.commands.setTextSelection({ from, to });
+      typeText(editor, from, to, "(");
+    });
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(`\`\`\`\n${expected}\n\`\`\``);
+  },
+);
+
+it("keeps replacement behavior at a prose mention boundary", async () => {
+  await using screen = await mountEditor("echo @prod next");
+  const { editor } = screen;
+  await act(async () => {
+    editor.commands.setTextSelection({ from: 7, to: 12 });
+    typeText(editor, 7, 12, "(");
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe("echo @prod(");
 });
