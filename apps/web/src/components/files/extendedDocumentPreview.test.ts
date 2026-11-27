@@ -287,9 +287,9 @@ describe("rich text preview paragraphs", () => {
   it("honors hidden character formatting and its reset", () => {
     expect(
       html(String.raw`{\rtf1 A{\v hidden{\v0 B}hidden}C\v hidden\v0 D\v hidden\plain E}`),
-    ).toEqual(["<p>ABCDE</p>"]);
+    ).toEqual(["<p data-rtf-whitespace>ABCDE</p>"]);
     expect(html(String.raw`{\rtf1\ansi{\v\line\line\line}First line\line Second line}`)).toEqual([
-      "<p>First line<br>Second line</p>",
+      "<p data-rtf-whitespace>First line<br>Second line</p>",
     ]);
   });
   it("renders TextEdit soft line breaks while hiding deleted breaks", () => {
@@ -304,50 +304,61 @@ describe("rich text preview paragraphs", () => {
       html(
         String.raw`{\rtf1\ansi\sectd\cols2\pard North\column South\page East\sect\sectd\pard West\par}`,
       ),
-    ).toEqual(["<p>North<br>South</p>", "<p>East<br>West<br></p>"]);
+    ).toEqual([
+      "<p data-rtf-whitespace>North<br>South</p>",
+      "<p data-rtf-whitespace>East<br>West<br></p>",
+    ]);
     expect(
       html(String.raw`{\rtf1\ansi First\par\sect\sectd Second\par\column Third\page\sect Fourth}`),
-    ).toEqual(["<p>First<br>Second<br>Third</p>", "<p>Fourth</p>"]);
+    ).toEqual([
+      "<p data-rtf-whitespace>First<br>Second<br>Third</p>",
+      "<p data-rtf-whitespace>Fourth</p>",
+    ]);
   });
   it("hides tracked deletions while retaining replacement text", () => {
     expect(html(String.raw`{\rtf1 aaa{\deleted bbb}{\revised BBB}ccc}`)).toEqual([
-      "<p>aaaBBBccc</p>",
+      "<p data-rtf-whitespace>aaaBBBccc</p>",
     ]);
     expect(html(String.raw`{\rtf1 A\deleted old\deleted0 B\deleted old\plain C}`)).toEqual([
-      "<p>ABC</p>",
+      "<p data-rtf-whitespace>ABC</p>",
     ]);
-    expect(html(String.raw`{\rtf1 A{\deleted\uc1\u945\deleted0 old}B}`)).toEqual(["<p>AB</p>"]);
+    expect(html(String.raw`{\rtf1 A{\deleted\uc1\u945\deleted0 old}B}`)).toEqual([
+      "<p data-rtf-whitespace>AB</p>",
+    ]);
   });
   it("decodes Mac Roman rich text", () => {
     for (const header of [String.raw`\mac`, String.raw`\mac\ansicpg10000`]) {
       expect(html(String.raw`{\rtf1` + header + String.raw` Caf\'8e Cr\'8fme}`)).toEqual([
-        "<p>Café Crème</p>",
+        "<p data-rtf-whitespace>Café Crème</p>",
       ]);
     }
   });
   it("decodes rich text code pages 0 and 866", () => {
     for (const [rtf, expected] of [
-      [String.raw`{\rtf1\ansi\ansicpg0 Caf\'e9}`, "<p>Café</p>"],
-      [String.raw`{\rtf1\ansi\ansicpg866 \'8f\'e0\'a8\'a2\'a5\'e2}`, "<p>Привет</p>"],
+      [String.raw`{\rtf1\ansi\ansicpg0 Caf\'e9}`, "<p data-rtf-whitespace>Café</p>"],
+      [
+        String.raw`{\rtf1\ansi\ansicpg866 \'8f\'e0\'a8\'a2\'a5\'e2}`,
+        "<p data-rtf-whitespace>Привет</p>",
+      ],
       [
         String.raw`{\rtf1\ansi\ansicpg1251{\fonttbl\f0\froman\fcharset0 Times-Roman;}\f0 \'805 caf\'e9}`,
-        "<p>€5 café</p>",
+        "<p data-rtf-whitespace>€5 café</p>",
       ],
       [
         String.raw`{\rtf1\mac\ansicpg10000{\fonttbl\f0\fnil\fcharset0 LucidaGrande;}\f0 pridr\'9eana}`,
-        "<p>pridržana</p>",
+        "<p data-rtf-whitespace>pridržana</p>",
       ],
       [
         String.raw`{\rtf1\ansi\ansicpg1251{\fonttbl{\f0\fnil\fcharset0\cpg1251 Arial;}{\f1\fnil\fcharset204 Arial{\*\fontfile\cpg1252 arial.ttf};}}\f0 \'cf\'f0\'e8\f1\'e2\'e5\'f2}`,
-        "<p>Привет</p>",
+        "<p data-rtf-whitespace>Привет</p>",
       ],
       [
         String.raw`{\rtf1\ansi\ansicpg54936 Quarterly notes: \'d6\'d0\'ce\'c4 \'95\'32\'82\'36 \'82\'35\'8f\'33 \uc2\u20320\'c4\'e3 done\par}`,
-        "<p>Quarterly notes: 中文 𠀀 龦 你 done<br></p>",
+        "<p data-rtf-whitespace>Quarterly notes: 中文 𠀀 龦 你 done<br></p>",
       ],
       [
         String.raw`{\rtf1\ansi{\fonttbl{\f0\fnil\fcharset0\cpg54936 SimSun;}}\f0 \'d6\'d0\'ce\'c4}`,
-        "<p>中文</p>",
+        "<p data-rtf-whitespace>中文</p>",
       ],
     ] as const) {
       expect(html(rtf)).toEqual([expected]);
@@ -368,12 +379,12 @@ Third}`;
   it("keeps styled surrogate-pair emojis in one formatting run", () => {
     expect(
       html("{\\rtf1\\ansi\\b \\uc0\\u55357 \\u56960  Launch\\b0  \\i\\uc1\\u-10187?\\u-8904?\\i0}"),
-    ).toEqual(["<p><strong>🚀 Launch</strong> <em>𝔸</em></p>"]);
+    ).toEqual(["<p data-rtf-whitespace><strong>🚀 Launch</strong> <em>𝔸</em></p>"]);
     expect(html("{\\rtf1\\b\\uc1\\u-10179\\_\\uc0\\u-8576 }")).toEqual([
-      "<p><strong>🚀</strong></p>",
+      "<p data-rtf-whitespace><strong>🚀</strong></p>",
     ]);
     expect(html("{\\rtf1\\b A\\u66\\\nC\\par D}")).toEqual([
-      "<p><strong>ABC</strong><br><strong>D</strong></p>",
+      "<p data-rtf-whitespace><strong>ABC</strong><br><strong>D</strong></p>",
     ]);
   });
 });

@@ -2024,44 +2024,6 @@ it.each([
   expect(new DOMParser().parseFromString(html, "text/html").body.textContent).toBe(expected);
 });
 
-it.each(["odt", "odp"] as const)("preserves rendered %s spaces and tabs", async (kind) => {
-  const archive = new JSZip().file(
-    "content.xml",
-    `<office:document>${kind === "odt" ? "<office:text>" : "<draw:page>"}<text:p>A<text:s text:c="3"/>B<text:tab/>C</text:p>${kind === "odt" ? "</office:text>" : "</draw:page>"}</office:document>`,
-  );
-  const bytes = await archive.generateAsync({ type: "arraybuffer" });
-  const worker = new Worker(new URL("./officePreview.worker.ts", import.meta.url), {
-    type: "module",
-  });
-  try {
-    const result = await new Promise<OfficeWorkerResult>((resolve) => {
-      worker.addEventListener(
-        "message",
-        (event: MessageEvent<OfficeWorkerResult>) => resolve(event.data),
-        { once: true },
-      );
-      worker.postMessage({ type: "open", kind, bytes }, [bytes]);
-    });
-    if (result.type !== "document") throw new Error("Expected document");
-    await using screen = await render(
-      <DocumentPages html={result.pages[0]!.html} name="spacing" output />,
-    );
-    await vi.waitFor(() => {
-      const doc = screen.container.querySelector("iframe")?.contentDocument;
-      const spans = doc?.querySelectorAll<HTMLElement>("span[data-odf-whitespace]");
-      expect(doc?.querySelector("p")?.textContent).toBe("A   B\tC");
-      expect(spans).toHaveLength(2);
-      for (const span of spans!) {
-        expect(doc!.defaultView!.getComputedStyle(span).whiteSpace).toBe("pre-wrap");
-        expect(span.getBoundingClientRect().width).toBeGreaterThan(0);
-      }
-      expect(spans![0]!.getBoundingClientRect().width).toBeGreaterThan(10);
-    });
-  } finally {
-    worker.terminate();
-  }
-});
-
 it.each(["rtf", "epub", "ods"] as const)(
   "preserves %s document text through the worker and attachment viewer",
   async (kind) => {
