@@ -136,7 +136,7 @@ import { excludeGlobalAgentThreads } from "../globalAgentRoute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { forkMenuWorkspace, readThreadForkMenuState, useForkThread } from "../hooks/useForkThread";
 import { startThreadOnBranch } from "../hooks/threadMenuActions";
-import { buildForkMenuItems } from "./threadActionMenu.logic";
+import { buildForkMenuItems, canMarkLatestRunUnread } from "./threadActionMenu.logic";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -1790,7 +1790,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
     const markUnreadEntries = selectedThreadEntries.filter(
       ({ thread }) =>
-        thread.latestRun?.completedAt != null && threadRuntimeCanArchive(thread.runtime),
+        canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime),
     );
     const clicked = await api.contextMenu.show(
       buildMultiSelectThreadContextMenuItems({ count, hasRunningThread })
@@ -2165,7 +2165,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ...(appAtomRegistry.get(canShareWithGuestAtom(thread.environmentId))
             ? [{ id: "share-guest", label: "Share with guest" }]
             : []),
-          ...(thread.latestRun?.completedAt != null && threadRuntimeCanArchive(thread.runtime)
+          ...(canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime)
             ? [{ id: "mark-unread", label: "Mark unread" }]
             : []),
           { id: "copy-path", label: "Copy Path" },

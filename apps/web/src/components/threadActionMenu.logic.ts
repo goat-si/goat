@@ -190,6 +190,16 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
   ].includes(action);
 }
 
+/**
+ * The server marks unread against the latest run's completion, and a stopped run never reads as
+ * unread, so only a run that finished on its own can be marked unread.
+ */
+export function canMarkLatestRunUnread(
+  run: { readonly status: string; readonly completedAt?: string | null } | null | undefined,
+): boolean {
+  return run?.completedAt != null && run.status !== "interrupted" && run.status !== "cancelled";
+}
+
 export function buildBulkMarkUnreadContextMenu<
   T extends {
     readonly latestRun?: { readonly status: string; readonly completedAt?: string | null } | null;
@@ -203,7 +213,7 @@ export function buildBulkMarkUnreadContextMenu<
 } {
   // Same rule as the single-thread menu: only a settled, completed run can be marked unread.
   const eligible = threads.filter(
-    (thread) => thread.latestRun?.completedAt != null && threadRuntimeCanArchive(thread.runtime),
+    (thread) => canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime),
   );
   return {
     threads: eligible,

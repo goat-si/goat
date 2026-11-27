@@ -26,6 +26,7 @@ import { canPromoteThread } from "../components/Sidebar.logic";
 import { usePromoteThread } from "../components/promoteThread";
 import {
   buildThreadActionMenuItems,
+  canMarkLatestRunUnread,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
@@ -174,7 +175,7 @@ export function useThreadActionMenu(input: {
         canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
         isRegeneratingTitle,
         isRunning: !threadRuntimeCanArchive(thread.runtime),
-        hasCompletedRun: thread.latestRun?.completedAt != null,
+        hasCompletedRun: canMarkLatestRunUnread(thread.latestRun),
         canPromote: canPromoteThread(thread, {
           threadPromotion: readEnvironmentSupportsPromotion(threadRef.environmentId),
         }),
