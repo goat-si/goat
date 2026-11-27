@@ -31,7 +31,7 @@ import { mcpToolSession, type McpToolSession } from "../mcp/AcpMcpStdioBridge.ts
 import { CliCredentialError } from "./cliCredential.ts";
 import { expandHomePath } from "../os-jank.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { unsetInheritedRepositoryEnv } from "../vcs/VcsProcess.ts";
+import { listGitCheckouts } from "./threadGitCheckouts.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveShellCredential } from "./login.ts";
 import { generatedVerbsNote } from "./agentSurfaceCommand.ts";
@@ -251,35 +251,6 @@ const listAllProjects = Effect.fn("cli.thread.listAllProjects")(function* (tools
   return projects;
 });
 
-/** The checkouts of the git repository at `directory`, or none outside a repository. */
-const listGitCheckouts = Effect.fn("cli.thread.listGitCheckouts")(function* (directory: string) {
-  const processRunner = yield* ProcessRunner.ProcessRunner;
-  const env = unsetInheritedRepositoryEnv(process.env, yield* HostProcess.Platform);
-  const list = (args: ReadonlyArray<string>) =>
-    processRunner
-      .run({
-        command: "git",
-        args: ["worktree", "list", "--porcelain", ...args],
-        cwd: directory,
-        env,
-      })
-      .pipe(
-        Effect.option,
-        Effect.map((result) =>
-          Option.isSome(result) && result.value.code === 0 ? result.value.stdout : undefined,
-        ),
-      );
-  // Pre-2.36 Git rejects worktree list -z; normalize its line output to NUL records.
-  const stdout = (yield* list(["-z"])) ?? (yield* list([]))?.replaceAll("\n", "\0") ?? "";
-  return stdout.split("\0\0").flatMap((record) => {
-    const [first = "", ...attributes] = record.split("\0");
-    const prunable = attributes.some((attribute) => attribute.startsWith("prunable"));
-    return first.startsWith("worktree ") && !attributes.includes("bare") && !prunable
-      ? [first.slice("worktree ".length)]
-      : [];
-  });
-});
-
 /**
  * A project id, or a path inside a project's folder (deepest project wins).
  * A path inside a git worktree resolves as the same path in the repository's
@@ -330,20 +301,40 @@ export const resolveProject = Effect.fn("cli.thread.resolveProject")(function* (
 
   const containing = containingRoots(target, requestedPath)[0]?.project;
   if (containing !== undefined) return containing;
-  const targetInfo = yield* fileSystem.stat(target).pipe(Effect.option);
-  const gitDirectory =
-    Option.isSome(targetInfo) && targetInfo.value.type === "File" ? path.dirname(target) : target;
+  const projectNotFound = () => new ThreadProjectNotFoundError({ identifier });
+  const statIfExists = (value: string) =>
+    fileSystem.stat(value).pipe(
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined),
+      Effect.mapError(projectNotFound),
+    );
+  // Git needs an existing cwd, so a path that doesn't exist yet resolves
+  // through its nearest existing ancestor.
+  let existing = target;
+  let info = yield* statIfExists(existing);
+  while (info === undefined) {
+    const parent = path.dirname(existing);
+    if (parent === existing) return yield* projectNotFound();
+    existing = parent;
+    info = yield* statIfExists(existing);
+  }
+  let gitDirectory = info.type === "File" ? path.dirname(target) : target;
+  let checkoutTarget = target;
+  if (existing !== target) {
+    if (info.type !== "Directory") return yield* projectNotFound();
+    gitDirectory = yield* realPath(existing);
+    checkoutTarget = path.join(gitDirectory, path.relative(existing, target));
+  }
   const listed = yield* listGitCheckouts(gitDirectory).pipe(
     Effect.flatMap((paths) => Effect.forEach(paths, realPath)),
     Effect.provide(ProcessRunner.layer),
   );
   const ownCheckout = listed
-    .filter((checkout) => contains(checkout, target))
+    .filter((checkout) => contains(checkout, checkoutTarget))
     .toSorted((left, right) => right.length - left.length)[0];
   if (ownCheckout === undefined) {
-    return yield* new ThreadProjectNotFoundError({ identifier });
+    return yield* projectNotFound();
   }
-  const relative = path.relative(ownCheckout, target);
+  const relative = path.relative(ownCheckout, checkoutTarget);
   const matches = new Map<ProjectId, (typeof projects)[number]>();
   for (const checkout of listed) {
     if (checkout === ownCheckout) continue;
@@ -356,7 +347,7 @@ export const resolveProject = Effect.fn("cli.thread.resolveProject")(function* (
   }
   const [match, ...others] = matches.values();
   if (match === undefined) {
-    return yield* new ThreadProjectNotFoundError({ identifier });
+    return yield* projectNotFound();
   }
   if (others.length > 0) {
     const names = [match, ...others].map((project) => `${project.title} (${project.id})`);
