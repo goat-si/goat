@@ -15,6 +15,12 @@ import * as Schema from "effect/Schema";
 
 import { antigravityManagedPath, antigravityProfileRoot } from "./AntigravityProfilePaths.ts";
 import { boundAntigravityToolText, isCutAntigravityToolText } from "./AntigravityProtocol.ts";
+import {
+  readDiskSwarmMembersByConversationId,
+  swarmAddLaunches,
+  swarmRoleLabel,
+  type AntigravityChildLaunch,
+} from "./AntigravitySwarmWork.ts";
 
 // Field numbers from the runtime's trajectory protos (exa.cortex_pb).
 const STEP_METADATA = 5;
@@ -41,22 +47,17 @@ const MAX_DETACHED_CHILDREN = 64;
 /** GOAT's title for a batch whose launch text it never saw. */
 export const ANTIGRAVITY_SUBAGENT_BATCH_TITLE = "Antigravity subagent batch";
 
-interface AntigravityChildLaunch {
-  readonly role: string;
-  readonly prompt: string;
-}
-
 const LaunchInput = Schema.Struct({ Role: Schema.String, Prompt: Schema.String });
 // agy 1.5 launches one child per call with a flat input; earlier releases send a batch.
 const decodeLaunchInput = Schema.decodeUnknownOption(
   Schema.Union([Schema.Struct({ Subagents: Schema.NonEmptyArray(LaunchInput) }), LaunchInput]),
 );
 
-/** `invoke_subagent` arguments, from the permission prompt or the persisted record. */
+/** `invoke_subagent` or native `swarm` (`action: "add"`) arguments. */
 export function antigravitySubagentLaunches(
   input: unknown,
 ): ReadonlyArray<AntigravityChildLaunch> | undefined {
-  return Option.getOrUndefined(
+  const classic = Option.getOrUndefined(
     Option.map(decodeLaunchInput(input), (decoded) =>
       ("Subagents" in decoded ? decoded.Subagents : [decoded]).map((entry) => ({
         role: entry.Role,
@@ -64,6 +65,7 @@ export function antigravitySubagentLaunches(
       })),
     ),
   );
+  return classic ?? swarmAddLaunches(input);
 }
 
 /** Batch title and prompt; reads match permission-prompt tool call ids against this exact text. */
@@ -580,7 +582,7 @@ function detachedLaunchCall(message: ChildMessage, rootSessionId: string) {
   const call = tool?.toolCall;
   return message.sender === rootSessionId &&
     (tool?.conversationId === undefined || tool.conversationId === rootSessionId) &&
-    call?.name === "invoke_subagent"
+    (call?.name === "invoke_subagent" || call?.name === "swarm")
     ? call
     : undefined;
 }
@@ -619,7 +621,7 @@ async function findDetachedInvokeRecord(
 ): Promise<InvokeRecord | undefined> {
   const childIds = await listDetachedChildIds(profileRoot, rootSessionId);
   if (childIds === undefined || childIds.length === 0) return undefined;
-  const matches: Array<InvokeRecord> = [];
+  const matches: Array<InvokeRecord & { readonly isSwarm: boolean }> = [];
   for (const childId of childIds) {
     const messages = await readInbox(profileRoot, childId).catch(() => undefined);
     // An unreadable or oversized sibling inbox could also claim this id, so uniqueness is unproven.
@@ -630,25 +632,50 @@ async function findDetachedInvokeRecord(
     if (launchMessage === undefined) continue;
     const subagent = await readDetachedSubagent(profileRoot, rootSessionId, childId);
     if (subagent === undefined) return undefined;
-    const argumentsJson = launchMessage.sourceMetadata?.tool?.toolCall?.argumentsJson;
+    const call = launchMessage.sourceMetadata?.tool?.toolCall;
+    const isSwarm = call?.name === "swarm";
+    const argumentsJson = call?.argumentsJson;
     const parsedArgs =
       argumentsJson === undefined
         ? undefined
         : Option.getOrUndefined(decodeArgument(argumentsJson));
-    const [fromArgs] = antigravitySubagentLaunches(parsedArgs) ?? [];
+    const argLaunches = antigravitySubagentLaunches(parsedArgs);
+    const descriptorLabel = swarmRoleLabel(subagent.subagentDescriptor?.role);
+    const matchedLaunch =
+      isSwarm && descriptorLabel !== undefined
+        ? (argLaunches?.find((entry) => entry.role.startsWith(descriptorLabel)) ?? {
+            role: descriptorLabel,
+            prompt: launchMessage.content ?? argLaunches?.[0]?.prompt ?? "",
+          })
+        : argLaunches?.[0];
     matches.push({
+      isSwarm,
       toolCallId: nativeTaskId,
       launches: [
-        fromArgs ?? {
-          role: subagent.subagentDescriptor?.role ?? "",
+        matchedLaunch ?? {
+          role: descriptorLabel ?? subagent.subagentDescriptor?.role ?? "",
           prompt: launchMessage.content ?? "",
         },
       ],
       children: [{ conversationId: childId }],
     });
   }
-  const [match] = matches;
-  return matches.length === 1 ? match : undefined;
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  if (matches.length > 1 && matches.every((entry) => entry.isSwarm)) {
+    const ordered = [...matches].sort((left, right) =>
+      (left.launches[0]?.role ?? "").localeCompare(right.launches[0]?.role ?? "", undefined, {
+        numeric: true,
+      }),
+    );
+    return {
+      toolCallId: nativeTaskId,
+      launches: ordered.flatMap((entry) => entry.launches),
+      children: ordered.flatMap((entry) => entry.children),
+    };
+  }
+  return undefined;
 }
 
 const PENDING_REPLY_TAIL_BYTES = 64 * 1024;
@@ -799,20 +826,32 @@ export const readAntigravityChildrenAtWork = Effect.fn("readAntigravityChildrenA
       const reported = new Set(
         (await readInbox(profileRoot, input.rootSessionId)).map((message) => message.sender),
       );
-      const atWork: Array<string> = [];
+      const swarmMembers = await readDiskSwarmMembersByConversationId(
+        profileRoot,
+        input.rootSessionId,
+        MAX_STEP_BYTES,
+        NATIVE_ID,
+      );
+      const atWork = new Set<string>();
       for (const childId of childIds) {
         if (reported.has(childId)) continue;
+        const swarmMember = swarmMembers.get(childId);
+        if (swarmMember?.killed === true || swarmMember?.parked === true) continue;
         // `manage_subagents` kill only marks the record; a killed child never reports.
         const subagent = await readDetachedSubagent(profileRoot, input.rootSessionId, childId);
         if (subagent?.state === "SUBAGENT_STATE_KILLED") continue;
+        const directTaskId = `swarm:${childId}`;
+        if (input.toolCallIds.includes(directTaskId)) {
+          atWork.add(directTaskId);
+        }
         for (const message of await readInbox(profileRoot, childId)) {
           const launch = detachedLaunchCall(message, input.rootSessionId);
           if (launch !== undefined && input.toolCallIds.includes(launch.id)) {
-            atWork.push(launch.id);
+            atWork.add(launch.id);
           }
         }
       }
-      return atWork;
+      return [...atWork];
     };
     return yield* Effect.tryPromise({
       try: read,

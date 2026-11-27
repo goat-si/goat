@@ -19,6 +19,20 @@ import {
   isAntigravitySnippetPatch,
   readAntigravityPreEditFile,
 } from "./AntigravityEditLocation.ts";
+import {
+  antigravitySwarmAddChildSessionId,
+  antigravitySwarmAddModel,
+  identifyAntigravitySwarmToolCall,
+  normalizeAntigravitySwarmToolPresentation,
+  readAntigravityToolMeta,
+  type AntigravitySwarmToolName,
+} from "./AntigravitySwarmProtocol.ts";
+
+export {
+  antigravitySwarmAddChildSessionId,
+  antigravitySwarmAddModel,
+  type AntigravitySwarmToolName,
+};
 
 const TOOL_TEXT_LIMIT = 8_000;
 const TOOL_TEXT_TRUNCATED = "[Earlier output truncated]\n\n";
@@ -585,7 +599,7 @@ export function normalizeAntigravityToolCall(
       ...(exitCode !== undefined ? { exitCode } : {}),
     };
   }
-  return {
+  const normalized: AcpToolCallState = {
     ...toolCall,
     ...(kind !== undefined ? { kind } : {}),
     ...(command !== undefined ? { command } : {}),
@@ -597,6 +611,7 @@ export function normalizeAntigravityToolCall(
         : {}),
     data,
   };
+  return normalizeAntigravitySwarmToolPresentation(normalized, boundText);
 }
 
 export function isAntigravityOpenCommand(toolCall: AcpToolCallState): boolean {
@@ -612,19 +627,22 @@ const ANTIGRAVITY_SUBAGENT_TITLES = new Set([
   "Run invoke_subagent",
 ]);
 
-/** The ACP agent reports subagent calls as ordinary tools without child IDs or models. */
+/** Classifies native Antigravity subagent and `swarm` worker launch tool calls. */
 export function classifyAntigravitySubagentToolCall(
   toolCall: AcpToolCallState,
   rawPayload?: unknown,
 ): "subagent" | "mcp" | undefined {
-  if (
-    (toolCall.kind !== undefined && toolCall.kind !== "other") ||
-    toolCall.title === undefined ||
-    !ANTIGRAVITY_SUBAGENT_TITLES.has(toolCall.title)
-  )
+  if (toolCall.kind !== undefined && toolCall.kind !== "other") return undefined;
+  const swarm = identifyAntigravitySwarmToolCall(toolCall, rawPayload);
+  if (swarm !== undefined) {
+    if (swarm.tool !== "swarm") return undefined;
+    if (swarm.mcp) return "mcp";
+    return swarm.action?.toLowerCase() === "add" ? "subagent" : undefined;
+  }
+  if (toolCall.title === undefined || !ANTIGRAVITY_SUBAGENT_TITLES.has(toolCall.title)) {
     return undefined;
-  const update = Predicate.isObject(rawPayload) ? rawPayload.update : undefined;
-  const meta = Predicate.isObject(update) ? update._meta : toolCall.data.meta;
+  }
+  const meta = readAntigravityToolMeta(toolCall, rawPayload);
   return Predicate.isObject(meta) && meta.is_mcp_tool_call === true ? "mcp" : "subagent";
 }
 
