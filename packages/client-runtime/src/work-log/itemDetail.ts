@@ -127,13 +127,18 @@ function parseJson(text: string): unknown {
 }
 
 // Match strings whole so digits inside them are not mistaken for JSON numbers.
-const JSON_STRING_OR_NUMBER = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+const JSON_STRING_OR_NUMBER = /"(?:[^"\\]|\\.)*"|(-?\d+(?:\.\d+)?)(?:[eE][+-]?\d+)?/g;
 
+/** Keep raw JSON when numbers are unsafe integers, overflow, or underflow to zero. */
 function hasLossyJsonNumber(json: string): boolean {
-  for (const [token] of json.matchAll(JSON_STRING_OR_NUMBER)) {
-    if (token.startsWith('"')) continue;
+  for (const [token, mantissa] of json.matchAll(JSON_STRING_OR_NUMBER)) {
+    if (mantissa === undefined) continue;
     const value = Number(token);
-    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+    if (
+      !Number.isFinite(value) ||
+      (Number.isInteger(value) && !Number.isSafeInteger(value)) ||
+      (value === 0 && /[1-9]/.test(mantissa))
+    ) {
       return true;
     }
   }
