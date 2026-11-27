@@ -270,6 +270,22 @@ const PluginManifest = Schema.fromJsonString(
     skills: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
   }),
 );
+const KnownMarketplaces = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+const decodeKnownMarketplaces = Schema.decodeUnknownEffect(KnownMarketplaces);
+const decodeKnownMarketplace = Schema.decodeUnknownOption(
+  Schema.Struct({ installLocation: Schema.NonEmptyString }),
+);
+const MarketplaceManifest = Schema.fromJsonString(
+  Schema.Struct({ plugins: Schema.Array(Schema.Unknown) }),
+);
+const decodeMarketplaceManifest = Schema.decodeUnknownEffect(MarketplaceManifest);
+const decodeMarketplaceEntry = Schema.decodeUnknownOption(
+  Schema.Struct({
+    name: Schema.String,
+    source: Schema.Unknown,
+    skills: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+  }),
+);
 
 const SyncedPlugins = Schema.fromJsonString(
   Schema.Struct({ plugins: Schema.Array(Schema.Unknown) }),
@@ -332,17 +348,62 @@ const readPluginManifest = Effect.fn("readPluginManifest")(function* (
     : yield* decodePluginManifest(contents).pipe(Effect.orElseSucceed(() => undefined));
 });
 
+/** Declared skill folders that exist inside the install, through symlinks too, as the native loader requires. */
+const containedSkillDirectories = Effect.fn("containedSkillDirectories")(function* (
+  installPath: string,
+  declared: ReadonlyArray<string>,
+  budget: ClaudeSkillScanBudget,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const canonicalInstallPath = yield* fileSystem
+    .realPath(installPath)
+    .pipe(Effect.orElseSucceed(() => undefined));
+  const directories: Array<string> = [];
+  for (const relative of declared.slice(0, MAX_PLUGIN_SKILL_ROOTS)) {
+    if (budget.remainingEntries <= 0) break;
+    budget.remainingEntries--;
+    const directory = path.resolve(installPath, relative);
+    if (!isInsideDirectory(path, installPath, directory) || canonicalInstallPath === undefined) {
+      continue;
+    }
+    const canonicalDirectory = yield* fileSystem
+      .realPath(directory)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (
+      canonicalDirectory !== undefined &&
+      isInsideDirectory(path, canonicalInstallPath, canonicalDirectory)
+    ) {
+      directories.push(directory);
+    }
+  }
+  return directories;
+});
+
 const pluginSkillRoots = Effect.fn("pluginSkillRoots")(function* (
   installPath: string,
   scope: ClaudeSkillScope,
   prefix: string,
   manifest: typeof PluginManifest.Type | undefined,
   budget: ClaudeSkillScanBudget,
+  entrySkills?: ReadonlyArray<string>,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const roots: Array<ClaudeSkillRoot> = [];
   const defaultDirectory = path.join(installPath, "skills");
+  // A root-sourced marketplace entry's skills list replaces the plugin's skills; `./` means skills/.
+  const entryDirectories =
+    entrySkills === undefined
+      ? []
+      : yield* containedSkillDirectories(installPath, entrySkills, budget);
+  if (entryDirectories.length > 0) {
+    return entryDirectories.map((directory) => ({
+      directory: directory === installPath ? defaultDirectory : directory,
+      scope,
+      prefix,
+    }));
+  }
+  const roots: Array<ClaudeSkillRoot> = [];
   const hasDefaultDirectory = yield* fileSystem
     .exists(defaultDirectory)
     .pipe(Effect.orElseSucceed(() => false));
@@ -354,30 +415,12 @@ const pluginSkillRoots = Effect.fn("pluginSkillRoots")(function* (
       .pipe(Effect.orElseSucceed(() => false));
     if (hasRootSkill) roots.push({ directory: installPath, scope, prefix });
   }
-
-  const canonicalInstallPath = yield* fileSystem
-    .realPath(installPath)
-    .pipe(Effect.orElseSucceed(() => undefined));
-  for (const relative of typeof declared === "string"
-    ? [declared]
-    : (declared ?? []).slice(0, MAX_PLUGIN_SKILL_ROOTS)) {
-    if (budget.remainingEntries <= 0) break;
-    budget.remainingEntries--;
-    const directory = path.resolve(installPath, relative);
-    if (!isInsideDirectory(path, installPath, directory) || canonicalInstallPath === undefined) {
-      continue;
-    }
-    const canonicalDirectory = yield* fileSystem
-      .realPath(directory)
-      .pipe(Effect.orElseSucceed(() => undefined));
-    // The native loader rejects manifest roots that escape through a symlink, too.
-    if (
-      canonicalDirectory !== undefined &&
-      isInsideDirectory(path, canonicalInstallPath, canonicalDirectory)
-    ) {
-      roots.push({ directory, scope, prefix });
-    }
-  }
+  const declaredDirectories = yield* containedSkillDirectories(
+    installPath,
+    typeof declared === "string" ? [declared] : (declared ?? []),
+    budget,
+  );
+  for (const directory of declaredDirectories) roots.push({ directory, scope, prefix });
   return roots;
 });
 
@@ -534,6 +577,54 @@ const discoverPluginSkillRoots = Effect.fn("discoverPluginSkillRoots")(function*
   const projectRepositoryRoots = new Map<string, string | undefined>();
   const repositoryRoot =
     workspace === undefined ? undefined : yield* findPluginRepositoryRoot(workspace);
+  const knownMarketplacesText = yield* readClaudeSkillScanText(
+    fileSystem,
+    path.join(pluginsPath, "known_marketplaces.json"),
+    MAX_REGISTRY_BYTES,
+    budget,
+  );
+  const knownMarketplaces =
+    knownMarketplacesText === undefined
+      ? {}
+      : yield* decodeKnownMarketplaces(knownMarketplacesText).pipe(
+          Effect.orElseSucceed((): Record<string, unknown> => ({})),
+        );
+  const marketplaceEntries = new Map<string, ReadonlyArray<unknown>>();
+  // Claude applies an entry's skills list only when the entry's source is the marketplace root.
+  const readRootEntrySkills = Effect.fnUntraced(function* (marketplace: string, plugin: string) {
+    if (!marketplaceEntries.has(marketplace)) {
+      const location = Option.getOrUndefined(
+        decodeKnownMarketplace(knownMarketplaces[marketplace]),
+      )?.installLocation;
+      const manifestText =
+        location === undefined
+          ? undefined
+          : yield* readClaudeSkillScanText(
+              fileSystem,
+              path.join(location, ".claude-plugin", "marketplace.json"),
+              MAX_REGISTRY_BYTES,
+              budget,
+            );
+      const manifest =
+        manifestText === undefined
+          ? undefined
+          : yield* decodeMarketplaceManifest(manifestText).pipe(
+              Effect.orElseSucceed(() => undefined),
+            );
+      marketplaceEntries.set(marketplace, manifest?.plugins ?? []);
+    }
+    const entry = (marketplaceEntries.get(marketplace) ?? [])
+      .flatMap((candidate) => Option.toArray(decodeMarketplaceEntry(candidate)))
+      .find((candidate) => candidate.name === plugin);
+    if (
+      entry?.skills === undefined ||
+      typeof entry.source !== "string" ||
+      !entry.source.split(/[\\/]/).every((segment) => segment === "" || segment === ".")
+    ) {
+      return undefined;
+    }
+    return typeof entry.skills === "string" ? [entry.skills] : entry.skills;
+  });
 
   for (const [key, entries] of Object.entries(installed?.plugins ?? {}).sort()) {
     if (budget.remainingEntries <= 0 || budget.remainingBytes <= 0) break;
@@ -571,7 +662,14 @@ const discoverPluginSkillRoots = Effect.fn("discoverPluginSkillRoots")(function*
     if (!prefix || inlinePluginNames.has(pluginNameKey(prefix))) continue;
     // A registry record whose install is gone loads nothing and claims no namespace.
     if (Option.isSome(existing)) claimedPluginNames.add(pluginNameKey(prefix));
-    roots.push(...(yield* pluginSkillRoots(installPath, scope, prefix, manifest, budget)));
+    const separator = key.lastIndexOf("@");
+    const entrySkills =
+      separator > 0
+        ? yield* readRootEntrySkills(key.slice(separator + 1), key.slice(0, separator))
+        : undefined;
+    roots.push(
+      ...(yield* pluginSkillRoots(installPath, scope, prefix, manifest, budget, entrySkills)),
+    );
   }
   if (syncedBucket === undefined) return roots;
 
