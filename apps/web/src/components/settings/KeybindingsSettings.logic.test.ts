@@ -13,6 +13,7 @@ import {
   buildKeybindingRows,
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
+  filterKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
@@ -23,6 +24,24 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
+  it("finds a shortcut by the label its row shows", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { command: "commandPalette.toggle", key: "mod+k" },
+        { command: "chat.new", key: "mod+shift+o" },
+      ]),
+      "Linux x86_64",
+    );
+    expect(
+      filterKeybindingRows(rows, "Ctrl+K", undefined, "Linux x86_64").map((row) => row.command),
+    ).toEqual(["commandPalette.toggle"]);
+    expect(
+      filterKeybindingRows(rows, "ctrl+shift+o", undefined, "Linux x86_64").map(
+        (row) => row.command,
+      ),
+    ).toEqual(["chat.new"]);
+  });
+
   it("lists composer, provider, and pull request commands with editable defaults", () => {
     const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS);
     for (const command of [

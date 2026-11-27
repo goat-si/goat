@@ -363,6 +363,7 @@ export function filterKeybindingRows(
   rows: ReadonlyArray<KeybindingRow>,
   query: string,
   visibleLabel?: (command: KeybindingCommand) => string,
+  platform = navigator.platform,
 ): ReadonlyArray<KeybindingRow> {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return rows;
@@ -372,6 +373,8 @@ export function filterKeybindingRows(
       commandLabel(row.command).toLowerCase().includes(normalizedQuery) ||
       visibleLabel?.(row.command).toLowerCase().includes(normalizedQuery) ||
       row.key.toLowerCase().includes(normalizedQuery) ||
+      // The row shows the platform label ("Ctrl+K"), not the stored "mod+k".
+      formatShortcutLabel(row.binding.shortcut, platform).toLowerCase().includes(normalizedQuery) ||
       row.when.toLowerCase().includes(normalizedQuery) ||
       row.source.toLowerCase().includes(normalizedQuery)
     );
