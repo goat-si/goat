@@ -2,7 +2,7 @@ import { resolveNewTaskDraftWorkspace } from "../features/threads/new-task-conte
 import type { EnvironmentShellStatus } from "@goat/client-runtime/state/shell";
 import type { EnvironmentId, MessageId, ProjectId } from "@goat/contracts";
 
-import { deriveThreadTitleFromPrompt } from "../lib/projectThreadStartTurn";
+import { deriveUnsentThreadTitle } from "../lib/projectThreadStartTurn";
 import {
   isQueuedThreadCreationSendable,
   resolveThreadOutboxDeliveryAction,
@@ -44,14 +44,6 @@ export interface PendingDraftTask {
 
 export function composerDraftHasUserContent(draft: ComposerDraft): boolean {
   return draft.text.trim().length > 0 || draft.attachments.length > 0;
-}
-
-function draftTitle(draft: ComposerDraft): string {
-  if (draft.text.trim().length > 0) {
-    return deriveThreadTitleFromPrompt(draft.text);
-  }
-  const count = draft.attachments.length;
-  return count === 1 ? "1 attachment" : `${count} attachments`;
 }
 
 /** A project's new-task defaults, as useNewTaskProjectDefaults resolves them. */
@@ -138,7 +130,7 @@ export function buildPendingNewTasks(input: {
       projectTitle: message.creation.projectTitle,
       projectCwd: message.creation.projectCwd,
       branch: message.creation.branch,
-      title: deriveThreadTitleFromPrompt(message.text),
+      title: deriveUnsentThreadTitle(message),
       createdAt: message.createdAt,
       message,
       creation: message.creation,
@@ -156,7 +148,7 @@ export function buildPendingNewTasks(input: {
       projectTitle: undefined,
       projectCwd: undefined,
       branch: draft.workspaceSelection?.branch ?? null,
-      title: draftTitle(draft),
+      title: deriveUnsentThreadTitle(draft),
       createdAt: draft.project.createdAt,
       draftKey,
       draft,

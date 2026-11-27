@@ -5,7 +5,7 @@ import { asLaunchingThread } from "@goat/client-runtime/state/thread-inbox";
 import { Atom } from "effect/reactivity";
 import * as DateTime from "effect/DateTime";
 
-import { deriveThreadTitleFromPrompt } from "../lib/projectThreadStartTurn";
+import { deriveUnsentThreadTitle } from "../lib/projectThreadStartTurn";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
@@ -172,7 +172,7 @@ export function pendingThreadCreationShell(
   return presentThreadShell(message.environmentId, {
     id: message.threadId,
     projectId: creation.projectId,
-    title: deriveThreadTitleFromPrompt(message.text),
+    title: deriveUnsentThreadTitle(message),
     providerInstanceId: message.modelSelection.instanceId,
     modelSelection: message.modelSelection,
     runtimeMode: message.runtimeMode ?? DEFAULT_RUNTIME_MODE,

@@ -94,3 +94,15 @@ export function deriveThreadTitleFromPrompt(value: string): string {
   const end = splitsSurrogatePair(title, 69) ? 68 : 69;
   return `${title.slice(0, end).trimEnd()}...`;
 }
+
+/** Titles a new task the server has not created yet; one with only attachments shows their count. */
+export function deriveUnsentThreadTitle(input: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<unknown>;
+}): string {
+  if (input.text.trim().length > 0 || input.attachments.length === 0) {
+    return deriveThreadTitleFromPrompt(input.text);
+  }
+  const count = input.attachments.length;
+  return count === 1 ? "1 attachment" : `${count} attachments`;
+}
