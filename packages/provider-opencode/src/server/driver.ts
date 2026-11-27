@@ -502,14 +502,12 @@ export const OpenCodeDriver: ProviderDriver<
       sessionConfigKey: yield* random.uuidV4().pipe(Effect.orDie),
       runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
-    const scope = yield* Effect.scope;
     const catalogWatch = yield* makeOpenCode2CatalogWatch(currentEnvironment);
     const machineCatalog = makeOpenCode2MachineCatalogFollower(catalogWatch, host.paths.cwd);
-    const workspaceTracker = makeOpenCode2WorkspaceTracker({
+    const workspaceTracker = yield* makeOpenCode2WorkspaceTracker({
       server: openCode2ProbeServer,
       pathService,
       currentEnvironment,
-      scope,
     });
     // A session or text generation can start the server too, and reads no catalog when it does.
     yield* Stream.runForEach(openCode2ProbeServer.connections, (connection) =>
@@ -974,7 +972,7 @@ export const OpenCodeDriver: ProviderDriver<
                 ),
               ),
             ),
-      workspaceRescans: catalogWatch.rescans,
+      workspaceRescans: Stream.merge(catalogWatch.rescans, workspaceTracker.skillRescans),
       invalidateCaches: forgetServers,
       afterUpdate,
       orchestrationAdapter,
