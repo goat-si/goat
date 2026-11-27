@@ -43,9 +43,7 @@ import { finishIdleCommand } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
-  skillMentions,
-  availableSkillMentions,
-  listDirectorySkills,
+  resolveSkillMentions,
   formQuestions,
   formAnswer,
   approves,
@@ -3381,15 +3379,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           });
         }
       }
-      const mentions = skillMentions(text);
-      const skills =
-        mentions.length === 0
-          ? []
-          : yield* availableSkillMentions(
-              mentions,
-              listDirectorySkills(client, location),
-              readModels(location.directory),
-            );
+      const skills = yield* resolveSkillMentions(
+        text,
+        client,
+        location,
+        readModels(location.directory),
+      );
       if (state.active !== turn || turn.interrupted) return;
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
@@ -3752,7 +3747,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (turn.settledInbox.has(inboxID)) return;
           turn.steers.add(inboxID);
           state.strandedSteers.delete(inboxID);
-          const { files, messageText } = yield* Effect.gen(function* () {
+          const { files, messageText, skills } = yield* Effect.gen(function* () {
             const files = yield* promptFiles(steerInput.message.attachments);
             const messageText = (yield* providerMessageTextWithAttachmentPaths({
               text: steerInput.message.text,
@@ -3760,7 +3755,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               resolveAttachmentPath: host.resolveAttachmentPath,
               resolveExtractedTextPath: host.resolveExtractedTextPath,
             })).trim();
-            return { files, messageText };
+            const directory = directoryOf(turn.input.runtimePolicy.cwd);
+            const skills = yield* resolveSkillMentions(
+              steerInput.message.text,
+              client,
+              { directory },
+              readModels(directory),
+            );
+            return { files, messageText, skills };
           }).pipe(
             Effect.onInterrupt(() =>
               lock.withPermit(
@@ -3797,6 +3799,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               id: inboxID,
               text: messageText,
               ...(files.length === 0 ? {} : { files }),
+              ...(skills.length === 0
+                ? {}
+                : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
               delivery: "steer",
             })
             .pipe(

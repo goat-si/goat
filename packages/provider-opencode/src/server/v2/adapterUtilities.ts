@@ -221,3 +221,15 @@ export const listDirectorySkills = (
     Effect.map((list) => new Set<string>(list.data.map((skill) => skill.id))),
     Effect.orElseSucceed(() => new Set<string>()),
   );
+
+export const resolveSkillMentions = <E, R>(
+  text: string,
+  client: OpenCodeClient,
+  location: { readonly directory: string },
+  readModels: Effect.Effect<unknown, E, R>,
+): Effect.Effect<ReadonlyArray<string>, E, R> => {
+  const mentions = skillMentions(text);
+  return mentions.length === 0
+    ? Effect.succeed([])
+    : availableSkillMentions(mentions, listDirectorySkills(client, location), readModels);
+};
