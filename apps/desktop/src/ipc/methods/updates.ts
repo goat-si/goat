@@ -12,6 +12,16 @@ import * as DesktopUpdates from "../../updates/DesktopUpdates.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
+export const confirmUpdateWorkspaceReady = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_WORKSPACE_READY_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.updates.confirmWorkspaceReady")(function* () {
+    const updates = yield* DesktopUpdates.DesktopUpdates;
+    yield* updates.confirmWorkspaceReady;
+  }),
+});
+
 export const getUpdateState = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.UPDATE_GET_STATE_CHANNEL,
   payload: Schema.Void,

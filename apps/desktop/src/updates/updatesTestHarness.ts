@@ -307,23 +307,24 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
             }),
           )
         : Effect.void,
-    readFileString: (path) => {
-      const installRecord = isInstallRecord(path)
-        ? (installRecords.get(path) ?? previousInstallRecord)
-        : undefined;
-      const contents = installRecord ?? markerContents.get(path);
-      if (contents !== undefined) return Effect.succeed(contents);
-      return path === "/missing/resources/package-type" && options.packageType !== undefined
-        ? Effect.succeed(options.packageType)
-        : Effect.fail(
-            PlatformError.systemError({
-              module: "FileSystem",
-              method: "readFileString",
-              _tag: "NotFound",
-              pathOrDescriptor: path,
-            }),
-          );
-    },
+    readFileString: (path) =>
+      Effect.suspend(() => {
+        const installRecord = isInstallRecord(path)
+          ? (installRecords.get(path) ?? previousInstallRecord)
+          : undefined;
+        const contents = installRecord ?? markerContents.get(path);
+        if (contents !== undefined) return Effect.succeed(contents);
+        return path === "/missing/resources/package-type" && options.packageType !== undefined
+          ? Effect.succeed(options.packageType)
+          : Effect.fail(
+              PlatformError.systemError({
+                module: "FileSystem",
+                method: "readFileString",
+                _tag: "NotFound",
+                pathOrDescriptor: path,
+              }),
+            );
+      }),
     makeDirectory: () => Effect.void,
     writeFileString: (path, data) =>
       Effect.sync(() => {
@@ -336,6 +337,12 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     rename: (from, to) =>
       Effect.sync(() => {
         const value = markerContents.get(from);
+        if (isInstallRecord(to) && value !== undefined) {
+          installRecords.set(to, value);
+          markerContents.delete(from);
+          updateRestartMarkers.delete(from);
+          return;
+        }
         if (value !== undefined) markerContents.set(to, value);
         markerContents.delete(from);
         updateRestartMarkers.delete(from);

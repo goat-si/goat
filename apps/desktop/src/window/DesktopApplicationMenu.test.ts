@@ -89,6 +89,7 @@ const layerElectronDialog = ({ shownMessageBox, answerMessageBox }: MenuServices
 
 const layerDesktopUpdates = ({ checkResult, install }: MenuServices) =>
   Layer.succeed(DesktopUpdates.DesktopUpdates, {
+    confirmWorkspaceReady: Effect.void,
     getState: Effect.die("unexpected getState"),
     isActionActive: Effect.succeed(false),
     isInstallActive: Effect.succeed(false),

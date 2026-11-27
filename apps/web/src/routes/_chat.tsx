@@ -1,4 +1,5 @@
 import { GlobalVoiceRecording } from "../speech/GlobalVoiceRecording";
+import { useEffect } from "react";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
 import { GoatBotRouteDrafts } from "../components/goatBot/GoatBotRouteDrafts";
@@ -14,6 +15,10 @@ import { usePrimaryEnvironmentId } from "../state/environments";
 import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 
 function ChatRouteLayout() {
+  // The workspace has committed past auth and onboarding, even with no remote machine online.
+  useEffect(() => {
+    void window.desktopBridge?.confirmUpdateWorkspaceReady?.().catch(() => undefined);
+  }, []);
   // Render both routes here so draft promotion keeps the same ChatView mounted.
   const { shownTarget, modalOpen } = useShownThreadRouteTarget();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
