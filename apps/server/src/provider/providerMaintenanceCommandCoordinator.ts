@@ -25,11 +25,11 @@ class MachineLockError extends Schema.TaggedError<MachineLockError>()("MachineLo
 }) {}
 
 /** @internal */
-export const machineLockFile = (lockKey: string) =>
-  NodePath.join(
-    NodeOS.tmpdir(),
-    `goat-provider-update-${NodeCrypto.createHash("sha256").update(lockKey).digest("hex").slice(0, 32)}`,
-  );
+export const machineLockFile = (lockKey: string, uid: number | undefined = process.getuid?.()) => {
+  const owner = uid === undefined ? "" : `-${uid}`;
+  const digest = NodeCrypto.createHash("sha256").update(lockKey).digest("hex").slice(0, 32);
+  return NodePath.join(NodeOS.tmpdir(), `goat-provider-update${owner}-${digest}`);
+};
 
 const withMachineLock = <A, E, R>(
   lockKey: string,

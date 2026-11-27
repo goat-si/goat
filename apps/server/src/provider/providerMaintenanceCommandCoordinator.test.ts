@@ -47,3 +47,10 @@ it.live("holds the update's lock key against other server processes while it run
     assert.strictEqual(yield* probe(machineLockFile(lockKey)), "acquired");
   }),
 );
+
+it.effect("isolates machine lock files across POSIX user IDs for the same lock key", () =>
+  Effect.sync(() => {
+    assert.notStrictEqual(machineLockFile("bun-global", 1000), machineLockFile("bun-global", 1001));
+    assert.strictEqual(machineLockFile("bun-global", 1000), machineLockFile("bun-global", 1000));
+  }),
+);
