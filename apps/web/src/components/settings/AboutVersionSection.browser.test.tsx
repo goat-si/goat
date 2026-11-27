@@ -1,5 +1,5 @@
 import type { DesktopUpdateState } from "@goat/contracts";
-import { beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import { render, stubGlobal } from "../../../test/render";
@@ -29,14 +29,11 @@ const available: DesktopUpdateState = {
   canRetry: false,
 };
 
-let currentState = available;
-beforeEach(() => {
-  currentState = available;
-});
+const snapshot = { read: () => available };
 
 vi.mock("../../state/desktopUpdate", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/desktopUpdate")>()),
-  useDesktopUpdateState: () => currentState,
+  useDesktopUpdateState: () => snapshot.read(),
 }));
 
 it("tells the user why an update download from About failed", async () => {
@@ -64,14 +61,14 @@ it("tells the user why an update download from About failed", async () => {
 it.each(["download", "install"] as const)(
   "offers the target installer and a stage-specific retry after %s fails",
   async (stage) => {
-    currentState = {
+    using _snapshot = vi.spyOn(snapshot, "read").mockReturnValue({
       ...available,
       status: stage === "install" ? "downloaded" : "available",
       downloadedVersion: stage === "install" ? "1.2.4" : null,
       errorContext: stage,
       message: "Failure detail from the updater.",
       canRetry: true,
-    };
+    });
     const openExternal = vi.fn(async () => true);
     using _bridge = stubGlobal("desktopBridge", { openExternal });
     await using screen = await render(<AboutVersionSection />);

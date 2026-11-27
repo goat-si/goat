@@ -308,7 +308,7 @@ export function getDesktopUpdateStatusText(
   );
 }
 
-// Exact app-owned sentences only. Service diagnostics are not message ids.
+// Only app-owned wording goes through translation. Service diagnostics remain literal values.
 export function translateDesktopUpdateMessage(
   message: string | null | undefined,
   gt: DesktopUpdateTranslate,
