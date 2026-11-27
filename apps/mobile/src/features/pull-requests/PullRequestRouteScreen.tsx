@@ -88,6 +88,7 @@ import { useNativeReviewDiffBridge } from "../review/useNativeReviewDiffBridge";
 import { usePullRequestActivityRows } from "./usePullRequestActivityRows";
 import { PullRequestActionToolbar, PullRequestCardGroup } from "./PullRequestControls";
 import {
+  pullRequestParams,
   pullRequestTarget as requestTarget,
   usePullRequestDiff,
   usePullRequestDiffEntry,
@@ -163,7 +164,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const insets = useSafeAreaInsets();
   const [toolbarHeight, setToolbarHeight] = usePullRequestToolbarHeight(insets.bottom);
   const barInsets = Platform.OS === "ios" ? insets : { top: 0, bottom: 0 };
-  const params = route.params;
+  // A link's query lands on this route; only the pull request's own fields go further.
+  const params = useMemo(() => pullRequestParams(route.params), [route.params]);
   usePullRequestEnvironmentFallback(params);
   const connected = usePullRequestConnected(params.environmentId);
   const [section, setSection] = useState(() => Link.linkedPullRequestSection(params.navigationUrl));

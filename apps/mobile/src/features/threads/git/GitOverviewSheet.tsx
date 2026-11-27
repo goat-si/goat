@@ -197,8 +197,6 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         environmentId: String(environmentId),
         threadId: String(threadId),
         confirmAction: confirmableAction,
-        branchName,
-        includesCommit: String(input.action === "commit_push" || input.action === "commit_push_pr"),
       });
       return;
     }

@@ -10,7 +10,11 @@ import { expect, it, vi } from "vite-plus/test";
 const mocks = vi.hoisted(() => ({ diff: vi.fn(), withheldDiffAdvertised: vi.fn() }));
 vi.mock("../../state/pull-requests", () => ({ composerPullRequests: mocks }));
 
-import { usePullRequestDiff, usePullRequestDiffEntry } from "./usePullRequestDiff";
+import {
+  pullRequestParams,
+  usePullRequestDiff,
+  usePullRequestDiffEntry,
+} from "./usePullRequestDiff";
 import * as reviewModel from "../review/reviewModel";
 import { getCachedNativeReviewDiffData } from "../review/nativeReviewDiffAdapter";
 
@@ -334,4 +338,18 @@ it("disables a withheld notice until the page catches up to the new head", async
   act(() => screen.current.refresh());
   await screen.succeed(1, page(newHead));
   expect(canTap()).toBe(true);
+});
+
+it("keeps only the pull request a route names", () => {
+  const pullRequest = {
+    environmentId: "environment",
+    projectId: "project",
+    repository: "owner/repo",
+    number: 1,
+    host: "git.example.com",
+    navigationUrl: "https://git.example.com/owner/repo/pull/1#discussion_r1",
+    navigationId: 2,
+  };
+  const routeParams = { ...pullRequest, commit: "abc1234", path: "src/index.ts" };
+  expect(pullRequestParams(routeParams)).toEqual(pullRequest);
 });
