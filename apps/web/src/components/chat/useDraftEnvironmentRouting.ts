@@ -11,11 +11,13 @@ import {
   type ProviderDriverKind,
   ProviderInstanceId,
   resolveProjectProviderInstanceEnabled,
+  type ScopedProjectRef,
   type ThreadContextRecord,
 } from "@goat/contracts";
 import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { shallow } from "zustand/shallow";
 import { toastManager } from "../ui/toast";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -23,12 +25,16 @@ import {
 } from "../../logicalProject";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { type EnvironmentPresentation, useEnvironmentProviders } from "../../state/environments";
-import { readProjects, subscribeProjects, useProjects } from "../../state/entities";
+import { readProject, readProjects, subscribeProjects, useProjects } from "../../state/entities";
 import { unsilenceProjectCloneToasts } from "../../state/projectClones";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { vcsEnvironment } from "../../state/vcs";
 import type { DraftSessionState } from "../../composerDraftStore";
 import { loadBalancingSendWarning } from "./composerSend.logic";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { trackPendingWorkspaceDefault } from "../../lib/draftWorkspaceDefaults";
 import { retargetDraftWorkspace } from "../../lib/retargetDraftWorkspace";
+import { resolveDefaultWorktreeBaseBranch } from "../BranchToolbar.logic";
 import { draftFanoutSelectionsAtom } from "./chatViewSend";
 
 interface DraftEnvironmentRoutingInput {
@@ -53,6 +59,17 @@ interface DraftEnvironmentRoutingInput {
   readonly activeProjectIsScratch: boolean;
   readonly projectGroupingSettings: ReturnType<typeof selectProjectGroupingSettings>;
   readonly sendInFlightRef: { readonly current: boolean };
+}
+
+// A send waits on this; a read stuck on a reconnecting machine falls back to no project file.
+function readDestinationWorkspace(draft: DraftSessionState, projectRef: ScopedProjectRef) {
+  return retargetDraftWorkspace(draft, projectRef, AbortSignal.timeout(5_000));
+}
+
+function changesProject(draft: DraftSessionState, projectRef: ScopedProjectRef) {
+  return (
+    draft.environmentId !== projectRef.environmentId || draft.projectId !== projectRef.projectId
+  );
 }
 
 /**
@@ -87,6 +104,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     (store) => store.setLogicalProjectDraftThreadId,
   );
   const allProjects = useProjects();
+  const readRefs = useAtomCommand(vcsEnvironment.readRefs, { reportFailure: false });
   const { openScratchProject } = useScratchProject();
   const needsLoadBalancing = automaticEnvironment && !draftThread?.loadBalancedEnvironmentId;
   const loadBalancingCandidates = automaticEnvironment
@@ -126,7 +144,31 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     needsLoadBalancing ? loadBalancingCandidates : [],
     loadBalancingSettings.loadBalancingWeights,
   );
+  const mountedRoutingScope = useRef<{ readonly key: string } | null>(null);
   const readRouting = useStableCallback(() => ({ input, loadBalancingCandidates }));
+  const readWorktreeBase = async (projectRef: ScopedProjectRef, branch: string | null) => {
+    const cwd = readProject(projectRef)?.workspaceRoot;
+    if (!cwd) return null;
+    const { environmentId } = projectRef;
+    const call = { signal: AbortSignal.timeout(5_000) };
+    if (branch) {
+      let cursor: number | undefined;
+      do {
+        const matching = await readRefs(
+          {
+            environmentId,
+            input: { cwd, query: branch.slice(0, 256), cursor, includeMatchingRemoteRefs: true },
+          },
+          call,
+        );
+        if (matching._tag !== "Success") break;
+        if (matching.value.refs.some((ref) => ref.name === branch)) return branch;
+        cursor = matching.value.nextCursor ?? undefined;
+      } while (cursor !== undefined && !call.signal.aborted);
+    }
+    const result = await readRefs({ environmentId, input: { cwd, limit: 2 } }, call);
+    return result._tag === "Success" ? resolveDefaultWorktreeBaseBranch(result.value.refs) : null;
+  };
   const refreshBeforeSend = () => {
     if (
       !automaticEnvironment ||
@@ -137,23 +179,42 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     )
       return null;
     const originalDraft = getDraftSession(draftId);
+    const scope = mountedRoutingScope.current;
+    if (!originalDraft || !scope) return null;
     const composerDraft = useComposerDraftStore.getState().getComposerDraft(draftId);
-    return loadBalancing.refreshSelection(loadBalancingCandidates).then((environmentId) => {
+    const readCurrentRouting = () => {
       const current = readRouting();
-      if (
-        current.input.draftId !== draftId ||
-        !current.input.automaticEnvironment ||
-        current.input.composerHasAttachments ||
-        current.input.activeProjectKey !== activeProjectKey ||
-        current.input.selectedProvider !== selectedProvider ||
-        current.input.activeProviderInstanceId !== activeProviderInstanceId ||
-        current.input.loadBalancingSettings.loadBalancingWeights !==
-          loadBalancingSettings.loadBalancingWeights ||
-        current.loadBalancingCandidates.join("\n") !== loadBalancingCandidates.join("\n") ||
-        getDraftSession(draftId) !== originalDraft ||
-        useComposerDraftStore.getState().getComposerDraft(draftId) !== composerDraft
-      )
-        return false;
+      const latestDraft = getDraftSession(draftId);
+      const draftMatches =
+        latestDraft === originalDraft ||
+        // The picker may fill an empty base while any of the routing reads are pending.
+        // Its automatic write keeps the routing mode; a manual pick switches it to manual.
+        (originalDraft.envMode === "worktree" &&
+          originalDraft.branch === null &&
+          latestDraft?.branch != null &&
+          shallow(latestDraft, {
+            ...originalDraft,
+            branch: latestDraft.branch,
+            environmentSelection: originalDraft.environmentSelection ?? "auto",
+          }));
+      return mountedRoutingScope.current === scope &&
+        current.input.draftId === draftId &&
+        current.input.automaticEnvironment &&
+        !current.input.composerHasAttachments &&
+        current.input.activeProjectKey === activeProjectKey &&
+        current.input.selectedProvider === selectedProvider &&
+        current.input.activeProviderInstanceId === activeProviderInstanceId &&
+        current.input.loadBalancingSettings.loadBalancingWeights ===
+          loadBalancingSettings.loadBalancingWeights &&
+        current.loadBalancingCandidates.join("\n") === loadBalancingCandidates.join("\n") &&
+        draftMatches &&
+        useComposerDraftStore.getState().getComposerDraft(draftId) === composerDraft
+        ? current
+        : null;
+    };
+    return loadBalancing.refreshSelection(loadBalancingCandidates).then(async (environmentId) => {
+      const current = readCurrentRouting();
+      if (!current) return false;
       const target = current.input.logicalProjectEnvironments.find(
         (candidate) => candidate.environmentId === environmentId,
       );
@@ -169,7 +230,24 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
         return false;
       }
       const projectRef = scopeProjectRef(target.environmentId, target.projectId);
-      if (originalDraft && target.environmentId !== originalDraft.environmentId) {
+      const moved = changesProject(originalDraft, projectRef);
+      const workspace = moved ? await readDestinationWorkspace(originalDraft, projectRef) : {};
+      const isWorktree = (workspace.envMode ?? originalDraft.envMode) === "worktree";
+      const branch =
+        isWorktree && (moved || originalDraft.branch === null)
+          ? await readWorktreeBase(projectRef, originalDraft.branch)
+          : moved
+            ? null
+            : originalDraft.branch;
+      if (
+        !readCurrentRouting()?.input.logicalProjectEnvironments.some(
+          (candidate) =>
+            candidate.environmentId === environmentId && candidate.projectId === target.projectId,
+        )
+      )
+        return false;
+
+      if (target.environmentId !== originalDraft.environmentId) {
         appAtomRegistry.set(
           draftFanoutSelectionsAtom(
             scopedThreadKey(scopeThreadRef(target.environmentId, originalDraft.threadId)),
@@ -187,7 +265,8 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
           projectRef,
           environmentSelection: "auto",
           loadBalancedEnvironmentId: target.environmentId,
-          branch: originalDraft?.branch ?? null,
+          ...workspace,
+          branch,
         }),
       );
       return true;
@@ -215,11 +294,26 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       (environment) => environment.environmentId === loadBalancing.environmentId,
     );
     if (!target?.projectId) return;
+    const draft = getDraftSession(draftId);
+    if (!draft) return;
+    const projectRef = scopeProjectRef(target.environmentId, target.projectId);
     setDraftThreadContext(draftId, {
-      projectRef: scopeProjectRef(target.environmentId, target.projectId),
+      projectRef,
       environmentSelection: "auto",
       loadBalancedEnvironmentId: target.environmentId,
     });
+    if (changesProject(draft, projectRef)) {
+      const current = { envMode: draft.envMode, startFromOrigin: draft.startFromOrigin };
+      trackPendingWorkspaceDefault(
+        draftId,
+        projectRef,
+        current,
+        readDestinationWorkspace(draft, projectRef).then((workspace) => ({
+          ...current,
+          ...workspace,
+        })),
+      );
+    }
   }, [
     needsLoadBalancing,
     loadBalancing.pending,
@@ -228,6 +322,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     draftId,
     logicalProjectEnvironments,
     sendInFlightRef,
+    getDraftSession,
     setDraftThreadContext,
   ]);
   // A change in flight belongs to the draft and project it started on.
@@ -240,16 +335,17 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   useLayoutEffect(() => {
     environmentChangeScopeRef.current = environmentChangeScope;
   });
-  // Leaving the scope, or unmounting, abandons a change still in flight.
-  useLayoutEffect(
-    () => () => {
+  // Leaving the scope, or unmounting, abandons a change or routing refresh still in flight.
+  useLayoutEffect(() => {
+    mountedRoutingScope.current = { key: environmentChangeScope };
+    return () => {
+      mountedRoutingScope.current = null;
       if (environmentChangeRef.current?.scope === environmentChangeScope) {
         environmentChangeRef.current.controller.abort();
         environmentChangeRef.current = null;
       }
-    },
-    [environmentChangeScope],
-  );
+    };
+  }, [environmentChangeScope]);
   const readPendingEnvironmentChange = () => {
     const pending = environmentChangeRef.current;
     return pending !== null && pending.scope === environmentChangeScopeRef.current ? pending : null;

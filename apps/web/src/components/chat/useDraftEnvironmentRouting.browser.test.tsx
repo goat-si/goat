@@ -33,6 +33,9 @@ const state = vi.hoisted(() => {
         ) => Atom.Atom<AsyncResult.AsyncResult<ProjectReadFileResult, never>>
       >(),
     addProjectToMachine: vi.fn(),
+    refreshSelection: vi.fn<() => Promise<EnvironmentId | null>>(),
+    readRefs: vi.fn(),
+    pickedEnvironmentId: null as EnvironmentId | null,
     toast: vi.fn(),
     unsilenceProjectCloneToasts: vi.fn(),
     projectArrivalTimesOut: false,
@@ -85,9 +88,13 @@ vi.mock("../../hooks/useLoadBalancedEnvironment", () => ({
   useLoadBalancedEnvironment: () => ({
     pending: false,
     failed: false,
-    environmentId: null,
+    environmentId: state.pickedEnvironmentId,
     refresh: () => undefined,
+    refreshSelection: state.refreshSelection,
   }),
+}));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: () => state.readRefs,
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("../../state/projectClones", () => ({
@@ -114,6 +121,7 @@ function projectFileAtom(contents: string) {
 }
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import { readPendingWorkspaceDefault } from "../../lib/draftWorkspaceDefaults";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
 import { useDraftEnvironmentRouting } from "./useDraftEnvironmentRouting";
 
@@ -149,10 +157,13 @@ type Routing = ReturnType<typeof useDraftEnvironmentRouting>;
 const clonedRef = (): ScopedProjectRef =>
   scopeProjectRef(studio, state.addProjectToMachine.mock.calls[0]?.[0].projectId);
 
-async function setup() {
+async function setup(options: { readonly automaticEnvironment?: boolean } = {}) {
   state.projects.clear();
   state.listeners.clear();
   state.projectListeners.clear();
+  state.pickedEnvironmentId = null;
+  state.refreshSelection.mockReset().mockResolvedValue(null);
+  state.readRefs.mockReset().mockResolvedValue({ _tag: "Success", value: { refs: [] } });
   state.getProjectFileQueryAtom.mockReset().mockReturnValue(projectFileAtom("{}"));
   state.addProjectToMachine
     .mockReset()
@@ -177,12 +188,14 @@ async function setup() {
     routing.current = value;
   };
   function Harness(props: { capture: (value: Routing) => void }) {
+    const draftThread = useComposerDraftStore((store) =>
+      options.automaticEnvironment ? store.getDraftSession(draftId) : null,
+    );
     const value = useDraftEnvironmentRouting({
       draftId,
-      // Read only for automatic routing, which these tests leave off.
-      draftThread: null,
+      draftThread,
       envLocked: false,
-      automaticEnvironment: false,
+      automaticEnvironment: options.automaticEnvironment ?? false,
       logicalProjectEnvironments: [
         {
           environmentId: laptop,
@@ -459,4 +472,36 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
       expect(state.projectListeners.size).toBe(0);
     },
   );
+
+  it("uses the destination default workspace and base branch when auto balancing before send", async () => {
+    await using screen = await setup({ automaticEnvironment: true });
+    state.setProject(onMacmini, {
+      ...SOURCE,
+      environmentId: macmini,
+      id: onMacmini.projectId,
+      defaultThreadEnvMode: "worktree" as const,
+    });
+    state.refreshSelection.mockResolvedValue(macmini);
+    state.readRefs.mockResolvedValue({
+      _tag: "Success",
+      value: { refs: [{ name: "main", current: true, isDefault: true, isRemote: false }] },
+    });
+    await act(() => {
+      useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+        envMode: "local",
+        startFromOrigin: false,
+        environmentSelection: "auto",
+        loadBalancedEnvironmentId: laptop,
+      });
+    });
+
+    const ready = await screen.routing.current?.refreshBeforeSend();
+    expect(ready).toBe(true);
+    expect(screen.draft()).toMatchObject({
+      environmentId: macmini,
+      envMode: "worktree",
+      branch: "main",
+    });
+    expect(readPendingWorkspaceDefault(draftId)).toBeNull();
+  });
 });
