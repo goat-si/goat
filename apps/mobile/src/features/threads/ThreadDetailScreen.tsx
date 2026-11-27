@@ -46,7 +46,7 @@ import {
 import { resolveSubagentPillSegment } from "@goat/client-runtime/state/thread-subagents";
 import { formatModelSelectionEffort } from "@goat/client-runtime/state/thread-execution";
 import { formatModelSlugName, resolveSelectableModel } from "@goat/shared/model";
-import { isProviderNativeSubagentThread } from "@goat/contracts";
+import { AuthOrchestrationOperateScope, isProviderNativeSubagentThread } from "@goat/contracts";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -113,6 +113,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
+import { useEnvironmentScopeDenied } from "../../state/session";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { LiveThreadWorkspaceBanner } from "./LiveThreadWorkspaceBanner";
@@ -345,6 +346,10 @@ function ThreadDetailBody(
   });
   const unsnoozeThread = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const canTriageThread = !useEnvironmentScopeDenied(
+    props.environmentId,
+    AuthOrchestrationOperateScope,
+  );
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const { runStop: anyRunStop, startHold } = useRunStopAndStartHold(
@@ -434,7 +439,9 @@ function ThreadDetailBody(
     latestRunCompletedAt: props.selectedThread.latestRun?.completedAt ?? null,
   });
   const runStatusAction = async (action: "stop" | "wake" | "unsettle" | "dismiss") => {
-    if (statusPending || !props.canOperateThread) return;
+    const permitted =
+      action === "wake" || action === "unsettle" ? canTriageThread : props.canOperateThread;
+    if (statusPending || !permitted) return;
     const request: BackgroundWorkStopRequest = {
       threadKey: selectedThreadKey,
       taskIds:
@@ -548,7 +555,8 @@ function ThreadDetailBody(
                   ? "Un-settle"
                   : "Dismiss",
             accessibilityLabel: snoozeShown ? "Wake now" : settled ? "Un-settle" : "Dismiss",
-            disabled: !props.canOperateThread || statusPending,
+            disabled:
+              !(snoozeShown || settled ? canTriageThread : props.canOperateThread) || statusPending,
             onPress: () =>
               void runStatusAction(snoozeShown ? "wake" : settled ? "unsettle" : "dismiss"),
           },

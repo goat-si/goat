@@ -14,6 +14,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -24,12 +25,19 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { RpcClientError } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { RpcSession } from "../rpc/session.ts";
+import {
+  makeThreadTriageOutboxStore,
+  ThreadTriageOutboxStore,
+} from "../platform/threadTriageOutboxStore.ts";
+import type { EnvironmentShellStatus } from "./shell.ts";
 import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 
@@ -88,15 +96,33 @@ const SNAPSHOT: OrchestrationV2ShellSnapshot = {
   ],
 };
 
+let randomCalls = 0;
+
 const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (options?: {
   readonly loadEarlier?: () => Effect.Effect<ThreadHistoryController.ThreadHistoryLoadEarlierResult>;
   readonly reconcilePendingWork?: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly connected?: boolean;
+  /** Shared between harnesses to stand in for a restart. */
+  readonly storage?: { value: string | null };
 }) {
   const requests = yield* Queue.unbounded<{
     command: OrchestrationV2Command;
     reply: Deferred.Deferred<{ sequence: number }, Error>;
   }>();
   const reconciled = yield* Queue.unbounded<ThreadId>();
+  const liveSession = Option.some({
+    client: {
+      [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+        Effect.gen(function* () {
+          const reply = yield* Deferred.make<{ sequence: number }, Error>();
+          yield* Queue.offer(requests, { command, reply });
+          return yield* Deferred.await(reply);
+        }),
+    },
+  } as unknown as RpcSession);
+  const session = yield* SubscriptionRef.make(
+    options?.connected === false ? Option.none<RpcSession>() : liveSession,
+  );
   const connectionFollowed = yield* Deferred.make<void>();
   const connection = yield* SubscriptionRef.make<SupervisorConnectionState>({
     ...AVAILABLE_CONNECTION_STATE,
@@ -104,21 +130,16 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
     phase: "connected",
   });
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-    target: { environmentId: ENVIRONMENT_ID },
+    target: { environmentId: ENVIRONMENT_ID, label: "Test" },
     state: connection,
-    session: yield* SubscriptionRef.make(
-      Option.some({
-        client: {
-          [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
-            Effect.gen(function* () {
-              const reply = yield* Deferred.make<{ sequence: number }, Error>();
-              yield* Queue.offer(requests, { command, reply });
-              return yield* Deferred.await(reply);
-            }),
-        },
-      } as unknown as RpcSession),
-    ),
+    session,
   } as EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+  const storage = options?.storage ?? { value: null };
+  const store = makeThreadTriageOutboxStore((next) =>
+    Effect.sync(() => {
+      storage.value = next(storage.value) ?? storage.value;
+    }),
+  );
   const runtime = Atom.runtime(
     Layer.mergeAll(
       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
@@ -133,8 +154,10 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
       } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
       Layer.succeed(
         SecureRandom.SecureRandom,
-        SecureRandom.make((size) => new Uint8Array(size)),
+        // Distinct per call, so a resend under a fresh command id would show.
+        SecureRandom.make((size) => new Uint8Array(size).fill(++randomCalls % 256)),
       ),
+      Layer.succeed(ThreadTriageOutboxStore, store),
       Layer.succeed(
         ThreadHistoryController.ThreadHistoryController,
         ThreadHistoryController.ThreadHistoryController.of({
@@ -150,16 +173,29 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
   const snapshotAtom = Atom.family((_environmentId: EnvironmentId) =>
     Atom.make<OrchestrationV2ShellSnapshot | null>(SNAPSHOT),
   );
-  const commands = createThreadEnvironmentAtoms(runtime, snapshotAtom);
+  const statusAtom = Atom.family((_environmentId: EnvironmentId) =>
+    Atom.make<EnvironmentShellStatus>(options?.connected === false ? "cached" : "live"),
+  );
+  const commands = createThreadEnvironmentAtoms(runtime, snapshotAtom, statusAtom);
   const registry = AtomRegistry.make();
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   const visibleAtom = commands.snapshotAtom(ENVIRONMENT_ID);
   registry.mount(visibleAtom);
+  const pendingSyncAtom = commands.pendingSyncAtom(ENVIRONMENT_ID);
+  registry.mount(pendingSyncAtom);
+  const reconnect = (status: EnvironmentShellStatus = "live") =>
+    SubscriptionRef.set(session, liveSession).pipe(
+      Effect.andThen(Effect.sync(() => registry.set(statusAtom(ENVIRONMENT_ID), status))),
+    );
   return {
     registry,
     commands,
     snapshotAtom,
+    statusAtom,
     visibleAtom,
+    pendingSyncAtom,
+    reconnect,
+    store,
     requests,
     reconciled,
     connection,
@@ -668,6 +704,205 @@ describe("remote thread lifecycle commands", () => {
       expect(snoozed?.pendingRuntimeRequest).toEqual(USER_INPUT);
       yield* Deferred.succeed(request.reply, { sequence: 2 });
       expect((yield* Effect.promise(() => result))._tag).toBe("Success");
+    }),
+  );
+});
+
+const waitFor = <A>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: Atom.Atom<A>,
+  done: (value: A) => boolean,
+) =>
+  Effect.callback<void>((resume) => {
+    if (done(registry.get(atom))) return resume(Effect.void);
+    const unsubscribe = registry.subscribe(atom, (value) => {
+      if (!done(value)) return;
+      unsubscribe();
+      resume(Effect.void);
+    });
+    return Effect.sync(unsubscribe);
+  });
+
+// regression: #24532 settle and snooze while the thread's machine is offline
+describe("settle and snooze while the environment is offline", () => {
+  type Harness = Effect.Success<ReturnType<typeof makeHarness>>;
+  const target = { environmentId: ENVIRONMENT_ID, input: { threadId: THREAD_ID } };
+  const snooze = {
+    environmentId: ENVIRONMENT_ID,
+    input: { threadId: THREAD_ID, snoozedUntil: "2099-01-01T00:00:00.000Z" },
+  };
+  const undo = {
+    environmentId: ENVIRONMENT_ID,
+    input: { threadId: THREAD_ID, reason: "user" as const },
+  };
+  const queued = (h: Harness) => h.store.update((stored) => stored);
+  const nothingPending = (h: Harness) =>
+    waitFor(h.registry, h.pendingSyncAtom, (threads) => threads.size === 0);
+  /** Commands on one thread go out in order, so this one arrives first only if no other was sent. */
+  const expectNothingSent = Effect.fn("expectNothingSent")(function* (h: Harness) {
+    const pin = h.commands.pin.run(h.registry, {
+      environmentId: ENVIRONMENT_ID,
+      input: { threadId: THREAD_ID, orderKey: "a" },
+    });
+    const request = yield* Queue.take(h.requests);
+    expect(request.command.type).toBe("thread.pin");
+    yield* Deferred.succeed(request.reply, { sequence: 9 });
+    yield* Effect.promise(() => pin);
+  });
+
+  it.effect.each([
+    ["settle", { settledOverride: "settled" }],
+    ["snooze", { snoozedUntil: FUTURE }],
+  ] as const)("shows a %s at once and sends it once the shell is live", ([action, shown]) =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false });
+      const result = yield* Effect.promise(() =>
+        action === "settle"
+          ? h.commands.settle.run(h.registry, target)
+          : h.commands.snooze.run(h.registry, snooze),
+      );
+      expect(result._tag).toBe("Success");
+      expect(h.registry.get(h.visibleAtom)?.threads[0]).toMatchObject(shown);
+      expect([...h.registry.get(h.pendingSyncAtom)]).toEqual([THREAD_ID]);
+      const entries = yield* queued(h);
+      expect(entries).toHaveLength(1);
+
+      yield* h.reconnect();
+      const request = yield* Queue.take(h.requests);
+      expect(request.command).toMatchObject({
+        type: `thread.${action}`,
+        threadId: THREAD_ID,
+        commandId: entries[0]!.commandId,
+      });
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      yield* nothingPending(h);
+      expect(yield* queued(h)).toEqual([]);
+      yield* expectNothingSent(h);
+    }),
+  );
+
+  it.effect("drops a queued settle when the thread changed on the server meanwhile", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false });
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      yield* h.reconnect("synchronizing");
+      const changed = {
+        ...SNAPSHOT,
+        snapshotSequence: 5,
+        threads: [
+          {
+            ...SNAPSHOT.threads[0]!,
+            latestRunId: RunId.make("run-2"),
+            itemCount: 3,
+          },
+        ],
+      };
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), changed);
+      h.registry.set(h.statusAtom(ENVIRONMENT_ID), "live");
+      yield* nothingPending(h);
+      expect(yield* queued(h)).toEqual([]);
+      expect(h.registry.get(h.visibleAtom)).toBe(changed);
+      yield* expectNothingSent(h);
+    }),
+  );
+
+  it.effect("un-settling a queued settle cancels it without contacting the server", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false });
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      // The undo plan stops here: the server never cleared the placement or snooze.
+      const unsettleResult = yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
+      expect(unsettleResult._tag === "Success" && unsettleResult.value).toMatchObject({
+        cancelledOnDevice: true,
+      });
+      expect(h.registry.get(h.pendingSyncAtom).size).toBe(0);
+      expect(yield* queued(h)).toEqual([]);
+      expect(h.registry.get(h.visibleAtom)).toBe(SNAPSHOT);
+      yield* h.reconnect();
+      yield* expectNothingSent(h);
+    }),
+  );
+
+  it.effect("waking cancels the snooze stored now, also when another tab replaced it", () =>
+    Effect.gen(function* () {
+      const storage = { value: null as string | null };
+      const h = yield* makeHarness({ connected: false, storage });
+      const otherTab = yield* makeHarness({ connected: false, storage });
+      yield* Effect.promise(() => h.commands.snooze.run(h.registry, snooze));
+      yield* Effect.promise(() =>
+        otherTab.commands.snooze.run(otherTab.registry, {
+          ...snooze,
+          input: { ...snooze.input, snoozedUntil: "2099-02-01T00:00:00.000Z" },
+        }),
+      );
+      yield* Effect.promise(() => h.commands.unsnooze.run(h.registry, undo));
+      expect(yield* queued(h)).toEqual([]);
+    }),
+  );
+
+  it.effect("skips a change another tab cancelled while an earlier send failed", () =>
+    Effect.gen(function* () {
+      const storage = { value: null as string | null };
+      const h = yield* makeHarness({ connected: false, storage });
+      const otherTab = yield* makeHarness({ connected: false, storage });
+      const second = { ...SNAPSHOT.threads[0]!, id: ThreadId.make("second") };
+      const twoThreads = { ...SNAPSHOT, threads: [SNAPSHOT.threads[0]!, second] };
+      for (const tab of [h, otherTab])
+        tab.registry.set(tab.snapshotAtom(ENVIRONMENT_ID), twoThreads);
+      const settleSecond = { environmentId: ENVIRONMENT_ID, input: { threadId: second.id } };
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, settleSecond));
+
+      yield* h.reconnect();
+      const first = yield* Queue.take(h.requests);
+      yield* Effect.promise(() =>
+        otherTab.commands.unsettle.run(otherTab.registry, {
+          ...settleSecond,
+          input: { ...settleSecond.input, reason: "user" as const },
+        }),
+      );
+      yield* Deferred.fail(
+        first.reply,
+        new RpcClientError.RpcClientError({ reason: new Socket.SocketCloseError({ code: 1006 }) }),
+      );
+      // The replay re-reads storage before the next change, which drops the cancelled one.
+      yield* waitFor(h.registry, h.pendingSyncAtom, (threads) => !threads.has(second.id));
+      yield* expectNothingSent(h);
+    }),
+  );
+
+  it.effect("sends a settle queued before a restart", () =>
+    Effect.gen(function* () {
+      const storage = { value: null as string | null };
+      const before = yield* makeHarness({ connected: false, storage });
+      yield* Effect.promise(() => before.commands.settle.run(before.registry, target));
+      const [entry] = yield* queued(before);
+
+      const h = yield* makeHarness({ connected: false, storage });
+      yield* waitFor(h.registry, h.pendingSyncAtom, (threads) => threads.has(THREAD_ID));
+      expect(h.registry.get(h.visibleAtom)?.threads[0]?.settledOverride).toBe("settled");
+      yield* h.reconnect();
+      const request = yield* Queue.take(h.requests);
+      expect(request.command).toMatchObject({
+        type: "thread.settle",
+        commandId: entry!.commandId,
+      });
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      yield* nothingPending(h);
+    }),
+  );
+
+  it.effect("refuses a snooze while a settle is queued, keeping the settle", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false });
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      const before = yield* queued(h);
+      const result = yield* Effect.promise(() => h.commands.snooze.run(h.registry, snooze));
+      expect(result._tag === "Failure" && Cause.squash(result.cause)).toMatchObject({
+        _tag: "EnvironmentRpcUnavailableError",
+        message: "Test is not connected.",
+      });
+      expect(yield* queued(h)).toEqual(before);
     }),
   );
 });
