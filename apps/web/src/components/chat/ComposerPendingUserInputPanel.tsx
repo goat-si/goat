@@ -210,7 +210,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         <ComposerBanner.Content>
           <span
             dir={textDirection(activeQuestion.header)}
-            className="shrink-0 text-muted-foreground"
+            className={cn(
+              "min-w-0 text-muted-foreground",
+              isCollapsed ? "max-w-1/2 truncate" : "wrap-anywhere",
+            )}
           >
             {activeQuestion.header}
           </span>
