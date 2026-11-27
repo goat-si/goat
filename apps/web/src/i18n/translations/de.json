@@ -3015,6 +3015,7 @@
   "c7b0bcb64f48db85": "Zeitstempelformat",
   "c7b59de5cc633b03": "Die Startprüfungen des Anbieters sind fehlgeschlagen.",
   "c7c73764f9b4539d": "GOAT Bot beantwortet deine Nachrichten und startet Aufgaben für dich. Unter „Läuft auf“ wählst du seine Umgebung, die sich vom Hub unterscheiden kann.",
+  "c7f5c98f1e79cc6c": "{count, plural, one {{count} weiteren Bildanhang anzeigen} other {{count} weitere Bildanhänge anzeigen}}",
   "c7fe4313def0ef2f": "Neuer Worktree",
   "c80f181fe72924a9": "Projekt konnte nicht entfernt werden",
   "c8192b219451a0d0": "{removed} entfernt, {kept} beibehalten, {failed} fehlgeschlagen",

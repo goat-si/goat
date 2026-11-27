@@ -3015,6 +3015,7 @@
   "c7b0bcb64f48db85": "Formato de hora",
   "c7b59de5cc633b03": "O provedor falhou nas verificações de inicialização.",
   "c7c73764f9b4539d": "O GOAT Bot responde às suas mensagens e inicia tarefas para você. Em «Executar em», escolha o ambiente do bot, que pode ser diferente do hub.",
+  "c7f5c98f1e79cc6c": "{count, plural, one {Mostrar mais {count} imagem anexada} other {Mostrar mais {count} imagens anexadas}}",
   "c7fe4313def0ef2f": "Novo worktree",
   "c80f181fe72924a9": "Não foi possível remover o projeto",
   "c8192b219451a0d0": "{removed} removidos, {kept} mantidos, {failed} com falha",

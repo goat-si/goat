@@ -7,6 +7,7 @@ import type {
 } from "@goat/contracts";
 import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import { CircleAlertIcon, PlayIcon, XIcon } from "~/components/solar";
+import { useGT } from "gt-react";
 import { type ComponentProps, useLayoutEffect, useRef } from "react";
 
 import {
@@ -595,6 +596,7 @@ export function ComposerRestingImagePreviews({
   readonly onExpandImage: (preview: ExpandedImagePreview) => void;
   readonly onShowMore: () => void;
 }) {
+  const gt = useGT();
   const counts = getRestingComposerImagePreviewCounts(images.length);
   const visibleImages = images.slice(0, counts.visibleCount);
   return (
@@ -649,7 +651,12 @@ export function ComposerRestingImagePreviews({
         <button
           type="button"
           className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/70 bg-muted/60 font-medium text-secondary-label text-xs tabular-nums outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-          aria-label={`Show ${String(counts.overflowCount)} more image attachments`}
+          aria-label={gt(
+            "{count, plural, one {Show {count} more image attachment} other {Show {count} more image attachments}}",
+            {
+              count: counts.overflowCount,
+            },
+          )}
           onPointerDown={(event) => event.preventDefault()}
           onClick={onShowMore}
         >

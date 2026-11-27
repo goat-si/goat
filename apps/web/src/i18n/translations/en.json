@@ -3015,6 +3015,7 @@
   "c7b0bcb64f48db85": "Timestamp format",
   "c7b59de5cc633b03": "The provider failed its startup checks.",
   "c7c73764f9b4539d": "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+  "c7f5c98f1e79cc6c": "{count, plural, one {Show {count} more image attachment} other {Show {count} more image attachments}}",
   "c7fe4313def0ef2f": "New worktree",
   "c80f181fe72924a9": "Failed to remove project",
   "c8192b219451a0d0": "{removed} removed, {kept} kept, {failed} failed",
