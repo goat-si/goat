@@ -64,6 +64,17 @@ const CURSOR_AGENT_SETTING_SOURCES = [
   "plugins",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+/** Whether the checkout's own Cursor config (settings, hooks, MCP servers) may load: only unrestricted turns. */
+export function cursorLoadsProjectConfig(
+  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  platform: NodeJS.Platform,
+): boolean {
+  const policy = cursorRuntimeAgentPolicy(runtimePolicy, platform);
+  return (
+    runtimePolicy.runtimeMode === "full-access" && !policy.autoReview && !policy.sandboxEnabled
+  );
+}
+
 /**
  * Cursor can drop its `task` tool but has no concurrency cap, so a goatclaw limit of zero
  * switches native subagents off and any other limit leaves them uncapped.
@@ -93,12 +104,9 @@ export function makeCursorAgentOptions(input: {
     local: {
       ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
       autoReview: policy.autoReview,
-      settingSources:
-        input.runtimePolicy.runtimeMode === "full-access" &&
-        !policy.autoReview &&
-        !policy.sandboxEnabled
-          ? [...CURSOR_AGENT_SETTING_SOURCES]
-          : CURSOR_AGENT_SETTING_SOURCES.filter((source) => source !== "project"),
+      settingSources: cursorLoadsProjectConfig(input.runtimePolicy, input.platform)
+        ? [...CURSOR_AGENT_SETTING_SOURCES]
+        : CURSOR_AGENT_SETTING_SOURCES.filter((source) => source !== "project"),
       sandboxOptions: {
         enabled: policy.sandboxEnabled,
       },
