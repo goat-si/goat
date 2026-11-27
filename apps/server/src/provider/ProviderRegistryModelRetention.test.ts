@@ -1,7 +1,20 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import {
+  ClaudeSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
+import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import { layerMockSpawner } from "./ProviderRegistry.testkit.ts";
+
+const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 it("drops Cursor models a ready catalog read returns none of", () => {
   const previousProvider = {
@@ -125,3 +138,64 @@ it("drops a Claude gateway model the same gateway no longer lists (#43603)", () 
     ["claude-sonnet-5-5", "gw--model:free[1m]", "gw--model:free"],
   );
 });
+
+it.effect("drops a retired gateway model when the surviving model is configured manually", () =>
+  Effect.gen(function* () {
+    const surviving = { value: "gateway/current", displayName: "Current", description: "" };
+    const retired = { value: "gateway/retired", displayName: "Retired", description: "" };
+    const settings = decodeClaudeSettings({
+      customModels: [{ slug: surviving.value, name: "My current model" }],
+    });
+    const environment = {
+      ANTHROPIC_BASE_URL: "https://gateway.example",
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
+    };
+    const makeCapabilities = (models: ReadonlyArray<typeof surviving>) => () =>
+      Effect.succeed({
+        tokenSource: "none" as const,
+        apiKeySource: "none" as const,
+        apiProvider: "firstParty" as const,
+        email: undefined,
+        subscriptionType: undefined,
+        slashCommands: [],
+        models,
+      });
+    const before = yield* checkClaudeProviderStatus(
+      settings,
+      makeCapabilities([surviving, retired]),
+      environment,
+    );
+    const after = yield* checkClaudeProviderStatus(
+      settings,
+      makeCapabilities([surviving]),
+      environment,
+    );
+    const instanceId = ProviderInstanceId.make("claudeAgent");
+    const driver = ProviderDriverKind.make("claudeAgent");
+    const visible = ProviderRegistry.mergeProviderSnapshot(
+      { ...before, instanceId, driver },
+      { ...after, instanceId, driver },
+    );
+    assert.include(
+      before.models.map((model) => model.slug),
+      retired.value,
+    );
+    assert.deepStrictEqual(
+      visible.models
+        .filter((model) => model.slug.startsWith("gateway/"))
+        .map((model) => model.slug),
+      [surviving.value],
+    );
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        NodeServices.layer,
+        layerMockSpawner((args) => {
+          const joined = args.join(" ");
+          if (joined === "--version") return { stdout: "2.1.332\n", stderr: "", code: 0 };
+          throw new Error(`Unexpected args: ${joined}`);
+        }),
+      ),
+    ),
+  ),
+);

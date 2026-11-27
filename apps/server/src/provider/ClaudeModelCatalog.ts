@@ -176,6 +176,15 @@ export function resolveClaudeCatalogModel(
   );
 }
 
+// Cloud backends decorate first-party ids: Bedrock adds a region prefix and a
+// version ("us.anthropic.claude-opus-4-6-v1"), Vertex adds "@<date>".
+export function stripClaudeBackendDecoration(wireModel: string): string {
+  return wireModel
+    .replace(/^(?:[a-z-]+\.)?anthropic\./, "")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/@[^@]*$/, "");
+}
+
 /** Match Claude Code's Bedrock and Vertex routes back to canonical composer models. */
 export function withClaudeCodeModelRoutes(
   catalog: ClaudeModelCatalog,
@@ -185,10 +194,7 @@ export function withClaudeCodeModelRoutes(
   for (const { value, resolvedModel } of reportedModels) {
     if (value === "default") continue;
     const wireModel = (resolvedModel ?? value).replace(/\[1m\]$/i, "");
-    const firstPartyId = wireModel
-      .replace(/^(?:[a-z-]+\.)?anthropic\./, "")
-      .replace(/-v\d+(?::\d+)?$/, "")
-      .replace(/@[^@]*$/, "");
+    const firstPartyId = stripClaudeBackendDecoration(wireModel);
     if (firstPartyId === wireModel) continue;
     const slug = resolveClaudeReportedModelSlug(catalog, firstPartyId);
     if (!apiModels.has(slug)) apiModels.set(slug, value.replace(/\[1m\]$/i, ""));
@@ -344,7 +350,7 @@ export interface ClaudeEffortCapSource {
 }
 
 const CLAUDE_1M_SUFFIX = "[1m]";
-const CLAUDE_CODE_FAMILY_ALIASES: ReadonlySet<string> = new Set([
+export const CLAUDE_CODE_FAMILY_ALIASES: ReadonlySet<string> = new Set([
   "opus",
   "sonnet",
   "haiku",
