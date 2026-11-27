@@ -11,9 +11,10 @@ export function mobileApplicationActiveWakeup(
   backgroundedAtMs: number | null,
   activeAtMs: number,
   foregroundHandoffActive = false,
-): MobileApplicationActiveWakeup {
+): MobileApplicationActiveWakeup | null {
+  // iOS goes inactive without suspending for Control Center, alerts, and the app switcher.
+  if (backgroundedAtMs === null) return null;
   return !foregroundHandoffActive &&
-    backgroundedAtMs !== null &&
     activeAtMs - backgroundedAtMs >= MOBILE_LONG_BACKGROUND_AFTER_MS
     ? "application-active-long"
     : "application-active-probe";

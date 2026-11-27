@@ -52,6 +52,8 @@ const layerProvidedClientConnection = layerSnapshotLoader.pipe(
       usageLimitsCommand: true,
       providerCatalogsOnDemand: true,
       providerCatalogDigests: true,
+      // Halves idle pings on mobile (10 s instead of the 5 s default) to save battery.
+      pingInterval: "10 seconds",
     }),
   ),
   Layer.provideMerge(

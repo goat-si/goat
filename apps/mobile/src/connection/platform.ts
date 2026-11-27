@@ -126,14 +126,12 @@ const layerWakeups = Wakeups.layer({
                 return;
               }
               if (state === "active") {
-                Queue.offerUnsafe(
-                  queue,
-                  mobileApplicationActiveWakeup(
-                    backgroundedAtMs,
-                    Date.now(),
-                    foregroundHandoff || isForegroundHandoffActive(),
-                  ),
+                const wakeup = mobileApplicationActiveWakeup(
+                  backgroundedAtMs,
+                  Date.now(),
+                  foregroundHandoff || isForegroundHandoffActive(),
                 );
+                if (wakeup !== null) Queue.offerUnsafe(queue, wakeup);
                 backgroundedAtMs = null;
                 foregroundHandoff = false;
               }
