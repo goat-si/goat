@@ -750,7 +750,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
             </p>
             {isDownloading ? (
               <progress
-                className="mt-2 w-full"
+                className="mt-2 block h-1.5 w-full overflow-hidden rounded-full accent-primary forced-colors:border [&[value]]:appearance-none [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-primary forced-colors:[&::-webkit-progress-value]:bg-[Highlight]"
                 aria-label={gt("Downloading update")}
                 value={state.downloadPercent ?? undefined}
                 max={100}
