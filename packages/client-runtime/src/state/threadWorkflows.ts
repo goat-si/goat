@@ -100,6 +100,17 @@ export function threadSteersDuringCompaction(projection: Projection | null | und
   );
 }
 
+/** The server rejects a steer into a run that Stop has reached, though the run still reads as running. */
+export function runStopRequested(
+  projection: Pick<Projection, "turnItems"> | null | undefined,
+  runId: Run["id"] | null | undefined,
+): boolean {
+  if (projection == null || runId == null) return false;
+  return projection.turnItems.some(
+    (item) => item.runId === runId && item.type === "run_interrupt_request",
+  );
+}
+
 export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
   if (projection == null) return false;
   const session = resolveThreadProviderSession(projection);

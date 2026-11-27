@@ -5,6 +5,7 @@ import {
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
   resolveLatestMergeBackRun,
+  runStopRequested,
   threadForkAvailability,
   threadSupportsProviderHandoff,
 } from "./threadWorkflows.ts";
@@ -31,6 +32,19 @@ const capabilities = (input?: {
   }) as never;
 
 describe("thread workflows", () => {
+  it("detects when Stop has already reached the active run", () => {
+    const activeRunId = RunId.make("active");
+    const otherRunId = RunId.make("other");
+    const projection = {
+      turnItems: [{ runId: activeRunId, type: "run_interrupt_request" }],
+    } as unknown as OrchestrationV2ThreadProjection;
+
+    expect(runStopRequested(projection, activeRunId)).toBe(true);
+    expect(runStopRequested(projection, otherRunId)).toBe(false);
+    expect(runStopRequested(projection, null)).toBe(false);
+    expect(runStopRequested(null, activeRunId)).toBe(false);
+  });
+
   it("allows a completed thread to switch providers after its session detaches", () => {
     const projection = {
       thread: {
