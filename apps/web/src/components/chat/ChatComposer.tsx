@@ -48,6 +48,7 @@ import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   memo,
   type ReactNode,
+  use,
   useEffect,
   useId,
   useImperativeHandle,
@@ -290,6 +291,7 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope } from "../../state/session";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
+import { BackgroundThreadContext } from "./backgroundThread";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
@@ -2270,8 +2272,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const showInlineRestingControls = composerControlsCollapsed && restingControlsHost === null;
   const composerControlsVisibleInStrip =
     composerControlsCollapsed && restingControlsHost !== null && restingControlsVisible;
+  const backgroundThread = use(BackgroundThreadContext);
   const composerControlsHidden = composerControlsCollapsed && !restingControlsVisible;
-  if (composerControlsHidden && isComposerModelPickerOpen) {
+  // Popovers and menus stack above app modals, so one left open would cover Usage.
+  const composerMenusClosed = composerControlsHidden || backgroundThread;
+  if (composerMenusClosed && isComposerModelPickerOpen) {
     setIsComposerModelPickerOpen(false);
   }
   useLayoutEffect(() => {
@@ -2621,7 +2626,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       toggleInteractionMode={toggleInteractionMode}
       handleRuntimeModeChange={handleRuntimeModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
-      composerControlsHidden={composerControlsHidden}
+      composerControlsHidden={composerMenusClosed}
       restingHiddenBlockCount={restingHiddenBlockCount}
       iconOnlyBlockCount={iconOnlyBlockCount}
       showInlineRestingControls={showInlineRestingControls}
