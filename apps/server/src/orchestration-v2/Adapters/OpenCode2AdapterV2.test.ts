@@ -28,7 +28,6 @@ import {
   RunId,
   type RuntimeRequestId,
   ThreadId,
-  type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   type ProviderReplayEntry,
 } from "@goat/contracts";
@@ -375,10 +374,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         promptAccepted,
         event("session.execution.succeeded", { sessionID: SESSION }),
       ]);
-      const renamed = {
-        ...turnInput(thread),
-        appThread: { title: "Prime factors of 391" } as OrchestrationV2AppThread,
-      };
+      const base = turnInput(thread);
+      const appThread = { ...base.appThread, title: "Prime factors of 391", titleRenamed: true };
+      const renamed = { ...base, appThread };
       const first = yield* terminalOf(runtime).pipe(Effect.forkScoped);
       yield* runtime.startTurn(renamed);
       assert.equal((yield* Fiber.join(first))?.status, "completed");

@@ -51,6 +51,8 @@ export interface ThreadLaunchInput {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly generateTitle?: boolean;
+  /** The caller chose `title`, so a first message keeps it. */
+  readonly titleRenamed?: boolean;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;

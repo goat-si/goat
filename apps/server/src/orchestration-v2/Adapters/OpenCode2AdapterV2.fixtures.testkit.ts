@@ -239,7 +239,10 @@ export const turnInput = (
   modelSelection: ModelSelection = bigPickle,
   runtimeMode: "full-access" | "approval-required" = "full-access",
 ) => ({
-  appThread: { title: TITLE } as OrchestrationV2AppThread,
+  appThread: {
+    title: TITLE,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+  } as OrchestrationV2AppThread,
   threadId,
   runId: RunId.make("run:opencode2-adapter"),
   runOrdinal: 1,

@@ -726,6 +726,7 @@ export const layer = Layer.effect(
                     commandId,
                     projectId: active.projectId,
                     title: active.title,
+                    titleRenamed: true,
                     modelSelection: active.modelSelection,
                     runtimeMode: active.runtimeMode,
                     interactionMode: active.interactionMode,
@@ -749,9 +750,7 @@ export const layer = Layer.effect(
                     Effect.map((launched) => ({
                       threadId: launched.threadId,
                       run:
-                        launched.projection.runs.find(
-                          (candidate) => candidate.userMessageId === messageId,
-                        ) ?? null,
+                        launched.projection.runs.find((c) => c.userMessageId === messageId) ?? null,
                     })),
                     Effect.mapError((cause) =>
                       taskError("Could not dispatch schedule task.", { cause }),

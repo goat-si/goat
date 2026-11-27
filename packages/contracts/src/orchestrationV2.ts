@@ -2893,6 +2893,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     projectId: ProjectId,
     title: TrimmedNonEmptyString,
+    titleRenamed: Schema.optional(Schema.Boolean),
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
