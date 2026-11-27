@@ -23,6 +23,7 @@ import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/st
 import {
   CommonActions,
   StackActions,
+  useIsFocused,
   useNavigation,
   usePreventRemove,
 } from "@react-navigation/native";
@@ -97,6 +98,7 @@ import {
 } from "./new-task-context-presentation";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
+import { resolveHandedIncomingShare } from "../sharing/incoming-share-presentation";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -120,11 +122,13 @@ export function NewTaskDraftScreen(props: {
   const flow = useNewTaskFlow();
   const servesRoute = props.flowKey === flow.flowKey;
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const goBack = useWorkspaceBackNavigation();
   const {
     consumeShare,
     getShare,
     isLoading: isIncomingShareInboxLoading,
+    pendingShare,
     releaseShareReservation,
     reserveShare,
   } = useIncomingShare();
@@ -243,17 +247,29 @@ export function NewTaskDraftScreen(props: {
   );
   const activeShareImportTokenRef = useRef<symbol | null>(null);
   const shareImportMountedRef = useRef(true);
+  const routeIncomingShare = props.incomingShareId ? getShare(props.incomingShareId) : null;
+  const handedIncomingShare = resolveHandedIncomingShare({
+    isFocused,
+    servesRoute,
+    submitting: flow.submitting,
+    routeShareId: props.incomingShareId,
+    hasRouteSharePending: routeIncomingShare !== null,
+    cancelledShareId: cancelledIncomingShareId,
+    pendingShare,
+  });
+  const activeIncomingShareId = handedIncomingShare?.id ?? props.incomingShareId;
+  const incomingShare = handedIncomingShare ?? routeIncomingShare;
+  const isHandedIncomingShare = handedIncomingShare !== null;
   // The share import resumes after awaits; this reads the screen's current
   // draft and share at that point without re-running the import effect.
   const isCurrentShareImport = useEffectEvent(
     (draftKey: string, shareId: string) =>
-      servesRoute && flow.draftKey === draftKey && props.incomingShareId === shareId,
+      servesRoute && flow.draftKey === draftKey && activeIncomingShareId === shareId,
   );
   const isImportingShare = importingShareKey !== null;
   const alertedUnavailableIncomingShareIdRef = useRef<string | null>(null);
   // Remember consumed shares locally: send clears the receipt before navigation and can trigger a missing-content render.
   const [consumedIncomingShareId, setConsumedIncomingShareId] = useState<string | null>(null);
-  const incomingShare = props.incomingShareId ? getShare(props.incomingShareId) : null;
   const requestedInitialProjectAvailable = Boolean(
     props.initialProjectRef?.environmentId &&
     props.initialProjectRef.projectId &&
@@ -282,8 +298,11 @@ export function NewTaskDraftScreen(props: {
     resolveDraftShareTransfer({
       selectedProjectKey,
       selectedProject,
-      initialProjectRef: props.initialProjectRef,
-      hasPendingShare: Boolean(incomingShare && cancelledIncomingShareId !== props.incomingShareId),
+      // The route's share was prepared for the draft's initial project; a handed share joins whichever project is selected.
+      initialProjectRef: isHandedIncomingShare ? undefined : props.initialProjectRef,
+      hasPendingShare: Boolean(
+        incomingShare && cancelledIncomingShareId !== activeIncomingShareId,
+      ),
       awaitingServerConfig: isIncomingShareAwaitingServerConfig,
       isImportingShare,
     });
@@ -306,23 +325,24 @@ export function NewTaskDraftScreen(props: {
     flow.submitting;
   usePreventRemove(preventRemove, () => undefined);
   const hasImportedIncomingShare = Boolean(
-    props.incomingShareId &&
-    (consumedIncomingShareId === props.incomingShareId ||
+    activeIncomingShareId &&
+    (consumedIncomingShareId === activeIncomingShareId ||
       (flow.draftKey &&
-        getComposerDraftSnapshot(flow.draftKey).importedShareIds?.includes(props.incomingShareId))),
+        getComposerDraftSnapshot(flow.draftKey).importedShareIds?.includes(activeIncomingShareId))),
   );
   const isIncomingShareUnavailable = Boolean(
     props.incomingShareId &&
+    !isHandedIncomingShare &&
     !isIncomingShareInboxLoading &&
     !incomingShare &&
     !hasImportedIncomingShare,
   );
   const isIncomingShareReady =
-    !props.incomingShareId ||
+    !activeIncomingShareId ||
     (hasImportedIncomingShare && !incomingShare) ||
     isIncomingShareUnavailable;
   useEffect(() => {
-    if (cancelledIncomingShareId === props.incomingShareId) {
+    if (props.incomingShareId && cancelledIncomingShareId === props.incomingShareId) {
       navigation.goBack();
     }
   }, [cancelledIncomingShareId, navigation, props.incomingShareId]);
@@ -424,7 +444,7 @@ export function NewTaskDraftScreen(props: {
 
   useEffect(() => {
     if (!servesRoute) return;
-    const shareId = props.incomingShareId;
+    const shareId = activeIncomingShareId;
     const draftKey = flow.draftKey;
     const destinationProject = incomingShareProject;
     if (!shareId || !draftKey || !destinationProject || cancelledIncomingShareId === shareId) {
@@ -633,7 +653,7 @@ export function NewTaskDraftScreen(props: {
     incomingShare,
     isIncomingShareInboxLoading,
     isIncomingShareUnavailable,
-    props.incomingShareId,
+    activeIncomingShareId,
     releaseShareReservation,
     reserveShare,
     selectedEnvironmentServerConfig,

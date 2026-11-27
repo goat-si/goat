@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   EMPTY_INCOMING_SHARE_PRESENTATION_STATE,
+  resolveHandedIncomingShare,
   transitionIncomingSharePresentation,
 } from "./incoming-share-presentation";
 
@@ -50,5 +51,27 @@ describe("incoming share presentation", () => {
         pendingShareId: "share-1",
       }).shareIdToPresent,
     ).toBe("share-1");
+  });
+
+  it("hands a pending share to an open focused draft once its own share is done", () => {
+    const share = { id: "share-2" };
+    const base = {
+      isFocused: true,
+      servesRoute: true,
+      submitting: false,
+      routeShareId: "share-1" as string | undefined,
+      hasRouteSharePending: false,
+      cancelledShareId: null as string | null,
+      pendingShare: share,
+    };
+
+    expect(resolveHandedIncomingShare(base)).toBe(share);
+    expect(resolveHandedIncomingShare({ ...base, routeShareId: undefined })).toBe(share);
+    expect(resolveHandedIncomingShare({ ...base, hasRouteSharePending: true })).toBeNull();
+    expect(resolveHandedIncomingShare({ ...base, submitting: true })).toBeNull();
+    expect(resolveHandedIncomingShare({ ...base, isFocused: false })).toBeNull();
+    expect(resolveHandedIncomingShare({ ...base, servesRoute: false })).toBeNull();
+    expect(resolveHandedIncomingShare({ ...base, routeShareId: "share-2" })).toBeNull();
+    expect(resolveHandedIncomingShare({ ...base, cancelledShareId: "share-2" })).toBeNull();
   });
 });
