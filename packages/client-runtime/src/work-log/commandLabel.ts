@@ -1387,9 +1387,10 @@ function withoutShellWrapper(command: string): string {
   const program = tokens?.[0]
     ?.split(/[\\/]/u)
     .at(-1)
-    ?.replace(/\.exe$/iu, "");
+    ?.toLowerCase()
+    .replace(/\.exe$/u, "");
   if (!tokens || !program) return trimmed;
-  const scriptIndex = POWERSHELL_PROGRAMS.has(program.toLowerCase())
+  const scriptIndex = POWERSHELL_PROGRAMS.has(program)
     ? powerShellCommandArgumentIndex(tokens)
     : SHELL_PROGRAMS.has(program)
       ? shellCommandArgumentIndex(program, tokens, 1)

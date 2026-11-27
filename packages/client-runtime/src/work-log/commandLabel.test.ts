@@ -194,6 +194,8 @@ describe("commandDisplayText with PowerShell wrappers", () => {
     ],
     ['pwsh -NoProfile -ExecutionPolicy Bypass -c "npm test"', "npm test"],
     ["powershell.exe -NonInteractive -command 'git status --short'", "git status --short"],
+    ['Bash.exe -lc "git status"', "git status"],
+    ['"C:\\Program Files\\Git\\bin\\Bash.exe" -lc "rg foo"', "rg foo"],
   ])("unwraps %j to the script it runs", (input, expected) => {
     expect(commandDisplayText(input)).toBe(expected);
   });
