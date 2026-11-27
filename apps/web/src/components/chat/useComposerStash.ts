@@ -87,6 +87,7 @@ export function useComposerStash(input: {
   readonly attachmentTargetKey: string;
   readonly isComposerDraftTargetOpen: (targetKey: string) => boolean;
   readonly composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
+  readonly composerFormRef?: RefObject<HTMLElement | null>;
   readonly isRevertingCheckpoint: () => boolean;
   readonly pendingThreadImportsRef: RefObject<Map<string, number>>;
   readonly setComposerCursor: Dispatch<SetStateAction<number>>;
@@ -118,6 +119,7 @@ export function useComposerStash(input: {
     attachmentTargetKey,
     isComposerDraftTargetOpen,
     composerEditorRef,
+    composerFormRef,
     isRevertingCheckpoint,
     pendingThreadImportsRef,
     setComposerCursor,
@@ -691,9 +693,16 @@ export function useComposerStash(input: {
     if (backgroundThread) return;
     return registerCommands(
       { "composer.stash": handleStashShortcut },
-      { capture: true, context: readShortcutContext },
+      {
+        capture: true,
+        context: readShortcutContext,
+        // A side chat's composer takes the keys pressed in its pane; the main one takes the rest.
+        when: (event) =>
+          isInSideChatSurface(event.target) ===
+          isInSideChatSurface(composerFormRef?.current ?? null),
+      },
     );
-  }, [backgroundThread, handleStashShortcut, readShortcutContext]);
+  }, [backgroundThread, composerFormRef, handleStashShortcut, readShortcutContext]);
 
   return {
     stashQueue,
@@ -704,4 +713,8 @@ export function useComposerStash(input: {
     deleteStashEntryStable,
     toggleStashMenuStable,
   };
+}
+
+function isInSideChatSurface(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("[data-side-chat-surface]") !== null;
 }
