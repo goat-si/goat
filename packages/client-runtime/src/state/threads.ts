@@ -527,8 +527,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
   });
 
+  // A subagent can settle on the server without an event a replay would carry, so a cached
+  // live subagent opens with a snapshot rather than resuming from the saved cursor.
   const recovery = yield* makeThreadSubscriptionRecovery({
     isCold: () => Option.isNone(SubscriptionRef.getUnsafe(state).data),
+    initialNeedsFreshSnapshot: Option.exists(cachedThread, (thread) =>
+      thread.subagents.some((subagent) => isOrchestrationV2WorkActive(subagent.status)),
+    ),
     setStreamError,
     logAttributes: { environmentId, threadId },
   });
