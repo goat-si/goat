@@ -71,7 +71,8 @@ vi.mock("./lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
 import { AppProviders } from "./AppProviders";
 import { SelectableMarkdownText } from "./native/SelectableMarkdownText";
 
-it("an assistant reply renders inside the app's providers with its translated selection menu", async () => {
+// Every assistant reply calls useGT, which throws outside the root GTProvider.
+it("an assistant reply renders inside the app's providers with its translated selection menu (#3996)", async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement("div");
   document.body.appendChild(container);
