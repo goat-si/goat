@@ -792,7 +792,7 @@ export function registerPiToolChecks({
         type: "tool_execution_end",
         toolCallId: "read-image",
         toolName: "read",
-        args: { path: "/workspace/shot.png" },
+        args: { path: "@/workspace/shot.png" },
         result: { content: [{ type: "text", text: "image" }] },
       });
       const event = yield* takeEvent(
