@@ -1,4 +1,5 @@
 import { hasCutLines } from "@goat/shared/diffCutLines";
+import { orderDiffFilesForReview } from "@goat/client-runtime/diff-file-order";
 import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
 import type { PullRequestDiffResult } from "@goat/contracts";
 import {
@@ -110,7 +111,10 @@ export function combinePullRequestDiffPages(
     cache.set(page.result, value);
     return value;
   });
-  const files = parsed.flatMap((page) => (page.kind === "files" ? page.files : []));
+  const files = orderDiffFilesForReview(
+    parsed.flatMap((page) => (page.kind === "files" ? page.files : [])),
+    (file) => file.path,
+  );
   if (files.length === 0) return parsed[0] ?? { kind: "empty" };
   return {
     kind: "files",

@@ -120,6 +120,7 @@ const LOGIN_SHELL_ENV_NAMES = [
   "OTEL_SDK_DISABLED",
   "__MISE_DIFF",
   "JAVA_HOME",
+  "PNPM_HOME",
 ] as const;
 const WINDOWS_PROFILE_ENV_NAMES = [
   "PATH",
@@ -219,6 +220,8 @@ const logShellEnvironmentCommandError = (
 const captureWindowsEnvironmentCommand = (names: ReadonlyArray<string>) =>
   [
     "$ErrorActionPreference = 'Stop'",
+    // Redirected PowerShell output uses the console code page, which mangles non-ASCII paths.
+    "try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}",
     ...names.flatMap((name) => {
       return [
         `Write-Output '${startMarker(name)}'`,
@@ -514,6 +517,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       "SSL_CERT_DIR",
       "NODE_EXTRA_CA_CERTS",
       "JAVA_HOME",
+      "PNPM_HOME",
       "GOAT_TELEMETRY_ENABLED",
       "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
       "GOAT_OTEL_SDK_DISABLED",
@@ -605,6 +609,7 @@ const CACHED_ENV_NAMES = [
   "HOMEBREW_CELLAR",
   "HOMEBREW_REPOSITORY",
   "JAVA_HOME",
+  "PNPM_HOME",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",

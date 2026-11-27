@@ -193,6 +193,7 @@ export const measuredResize = async (
     readonly desktopViewport: Size | null;
     readonly desktopViewportChanges: number;
     readonly desktopResize: PromiseWithResolvers<void>;
+    desktopResizeUndrawn: boolean;
   },
   fallback: Size,
   apply: () => Promise<void>,
@@ -215,11 +216,23 @@ export const measuredResize = async (
   // The desktop draws the new size after the session update; its page resize says it has.
   // Half the time left keeps room for the read, which runs even if nothing was drawn,
   // because a page can keep another size than the one asked for.
-  if (from?.width !== to?.width || from?.height !== to?.height)
-    await within(drawn, Math.min(DESKTOP_RESIZE_WAIT_MS, remainingMs() / 2));
+  let undrawn = false;
+  if (tab.desktopResizeUndrawn || from?.width !== to?.width || from?.height !== to?.height)
+    undrawn =
+      (await within(
+        drawn.then(() => true),
+        Math.min(DESKTOP_RESIZE_WAIT_MS, remainingMs() / 2),
+      )) === null;
   const changes = tab.desktopViewportChanges;
   const viewport = await within(desktop.measure(), remainingMs());
   // The size from before the resize, or one the page changed under, is not what it gave.
+  tab.desktopResizeUndrawn =
+    undrawn && to !== null && (viewport?.width !== to.width || viewport?.height !== to.height);
+  if (tab.desktopResizeUndrawn)
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "The desktop did not draw the page at the new size. Show or restore the GOAT window and try again.",
+    );
   if (!viewport || tab.desktopViewportChanges !== changes) throw notMeasured();
   return (setting: PreviewViewportSetting) => ({
     viewport,

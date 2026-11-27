@@ -241,11 +241,9 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
   );
 });
 
-const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(function* (
+const downloadArchive = Effect.fn("cloud.pinned_runtime.download_archive")(function* (
   input: PinnedRuntimeInstallInput,
-  stagingDir: string,
 ) {
-  const { fs, path } = input;
   const platformKey = cliArchivePlatformKey(input.platform, input.arch);
   if (platformKey === undefined) {
     return yield* new PinnedRuntimeInstallError({
@@ -286,6 +284,16 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
     });
   }
 
+  return { archive, expected };
+});
+
+const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(function* (
+  input: PinnedRuntimeInstallInput,
+  stagingDir: string,
+  download: { readonly archive: Uint8Array; readonly expected: string },
+) {
+  const { fs, path } = input;
+  const { archive, expected } = download;
   const archivePath = path.join(stagingDir, PINNED_RUNTIME_ARCHIVE_FILE);
   yield* fs
     .writeFile(archivePath, archive)
@@ -372,10 +380,11 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
         }),
     ),
   );
+  const download = yield* downloadArchive(input);
   const stagingDir = yield* fs
     .makeTempDirectory({
       directory: versionsDir,
-      prefix: ".staging-",
+      prefix: PINNED_RUNTIME_STAGING_PREFIX,
     })
     .pipe(
       Effect.mapError(
@@ -393,7 +402,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
   };
 
   return yield* Effect.gen(function* () {
-    const archiveSha256 = yield* installFromArchive(input, stagingDir);
+    const archiveSha256 = yield* installFromArchive(input, stagingDir, download);
 
     input.onProgress?.({ stage: "validate" });
     yield* input.validate(stagingPaths);
@@ -460,6 +469,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
 export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
   pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
 
+const PINNED_RUNTIME_STAGING_PREFIX = ".staging-";
 export const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";
 /**
  * Another process may have just published a runtime it has not yet pointed anything at: an
@@ -648,6 +658,15 @@ const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(functio
     (yield* Clock.currentTimeMillis) - Duration.toMillis(PINNED_RUNTIME_PRUNE_GRACE);
   const completed: Array<{ readonly version: string; readonly completedAt: number }> = [];
   for (const version of entries) {
+    if (version.startsWith(PINNED_RUNTIME_STAGING_PREFIX)) {
+      const stagingDir = path.join(versionsDir, version);
+      const modifiedAt = yield* fs.stat(stagingDir).pipe(
+        Effect.map((info) => Option.getOrUndefined(info.mtime)?.getTime()),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (modifiedAt !== undefined && modifiedAt < settledBefore) pruned.add(stagingDir);
+      continue;
+    }
     if (!isExactServiceVersion(version)) continue;
     const versionDir = path.join(versionsDir, version);
     const sentinelPath = path.join(versionDir, ".install-complete");
@@ -687,7 +706,7 @@ const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(functio
     if (state === undefined) return undecided;
     keep.add(state.activeVersion);
     if (state.update !== undefined) {
-      keep.add(state.update.fromVersion);
+      if (state.update.status !== "committed") keep.add(state.update.fromVersion);
       keep.add(state.update.targetVersion);
     }
   }
@@ -851,8 +870,8 @@ export const reachedWithoutLinks = Effect.fn("cloud.pinned_runtime.reached_witho
 
 /**
  * Keep runtimes named by callers, service state, running processes, launchers, or references,
- * and anything published within an hour. Only prune completed runtimes; leave staging
- * directories, symlinks, and unexpected entries untouched.
+ * and anything published within an hour. Prune completed runtimes and abandoned staging
+ * directories; leave symlinks and unexpected entries untouched.
  */
 export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(function* (input: {
   readonly baseDir: string;
@@ -867,11 +886,14 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
   );
   const removed: Array<string> = [];
   for (const target of pruned) {
+    const name = path.basename(target);
     yield* fs.remove(target, { recursive: true, force: true }).pipe(
       Effect.andThen(
-        Effect.sync(() =>
-          removed.push(path.basename(target).slice(PINNED_RUNTIME_PRUNED_PREFIX.length)),
-        ),
+        Effect.sync(() => {
+          if (name.startsWith(PINNED_RUNTIME_PRUNED_PREFIX)) {
+            removed.push(name.slice(PINNED_RUNTIME_PRUNED_PREFIX.length));
+          }
+        }),
       ),
       Effect.catch((cause) =>
         Effect.logWarning("Could not remove an unused GOAT runtime.", { target, cause }),

@@ -355,6 +355,11 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
     return [instanceId, ...shared.flat()];
   });
   const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
+    makeLockError: () =>
+      new ServerProviderUpdateError({
+        provider: ProviderDriverKind.make("unknown"),
+        reason: "Could not lock the provider update across servers.",
+      }),
     makeAlreadyRunningError: () =>
       new ServerProviderUpdateError({
         provider: ProviderDriverKind.make("unknown"),

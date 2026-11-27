@@ -17,8 +17,9 @@ export const MANAGED_ENDPOINT_GRACE_PERIOD_MINUTES = 5;
 // Never-connected tunnels may still be pairing; allow an hour.
 export const MANAGED_ENDPOINT_INACTIVE_GRACE_PERIOD_MINUTES = 60;
 export const MANAGED_ENDPOINT_SWEEP_PAGE_SIZE = 100;
-export const MANAGED_ENDPOINT_SWEEP_ATTEMPT_LIMIT = 250;
+export const MANAGED_ENDPOINT_SWEEP_ATTEMPT_LIMIT = 500;
 export const MANAGED_ENDPOINT_SWEEP_LIST_REQUEST_LIMIT = 10;
+const MANAGED_ENDPOINT_SWEEP_LIST_TIMEOUT = "30 seconds";
 const MANAGED_ENDPOINT_LEGACY_AGE_BUCKET_DAYS = [7, 30, 90] as const;
 // Hosts without recovery cannot replace deleted tunnels; allow a longer absence.
 const MANAGED_ENDPOINT_LEGACY_GRACE_PERIOD_DAYS = 7;
@@ -197,15 +198,18 @@ export const make = Effect.gen(function* () {
       const cutoffIso = DateTime.formatIso(cutoff);
       const listPage = (page: number) => {
         listRequests += 1;
-        return tunnels.list({
-          isDeleted: false,
-          includePrefix: prefix,
-          status,
-          existedAt: cutoffIso,
-          ...(status === "down" ? { wasInactiveAt: cutoffIso } : {}),
-          page,
-          perPage: MANAGED_ENDPOINT_SWEEP_PAGE_SIZE,
-        });
+        return tunnels.list(
+          {
+            isDeleted: false,
+            includePrefix: prefix,
+            status,
+            existedAt: cutoffIso,
+            ...(status === "down" ? { wasInactiveAt: cutoffIso } : {}),
+            page,
+            perPage: MANAGED_ENDPOINT_SWEEP_PAGE_SIZE,
+          },
+          { timeout: MANAGED_ENDPOINT_SWEEP_LIST_TIMEOUT },
+        );
       };
       const first = yield* listPage(1);
       const totalCount =

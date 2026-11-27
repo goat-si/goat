@@ -66,12 +66,6 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { WEBHOOK_ROUTE_PREFIX } from "./scheduledTasks/ScheduledTaskService.ts";
-import {
-  browserApiCorsAllowedHeaders,
-  browserApiCorsAllowedMethods,
-  DESKTOP_RENDERER_ORIGINS,
-  MCP_HTTP_PATH,
-} from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
@@ -356,33 +350,7 @@ export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compres
   global: true,
 });
 
-export const layerBrowserApiCors = Layer.unwrap(
-  Effect.gen(function* () {
-    const config = yield* ServerConfig.ServerConfig;
-    const devOrigin = config.devUrl?.origin;
-    // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
-    const cors = HttpMiddleware.cors({
-      ...(devOrigin
-        ? {
-            allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
-            credentials: true,
-          }
-        : {}),
-      allowedMethods: browserApiCorsAllowedMethods,
-      allowedHeaders: browserApiCorsAllowedHeaders,
-      maxAge: 600,
-    });
-    return HttpRouter.middleware(
-      (httpEffect) => {
-        const withCors = cors(httpEffect);
-        return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-          request.url.split("?", 1)[0] === MCP_HTTP_PATH ? httpEffect : withCors,
-        );
-      },
-      { global: true },
-    );
-  }),
-);
+export { layerBrowserApiCors } from "./httpBrowserCors.ts";
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname
@@ -540,24 +508,30 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
   ),
 );
 
-const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
-
-// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
-export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) => {
+const requestPath = (request: HttpServerRequest.HttpServerRequest) => {
   const queryIndex = request.url.indexOf("?");
-  const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
-  // Webhook, asset and upload URLs carry bearer tokens in the path, so they never reach a trace.
-  // Computer use proxies POST a person's input many times a second; tracing it rotates the log.
+  return queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
+};
+const isSignedUrlRequest = (request: HttpServerRequest.HttpServerRequest) => {
+  const path = requestPath(request);
   return (
-    UNTRACED_REQUEST_PATHS.has(path) ||
     path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
     path.startsWith(`${ASSET_ROUTE_PREFIX}/`) ||
-    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`) ||
-    (request.method === "POST" && path === COMPUTER_USE_LEASE_ROUTE)
+    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`)
   );
 };
-
+export const untracedRequest = (request: HttpServerRequest.HttpServerRequest) =>
+  requestPath(request) === OTLP_TRACES_PROXY_PATH ||
+  isSignedUrlRequest(request) ||
+  (request.method === "POST" && requestPath(request) === COMPUTER_USE_LEASE_ROUTE);
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(untracedRequest);
+export const layerUnloggedSignedRequests = HttpRouter.middleware(
+  (httpEffect) =>
+    Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+      isSignedUrlRequest(request) ? HttpMiddleware.withLoggerDisabled(httpEffect) : httpEffect,
+    ),
+  { global: true },
+);
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 

@@ -6,7 +6,7 @@ import {
   VcsBranchStatus,
   VcsStatusInput,
   VcsStatusSubscriptionInput,
-  VcsStatusResult,
+  VcsRefreshStatusResult,
   VcsStatusStreamEvent,
 } from "./git.ts";
 
@@ -42,7 +42,7 @@ const WsVcsRefreshStatusRpc = Rpc.make(VCS_STATUS_WS_METHODS.vcsRefreshStatus, {
     ...VcsStatusInput.fields,
     localOnly: Schema.optional(Schema.Boolean),
   }),
-  success: VcsStatusResult,
+  success: VcsRefreshStatusResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 

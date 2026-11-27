@@ -1,5 +1,9 @@
+import { makeStatusCacheWithRemoteLock } from "./vcsStatusCache.ts";
+import { remoteRefreshFailureDelay } from "./remoteRefreshFailureDelay.ts";
+import { statusWithRefsDigest } from "./statusWithRefsDigest.ts";
+import { makeUpstreamReads } from "./upstreamReads.ts";
 import { VcsAutomaticFetchInterval, VcsAutoPullPolicy } from "./vcsBackgroundPolicy.ts";
-import { VcsRefSnapshot } from "./VcsRefSnapshot.ts";
+import { VcsRefSnapshot, refreshMovedRefs } from "./VcsRefSnapshot.ts";
 export { layer as layerRefSnapshot } from "./VcsRefSnapshot.ts";
 export {
   VcsAutomaticFetchInterval,
@@ -33,8 +37,7 @@ import type {
   GitManagerServiceError,
   VcsBranchStatus,
   VcsStatusLocalResult,
-  VcsStatusRemoteResult,
-  VcsStatusResult,
+  VcsRefreshStatusResult,
   VcsStatusStreamEvent,
 } from "@goat/contracts";
 import { DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL, GitManagerError } from "@goat/contracts";
@@ -44,55 +47,22 @@ import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import {
+  fingerprintStatusPart,
+  type CachedRemoteStatus,
+  type CachedVcsStatus,
+} from "./vcsCachedStatus.ts";
 
-const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
-const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
 const MAX_STATUS_REFRESH_WORKERS = 16;
-interface CachedValue<T> {
-  readonly fingerprint: string;
-  readonly value: T;
-}
-
-interface CachedRemoteStatus extends CachedValue<VcsStatusRemoteResult | null> {
-  readonly branch: string | null;
-}
-
 interface VcsStatusChange {
   readonly cwd: string;
   readonly events: Arr.NonEmptyReadonlyArray<VcsStatusStreamEvent>;
-}
-
-interface CachedLocalStatus extends CachedValue<VcsStatusLocalResult> {
-  readonly includesBranchChanges: boolean;
-}
-
-interface CachedVcsStatus {
-  readonly local: CachedLocalStatus | null;
-  readonly remote: CachedRemoteStatus | null;
 }
 
 interface ActiveRemotePoller {
   readonly fiber: Fiber.Fiber<void, never>;
   readonly subscriberCount: number;
   readonly demandCwds: Ref.Ref<ReadonlyMap<string, number>>;
-}
-
-function remoteRefreshFailureDelay(
-  consecutiveFailures: number,
-  configuredInterval: Duration.Duration,
-) {
-  const exponent = Math.max(0, consecutiveFailures - 1);
-  const backoffMs =
-    Duration.toMillis(VCS_STATUS_REFRESH_FAILURE_BASE_DELAY) * Math.pow(2, exponent);
-  const cappedBackoff = Duration.min(
-    Duration.millis(backoffMs),
-    VCS_STATUS_REFRESH_FAILURE_MAX_DELAY,
-  );
-  return Duration.max(configuredInterval, cappedBackoff);
-}
-
-function fingerprintStatusPart(status: unknown): string {
-  return JSON.stringify(status);
 }
 
 const normalizeCwd = (cwd: string) =>
@@ -126,19 +96,15 @@ export const make = Effect.gen(function* () {
   >();
   const publishBranch = branchUpdates.publish;
   const localRefreshLocks = yield* KeyedLock.make<string>();
-  const cache = new Map<string, CachedVcsStatus>();
-  // One permit per cwd for remote reads that write the cache. Without it a
-  // periodic poll that started before an agent creates a PR can finish after the
-  // turn-end refresh and overwrite the fresh PR with its stale `pr: null`.
-  const remoteWriteLocks = yield* KeyedLock.make<string>();
-  const withRemoteWriteLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
-    remoteWriteLocks.withLock(cwd, effect);
+  const { cache, withRemoteWriteLock } = yield* makeStatusCacheWithRemoteLock<CachedVcsStatus>(
+    (cwd) => detailedSubscribers.has(cwd),
+    (cwd) => localRefreshResults.delete(cwd),
+  );
+  const upstreamReads = makeUpstreamReads();
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
-
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")((cwd: string) =>
     Effect.sync(() => cache.get(cwd) ?? null),
   );
-
   const { wantsBranchChanges, acquireBranchChangesDemand } = makeBranchChangesDemand();
 
   const readLocalStatus = Effect.fn("VcsStatusBroadcaster.readLocalStatus")(function* (
@@ -200,6 +166,7 @@ export const make = Effect.gen(function* () {
 
   const updateCachedRemoteStatus = Effect.fn("VcsStatusBroadcaster.updateCachedRemoteStatus")(
     function* (cwd: string, remote: CachedRemoteStatus | null, options?: { publish?: boolean }) {
+      upstreamReads.clear(cwd);
       const [changed, value] = yield* Effect.sync(() => {
         const previous = cache.get(cwd) ?? { local: null, remote: null };
         const local = previous.local?.value;
@@ -338,6 +305,7 @@ export const make = Effect.gen(function* () {
     "VcsStatusBroadcaster.refreshLocalStatus",
   )(function* (rawCwd) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+    upstreamReads.clear(cwd);
     const local = yield* refreshLocalStatusCore(cwd);
     const cached = yield* getCachedStatus(cwd);
     if (cached?.remote?.value?.hasUpstream) {
@@ -354,6 +322,7 @@ export const make = Effect.gen(function* () {
           { branch: divergence.refName, value, fingerprint: fingerprintStatusPart(value) },
           { publish: true },
         );
+        upstreamReads.remember(cwd, divergence.details);
       }
     }
     return local;
@@ -367,7 +336,11 @@ export const make = Effect.gen(function* () {
     // GitManager's remote TTL cache is keyed by cwd, not the checked-out branch.
     yield* workflow.invalidateRemoteStatus(cwd);
     const previousRemote = (yield* getCachedStatus(cwd))?.remote;
-    const remote = yield* workflow.remoteStatus({ cwd }, options);
+    const { statusDetails, ...remoteOptions } = options ?? {};
+    const remote = yield* workflow.remoteStatus(
+      { cwd },
+      statusDetails?.branch === branch ? { ...remoteOptions, statusDetails } : remoteOptions,
+    );
     const latest = yield* getCachedStatus(cwd);
     const refreshed =
       remote?.hasUpstream && latest?.remote !== previousRemote && latest?.remote?.branch === branch
@@ -451,6 +424,7 @@ export const make = Effect.gen(function* () {
     options?: {
       readonly refreshUpstream?: boolean;
       readonly policyCwds?: ReadonlyArray<string>;
+      readonly refs?: Ref.Ref<string | null>;
     },
   ) {
     return yield* withRemoteWriteLock(
@@ -463,7 +437,7 @@ export const make = Effect.gen(function* () {
             : yield* maybeAutoPull(cwd, remoteRead, options?.policyCwds ?? [cwd]);
         if (pulled !== null) return pulled.remote;
         // Base refs and merge bases can move without changing divergence counts.
-        yield* refreshLocalStatusCore(cwd);
+        yield* refreshMovedRefs(cwd, options?.refs, readRefSnapshot, refreshLocalStatusCore);
         return yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
       }),
     );
@@ -482,12 +456,13 @@ export const make = Effect.gen(function* () {
           const pulled = refreshUpstream
             ? yield* maybeAutoPull(cwd, remoteRead, [policyCwd])
             : null;
-          if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
+          if (pulled !== null)
+            return { status: mergeGitStatusParts(pulled.local, pulled.remote), refs: null };
           yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
-          if (refsBeforeLocalRead === null || (yield* readRefSnapshot(cwd)) !== refsBeforeLocalRead)
-            yield* refreshLocalStatusCore(cwd);
+          const refs = refsBeforeLocalRead === null ? null : yield* readRefSnapshot(cwd);
+          if (refs === null || refs !== refsBeforeLocalRead) yield* refreshLocalStatusCore(cwd);
           const parts = yield* getStatusParts(cwd);
-          return mergeGitStatusParts(parts.local, parts.remote);
+          return { status: mergeGitStatusParts(parts.local, parts.remote), refs };
         }),
       );
     },
@@ -498,17 +473,21 @@ export const make = Effect.gen(function* () {
   )(function* (rawCwd, options) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
     yield* acquireBranchChangesDemand(cwd);
-    const refsBeforeLocalRead = options?.localOnly ? null : yield* readRefSnapshot(cwd);
-    yield* refreshLocalStatusCore(cwd);
     if (options?.localOnly) {
+      const [refs] = yield* Effect.all([readRefSnapshot(cwd), refreshLocalStatusCore(cwd)], {
+        concurrency: "unbounded",
+      });
       // Never cache a remote here: readers take `value: null` as "read and found no PR".
       const parts = yield* getStatusParts(cwd);
-      return mergeGitStatusParts(parts.local, parts.remote);
+      return statusWithRefsDigest(mergeGitStatusParts(parts.local, parts.remote), refs);
     }
-    return yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
+    const refsBeforeLocalRead = yield* readRefSnapshot(cwd);
+    yield* refreshLocalStatusCore(cwd);
+    const { status, refs } = yield* refreshRemoteAndLocalTotals(cwd, rawCwd, refsBeforeLocalRead);
+    return statusWithRefsDigest(status, refs);
   }, Effect.scoped);
 
-  type RefreshReply = Deferred.Deferred<VcsStatusResult, GitManagerServiceError>;
+  type RefreshReply = Deferred.Deferred<VcsRefreshStatusResult, GitManagerServiceError>;
   interface QueuedRefresh {
     current: RefreshReply;
     followUp: RefreshReply | null;
@@ -542,7 +521,7 @@ export const make = Effect.gen(function* () {
     Effect.uninterruptible(
       Effect.gen(function* () {
         if (broadcasterScope.state._tag === "Closed") return yield* Effect.interrupt;
-        const requested = yield* Deferred.make<VcsStatusResult, GitManagerServiceError>();
+        const requested = yield* Deferred.make<VcsRefreshStatusResult, GitManagerServiceError>();
         const queued = queuedRefreshes.get(rawCwd);
         if (queued) {
           queued.followUp ??= requested;
@@ -596,9 +575,11 @@ export const make = Effect.gen(function* () {
           const cached = yield* getCachedStatus(cwd);
           if (!cached || cached.remote?.value === null) return null;
           // Turn completion must update divergence even when background polling is paused.
+          const statusDetails = upstreamReads.take(cwd);
           const remoteRead = yield* readRemoteStatus(cwd, {
             refreshUpstream: false,
             refreshMissingPullRequest: true,
+            ...(statusDetails ? { statusDetails } : {}),
           });
           return yield* updateCachedRemoteStatus(cwd, remoteRead, { publish: true });
         }),
@@ -613,6 +594,7 @@ export const make = Effect.gen(function* () {
   ) {
     const consecutiveFailuresRef = yield* Ref.make(0);
     const needsInitialRefreshRef = yield* Ref.make(refreshImmediately);
+    const refsRef = yield* Ref.make<string | null>(null);
     const refreshRemoteStatusIfEnabled = Effect.gen(function* () {
       const configuredInterval = yield* automaticFetchInterval;
       const activeInterval = Duration.isZero(configuredInterval)
@@ -642,6 +624,7 @@ export const make = Effect.gen(function* () {
       const exit = yield* refreshRemoteStatus(cwd, {
         refreshUpstream: !Duration.isZero(configuredInterval),
         policyCwds: [...demandCwds.keys()],
+        refs: refsRef,
       }).pipe(Effect.exit);
       if (Exit.isSuccess(exit)) {
         yield* Ref.set(needsInitialRefreshRef, false);
@@ -864,6 +847,7 @@ export const make = Effect.gen(function* () {
               const remaining = (detailedSubscribers.get(cwd) ?? 1) - 1;
               if (remaining === 0) detailedSubscribers.delete(cwd);
               else detailedSubscribers.set(cwd, remaining);
+              cache.trim();
             }),
         );
         if (input.includeRemote !== false) yield* acquireBranchChangesDemand(cwd);

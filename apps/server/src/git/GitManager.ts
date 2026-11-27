@@ -1,3 +1,14 @@
+import { headBranchProbe } from "./headBranchProbe.ts";
+import {
+  COMMIT_TIMEOUT_MS,
+  STATUS_RESULT_CACHE_TTL,
+  STATUS_RESULT_CACHE_CAPACITY,
+  PR_LOOKUP_CACHE_TTL,
+  PR_LOOKUP_NO_OPEN_PR_CACHE_TTL,
+  PR_LOOKUP_CACHE_CAPACITY,
+  BRANCH_PR_LOOKUP_CONCURRENCY,
+  PR_THREAD_CONTEXT_BYTES,
+} from "./gitManagerLimits.ts";
 import { gitHubOwnerHeadSelector } from "./gitHubOwnerProbe.ts";
 import { toPullRequestInfo } from "./gitManagerPrInfo.ts";
 import { makePullRequestWorktreeLifecycle } from "./pullRequestWorktreeLifecycle.ts";
@@ -99,7 +110,6 @@ import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUr
 import { makeCachedGitConfigReader } from "../vcs/gitConfigReadCache.ts";
 import { makeCheckedOutPullRequest } from "./checkedOutPullRequest.ts";
 import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
-import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
@@ -131,14 +141,8 @@ export interface GitRunStackedActionOptions {
   readonly progressReporter?: GitActionProgressReporter;
 }
 
-export interface GitLocalStatusOptions {
-  /** Defaults to true. The branch-wide totals cost about half of a local status read. */
-  readonly includeBranchChanges?: boolean;
-}
-
-export interface GitRemoteStatusOptions extends GitVcsDriver.GitRemoteStatusOptions {
-  readonly refreshMissingPullRequest?: boolean;
-}
+import type { GitLocalStatusOptions, GitRemoteStatusOptions } from "./gitRemoteStatusOptions.ts";
+export type { GitLocalStatusOptions, GitRemoteStatusOptions } from "./gitRemoteStatusOptions.ts";
 
 import type { GitBranchPullRequest } from "./gitBranchPullRequest.ts";
 export type { GitBranchPullRequest } from "./gitBranchPullRequest.ts";
@@ -206,14 +210,6 @@ export class GitManager extends Context.Service<
   }
 >()("goat/git/GitManager") {}
 
-const COMMIT_TIMEOUT_MS = 10 * 60_000;
-const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
-const STATUS_RESULT_CACHE_CAPACITY = 2_048;
-const PR_LOOKUP_CACHE_TTL = Duration.seconds(60);
-const PR_LOOKUP_NO_OPEN_PR_CACHE_TTL = Duration.minutes(5);
-const PR_LOOKUP_CACHE_CAPACITY = 2_048;
-const BRANCH_PR_LOOKUP_CONCURRENCY = 4;
-const PR_THREAD_CONTEXT_BYTES = 16_000;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
 
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
@@ -270,20 +266,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
   return repositoryUrl === undefined
     ? null
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
-}
-
-function headBranchProbe(
-  provider: SourceControlProvider.SourceControlProvider["Service"],
-  headSelectors: ReadonlyArray<string>,
-  state: "open" | "all",
-  defaultBranchHeadSelector?: string,
-) {
-  return (
-    provider.headBranchProbe?.({ headSelectors, state, defaultBranchHeadSelector }) ?? {
-      headSelectors,
-      limit: state === "open" ? 1 : 20,
-    }
-  );
 }
 
 function toStatusPr(pr: PullRequestInfo): {
@@ -808,7 +790,7 @@ export const make = Effect.gen(function* () {
       .pipe(
         Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(nonRepositoryStatusDetails)),
       );
-    const hostingProvider = details.isRepo
+    const hostingProvider = details.hasOriginRemote
       ? yield* resolveHostingProvider(cwd, details.branch)
       : null;
 
@@ -1063,15 +1045,17 @@ export const make = Effect.gen(function* () {
     cwd: string,
     options?: GitRemoteStatusOptions,
   ) {
-    const details = yield* gitCore
-      .statusDetailsRemote(cwd, options)
-      .pipe(Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(null)));
+    const details =
+      options?.statusDetails ??
+      (yield* gitCore
+        .statusDetailsRemote(cwd, options)
+        .pipe(Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(null))));
     if (details === null || !details.isRepo) {
       return null;
     }
 
     const { pr, headSha } =
-      details.branch !== null
+      details.branch !== null && details.hasPrimaryRemote
         ? yield* lookupStatusPr(
             cwd,
             {
@@ -1618,7 +1602,9 @@ export const make = Effect.gen(function* () {
     const finalStatus =
       result.action === "commit"
         ? null
-        : yield* gitCore.statusDetails(cwd).pipe(Effect.orElseSucceed(() => null));
+        : yield* gitCore
+            .statusDetailsRemote(cwd, { refreshUpstream: false, includeAheadOfDefault: false })
+            .pipe(Effect.orElseSucceed(() => null));
     if (finalStatus?.branch) {
       finalBranchContext = {
         branch: finalStatus.branch,

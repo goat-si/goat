@@ -22,7 +22,8 @@ import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
 import type { ShellEnvironmentPatch } from "@goat/contracts";
 import * as HostProcess from "./HostProcess.ts";
-import { windowsTelemetryValueSelectionCommand } from "./windowsTelemetryValueSelection.ts";
+import { windowsEnvironmentValueCommand } from "./windowsTelemetryValueSelection.ts";
+export { windowsEnvironmentValueCommand } from "./windowsTelemetryValueSelection.ts";
 import { locateXcodeGitWithXcrun } from "./macosGit.ts";
 import * as Context from "effect/Context";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
@@ -268,30 +269,11 @@ export function buildEnvironmentCaptureCommand(
     : command;
 }
 
-// A variable saved after this process started is only in the User or Machine registry scope.
-export function windowsEnvironmentValueCommand(name: string): string {
-  if (name === "PATH") return "$value = [Environment]::GetEnvironmentVariable('PATH')";
-  const values =
-    "@(" +
-    `[Environment]::GetEnvironmentVariable('${name}','Process'),` +
-    `[Environment]::GetEnvironmentVariable('${name}','User'),` +
-    `[Environment]::GetEnvironmentVariable('${name}','Machine')` +
-    ") | Where-Object { $_ }";
-  if (
-    [
-      "GOAT_TELEMETRY_ENABLED",
-      "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
-    ].includes(name)
-  ) {
-    // Any explicit opt-out must win over an inherited opt-in.
-    return windowsTelemetryValueSelectionCommand(values);
-  }
-  return `$value = ${values} | Select-Object -First 1`;
-}
-
 function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    // Redirected PowerShell output uses the console code page, which mangles non-ASCII paths.
+    "try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}",
     ...names.flatMap((name) => {
       if (!SHELL_ENV_NAME_PATTERN.test(name)) {
         throw new Error(`Unsupported environment variable name: ${name}`);
@@ -920,8 +902,13 @@ function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<strin
 
   return [
     ...(appData ? [`${appData}\\npm`] : []),
-    ...(localAppData ? [`${localAppData}\\Programs\\nodejs`, `${localAppData}\\Volta\\bin`] : []),
-    ...(localAppData ? [`${localAppData}\\pnpm`] : []),
+    ...(localAppData
+      ? [
+          `${localAppData}\\Programs\\nodejs`,
+          `${localAppData}\\Volta\\bin`,
+          `${localAppData}\\pnpm`,
+        ]
+      : []),
     ...(userProfile
       ? [`${userProfile}\\.local\\bin`, `${userProfile}\\.bun\\bin`, `${userProfile}\\scoop\\shims`]
       : []),

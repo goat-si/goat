@@ -1,3 +1,4 @@
+import { supersededChecks, type WorkflowCheck } from "./gitHubSupersededChecks.ts";
 import { toLabels, type LabelFields } from "./gitHubPullRequestLabels.ts";
 import { toMergeMethod } from "./gitHubMergeMethod.ts";
 import { toFileViewedState } from "./gitHubFileViewedState.ts";
@@ -119,8 +120,7 @@ interface LatestReviewFields {
   readonly isMinimized?: boolean | undefined;
 }
 
-/** Check runs use status/conclusion; commit statuses use a single state. */
-interface CheckFields {
+interface CheckFields extends WorkflowCheck {
   readonly name?: string | null | undefined;
   readonly context?: string | null | undefined;
   readonly status?: string | null | undefined;
@@ -539,16 +539,17 @@ function isNamelessCheck(raw: CheckFields): boolean {
   return trimmed(raw.name) === null && trimmed(raw.context) === null;
 }
 
-/** Unfinished runs outrank finished runs of the same check across push/PR workflows. */
 function toCheckEntries(raw: ReadonlyArray<CheckFields> | null | undefined): ReadonlyArray<{
   readonly check: PullRequestCheck;
   readonly workflowName: string | null;
   readonly at: string | null;
 }> {
+  const isSuperseded = supersededChecks(raw ?? []);
   return (raw ?? []).flatMap((check) => {
     const name = trimmed(check.name) ?? trimmed(check.context);
     if (name === null) return [];
     const status = toCheckStatus(check);
+    if (isSuperseded(check, name, status)) return [];
     return [
       {
         check: {
@@ -1161,7 +1162,11 @@ export type GitHubCheckContext = CheckFields;
 function toCheckContexts(nodes: ReadonlyArray<CheckContext>): ReadonlyArray<GitHubCheckContext> {
   return nodes.map((check) =>
     check.__typename === "CheckRun"
-      ? { ...check, workflowName: check.checkSuite.workflowRun?.workflow.name ?? null }
+      ? {
+          ...check,
+          workflowName: check.checkSuite.workflowRun?.workflow.name ?? null,
+          workflowRun: check.checkSuite.workflowRun,
+        }
       : check,
   );
 }

@@ -1,3 +1,5 @@
+import { GitCommandError } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
@@ -104,7 +106,11 @@ interface BranchToolbarBranchSelectorProps {
 
 const WORKTREE_CHANGE_BLOCKED_MESSAGE = "Stop the current turn to switch worktrees.";
 
+const isGitCommandError = Schema.is(GitCommandError);
+
 function toBranchActionErrorMessage(error: unknown): string {
+  if (isGitCommandError(error))
+    return error.reason === undefined ? error.detail : `${error.detail} (${error.reason})`;
   return error instanceof Error ? error.message : "An error occurred.";
 }
 

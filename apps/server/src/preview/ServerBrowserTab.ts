@@ -91,6 +91,7 @@ export interface ServerTab {
   desktopViewportChanges: number;
   /** Settles at the desktop page's next main-frame resize. */
   desktopResize: PromiseWithResolvers<void>;
+  desktopResizeUndrawn: boolean;
   loading: boolean;
   readonly titleWatcher: ReturnType<typeof makeBrowserTitleWatcher>;
   lastReport: PreviewReportStatusInput | undefined;

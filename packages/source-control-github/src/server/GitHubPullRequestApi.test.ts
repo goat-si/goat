@@ -22,6 +22,7 @@ import {
   callAt,
   checkContextsPage,
   checkRun,
+  workflowRun,
   crossRepositoryDetail,
   defaultCredential,
   diffRefused,
@@ -66,7 +67,6 @@ import {
   workflowRuns,
 } from "./GitHubPullRequestApi.testkit.ts";
 
-// What GitHub answers for a pull request that has no `refs/pull/<number>/head`.
 const unresolvedPullRef = {
   type: "NOT_FOUND",
   message: "Could not resolve head ref 'refs/pull/7/head'.",
@@ -2802,13 +2802,13 @@ layer("GitHubPullRequestApi.layer", (it) => {
                                 name: "build",
                                 status: "COMPLETED",
                                 conclusion: "SUCCESS",
-                                checkSuite: { workflowRun: { workflow: { name: "linux" } } },
+                                checkSuite: { workflowRun: workflowRun("linux") },
                               }),
                               checkRun({
                                 name: "build",
                                 status: "COMPLETED",
                                 conclusion: "FAILURE",
-                                checkSuite: { workflowRun: { workflow: { name: "windows" } } },
+                                checkSuite: { workflowRun: workflowRun("windows") },
                               }),
                             ],
                             pageInfo: { hasNextPage: false },

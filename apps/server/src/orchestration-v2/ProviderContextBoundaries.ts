@@ -67,13 +67,14 @@ export function providerTurnForRun(
     return undefined;
   }
 
-  return (
-    latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId) ??
-    projection.providerTurns.find((turn) => {
-      const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
-      return attempt?.providerTurnId === turn.id;
-    })
-  );
+  const latest = latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId);
+  if (latest !== undefined) return latest;
+  const namedTurnId = projection.attempts.find(
+    (candidate) => candidate.id === run.activeAttemptId,
+  )?.providerTurnId;
+  return namedTurnId == null
+    ? undefined
+    : projection.providerTurns.find((turn) => turn.id === namedTurnId);
 }
 
 export function contextSourcePointForRun(
@@ -107,6 +108,39 @@ export function pendingForkTransferForThread(
       transfer.targetThreadId === projection.thread.id &&
       transfer.status === "pending",
   );
+}
+
+export function supersedeForkEvent(
+  transfer: OrchestrationV2ContextTransfer,
+  run: OrchestrationV2Run,
+  now: DateTime.Utc,
+) {
+  return {
+    type: "context-transfer.updated" as const,
+    threadId: run.threadId,
+    runId: run.id,
+    providerInstanceId: run.providerInstanceId,
+    occurredAt: now,
+    payload: {
+      ...transfer,
+      status: "superseded" as const,
+      error: "Superseded by a fresh session.",
+      updatedAt: now,
+    },
+  };
+}
+
+export function queuedFreshForkEvents(
+  projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "thread">,
+  run: OrchestrationV2Run,
+  message: OrchestrationV2ConversationMessage,
+  now: DateTime.Utc,
+) {
+  const transfer =
+    run.freshContext === true && message.scheduledTaskId === undefined
+      ? pendingForkTransferForThread(projection)
+      : undefined;
+  return transfer === undefined ? [] : [supersedeForkEvent(transfer, run, now)];
 }
 
 export function pendingMergeBackTransfersForThread(
@@ -179,7 +213,7 @@ export function appendContextHandoffId(
 }
 
 /** A fresh-session schedule run starts a side conversation; the thread's own one continues past it. */
-function isScheduledFreshRun(
+export function isScheduledFreshRun(
   run: Pick<OrchestrationV2Run, "freshContext" | "userMessageId">,
   turnItems: OrchestrationV2ThreadProjection["turnItems"],
 ): boolean {
@@ -230,8 +264,11 @@ function conversationProviderThread(
   const active = projection.providerThreads.find(
     (candidate) => candidate.id === projection.thread.activeProviderThreadId,
   );
-  if (active === undefined || !startedByScheduledFreshRun(active)) return active;
+  if (active === undefined) return active;
   const boundary = contextBoundaryOrdinal(projection);
+  if (!startedByScheduledFreshRun(active) && !providerThreadPredatesBoundary(active, boundary)) {
+    return active;
+  }
   return (
     projection.providerThreads
       .filter(

@@ -23,7 +23,10 @@ import {
   type ResolvedTarget,
 } from "../../../pullRequest/pullRequestTarget.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
-import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
+import {
+  ownPullRequestRepositories,
+  pullRequestSyncKey,
+} from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
 import {
   normalizeThreadPullRequestKey,
@@ -143,12 +146,11 @@ function projectForPullRequest(
       { projectId: project.id, host: target.host, repository: target.repository, number: 1 },
       project.repositoryIdentity ?? undefined,
     );
-    const projectKey = repositoryKeyOf(project);
     return (
       own !== null &&
-      projectKey !== null &&
-      own.host === projectKey.host &&
-      own.repository === projectKey.repository
+      ownPullRequestRepositories(project.repositoryIdentity).some(
+        ({ key }) => own.host === key.host && own.repository === key.repository,
+      )
     );
   };
   if (preferred !== undefined && matches(preferred)) return preferred;
@@ -226,6 +228,14 @@ const make = Effect.gen(function* () {
     const threadId = input.threadId ?? scope.thread?.threadId;
     if (threadId === undefined) return yield* new PullRequestThreadRequiredError();
     return yield* watches.setWatching({ threadId, target: input, watching }).pipe(
+      Effect.map((result) =>
+        result.checksState === "passing"
+          ? {
+              ...result,
+              next: "Checks already pass on this head, so no wake will come for them. Act on that now; the watch still wakes you on later changes.",
+            }
+          : result,
+      ),
       Effect.catchTags({
         PullRequestWatchThreadNotFoundError: (error) =>
           threadNotFound(engine, scope, error.threadId, error.message),

@@ -86,7 +86,7 @@ export const makeRequestSecret = (deps: {
     }
     const runId = run.id;
     const nodeId = run.rootNodeId;
-    const key = yield* deps.requestKey(input.clientRequestId);
+    const key = `${runId}:${yield* deps.requestKey(input.clientRequestId)}`;
     let turnItemId = TurnItemId.make(
       `turn-item:secret-request:${stablePart(threadId)}:${stablePart(key)}`,
     );
@@ -208,7 +208,11 @@ export const makeRequestSecret = (deps: {
           return item.secretStatus;
         }
         const current = projection.runs.find((candidate) => candidate.id === runId);
-        if (current === undefined || ThreadManagementService.isTerminalRunStatus(current.status)) {
+        if (
+          current === undefined ||
+          ThreadManagementService.isTerminalRunStatus(current.status) ||
+          current.rootNodeId !== nodeId
+        ) {
           yield* record("cancelled");
           return "cancelled" as const;
         }

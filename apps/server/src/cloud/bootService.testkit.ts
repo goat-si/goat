@@ -43,6 +43,7 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
   yield* fs.writeFileString(runtime.entryPath, "#!/bin/sh\n");
   yield* fs.writeFileString(runtime.sentinelPath, "1.2.3\n");
 
+  const markersAtStop: boolean[] = [];
   const commands: string[] = [];
   const invocations: ProcessRunner.ProcessRunInput[] = [];
   const timeouts = new Map<string, unknown>();
@@ -111,6 +112,17 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
       input: ProcessRunner.ProcessRunInput,
     ) {
       const command = `${input.command} ${input.args.join(" ")}`;
+      if (
+        command === "systemctl --user stop goat.service" ||
+        command === "systemctl --user restart --no-block goat.service" ||
+        command.startsWith("launchctl bootout --wait ")
+      ) {
+        markersAtStop.push(
+          yield* fs
+            .exists(path.join(baseDir, "runtime", "desktop-update-restart"))
+            .pipe(Effect.orDie),
+        );
+      }
       commands.push(command);
       invocations.push(input);
       timeouts.set(command, input.timeout);
@@ -299,6 +311,7 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
     home,
     baseDir,
     statePath,
+    markersAtStop,
     commands,
     invocations,
     timeouts,

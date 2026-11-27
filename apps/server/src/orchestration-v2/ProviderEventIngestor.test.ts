@@ -51,6 +51,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
+import { childCreatedEvent, recordFailedSpans } from "./test/recordFailedSpans.ts";
 
 import { toolOutputImages } from "@goat/shared/toolOutput";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -1691,7 +1692,6 @@ layer("ProviderEventIngestorV2", (it) => {
       assert.equal(projectedLarge.fileName, "src/generated.ts");
       assert.isBelow(projectedLarge.diffStr?.length ?? 0, 40_000);
       assert.isTrue(largeDiff.startsWith(projectedLarge.diffStr?.split("\n…")[0] ?? "-"));
-      // Counts come from the whole diff, before storage truncates it.
       assert.equal(projectedLarge.additions, 150_000);
       assert.equal(projectedLarge.deletions, 0);
       assert.deepEqual(
@@ -1874,16 +1874,17 @@ layer("ProviderEventIngestorV2", (it) => {
         threadId: rootEvent.threadId,
       });
 
-      const threadEvents = yield* ingestor.normalize({
-        providerSessionId,
-        providerInstanceId: modelSelection.instanceId,
-        threadId: rootEvent.threadId,
-        event: {
-          type: "app_thread.created",
-          driver: CODEX_DRIVER,
-          appThread: childThread,
-        },
-      });
+      const { failedSpans, tracer } = recordFailedSpans();
+      const threadEvents = yield* Effect.withTracer(
+        ingestor.normalize({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: rootEvent.threadId,
+          event: childCreatedEvent(childThread),
+        }),
+        tracer,
+      );
+      assert.deepEqual(failedSpans, []);
       const messageEvents = yield* ingestor.normalize({
         providerSessionId,
         providerInstanceId: modelSelection.instanceId,
@@ -2389,7 +2390,6 @@ layer("ProviderEventIngestorV2", (it) => {
         reportedSelection,
       );
     }).pipe(
-      // Fresh: the shared test layer has already built the ingestor this replaces.
       Effect.provide(
         Layer.fresh(
           layerFailingWrites([lockTimeout, lockTimeout], (events) =>

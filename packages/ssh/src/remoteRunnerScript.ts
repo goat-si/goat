@@ -135,6 +135,13 @@ if ! goat_runtime_ready; then
   esac
   GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"
   case "$GOAT_PLATFORM_KEY" in win32-*) GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.zip" ;; esac
+  case "$GOAT_PLATFORM_KEY" in
+    win32-*) ;;
+    *) if ! command -v tar >/dev/null 2>&1; then
+      printf 'Remote host needs tar to unpack %s. Install tar on it and try again.\\n' "$GOAT_ARCHIVE" >&2
+      exit 1
+    fi ;;
+  esac
   GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
 ${REMOTE_ARCHIVE_FETCH}
   goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS" "$GOAT_STAGING/SHA256SUMS" @@GOAT_ARCHIVE_CHECKSUMS_SECONDS@@

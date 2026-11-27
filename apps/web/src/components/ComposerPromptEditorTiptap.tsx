@@ -1,3 +1,4 @@
+import { ComposerContextReferenceNodeView } from "./composerReadOnlyContextChip";
 import { useGT } from "gt-react";
 import { revealComposerCaret } from "./revealComposerCaret";
 import { caretLineRect } from "./composerCaretLineRect";
@@ -129,7 +130,6 @@ import { getTimelinePageScrollKey } from "./chat/pageScrollController";
 import { Button } from "./ui/button";
 import {
   ComposerContextActionsContext,
-  ComposerContextReferenceChip,
   ComposerContextRecordsContext,
 } from "./composerContextPresentation";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -487,18 +487,6 @@ const ComposerContextReferenceExtension = Node.create({
     return ReactNodeViewRenderer(ComposerContextReferenceNodeView);
   },
 });
-
-function ComposerContextReferenceNodeView({ node }: NodeViewProps) {
-  return (
-    <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
-      <ComposerContextReferenceChip
-        kind={(node.attrs.kind as string) ?? ""}
-        contextId={(node.attrs.contextId as string) ?? ""}
-        label={(node.attrs.label as string) ?? ""}
-      />
-    </NodeViewWrapper>
-  );
-}
 
 function hasAncestor($pos: ResolvedPos, name: string): boolean {
   for (let depth = $pos.depth; depth > 0; depth -= 1) {

@@ -620,6 +620,8 @@ export const threadEntries = {
       projectId:
         "Project to start in. Default: the calling thread's project. Outside a thread pass it, or scratch.",
       title: "The new thread's title.",
+      generateTitle:
+        "true: after the first message, rename the thread from it as the app does. Needs message or attachments.",
       modelSelection:
         "{instanceId, model, options?} from goat_provider_list. Default: the calling thread's provider and model.",
       memoryGrantCeiling:

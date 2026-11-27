@@ -272,4 +272,29 @@ it.layer(layerTest)("publish locally tracked branches", (it) => {
         });
       }),
   );
+  it.effect("publishes a new branch prefixed with another remote's name under its full name", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const origin = yield* makeTmpDir("git-remote-");
+      const fork = yield* makeTmpDir("git-fork-");
+      yield* initRepoWithCommit(cwd);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      yield* git(origin, ["init", "--bare"]);
+      yield* git(fork, ["init", "--bare"]);
+      yield* git(cwd, ["remote", "add", "origin", origin]);
+      yield* git(cwd, ["remote", "add", "alice", fork]);
+      yield* git(cwd, ["checkout", "-b", "alice/fix"]);
+      yield* writeTextFile(cwd, "fix.txt", "fix\n");
+      yield* git(cwd, ["add", "-A"]);
+      yield* driver.commit(cwd, "Add fix", "");
+
+      const pushed = yield* driver.pushCurrentBranch(cwd, null);
+
+      assert.deepInclude(pushed, { status: "pushed", upstreamBranch: "origin/alice/fix" });
+      assert.equal(
+        yield* git(origin, ["--git-dir=.", "rev-parse", "refs/heads/alice/fix"]),
+        yield* git(cwd, ["rev-parse", "HEAD"]),
+      );
+    }),
+  );
 });

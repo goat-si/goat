@@ -9,7 +9,7 @@
  * The scope picker itself is passed in: its combobox state lives with the rest
  * of the sidebar's scope logic.
  */
-import { FolderPlusIcon, SearchIcon, SquarePenIcon, XIcon } from "~/components/solar";
+import { SearchIcon, SquarePenIcon, XIcon } from "~/components/solar";
 import {
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -26,7 +26,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export interface SidebarThreadHeaderProps {
   hasProjects: boolean;
   projectScope: ReactNode;
-  onNewProject: () => void;
   onNewThread: (event: ReactMouseEvent) => void;
   newThreadDisabled: boolean;
   newThreadShortcutLabel: string | null | undefined;
@@ -46,7 +45,6 @@ export interface SidebarThreadHeaderProps {
 export function SidebarThreadHeader({
   hasProjects,
   projectScope,
-  onNewProject,
   onNewThread,
   newThreadDisabled,
   newThreadShortcutLabel,
@@ -109,14 +107,7 @@ export function SidebarThreadHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center">
-        {hasProjects ? (
-          <>
-            {projectScope}
-            <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
-              <FolderPlusIcon />
-            </SidebarHeaderIconButton>
-          </>
-        ) : null}
+        {hasProjects ? <>{projectScope}</> : null}
         <SidebarHeaderIconButton
           label="New thread"
           tooltip={

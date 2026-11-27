@@ -8,7 +8,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 
-import { linkReferenceAutolinks } from "../pull-requests/pullRequestAutolinks";
+import { nativePullRequestMarkdown } from "../pull-requests/pullRequestAutolinks";
 
 type MarkdownNode = {
   readonly type: string;
@@ -139,7 +139,9 @@ export function goatBotChangeRequestLinks(
   }
   return {
     markdown:
-      repository === null ? relabelled : linkReferenceAutolinks(relabelled, repository.references),
+      repository === null
+        ? relabelled
+        : nativePullRequestMarkdown(relabelled, repository.references, false).markdown,
     labels,
   };
 }

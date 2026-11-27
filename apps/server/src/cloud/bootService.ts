@@ -1,3 +1,4 @@
+import { makeStopForRestart } from "./bootServiceRestart.ts";
 import {
   BOOT_SERVICE_NAMES,
   LEGACY_BOOT_SERVICE_NAMES,
@@ -156,16 +157,8 @@ export function renderBootServicePlist(
   },
 ): string {
   const names = options.names ?? BOOT_SERVICE_NAMES;
-  // ExitTimeOut 90 matches systemd's default TimeoutStopSec. A plain stop
-  // completes within the launcher's 5s child grace, but a stop that queues
-  // behind an in-flight update transition can take much longer; launchd's
-  // system-defined default (5s on current macOS) would SIGKILL the launcher
-  // (and, with it, the process group) mid-handoff.
-  // ProcessType Interactive opts out of background-job resource throttling.
-  // AbandonProcessGroup stays at its default (false): launchd reaps leftover
-  // process-group members only when the launcher itself exits — the analog of
-  // KillMode=mixed's final cgroup kill — and not when the launcher restarts its
-  // child, so agent children survive server updates.
+  // Allow an in-flight update to finish before launchd kills the launcher and its process group.
+  // Interactive avoids throttling; the default AbandonProcessGroup keeps children across updates.
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
@@ -266,7 +259,10 @@ export interface BootServiceManager {
   readonly activate: ReadonlyArray<BootServiceStep>;
   readonly restart: ReadonlyArray<BootServiceStep>;
   /** Queue a restart owned by the manager, since stopping would kill the caller. */
-  readonly handoff?: ReadonlyArray<BootServiceStep>;
+  readonly handoff?: {
+    readonly prepare: ReadonlyArray<BootServiceStep>;
+    readonly restart: ReadonlyArray<BootServiceStep>;
+  };
   readonly deactivate: ReadonlyArray<BootServiceStep>;
   readonly finalize: ReadonlyArray<BootServiceStep>;
 }
@@ -797,6 +793,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       yield* runSteps(legacy.manager.activate);
     }).pipe(Effect.ignore);
 
+  const stopForRestart = makeStopForRestart(fs, path, input.baseDir, runSteps);
+
   const install = Effect.fn("cloud.boot_service.install")(function* (options?: {
     readonly allowDowngrade?: boolean;
     readonly start?: boolean;
@@ -932,8 +930,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       return { ...plan, handedOff: true };
     }
     if (installed && start) {
-      if (currentInstalled) yield* runSteps(manager.stop);
-      if (Option.isSome(legacy)) yield* runSteps(legacy.value.manager.stop);
+      if (currentInstalled) yield* stopForRestart(manager.stop);
+      if (Option.isSome(legacy)) yield* stopForRestart(legacy.value.manager.stop);
     }
 
     let destinationRejected = false;
@@ -1079,7 +1077,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     if (Option.isNone(unit)) {
       if (Option.isNone(legacy)) return "skipped" as const;
       // Move the legacy unit to the new names without changing the version it starts.
-      yield* runSteps(legacy.value.manager.stop);
+      yield* stopForRestart(legacy.value.manager.stop);
       const begunAt = yield* Clock.currentTimeMillis;
       yield* Effect.gen(function* () {
         yield* fs.makeDirectory(path.dirname(unitPath), { recursive: true });
@@ -1098,10 +1096,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     // Writes no state, and the launcher lets an update transition in flight
     // finish before the queued stop tears it down.
     if (runningInsideService && manager.handoff !== undefined) {
-      yield* runSteps(manager.handoff);
+      yield* runSteps(manager.handoff.prepare);
+      yield* stopForRestart(manager.handoff.restart, true);
       return "queued" as const;
     }
-    yield* runSteps(manager.stop);
+    yield* stopForRestart(manager.stop);
     const begunAt = yield* Clock.currentTimeMillis;
     // A legacy unit left behind next to the current one would start a second server at boot.
     const retireLeftover = Option.isSome(legacy)
