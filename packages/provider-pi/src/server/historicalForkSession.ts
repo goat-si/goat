@@ -9,8 +9,14 @@ import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import {
+  piRetainedCheckpoint,
+  piSameHistory,
+  piUserEntryInWindow,
+  type PiHistoricalCheckpoint,
+} from "./entries.ts";
 import type { PiForkBoundary } from "./forkBoundary.ts";
-import { inspectSessionJsonl } from "./sessionJsonlScan.ts";
+import { inspectSessionJsonl, readBoundedSessionJsonl } from "./sessionJsonlScan.ts";
 
 const MAX_SCANNED_FILES = 2048;
 const MAX_SCANNED_BYTES = 512 * 1024 * 1024;
@@ -207,3 +213,114 @@ export const findHistoricalForkSession = Effect.fn("PiAdapter.findHistoricalFork
     return result.value;
   },
 );
+
+export const findHistoricalCheckpointSession = Effect.fn(
+  "PiAdapter.findHistoricalCheckpointSession",
+)(function* (
+  boundaryFile: string,
+  targetId: string,
+  earliestPromptAt: DateTime.Utc,
+  completedAt: DateTime.Utc,
+  driver: ProviderDriverKind,
+  limits?: ScanLimits,
+  sharedBudget?: ScanBudget,
+) {
+  const fail = (detail: string) =>
+    new ProviderAdapter.ProviderAdapterProtocolError({ driver, detail });
+  const from = DateTime.toEpochMillis(earliestPromptAt);
+  const to = DateTime.toEpochMillis(completedAt);
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = path.dirname(boundaryFile);
+  const budget = sharedBudget ?? makeHistoricalScanBudget(limits);
+  const stats = budget.stats;
+  const now = yield* Clock.currentTimeMillis;
+  budget.startedAt ??= now;
+  const remainingMs = budget.limits.maxDurationMs - (now - budget.startedAt);
+  const limit = (kind: string) =>
+    fail(
+      `Cannot recover Pi rollback session: couldn't verify which session this turn belongs to within the ${kind} scan limit (${stats.files} files, ${stats.bytes} bytes, ${stats.unreadable} unreadable files, ${stats.skipped} skipped lines)`,
+    );
+  const account = (bytes: number) =>
+    Effect.suspend(() => {
+      stats.bytes += bytes;
+      return stats.bytes > budget.limits.maxBytes ? Effect.fail(limit("bytes")) : Effect.void;
+    });
+  if (remainingMs <= 0) return yield* limit("time");
+  const scan = Effect.scoped(
+    Effect.gen(function* () {
+      const realDirectory = yield* fs
+        .realPath(directory)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (realDirectory === undefined) return undefined;
+      const handle = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () => NodeFSP.opendir(realDirectory),
+          catch: () => fail("session directory is unreadable"),
+        }),
+        (dir) =>
+          Effect.tryPromise({
+            try: () => dir.close(),
+            catch: () => fail("session directory could not be closed"),
+          }).pipe(Effect.ignore),
+      ).pipe(Effect.orElseSucceed(() => undefined));
+      if (handle === undefined) return undefined;
+      const files: string[] = [];
+      while (true) {
+        const entry = yield* Effect.tryPromise({
+          try: () => handle.read(),
+          catch: () => fail("session directory is unreadable"),
+        });
+        if (entry === null) break;
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        const file = path.join(directory, entry.name);
+        stats.files++;
+        if (stats.files > budget.limits.maxFiles) return yield* limit("files");
+        if (file === boundaryFile) continue;
+        files.push(file);
+      }
+      files.sort().reverse();
+      let match: PiHistoricalCheckpoint | undefined;
+      for (const file of files) {
+        const result = yield* Effect.result(
+          readBoundedSessionJsonl(fs, file, account, () => {
+            stats.skipped++;
+          }),
+        );
+        if (result._tag === "Failure") {
+          const failure = result.failure;
+          if (
+            typeof failure === "object" &&
+            failure !== null &&
+            "_tag" in failure &&
+            failure._tag === "ProviderAdapterProtocolError"
+          ) {
+            return yield* failure as ProviderAdapter.ProviderAdapterProtocolError;
+          }
+          stats.unreadable++;
+          continue;
+        }
+        const listing = result.success;
+        if (!piUserEntryInWindow(listing.entries.get(targetId), from, to)) continue;
+        const retained = piRetainedCheckpoint(listing, targetId, to);
+        if (retained === undefined) continue;
+        if (
+          match !== undefined &&
+          !piSameHistory(listing, retained.headId, match.listing, match.retained.headId)
+        ) {
+          return yield* fail("Pi rollback found conflicting histories for the checkpoint");
+        }
+        if (
+          match === undefined ||
+          (match.retained.forkEntryId !== undefined && retained.forkEntryId === undefined)
+        ) {
+          match = { file, listing, retained };
+        }
+      }
+      return match;
+    }),
+  );
+  const result = yield* scan.pipe(Effect.timeoutOption(Duration.millis(remainingMs)));
+  if (Option.isNone(result)) return yield* limit("time");
+  return result.value;
+});

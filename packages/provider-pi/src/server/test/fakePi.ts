@@ -70,7 +70,7 @@ export interface FakePi {
 }
 
 /** Pi omits `model` when none is selected and `sessionName` until one is set. */
-const recordedIdleState = (sessionFile: string) => ({
+export const recordedIdleState = (sessionFile: string) => ({
   thinkingLevel: "high",
   isStreaming: false,
   isCompacting: false,
@@ -87,7 +87,9 @@ const recordedIdleState = (sessionFile: string) => ({
 export const PI_COMPACTING_PROMPT_ERROR =
   "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.";
 
-export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
+export const makeFakePiWithResponses = Effect.fnUntraced(function* (
+  override?: (request: PiRpcRecord, response: PiRpcRecord) => Effect.Effect<PiRpcRecord>,
+) {
   const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
@@ -244,7 +246,8 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         continue;
       }
       const response = respondTo(record);
-      if (response !== null) yield* emit(response);
+      if (response !== null)
+        yield* emit(override === undefined ? response : yield* override(record, response));
     }
   });
 
@@ -354,3 +357,5 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     lastSpawn: () => lastSpawn,
   } satisfies FakePi;
 });
+
+export const makeFakePi: Effect.Effect<FakePi> = makeFakePiWithResponses();

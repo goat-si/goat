@@ -57,6 +57,7 @@ export const readPiEntries = <E>(
 export interface PiSessionEntry {
   readonly parentId: string | null;
   readonly isUserMessage: boolean;
+  readonly isLabel: boolean;
   /** Pi's `timestamp` as epoch milliseconds; null when missing or unparsable. */
   readonly timestamp: number | null;
 }
@@ -78,6 +79,7 @@ export function readPiSessionEntry(entry: unknown): [string, PiSessionEntry] | n
       isUserMessage:
         piRecordField(entry, "type") === "message" &&
         piRecordString(piRecordField(entry, "message"), "role") === "user",
+      isLabel: piRecordField(entry, "type") === "label",
       timestamp:
         timestamp === undefined
           ? null
@@ -150,4 +152,76 @@ export function walkPiBranch(
     current = entry.parentId;
   }
   return { entryCount: visited.size, userEntryIds, reachedStop: current === stopAt };
+}
+
+export function piUserEntryInWindow(
+  entry: PiSessionEntry | undefined,
+  from: number,
+  to: number,
+): boolean {
+  return (
+    entry?.isUserMessage === true &&
+    entry.timestamp !== null &&
+    entry.timestamp >= from &&
+    entry.timestamp <= to
+  );
+}
+
+export interface PiRetainedCheckpoint {
+  readonly headId: string;
+  readonly forkEntryId?: string;
+}
+
+export interface PiHistoricalCheckpoint {
+  readonly file: string;
+  readonly listing: PiSessionListing;
+  readonly retained: PiRetainedCheckpoint;
+}
+
+export function piRetainedCheckpoint(
+  listing: PiSessionListing,
+  targetId: string,
+  completedAt: number | undefined,
+): PiRetainedCheckpoint | undefined {
+  const walk = walkPiBranch(listing.entries, listing.leafId, targetId);
+  if (listing.leafId === null || walk?.reachedStop !== true || !listing.entries.has(targetId))
+    return undefined;
+  // An extension can leave later prompts in the source. Keep steers within the retained turn.
+  for (const id of [...walk.userEntryIds].reverse()) {
+    const entry = listing.entries.get(id);
+    if (entry?.timestamp == null || completedAt === undefined) return undefined;
+    if (entry.timestamp >= completedAt)
+      return entry.parentId === null ? undefined : { headId: entry.parentId, forkEntryId: id };
+  }
+  return { headId: listing.leafId };
+}
+
+// Pi's fork drops label entries from the copied path and re-adds them with new ids at the leaf.
+export function piSameHistory(
+  a: PiSessionListing,
+  aHead: string | null,
+  b: PiSessionListing,
+  bHead: string | null,
+): boolean {
+  const aPath = piContentPath(a, aHead);
+  const bPath = piContentPath(b, bHead);
+  return (
+    aPath !== null &&
+    bPath !== null &&
+    aPath.length === bPath.length &&
+    aPath.every((id, index) => id === bPath[index])
+  );
+}
+
+function piContentPath(listing: PiSessionListing, headId: string | null): Array<string> | null {
+  const path: Array<string> = [];
+  const visited = new Set<string>();
+  for (let id = headId; id !== null;) {
+    const entry = listing.entries.get(id);
+    if (entry === undefined || visited.has(id)) return null;
+    visited.add(id);
+    if (!entry.isLabel) path.push(id);
+    id = entry.parentId;
+  }
+  return path;
 }
