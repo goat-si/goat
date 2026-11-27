@@ -18,6 +18,7 @@ import {
 } from "../../themePalette";
 import {
   humanizeThemeName,
+  numberedThemeName,
   pairVsCodeThemes,
   parseThemeImport,
   resolveThemeLabelCollisions,
@@ -359,10 +360,7 @@ function ThemeImportBody({
       if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
     }
     for (let copy = 1; copy < 100; copy += 1) {
-      const candidate = renameTheme(
-        theme,
-        `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
-      );
+      const candidate = renameTheme(theme, numberedThemeName(theme.label, ` (${copy})`));
       if (getCustomThemes().some((existing) => existing.id === candidate.id)) continue;
       return candidate;
     }
