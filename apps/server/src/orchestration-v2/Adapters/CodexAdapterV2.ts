@@ -75,7 +75,7 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as MemorySnapshot from "../../memory/MemorySnapshot.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
-import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
+import { revertCodexThread, revertCodexThreadAfterTurn } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
@@ -8061,8 +8061,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 });
                 recordLoaded(threadId, loadRuntime, loadMcp);
               }
+              const keptNativeTurnId = nativeConversationHeadRef?.nativeId ?? null;
               const response = yield* ensureInitialized.pipe(
-                Effect.andThen(revertCodexThread(client, threadId, numTurns)),
+                Effect.andThen(
+                  keptNativeTurnId === null
+                    ? revertCodexThread(client, threadId, numTurns)
+                    : revertCodexThreadAfterTurn(client, threadId, keptNativeTurnId, numTurns),
+                ),
               );
               turnTokenUsageByThread.delete(threadId);
               return {
