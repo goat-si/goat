@@ -1,3 +1,4 @@
+import { resetCreditFailureText } from "@goat/client-runtime/state/usage";
 import * as Dialog from "../../components/ui/Dialog";
 import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import {
@@ -247,11 +248,7 @@ export function ResetCredits(props: {
       setStatus(result.value.warning ?? OUTCOME_TEXT[result.value.outcome]);
       return;
     }
-    setStatus(
-      "error" in result.cause && result.cause.error instanceof Error
-        ? result.cause.error.message
-        : "Could not use the reset credit.",
-    );
+    setStatus(resetCreditFailureText(result));
   };
 
   const confirm = (choice: ResetCreditChoice) => {

@@ -5,6 +5,7 @@ import type {
   UsageSummary,
   UsageSummaryInput,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import type { AtomRegistry } from "effect/reactivity";
 
@@ -50,6 +51,28 @@ export function usageSummaryInput(
   modelFilter: UsageModelFilter | undefined,
 ): UsageSummaryInput {
   return modelFilter === undefined ? input : { ...input, modelFilter };
+}
+
+function failureMessage(error: unknown): string | null {
+  if (typeof error === "string") {
+    return error.trim().length > 0 ? error : null;
+  }
+  if (typeof error !== "object" || error === null || !("message" in error)) return null;
+  return typeof error.message === "string" && error.message.trim().length > 0
+    ? error.message
+    : null;
+}
+
+/** The server's reason a reset credit could not be used, or a generic line when it gave none. */
+export function resetCreditFailureText(result: {
+  readonly cause: Cause.Cause<unknown>;
+}): string {
+  // Squashing an interrupt-only cause invents Effect's own "All fibers interrupted" text.
+  const failed = Cause.hasFails(result.cause) || Cause.hasDies(result.cause);
+  return (
+    (failed ? failureMessage(squashAtomCommandFailure(result)) : null) ??
+    "Could not use the reset credit."
+  );
 }
 
 const limitsRefreshAfter = new Map<EnvironmentId, number>();
