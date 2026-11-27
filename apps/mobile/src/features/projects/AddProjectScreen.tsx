@@ -38,9 +38,9 @@ import {
   resolveEnvironmentMachineKind,
   SourceControlProviderKind,
 } from "@goat/contracts";
-import { StackActions, useNavigation } from "@react-navigation/native";
+import { StackActions, useNavigation, useRoute } from "@react-navigation/native";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Platform, View } from "react-native";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
@@ -82,6 +82,7 @@ import {
 import {
   draftWithPrompt,
   getActiveRoute,
+  isActiveRoute,
   useCreateProject,
   useOpenNewTaskDraft,
   useOpenExistingProject,
@@ -423,13 +424,20 @@ export function AddProjectRepositoryScreen(props: {
     reportFailure: false,
   });
   const navigation = useNavigation();
+  const originRoute = useRoute();
   const environment = useEnvironmentFromParam(props.environmentId);
   const source = sourceFromParam(props.source);
   const [repositoryInput, setRepositoryInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pendingLookup = useRef<AbortController | null>(null);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- cancels the repository lookup when its screen unmounts
+  useEffect(() => () => pendingLookup.current?.abort(), []);
+
   const lookupRepository = async () => {
-    if (!environment || repositoryInput.trim().length === 0 || isSubmitting) return;
+    if (!environment || repositoryInput.trim().length === 0 || pendingLookup.current) return;
+    if (!isActiveRoute(navigation, originRoute)) return;
     const incompleteOwnerMessage = githubIncompleteOwnerRepositoryMessage(source, repositoryInput);
     if (incompleteOwnerMessage) {
       setError(incompleteOwnerMessage);
@@ -452,13 +460,22 @@ export function AddProjectRepositoryScreen(props: {
       setIsSubmitting(false);
       return;
     }
-    const result = await lookupRepositoryQuery({
-      environmentId: environment.environmentId,
-      input: {
-        provider,
-        repository: repositoryInput.trim(),
+    const lookup = new AbortController();
+    pendingLookup.current = lookup;
+    const result = await lookupRepositoryQuery(
+      {
+        environmentId: environment.environmentId,
+        input: {
+          provider,
+          repository: repositoryInput.trim(),
+        },
       },
-    });
+      { signal: lookup.signal },
+    );
+    if (lookup.signal.aborted) return;
+    pendingLookup.current = null;
+    setIsSubmitting(false);
+    if (!isActiveRoute(navigation, originRoute)) return;
     if (AsyncResult.isFailure(result)) {
       setError(errorMessage(Cause.squash(result.cause)));
     } else {
@@ -473,7 +490,6 @@ export function AddProjectRepositoryScreen(props: {
         }),
       );
     }
-    setIsSubmitting(false);
   };
   return (
     <AddProjectShell title={source === "url" ? "Git URL" : addProjectRemoteSourceLabel(source)}>

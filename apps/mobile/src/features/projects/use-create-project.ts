@@ -58,6 +58,20 @@ export function getActiveRoute(navigation: {
   return state?.routes[state.index];
 }
 
+export function isActiveRoute(
+  navigation: Parameters<typeof getActiveRoute>[0],
+  originRoute: ReturnType<typeof getActiveRoute>,
+): boolean {
+  const activeRoute = getActiveRoute(navigation);
+  // A warm link can change the task without replacing its native route key.
+  return (
+    originRoute !== undefined &&
+    activeRoute?.key === originRoute.key &&
+    activeRoute.name === originRoute.name &&
+    activeRoute.params === originRoute.params
+  );
+}
+
 async function retargetSavedNewTaskDraft(
   draftKey: string,
   project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
@@ -81,17 +95,7 @@ export function useOpenNewTaskDraft() {
     },
     originRoute: NavigationState<ParamListBase>["routes"][number] | undefined,
   ) => {
-    const isStillOnOrigin = () => {
-      const activeRoute = getActiveRoute(navigation);
-      // A warm link can change the task without replacing its native route key.
-      return (
-        originRoute !== undefined &&
-        activeRoute?.key === originRoute.key &&
-        activeRoute.name === originRoute.name &&
-        activeRoute.params === originRoute.params
-      );
-    };
-    if (!isStillOnOrigin()) return;
+    if (!isActiveRoute(navigation, originRoute)) return;
     const chooserDraft =
       params.draftId === undefined
         ? chooserDraftKey(
@@ -105,7 +109,7 @@ export function useOpenNewTaskDraft() {
         environmentId: params.environmentId,
         projectId: params.projectId,
       }).catch(() => false));
-    if (!isStillOnOrigin()) return;
+    if (!isActiveRoute(navigation, originRoute)) return;
     selectDetail({
       name: "Thread",
       params: { draft: carried ? { ...params, draftId: chooserDraft } : params },
