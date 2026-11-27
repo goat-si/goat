@@ -3248,3 +3248,7 @@ code {
 .messages-timeline-scroll:focus-visible {
   outline: none;
 }
+
+[data-script-command-input] {
+  font-variant-ligatures: none;
+}
