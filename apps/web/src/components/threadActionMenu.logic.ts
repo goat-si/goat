@@ -1,4 +1,5 @@
 import type { ContextMenuItem } from "@goat/contracts";
+import { threadRuntimeCanArchive } from "@goat/client-runtime/state/models";
 import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
@@ -187,6 +188,28 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
     "copy-thread",
     "copy-thread-id",
   ].includes(action);
+}
+
+export function buildBulkMarkUnreadContextMenu<
+  T extends {
+    readonly latestRun?: { readonly status: string; readonly completedAt?: string | null } | null;
+    readonly runtime: Parameters<typeof threadRuntimeCanArchive>[0];
+  },
+>(
+  threads: readonly T[],
+): {
+  readonly threads: readonly T[];
+  readonly items: readonly ContextMenuItem<"mark-unread">[];
+} {
+  // Same rule as the single-thread menu: only a settled, completed run can be marked unread.
+  const eligible = threads.filter(
+    (thread) => thread.latestRun?.completedAt != null && threadRuntimeCanArchive(thread.runtime),
+  );
+  return {
+    threads: eligible,
+    items:
+      eligible.length > 0 ? [{ id: "mark-unread", label: `Mark unread (${eligible.length})` }] : [],
+  };
 }
 
 export function buildThreadActionMenuItems(

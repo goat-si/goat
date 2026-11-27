@@ -171,6 +171,7 @@ import type { SidebarThreadSummary } from "../types";
 
 import { cn } from "~/lib/utils";
 import {
+  buildBulkMarkUnreadContextMenu,
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
@@ -2037,6 +2038,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
+      const markUnread = buildBulkMarkUnreadContextMenu(selectedThreads);
       // Presets sync across environments, so the first selected thread's stand for all.
       const snoozeEnvironmentId = selectedThreads[0]?.environmentId ?? null;
       const snoozePresets =
@@ -2085,7 +2087,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   },
                 ]
               : []),
-            { id: "mark-unread", label: `Mark unread (${count})` },
+            ...markUnread.items,
             {
               id: "delete",
               label: `Delete (${count})`,
@@ -2189,10 +2191,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         return;
       }
       if (clicked.value === "mark-unread") {
-        for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
-          if (thread) markThreadUnread(scopeThreadRef(thread.environmentId, thread.id));
-        }
+        markUnread.threads.forEach((t) => markThreadUnread(scopeThreadRef(t.environmentId, t.id)));
         clearSelection();
         return;
       }

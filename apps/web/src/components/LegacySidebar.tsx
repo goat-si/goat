@@ -1788,17 +1788,29 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
     );
 
+    const markUnreadEntries = selectedThreadEntries.filter(
+      ({ thread }) =>
+        thread.latestRun?.completedAt != null && threadRuntimeCanArchive(thread.runtime),
+    );
     const clicked = await api.contextMenu.show(
-      buildMultiSelectThreadContextMenuItems({ count, hasRunningThread }).map((item) =>
-        item.id === "archive" || item.id === "delete"
-          ? { ...item, disabled: item.disabled || !canOperateSelection }
-          : item,
-      ),
+      buildMultiSelectThreadContextMenuItems({ count, hasRunningThread })
+        .flatMap((item) =>
+          item.id === "mark-unread"
+            ? markUnreadEntries.length > 0
+              ? [{ ...item, label: `Mark unread (${markUnreadEntries.length})` }]
+              : []
+            : [item],
+        )
+        .map((item) =>
+          item.id === "archive" || item.id === "delete"
+            ? { ...item, disabled: item.disabled || !canOperateSelection }
+            : item,
+        ),
       position,
     );
 
     if (clicked === "mark-unread") {
-      for (const { threadRef } of selectedThreadEntries) {
+      for (const { threadRef } of markUnreadEntries) {
         markThreadUnread(threadRef);
       }
       clearSelection();
@@ -2153,7 +2165,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ...(appAtomRegistry.get(canShareWithGuestAtom(thread.environmentId))
             ? [{ id: "share-guest", label: "Share with guest" }]
             : []),
-          { id: "mark-unread", label: "Mark unread" },
+          ...(thread.latestRun?.completedAt != null && threadRuntimeCanArchive(thread.runtime)
+            ? [{ id: "mark-unread", label: "Mark unread" }]
+            : []),
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread", label: "Copy Thread" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
