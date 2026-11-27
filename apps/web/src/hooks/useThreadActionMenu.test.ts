@@ -216,7 +216,10 @@ describe("thread menu permissions", () => {
       state.threadFollows = capability;
       if (permitted) state.granted.add("secondary");
       createMenu().openMenu(position);
-      const labels = state.show.mock.calls[0]?.[0].map((item) => item.label) ?? [];
+      const labels =
+        state.show.mock.calls[0]?.[0]
+          .find((item) => item.id === "bot-actions")
+          ?.children?.map((item) => item.label) ?? [];
       expect(labels.includes("Ask a bot to follow…")).toBe(shown);
       expect(labels.includes("Stop following")).toBe(shown);
     },

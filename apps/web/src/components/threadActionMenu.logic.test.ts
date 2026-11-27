@@ -63,20 +63,20 @@ describe("buildThreadActionMenuItems", () => {
         ? [
             "unpin",
             "unsettle",
+            "auto-settle",
             "unsnooze",
             "rename",
             "regenerate-title",
-            "auto-settle",
             "archive",
             "delete",
           ]
         : [
             "pin",
             "settle",
+            "auto-settle",
             "snooze",
             "rename",
             "regenerate-title",
-            "auto-settle",
             "archive",
             "delete",
           ];
@@ -113,6 +113,23 @@ describe("buildThreadActionMenuItems", () => {
     });
     expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
     expect(items.find((item) => item.id === "turn-into-project")?.disabled).toBe(true);
+  });
+
+  it("preserves the availability of each grouped project action for read-only clients", () => {
+    const items = buildThreadActionMenuItems({
+      ...baseState,
+      projectFilter: { label: "Example", isActive: false, menuLabel: "项目" },
+      canOperate: false,
+      canTurnIntoProject: true,
+    });
+    const group = items.find((item) => item.id === "project-actions");
+    expect(group?.label).toBe("项目");
+    expect(group?.disabled).not.toBe(true);
+    expect(group?.children?.map((item) => [item.id, Boolean(item.disabled)])).toEqual([
+      ["filter-by-project", true],
+      ["turn-into-project", true],
+      ["project-settings", false],
+    ]);
   });
 
   describe("fork entry", () => {
@@ -192,7 +209,9 @@ it.each([
   "gates the shared sidebar menu's bot actions ($canFollowWithBot, $canOperate)",
   ({ canFollowWithBot, canOperate, expected }) => {
     expect(
-      allIds({ ...baseState, canFollowWithBot, canOperate }).filter((id) => id.startsWith("bot-")),
+      allIds({ ...baseState, canFollowWithBot, canOperate }).filter(
+        (id) => id === "bot-follow" || id === "bot-stop-following",
+      ),
     ).toEqual(expected);
   },
 );
