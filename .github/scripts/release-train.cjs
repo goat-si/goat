@@ -8,6 +8,7 @@
 //   node release-train.cjs recheck  before publishing, check that promotion still holds
 //   node release-train.cjs base     print the base version the next nightly or stable carries
 //   node release-train.cjs nightly  decide whether to build a nightly of a dev commit
+//   node release-train.cjs highlights  print PR highlights since the previous stable build
 //
 // Stable promotes the newest published nightly that has been out for 24 hours and is newer than
 // the current stable, unless an open issue is labeled release-blocker or the repository variable
@@ -236,6 +237,50 @@ function recheckStablePromotion({ releases, openBlockers, hold, shortSha, versio
   return { ok: true, reason: shortSha + " is still promotable" };
 }
 
+// The distribution repository's tags point at its own history. Release names carry
+// the source SHA. On a retry, the current version may already have been published.
+function previousStableSha(releases, version) {
+  const previous = releases.filter(
+    (release) =>
+      !release.draft &&
+      !release.prerelease &&
+      release.published_at &&
+      STABLE_TAG.test(release.tag_name) &&
+      compare(parsePlain(release.tag_name.slice(1)), parsePlain(version)) < 0,
+  );
+  const latest = newestStable(previous.map((release) => release.tag_name));
+  const release = latest && previous.find((row) => row.tag_name === "v" + format(latest));
+  return NAME_SHA.exec(release?.name ?? "")?.[1];
+}
+
+// Read the first-parent path between the two builds. A merge can bring in commits
+// from other repositories with their own PR numbers; only the integrated PR counts.
+function stableHighlights(pages, base, head) {
+  if (!pages.length || pages.some((page) => page.status !== "ahead")) return [];
+  const commits = new Map(
+    pages.flatMap((page) => page.commits.map((commit) => [commit.sha, commit])),
+  );
+  const features = new Set(),
+    fixes = new Set();
+  let sha = head;
+  while (!sha.startsWith(base)) {
+    const commit = commits.get(sha);
+    if (!commit || !commit.parent) return [];
+    const [subject, , mergeTitle] = commit.lines;
+    const title = /^Merge pull request #\d+ from /.test(subject)
+      ? mergeTitle
+      : / \(#\d+\)$/.test(subject)
+        ? subject.replace(/ \(#\d+\)$/, "")
+        : "";
+    const match = /^(feat|fix|perf)(?:\(([^)]+)\))?!?: (.+)$/i.exec(title ?? "");
+    if (match && !/^(?:ci|deps|build|scripts|test|tests|release|docs|lint)$/.test(match[2] ?? "")) {
+      (match[1].toLowerCase() === "feat" ? features : fixes).add(match[3].trim());
+    }
+    sha = commit.parent;
+  }
+  return [...new Set([...features, ...fixes])].slice(0, 5);
+}
+
 /** One JSON object per line, as gh api --paginate --jq '.[] | {...}' prints them. */
 const readJsonLines = (file) =>
   fs
@@ -249,6 +294,29 @@ function main(argv = process.argv.slice(2), env = process.env) {
   if (command === "base") {
     const tags = fs.readFileSync(env.RELEASE_TAGS_FILE, "utf8").split(/\r?\n/).filter(Boolean);
     console.log(nextStableBase({ tags, packageVersion: env.PACKAGE_VERSION }));
+    return;
+  }
+  if (command === "highlights") {
+    const base = previousStableSha(readJsonLines(env.RELEASES_FILE), env.VERSION);
+    if (!base) return;
+    if (!/^[0-9a-f]{40}$/.test(env.SHA)) throw new Error("Expected the built source SHA");
+    const output = childProcess.execFileSync(
+      "gh",
+      [
+        "api",
+        "--paginate",
+        "repos/goat-si/goat/compare/" + base + "..." + env.SHA + "?per_page=100",
+        "--jq",
+        '{status, commits: [.commits[] | {sha, parent: .parents[0].sha, lines: (.commit.message | split("\\n")[:3])}]}',
+      ],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    );
+    const pages = output
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    for (const line of stableHighlights(pages, base, env.SHA)) console.log(line);
     return;
   }
   const blockerCount = () => {
@@ -313,11 +381,13 @@ function main(argv = process.argv.slice(2), env = process.env) {
     console.log("build=" + decision.build);
     return;
   }
-  throw new Error("usage: release-train.cjs stable|recheck|base|nightly");
+  throw new Error("usage: release-train.cjs stable|recheck|base|nightly|highlights");
 }
 
 module.exports = {
   SOAK_MS,
+  previousStableSha,
+  stableHighlights,
   BLOCKER_LABEL,
   decideNightlyBuild,
   decideStablePromotion,

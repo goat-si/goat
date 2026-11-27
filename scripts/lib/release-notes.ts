@@ -10,19 +10,35 @@ function platformOfFile(name: string) {
   return "other";
 }
 
-/** Release notes describe downloads and signing, without the source commit history. */
-export function renderReleaseNotes(version: string, utcDate: string, files: ReadonlyArray<string>) {
+/** Stable highlights are plain text. All releases include the same download inventory. */
+export function renderReleaseNotes(
+  version: string,
+  utcDate: string,
+  files: ReadonlyArray<string>,
+  highlights: readonly string[] = [],
+) {
   const sortedFiles = files.toSorted();
   const rows = ["mac", "win", "linux", "cli", "other"].flatMap((platform) =>
     sortedFiles
       .filter((file) => platformOfFile(file) === platform)
       .map((file) => `| ${platform} | \`${file.replaceAll("|", "\\|").replaceAll("`", "")}\` |`),
   );
+  const bullets = highlights.map((line) => {
+    // Escape Markdown and HTML before inserting externally supplied PR titles into a release.
+    const text = line
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replace(/[\\`*_{}\[\]()!|~]/g, (char) => "&#" + char.charCodeAt(0) + ";")
+      .replaceAll("@", "&#64;");
+    return "- " + text;
+  });
   return [
     `GOAT ${version}`,
     "",
     `UTC date: ${utcDate}`,
     "",
+    ...(bullets.length ? ["## What's changed", "", ...bullets, ""] : []),
     "| Platform | File |",
     "| --- | --- |",
     ...rows,

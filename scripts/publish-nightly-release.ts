@@ -138,6 +138,7 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
   readonly version: string;
   readonly name: string;
   readonly dryRun?: boolean;
+  readonly highlights?: ReadonlyArray<string> | undefined;
   /**
    * Publish only the release assets: no installers are required and nothing is committed
    * to the repository. Used for goat-si/goat's own releases, which carry the runtime
@@ -189,29 +190,21 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
   if (superseded(releases)) return "superseded" as const;
   const date = DateTime.formatIsoDateUtc(yield* DateTime.now);
   let draft = releases.find((release) => release.draft && release.tag_name === `v${version}`);
+  const notes = renderReleaseNotes(
+    version,
+    date,
+    local.map((asset) => asset.name),
+    prerelease ? [] : input.highlights,
+  );
   if (dryRun) {
     if (draft) yield* client.listAssets(draft.id);
     for (const file of repositoryFiles) yield* client.getContents(file);
     yield* Console.log(
-      `Would ${draft ? "reconcile" : "create"} ${channel} draft v${version}, verify ${local.length} assets, sync repository files, recheck supersession, and publish.\n${renderReleaseNotes(
-        version,
-        date,
-        local.map((asset) => asset.name),
-      )}`,
+      `Would ${draft ? "reconcile" : "create"} ${channel} draft v${version}, verify ${local.length} assets, sync repository files, recheck supersession, and publish.\n${notes}`,
     );
     return undefined;
   }
-  draft ??= yield* client.createDraft(
-    version,
-    name,
-    renderReleaseNotes(
-      version,
-      date,
-      local.map((asset) => asset.name),
-    ),
-    prerelease,
-    input.target,
-  );
+  draft ??= yield* client.createDraft(version, name, notes, prerelease, input.target);
   if (!draft.draft)
     return yield* new NightlyPublishError({
       message: "Refusing to reconcile a published release.",
@@ -286,7 +279,18 @@ const command = Command.make(
   (input) =>
     Effect.gen(function* () {
       const client = yield* makeGitHubReleasesClient(input.repo);
+      const highlightsFile = yield* Config.String("GOAT_STABLE_HIGHLIGHTS_FILE").pipe(
+        Config.option,
+      );
+      const highlights =
+        Option.isSome(highlightsFile) && releaseChannelOfVersion(input.version) === "stable"
+          ? (yield* (yield* FileSystem.FileSystem).readFileString(highlightsFile.value))
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean)
+          : [];
       const outcome = yield* publishNightlyRelease({
+        highlights,
         ...input,
         target: Option.getOrUndefined(input.target),
         client,

@@ -50,6 +50,10 @@ on:
         options:
           - nightly
           - stable
+      highlights:
+        description: Optional plain-text highlights for a stable release, one change per line. Defaults to merged features and fixes.
+        required: false
+        type: string
       publish:
         description: publish to goat-releases (also needs repository variable GOAT_RELEASES_PUBLISH=true)
         required: false
@@ -1106,6 +1110,24 @@ jobs:
           blockers="$(gh api --paginate 'repos/goat-si/goat/issues?labels=release-blocker&state=open&per_page=100' \
             --jq '.[] | select(.pull_request | not) | .number' | wc -l | tr -d ' ')"
           RELEASES_FILE="$releases" OPEN_BLOCKERS="$blockers" SHORT_SHA="${SHA:0:12}" node "$train" recheck
+
+      - name: Prepare stable release highlights
+        if: needs.prepare.outputs.channel == 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          RELEASE_HIGHLIGHTS: ${{ inputs.highlights }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/stable-highlights.txt"
+          if [[ -n "$RELEASE_HIGHLIGHTS" ]]; then
+            printf '%s\n' "$RELEASE_HIGHLIGHTS" > "$notes"
+          elif ! RELEASES_FILE="$RUNNER_TEMP/goat-releases.jsonl" node "$RUNNER_TEMP/release-train.cjs" highlights > "$notes"; then
+            : > "$notes"
+            echo "::warning::Could not collect stable highlights. Publishing the download inventory."
+          fi
+          echo "GOAT_STABLE_HIGHLIGHTS_FILE=$notes" >> "$GITHUB_ENV"
 
       # The only step in this workflow that reads a secret. The token is scoped to
       # goat-si/goat-releases by the App installation.

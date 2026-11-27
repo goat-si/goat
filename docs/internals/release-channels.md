@@ -105,3 +105,9 @@ goat-ci does not run when commits land on dev. A maintainer starts it by hand (`
 The nightly's jobs pass their outputs to each other through such drafts, one per hand-off so parallel jobs never upload into the same release, not through Actions artifacts. goat-si is on the free plan, whose 0.5 GB Actions and Packages storage fills quickly and then fails every artifact upload; release assets do not count toward it. Each hand-off is a tar stream split into 256 MiB parts with a manifest of their sizes and SHA-256 hashes, the producer reads back what GitHub stored, and a consumer refuses any part that does not match. The cleanup job deletes the drafts when the run ends. When a job failed or was cancelled it keeps them, so "Re-run failed jobs" re-runs the failed jobs and the jobs that depend on them, reusing the hand-offs the passing jobs staged. A later run deletes kept drafts 72 hours after they were created. The pre-push guard refuses `actions/upload-artifact` and `actions/download-artifact` in both GOAT workflows.
 
 Only the hosted publish job reads the goat-releases App credentials. Publishing is idempotent per tag: identical bytes count as already published, and different bytes fail the run rather than replacing a release that users may already have.
+
+### Stable release highlights
+
+A stable release lists up to five merged features, fixes, or performance changes since the previous stable build, above the download table. The publisher uses the two built source commits and recognizes conventional squash and merge PR titles. Features come first. If the previous build or its changes cannot be determined, the download inventory still publishes. Nightlies keep the inventory alone.
+
+For a manual stable promotion, the optional `highlights` workflow input replaces the generated text. Enter one plain-text change per line. The distribution release and its source-repository mirror use the same input.
