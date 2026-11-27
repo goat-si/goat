@@ -69,7 +69,7 @@ type TranscriptCommitResult =
   | { readonly kind: "stale" }
   | { readonly kind: "empty" };
 
-const WORD_SPACELESS_LANGUAGES = new Set(["ja", "zh", "yue", "th", "lo", "km", "my"]);
+const WORD_SPACELESS_LANGUAGES = new Set(["ja", "zh", "cmn", "yue", "th", "lo", "km", "my"]);
 
 export function resolveTranscriptCommit(
   captured: VoiceDraftSnapshot,
