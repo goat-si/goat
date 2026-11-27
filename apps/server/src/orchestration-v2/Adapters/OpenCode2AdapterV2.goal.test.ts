@@ -38,6 +38,7 @@ import {
   reconnected,
   resumed,
   sessionInfo,
+  terminalOf,
   threadId,
   turnInput,
 } from "./OpenCode2AdapterV2.fixtures.testkit.ts";
@@ -505,5 +506,38 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         );
         assert.deepInclude(collected.at(-1), { type: "turn.terminal", status: "completed" });
       }).pipe(Effect.scoped),
+  );
+
+  // regression: #42892
+  it.effect("shows OpenCode's goal length limit when it rejects a /goal objective", () =>
+    Effect.gen(function* () {
+      const objective = "a".repeat(4001);
+      const { runtime, thread } = yield* resumed(
+        [
+          out("command.list", "<any>"),
+          reply("command.list", { location: { directory: WORK }, data: [{ name: "goal" }] }),
+          out("message.list", { sessionID: SESSION, order: "desc", limit: "1" }),
+          reply("message.list", { data: [], cursor: {} }),
+          out("session.command", { sessionID: SESSION, name: "goal", text: objective }),
+          reply("session.command", {
+            status: 500,
+            body: {
+              _tag: "CommandExecutionError",
+              command: "goal",
+              message: "A goal objective is limited to 4000 characters (got 4001).",
+            },
+          }),
+        ],
+        { version: "2.2.5" },
+      );
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      const input = turnInput(thread);
+      yield* runtime
+        .startTurn({ ...input, message: { ...input.message, text: `/goal ${objective}` } })
+        .pipe(Effect.ignore);
+      const ended = yield* Fiber.join(terminal);
+      assert.equal(ended?.status, "failed");
+      assert.include(ended?.failure?.message ?? "", "4000 characters (got 4001)");
+    }).pipe(Effect.scoped),
   );
 });
