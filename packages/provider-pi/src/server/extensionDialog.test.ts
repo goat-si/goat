@@ -29,7 +29,7 @@ it("does not interpret a malformed custom sentinel as an extension answer", () =
 it("bounds staged custom answers and releases capacity after delivery or cleanup", () => {
   const answers = new PiCustomAnswers();
   const route = {
-    lines: ["option"],
+    optionLines: ["option"],
     sentinel: "2. Type something.",
     followUpTitlePrefix: "Question\n\n",
   };
@@ -84,7 +84,7 @@ it("bounds custom answers across sessions and releases the shared budget", () =>
     for (let i = 0; i < 64; i++) {
       expect(
         session.route(
-          { lines: [], sentinel: "1. Type something.", followUpTitlePrefix: `question-${i}` },
+          { optionLines: [], sentinel: "1. Type something.", followUpTitlePrefix: `question-${i}` },
           { value: "answer" },
         ),
       ).toEqual({ value: "1. Type something." });
@@ -92,9 +92,27 @@ it("bounds custom answers across sessions and releases the shared budget", () =>
   }
   const fifth = sessions[4];
   if (fifth === undefined) throw new Error("missing test session");
-  const route = { lines: [], sentinel: "1. Type something.", followUpTitlePrefix: "other" };
+  const route = { optionLines: [], sentinel: "1. Type something.", followUpTitlePrefix: "other" };
   expect(fifth.route(route, { value: "answer" })).toBeNull();
   sessions[0]?.clear();
   expect(fifth.route(route, { value: "answer" })).toEqual({ value: "1. Type something." });
   for (const session of sessions) session.clear();
+});
+
+it("routes a custom answer that matches the hidden sentinel option", () => {
+  const answers = new PiCustomAnswers();
+  const route = {
+    optionLines: ["1. Yes \u2014 Go", "2. No \u2014 Stop"],
+    sentinel: "3. Type something.",
+    followUpTitlePrefix: "Choose?\n\n1. Yes \u2014 Go\n2. No \u2014 Stop\n\n",
+  };
+  expect(answers.route(route, { value: "3. Type something." })).toEqual({
+    value: "3. Type something.",
+  });
+  expect(
+    answers.take("input", {
+      title: `${route.followUpTitlePrefix}Type your answer:`,
+      placeholder: "",
+    }),
+  ).toBe("3. Type something.");
 });
