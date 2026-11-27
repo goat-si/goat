@@ -69,3 +69,32 @@ it("dates an archive folder by its own ZIP record when its children come first",
     URL.revokeObjectURL(src);
   }
 });
+
+it("opens extensionless UTF-8 text archive entries while rejecting binary ones", async () => {
+  const bytes = await new JSZip()
+    .file("CHANGELOG", "Release 1.2.3 notes")
+    .file("firmware", new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01]))
+    .generateAsync({ type: "arraybuffer" });
+  const src = URL.createObjectURL(new Blob([bytes]));
+  try {
+    await using screen = await render(<BinaryViewer src={src} name="pkg.zip" kind="archive" />);
+    await vi.waitFor(
+      () => expect(screen.container.querySelectorAll("tbody button")).toHaveLength(2),
+      10_000,
+    );
+    await screen.getByRole("button", { name: "CHANGELOG" }).click();
+    await vi.waitFor(
+      () => expect(screen.container.textContent).toContain("Release 1.2.3 notes"),
+      10_000,
+    );
+    await screen.getByRole("button", { name: "Back to archive" }).click();
+    await screen.getByRole("button", { name: "firmware" }).click();
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Only UTF-8 text and images can be opened inside an archive.",
+      ),
+    );
+  } finally {
+    URL.revokeObjectURL(src);
+  }
+});
