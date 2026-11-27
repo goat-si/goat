@@ -37,6 +37,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
+import { formatFileChangeLine } from "./V2ItemInspector.logic";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { CopyRegion, ShellCommandLine, ToolCallCard } from "./ToolCallCard";
@@ -391,11 +392,7 @@ function FileChangeDetail({
         <ul className="space-y-1 font-mono text-muted-foreground">
           {changes.map((change) => (
             <li key={JSON.stringify([change.operation, change.oldPath, change.path])}>
-              {change.operation} {change.oldPath ? `${change.oldPath} → ` : ""}
-              {formatWorkspaceRelativePath(change.path, workspaceRoot)}
-              {change.fileType || change.mimeType
-                ? ` (${[change.fileType, change.mimeType].filter(Boolean).join(", ")})`
-                : ""}
+              {formatFileChangeLine(change, workspaceRoot)}
             </li>
           ))}
         </ul>
