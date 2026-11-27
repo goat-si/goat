@@ -41,6 +41,7 @@ import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import {
+  acpRegistryLiveCatalogKey,
   normalizeAcpRegistryCommands,
   normalizeAcpRegistryLiveConfiguration,
   normalizeAcpRegistryWebUrl,
@@ -398,12 +399,27 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
                   ),
               }
             : {}),
-          onSessionConfigurationUpdate: (configOptions, modeState, modelState) => {
+          onSessionConfigurationUpdate: (configOptions, modeState, modelState, updateOptions) => {
             const environmentKey = configurationOrigin(configOptions);
-            return runtimeCoordinator.publishLiveConfiguration(options.instanceId, {
-              ...normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState),
-              ...(environmentKey === undefined ? {} : { environmentKey }),
-            });
+            const normalized = normalizeAcpRegistryLiveConfiguration(
+              configOptions,
+              modeState,
+              modelState,
+            );
+            const catalogKey = acpRegistryLiveCatalogKey(normalized);
+            const includeCatalog =
+              catalogKey.length > 0 && catalogKey !== updateOptions?.lastCatalogKey;
+            const published = includeCatalog
+              ? normalized
+              : normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState, {
+                  includeCatalog: false,
+                });
+            return runtimeCoordinator
+              .publishLiveConfiguration(options.instanceId, {
+                ...published,
+                ...(environmentKey === undefined ? {} : { environmentKey }),
+              })
+              .pipe(Effect.as(catalogKey.length > 0 ? catalogKey : null));
           },
           onUrlElicitation: ({ elicitationId, url, message }) => {
             const normalizedUrl = normalizeAcpRegistryWebUrl(url);

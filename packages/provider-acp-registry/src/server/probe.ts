@@ -15,10 +15,8 @@ import { AcpRegistrySettings } from "../settings.ts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -221,10 +219,20 @@ export interface AcpRegistryLiveConfiguration {
   readonly modelsFromModelSelect?: boolean;
 }
 
+export function acpRegistryLiveCatalogKey(
+  configuration: Pick<AcpRegistryLiveConfiguration, "models" | "modelsFromModelSelect">,
+): string {
+  if (configuration.models.length === 0) return "";
+  return `${configuration.modelsFromModelSelect ? "select" : "list"}:${configuration.models
+    .map((model) => `${model.id}\0${model.name}`)
+    .join("\u001f")}`;
+}
+
 export function normalizeAcpRegistryLiveConfiguration(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
   modeState?: Parameters<typeof acpProviderOptionDescriptors>[0]["modeState"],
   modelState?: EffectAcpSchema.SessionModelState | null,
+  options?: { readonly includeCatalog?: boolean },
 ): AcpRegistryLiveConfiguration {
   const modelOption = findModelConfigOption(configOptions);
   const currentModelId =
@@ -261,8 +269,9 @@ export function normalizeAcpRegistryLiveConfiguration(
       .filter((option) => isAcpThoughtLevelOption(option) || option.category === "model_config")
       .map((option) => option.id),
   );
+  const includeCatalog = options?.includeCatalog !== false;
   return {
-    models,
+    models: includeCatalog ? models : [],
     currentModelId: models.some((model) => model.id === boundedCurrentModelId)
       ? boundedCurrentModelId
       : null,
@@ -270,7 +279,7 @@ export function normalizeAcpRegistryLiveConfiguration(
     modelOptionIds: descriptors
       .filter((descriptor) => modelOptionIds.has(descriptor.id))
       .map((descriptor) => descriptor.id),
-    modelsFromModelSelect: modelOption !== undefined,
+    modelsFromModelSelect: includeCatalog && modelOption !== undefined,
   };
 }
 
@@ -371,6 +380,7 @@ export interface AcpRegistryConfigurationProbeResult {
   readonly probe: AcpRegistryProbeResult;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
+  readonly modelsFromModelSelect?: boolean;
 }
 
 export type AcpRegistryConfigurationProbe<Requirements = never> = (
@@ -378,17 +388,7 @@ export type AcpRegistryConfigurationProbe<Requirements = never> = (
 ) => Effect.Effect<AcpRegistryConfigurationProbeResult, AcpRegistryOperationError, Requirements>;
 
 export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeConfiguration")(
-  function* (
-    input: AcpRegistryConfigurationProbeInput,
-  ): Effect.fn.Return<
-    AcpRegistryConfigurationProbeResult,
-    AcpRegistryOperationError,
-    | AcpRegistrySupport.AcpRegistryCatalog
-    | ChildProcessSpawner.ChildProcessSpawner
-    | FileSystem.FileSystem
-    | Path.Path
-    | SecureRandom.SecureRandom
-  > {
+  function* (input: AcpRegistryConfigurationProbeInput) {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
     const probeTimeoutMs = resolveProviderProbeTimeoutMs(
       "acp_registry",
@@ -399,14 +399,16 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
     const random = yield* SecureRandom.SecureRandom;
     const pty = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
 
+    // A background probe only resolves agents already prepared on this host.
+    // Downloads and package installs have their own bounded timeouts inside AcpRegistryCatalog.
+    const resolved = yield* catalog
+      .resolve(input.settings, input.cwd, input.environment, { allowInstall: false })
+      .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+    const prepared = yield* catalog
+      .prepareRuntimeSpawn(resolved)
+      .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
+
     const openSession = Effect.gen(function* () {
-      // A background probe only resolves agents already prepared on this host.
-      const resolved = yield* catalog
-        .resolve(input.settings, input.cwd, input.environment, { allowInstall: false })
-        .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
-      const prepared = yield* catalog
-        .prepareRuntimeSpawn(resolved)
-        .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
       const spawn = yield* isolateDeepSeekProbeHistory(input.settings.commandPath, prepared);
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
       const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
@@ -562,7 +564,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           Effect.fail(
             new AcpRegistryOperationError({
               reason: "probe_failed",
-              message: `The ACP agent did not resolve and create a test session within ${probeTimeoutMs / 1_000} seconds. Package installation or agent startup may be slow; this check retries on the next provider refresh.`,
+              message: `The ACP agent did not create a test session within ${probeTimeoutMs / 1_000} seconds. Agent startup may be slow; this check retries on the next provider refresh.`,
             }),
           ),
       }),
@@ -582,6 +584,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
         ),
         slashCommands: session.commands.slashCommands,
         skills: session.commands.skills,
+        modelsFromModelSelect: session.liveConfiguration.modelsFromModelSelect === true,
       };
       // Runs in the probe session before it is deleted, outside the setup deadline.
       if (input.modelDiscovery !== undefined) {
@@ -595,10 +598,10 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       }
       return result;
     }).pipe(
-      Effect.scoped,
       Effect.mapError((error) =>
         error._tag === "AcpRegistryOperationError" ? error : acpRegistryProbeFailure(error),
       ),
     );
   },
+  Effect.scoped,
 );

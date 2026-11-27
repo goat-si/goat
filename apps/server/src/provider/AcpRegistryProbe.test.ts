@@ -41,6 +41,8 @@ const sessionListCatalog = (count: number, scenario?: string) =>
   AcpRegistrySupport.AcpRegistryCatalog.of({
     search: () => Effect.die("unused search"),
     prepare: () => Effect.die("unused prepare"),
+    refreshIndex: () => Effect.succeed(false),
+    invalidateIndex: () => Effect.void,
     inspect: () => Effect.die("unused inspect"),
     uninstallManagedBinary: () => Effect.die("unused uninstall"),
     prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
@@ -663,6 +665,8 @@ describe("ACP Registry probe", () => {
         const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
           search: () => Effect.die("unused search"),
           prepare: () => Effect.die("unused prepare"),
+          refreshIndex: () => Effect.succeed(false),
+          invalidateIndex: () => Effect.void,
           inspect: () => Effect.die("unused inspect"),
           uninstallManagedBinary: () => Effect.die("unused uninstall"),
           prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
@@ -735,6 +739,8 @@ await import(pathToFileURL(agentPath).href);
       const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
         search: () => Effect.die("unused search"),
         prepare: () => Effect.die("unused prepare"),
+        refreshIndex: () => Effect.succeed(false),
+        invalidateIndex: () => Effect.void,
         inspect: () => Effect.die("unused inspect"),
         uninstallManagedBinary: () => Effect.die("unused uninstall"),
         prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
@@ -787,6 +793,8 @@ await import(pathToFileURL(agentPath).href);
         const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
           search: () => Effect.die("unused search"),
           prepare: () => Effect.die("unused prepare"),
+          refreshIndex: () => Effect.succeed(false),
+          invalidateIndex: () => Effect.void,
           inspect: () => Effect.die("unused inspect"),
           prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
           uninstallManagedBinary: () => Effect.die("unused uninstall"),

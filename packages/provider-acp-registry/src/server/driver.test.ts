@@ -134,6 +134,8 @@ function catalogWithInspection(
   return {
     search: () => Effect.die("unused search"),
     prepare: () => Effect.die("unused prepare"),
+    refreshIndex: () => Effect.succeed(false),
+    invalidateIndex: () => Effect.void,
     inspect: () => Effect.succeed(inspection),
     resolve: () => Effect.die("unused resolve"),
     prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),

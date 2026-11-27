@@ -138,6 +138,8 @@ it.live(
           }),
         search: () => Effect.die("unused"),
         prepare: () => Effect.die("unused"),
+        refreshIndex: () => Effect.succeed(false),
+        invalidateIndex: () => Effect.void,
         prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
         uninstallManagedBinary: () => Effect.die("unused"),
       };
