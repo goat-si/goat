@@ -81,7 +81,7 @@ it("an assistant reply renders inside the app's providers with its translated se
     await act(async () =>
       root.render(
         <AppProviders>
-          <SelectableMarkdownText markdown={reply} textStyle={{}} />
+          <SelectableMarkdownText markdown={reply} textStyle={{} as never} />
         </AppProviders>,
       ),
     );
