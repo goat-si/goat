@@ -703,12 +703,35 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
     "reads external workspace usage without local credentials, HTTP $status, $reason",
     (scenario) =>
       Effect.gen(function* () {
-        const requested: string[] = [];
-        const replay = replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret", requested);
+        const replay = replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret");
         const server = HttpClient.make((request) => {
           assert.notInclude(request.url, "opencode.ai/zen");
-          if (request.url.endsWith("/api/experimental/usage/limits")) {
+          const path = new URL(request.url).pathname;
+          if (path === "/api/experimental/usage/limits" || path === "/api/provider") {
             assert.strictEqual(request.headers.authorization, "Basic b3BlbmNvZGU6c2VjcmV0");
+            if (Array.from(request.urlParams).length > 0) {
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({ message: "Location not found" }, { status: 404 }),
+                ),
+              );
+            }
+            if (path === "/api/provider") {
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    location: { directory: "/work" },
+                    data: [
+                      { id: "opencode", integrationID: "opencode" },
+                      { id: "opencode-go", integrationID: "opencode" },
+                      { id: "github-copilot", integrationID: "github-copilot" },
+                    ],
+                  }),
+                ),
+              );
+            }
             return Effect.succeed(
               HttpClientResponse.fromWeb(
                 request,
