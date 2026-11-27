@@ -1347,6 +1347,7 @@
   "5718e0e01ffe47c0": "Geplante Aufgaben konnten nicht geladen werden: {list}",
   "572af69aabb3da72": "Verbindung testen",
   "572ce4044ccc9f88": "Eingabefeld: Host",
+  "57320c95780c065c": "{processStarts} gestartet · {processExits} beendet",
   "573ea5fdf293a9d6": "Alle Checkouts",
   "575ae567e3b6ca3d": "Semantischer Präfix",
   "576b5c9e345cb757": "Optionen für die Wiedervorlage bearbeiten",

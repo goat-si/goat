@@ -1347,6 +1347,7 @@
   "5718e0e01ffe47c0": "Impossible de charger les tâches planifiées : {list}",
   "572af69aabb3da72": "Tester la connexion",
   "572ce4044ccc9f88": "Zone de saisie : Hôte",
+  "57320c95780c065c": "{processStarts, plural, one {{processStarts} démarrage} other {{processStarts} démarrages}} · {processExits, plural, one {{processExits} sortie} other {{processExits} sorties}}",
   "573ea5fdf293a9d6": "Toutes les copies de travail",
   "575ae567e3b6ca3d": "Préfixe sémantique",
   "576b5c9e345cb757": "Modifier les options de mise en veille",

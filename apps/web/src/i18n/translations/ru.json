@@ -1347,6 +1347,7 @@
   "5718e0e01ffe47c0": "Не удалось загрузить задачи по расписанию: {list}",
   "572af69aabb3da72": "Проверить подключение",
   "572ce4044ccc9f88": "Поле ввода: Хост",
+  "57320c95780c065c": "{processStarts, plural, one {{processStarts} запуск} few {{processStarts} запуска} many {{processStarts} запусков} other {{processStarts} запуска}} · {processExits, plural, one {{processExits} завершение} few {{processExits} завершения} many {{processExits} завершений} other {{processExits} завершения}}",
   "573ea5fdf293a9d6": "Все рабочие копии",
   "575ae567e3b6ca3d": "Смысловой префикс",
   "576b5c9e345cb757": "Изменить варианты откладывания",

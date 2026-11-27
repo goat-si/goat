@@ -1347,6 +1347,7 @@
   "5718e0e01ffe47c0": "No se pudieron cargar las tareas programadas: {list}",
   "572af69aabb3da72": "Probar conexión",
   "572ce4044ccc9f88": "Redactor: Equipo anfitrión",
+  "57320c95780c065c": "{processStarts, plural, one {{processStarts} inicio} other {{processStarts} inicios}} · {processExits, plural, one {{processExits} salida} other {{processExits} salidas}}",
   "573ea5fdf293a9d6": "Todos los checkouts",
   "575ae567e3b6ca3d": "Prefijo semántico",
   "576b5c9e345cb757": "Editar opciones de aplazamiento",

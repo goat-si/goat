@@ -991,7 +991,15 @@ function ResourceTelemetryDiagnosticsBody({
               label="Process count"
               value={allT3 ? String(allT3.processCount) : "..."}
               detail={
-                allT3 ? `${allT3.processStarts} starts · ${allT3.processExits} exits` : undefined
+                allT3
+                  ? gt(
+                      "{processStarts, plural, one {{processStarts} start} other {{processStarts} starts}} · {processExits, plural, one {{processExits} exit} other {{processExits} exits}}",
+                      {
+                        processStarts: allT3.processStarts,
+                        processExits: allT3.processExits,
+                      },
+                    )
+                  : undefined
               }
             />
             <IconStat

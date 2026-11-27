@@ -1347,6 +1347,7 @@
   "5718e0e01ffe47c0": "Não foi possível carregar as tarefas agendadas: {list}",
   "572af69aabb3da72": "Testar conexão",
   "572ce4044ccc9f88": "Campo de entrada: Host",
+  "57320c95780c065c": "{processStarts, plural, one {{processStarts} início} other {{processStarts} inícios}} · {processExits, plural, one {{processExits} saída} other {{processExits} saídas}}",
   "573ea5fdf293a9d6": "Todos os checkouts",
   "575ae567e3b6ca3d": "Prefixo semântico",
   "576b5c9e345cb757": "Editar opções de adiamento",

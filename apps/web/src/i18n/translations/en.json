@@ -1347,6 +1347,7 @@
   "5718e0e01ffe47c0": "Could not load scheduled tasks: {list}",
   "572af69aabb3da72": "Test connection",
   "572ce4044ccc9f88": "Composer: Host",
+  "57320c95780c065c": "{processStarts, plural, one {{processStarts} start} other {{processStarts} starts}} · {processExits, plural, one {{processExits} exit} other {{processExits} exits}}",
   "573ea5fdf293a9d6": "All checkouts",
   "575ae567e3b6ca3d": "Semantic prefix",
   "576b5c9e345cb757": "Edit snooze options",
