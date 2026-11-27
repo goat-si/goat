@@ -1,3 +1,4 @@
+import { GITHUB_ALERT_MARKER } from "@goat/shared/markdownGithubAlerts";
 import {
   parsePullRequestAnchor,
   pullRequestAnchorMatchesUrl,
@@ -26,15 +27,20 @@ function markdownExcerpt(body: string): string | null {
   const words: string[] = [];
   const visit = (node: MdastNodes) => {
     if (node.type === "text" || node.type === "inlineCode") words.push(node.value);
+    if (node.type === "blockquote") {
+      const paragraph = node.children[0];
+      const first = paragraph?.type === "paragraph" ? paragraph.children[0] : undefined;
+      if (first?.type === "text") {
+        const marker = GITHUB_ALERT_MARKER.exec(first.value);
+        if (marker && (/[\r\n]$/.test(marker[0]) || paragraph?.children.length === 1)) {
+          first.value = first.value.slice(marker[0].length);
+        }
+      }
+    }
     if (node.type !== "code" && "children" in node) for (const child of node.children) visit(child);
   };
   visit(fromMarkdown(body));
-  // GitHub's alert marker (`> [!NOTE]`) parses as text but reads as markup.
-  const text = words
-    .join(" ")
-    .replace(/\[!(?:note|tip|important|warning|caution)\]/giu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
+  const text = words.join(" ").replace(/\s+/gu, " ").trim();
   if (text === "") return null;
   if (text.length <= LINK_EXCERPT_LENGTH) return text;
   let end = LINK_EXCERPT_LENGTH - 1;
