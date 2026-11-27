@@ -4,6 +4,7 @@ import type {
   NetworkStatus,
   PreparedConnection,
 } from "@goat/client-runtime/connection";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
 import type { RpcSession } from "@goat/client-runtime/rpc/session";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import type { createEnvironmentThreadDetailAtoms } from "@goat/client-runtime/state/threads";
@@ -22,7 +23,7 @@ import {
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
 import type * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import { useImperativeHandle, type RefObject } from "react";
+import { useImperativeHandle, useLayoutEffect, useRef, type RefObject } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
@@ -36,6 +37,7 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { useQueuedRunEdit } from "./useQueuedRunEdit";
+import type { ChatComposerHandle } from "./ChatComposer";
 
 interface RunStatus {
   readonly id: RunId;
@@ -253,16 +255,31 @@ function setRuns(ref: ScopedThreadRef, status: string) {
   appAtomRegistry.set(mocks.threadRuns(runsKey(ref)), [{ id: RUN, status }]);
 }
 
+interface ComposerRefs {
+  readonly promptRef: RefObject<string>;
+  readonly composerRef: Parameters<typeof useQueuedRunEdit>[0]["composerRef"];
+}
+
 function Harness(props: {
   readonly threadRef: ScopedThreadRef;
   readonly threadDetailRef: ScopedThreadRef | null;
   readonly runStatus: string;
   readonly hookRef: RefObject<HookResult | null>;
   readonly messages: ReadonlyArray<unknown>;
+  readonly composer?: ComposerRefs | undefined;
 }) {
+  const threadKey = scopedThreadKey(props.threadRef);
+  const currentRouteThreadKeyRef = useRef<string | null>(threadKey);
+  useLayoutEffect(() => {
+    currentRouteThreadKeyRef.current = threadKey;
+    return () => {
+      currentRouteThreadKeyRef.current = null;
+    };
+  }, [threadKey]);
   const result = useQueuedRunEdit({
     environmentId: ENV,
     routeThreadRef: props.threadRef,
+    currentRouteThreadKeyRef,
     threadDetailRef: props.threadDetailRef,
     threadDraftTarget: props.threadRef,
     activeThreadId: props.threadRef.threadId,
@@ -270,8 +287,8 @@ function Harness(props: {
       props.threadDetailRef === null
         ? null
         : projection([{ id: RUN, status: props.runStatus }], props.messages),
-    promptRef: { current: "" },
-    composerRef: { current: null },
+    promptRef: props.composer?.promptRef ?? { current: "" },
+    composerRef: props.composer?.composerRef ?? { current: null },
   });
   useImperativeHandle(props.hookRef, () => result);
   return null;
@@ -303,6 +320,7 @@ function view(
   hook: { current: HookResult | null },
   threadDetailRef: ScopedThreadRef | null = threadRef,
   messages: ReadonlyArray<unknown> = [],
+  composer?: ComposerRefs,
 ) {
   return (
     <AppAtomRegistryProvider>
@@ -312,6 +330,7 @@ function view(
         runStatus={runStatus}
         hookRef={hook}
         messages={messages}
+        composer={composer}
       />
       {threadDetailRef === null ? null : <ThreadReader threadRef={threadDetailRef} />}
     </AppAtomRegistryProvider>
@@ -395,6 +414,62 @@ const promptOf = (ref: ScopedThreadRef) =>
   useComposerDraftStore.getState().getComposerDraft(ref)?.prompt ?? "";
 
 describe("useQueuedRunEdit", () => {
+  it.each([
+    { navigation: "switches before the reply", resets: false, focuses: false },
+    { navigation: "switches before the frame", resets: true, focuses: false },
+    { navigation: "stays on thread", resets: true, focuses: true },
+  ])("finishes a successful queued edit when the user $navigation", async (scenario) => {
+    const { hook } = setup();
+    const requested = Promise.withResolvers<void>();
+    const reply = Promise.withResolvers<{ readonly _tag: "Success" }>();
+    mocks.editQueuedRun.mockImplementation(() => {
+      requested.resolve();
+      return reply.promise;
+    });
+    const focusAtEnd = vi.fn();
+    const resetCursorState = vi.fn();
+    const composer: ComposerRefs = {
+      promptRef: { current: "changed" },
+      composerRef: { current: null },
+    };
+    await using screen = await render(view(THREAD_A, "queued", hook, THREAD_A, [], composer));
+    const frames: FrameRequestCallback[] = [];
+    using _frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return 0;
+    });
+    await beginChangedEdit(hook);
+    await act(() => {
+      for (const frame of frames.splice(0)) frame(0);
+    });
+    composer.composerRef.current = {
+      focusAtEnd,
+      resetCursorState,
+    } as unknown as ChatComposerHandle;
+
+    const setThreadError = vi.fn();
+    const saved = requireHook(hook).saveEdit(savedContent("changed"), setThreadError);
+    await requested.promise;
+    const openOtherThread = async () => {
+      await screen.rerender(view(THREAD_B, "queued", hook, THREAD_B, [], composer));
+      composer.promptRef.current = "other thread draft";
+    };
+    if (scenario.navigation === "switches before the reply") await openOtherThread();
+    reply.resolve({ _tag: "Success" });
+    await act(() => saved);
+    expect(setThreadError).toHaveBeenCalledExactlyOnceWith(THREAD_A.threadId, null);
+    expect(resetCursorState).toHaveBeenCalledTimes(Number(scenario.resets));
+
+    if (scenario.navigation === "switches before the frame") await openOtherThread();
+    await act(() => {
+      for (const frame of frames.splice(0)) frame(0);
+    });
+    expect(focusAtEnd).toHaveBeenCalledTimes(Number(scenario.focuses));
+    expect(composer.promptRef.current).toBe(
+      scenario.navigation === "stays on thread" ? "" : "other thread draft",
+    );
+  });
+
   it("hides an attachment-only placeholder while editing and restores it when saving", async () => {
     const { hook } = setup();
     mocks.editQueuedRun.mockResolvedValue({ _tag: "Success" });

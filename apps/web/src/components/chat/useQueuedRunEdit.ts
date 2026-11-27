@@ -220,6 +220,7 @@ function pendingRequestsAtom(threadDetailRef: ScopedThreadRef | null) {
 export function useQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
   readonly routeThreadRef: ScopedThreadRef;
+  readonly currentRouteThreadKeyRef: { readonly current: string | null };
   /** Null while the route waits for the server's shell; see resolveThreadDetailRef. */
   readonly threadDetailRef: ScopedThreadRef | null;
   readonly threadDraftTarget: ComposerThreadTarget;
@@ -232,6 +233,7 @@ export function useQueuedRunEdit(input: {
   const {
     environmentId,
     routeThreadRef,
+    currentRouteThreadKeyRef,
     threadDetailRef,
     threadDraftTarget,
     activeThreadId,
@@ -265,7 +267,9 @@ export function useQueuedRunEdit(input: {
         }));
 
   const focusComposerSoon = () => {
-    window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+    window.requestAnimationFrame(() => {
+      if (currentRouteThreadKeyRef.current === editKey) composerRef.current?.focusAtEnd();
+    });
   };
   const clearEditDraft = (runId: RunId) => {
     const target = queuedRunEditDraftId(routeThreadRef, runId);
@@ -443,15 +447,19 @@ export function useQueuedRunEdit(input: {
     const current = finishSave(error === null);
     if (error !== null) return;
     if (current) {
-      promptRef.current = "";
       useComposerDraftStore
         .getState()
         .clearComposerContent(queuedRunEditDraftId(routeThreadRef, editing.runId));
-      composerRef.current?.resetCursorState();
+      if (currentRouteThreadKeyRef.current === editKey) {
+        promptRef.current = "";
+        composerRef.current?.resetCursorState();
+      }
     }
     releaseUnownedQueuedEditAttachments(newAttachments, environmentId);
     if (!current) return;
-    focusComposerSoon();
+    if (currentRouteThreadKeyRef.current === editKey) {
+      focusComposerSoon();
+    }
   };
 
   return {

@@ -402,10 +402,9 @@ import {
 import { subscribeSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
 import { useBrowserHistoryProject } from "../hooks/useBrowserHistoryProject";
 import { useGlobalAgentStore } from "../globalAgentStore";
-
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 const EMPTY_CHAT_DATA: never[] = [];
-import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -505,6 +504,7 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunEdit = useQueuedRunEdit({
     environmentId,
     routeThreadRef,
+    currentRouteThreadKeyRef,
     threadDetailRef: routeThreadDetailRef,
     threadDraftTarget: baseComposerDraftTarget,
     activeThreadId: serverThread !== null || draftThread !== null ? threadId : null,
