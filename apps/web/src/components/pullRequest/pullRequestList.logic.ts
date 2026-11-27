@@ -205,7 +205,10 @@ export function selectedPullRequestLabels(
   });
 }
 
-export { rememberPullRequestLabels } from "./pullRequestListFilterMemory.logic";
+export {
+  rememberPullRequestAuthors,
+  rememberPullRequestLabels,
+} from "./pullRequestListFilterMemory.logic";
 
 export function pullRequestLabelChoices(
   facets: ReadonlyArray<PullRequestLabelFacet>,

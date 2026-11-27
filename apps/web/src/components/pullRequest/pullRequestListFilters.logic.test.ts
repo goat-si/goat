@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { rememberPullRequestLabels, selectedPullRequestLabels } from "./pullRequestList.logic";
+import {
+  rememberPullRequestAuthors,
+  rememberPullRequestLabels,
+  selectedPullRequestAuthor,
+  selectedPullRequestLabels,
+} from "./pullRequestList.logic";
+
+const actor = (login: string, name: string | null = null) => ({ login, name, avatarUrl: null });
 
 describe("filter picker choices", () => {
   it("restores a selected label's color and count from loaded facets or host labels", () => {
@@ -22,5 +29,20 @@ describe("filter picker choices", () => {
       { name: "release-blocker", color: "b60205", count: 0 },
     ]);
     expect(rememberPullRequestLabels(next, [{ name: "docs", color: "0075ca" }])).toBe(next);
+  });
+
+  it("keeps a host-only author's avatar after the host answers a new search without them", () => {
+    const juliana = { login: "Juliana", name: "Juliana", avatarUrl: "https://host/juliana.png" };
+    const first = rememberPullRequestAuthors([], [juliana]);
+    const next = rememberPullRequestAuthors(first, [actor("sam")]);
+
+    expect(selectedPullRequestAuthor([], next, "juliana")?.actor).toEqual(juliana);
+    expect(rememberPullRequestAuthors(next, [actor("sam")])).toBe(next);
+    expect(rememberPullRequestAuthors(next, [])).toBe(next);
+
+    const moved = { ...juliana, avatarUrl: "https://host/juliana-new.png" };
+    expect(
+      selectedPullRequestAuthor([], rememberPullRequestAuthors(first, [moved]), "juliana")?.actor,
+    ).toEqual(moved);
   });
 });
