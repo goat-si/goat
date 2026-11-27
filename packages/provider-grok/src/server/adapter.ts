@@ -11,19 +11,23 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 import {
   defaultInstanceIdForDriver,
+  NonNegativeInt,
   ProviderDriverKind,
   type OrchestrationV2ProviderCapabilities,
   type RuntimeMode,
+  type ThreadTokenUsageSnapshot,
 } from "@goat/contracts";
 import { GrokSettings } from "../settings.ts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -245,6 +249,16 @@ interface GrokSessionLaunch {
 
 /** The capability id the composer stores Grok's reasoning effort under. */
 const GROK_REASONING_EFFORT_OPTION_ID = "reasoningEffort";
+const decodeGrokContextMetadata = Schema.decodeUnknownOption(
+  Schema.Struct({ totalTokens: NonNegativeInt }),
+);
+
+function extractGrokContextUsage(
+  notification: EffectAcpSchema.SessionNotification,
+): ThreadTokenUsageSnapshot | undefined {
+  const metadata = Option.getOrUndefined(decodeGrokContextMetadata(notification._meta));
+  return metadata === undefined ? undefined : { usedTokens: metadata.totalTokens };
+}
 
 // Protocol 1 sends the effort as `session/set_model` metadata on every call: that response
 // carries no config options, so there is no live effort to compare against. Newer protocols
@@ -347,6 +361,7 @@ export function makeGrokAcpAdapterFlavor(
     // Grok accepts image blocks despite advertising promptCapabilities.image:false.
     supportsImagePrompts: true,
     supportsCompaction: true,
+    extractContextUsage: extractGrokContextUsage,
     // Grok expands only a leading `/name`, while the `$` picker inserts `$name` from the
     // `grok inspect` catalog. Ask that catalog again so other `$` text is left alone.
     rewriteUserText: (text, turnInput, session) => {

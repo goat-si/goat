@@ -18,6 +18,7 @@ import {
 import { createTerminalEnvironmentState } from "./terminalEnvironmentState.ts";
 import { AcpModelSelectionError, refusedWithSessionIntact } from "./adapterErrors.ts";
 import { makeSessionConfigurationPublisher } from "./sessionConfigurationPublisher.ts";
+import { makeAcpContextUsageProjection } from "./contextUsageProjection.ts";
 import {
   observeLateAcpCompaction,
   prepareAcpAppContext,
@@ -849,6 +850,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+        const contextUsageProjection = makeAcpContextUsageProjection({
+          driver,
+          flavor,
+          activeSessionId,
+          activeSelection,
+          activeSessionSetup,
+          activeTurn,
+          providerThreadByNativeSessionId,
+          contextUsageBySessionId,
+          nativeMetadataBySessionId,
+          emitProviderEvent,
+        });
         let scheduleDeferredFinalize: (context: ActiveAcpTurn) => Effect.Effect<void> = () =>
           Effect.void;
         let refreshModelSwitchCapability: Effect.Effect<void> = Effect.void;
@@ -3680,6 +3693,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             (yield* Ref.get(stoppedRunQuarantine))
           )
             return;
+          yield* contextUsageProjection.projectExtractedContextUsage(notification, true);
           if (yield* projectAgentTerminalUpdate(notification, context)) return;
           if (flavor.replyEndsWithUsageUpdate === true) {
             if (context === null) {
@@ -3725,38 +3739,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 context.nativeMetadata = metadata;
               }
             }
-            const knownProviderThread = (yield* Ref.get(providerThreadByNativeSessionId)).get(
+            yield* contextUsageProjection.publishProviderThreadState(
               notification.sessionId,
+              context,
             );
-            if (knownProviderThread !== undefined) {
-              const now = yield* DateTime.now;
-              const providerThread: OrchestrationV2ProviderThread = {
-                ...knownProviderThread,
-                // The settled turn's snapshot is still cached as active; no turn runs now.
-                ...(context === null && knownProviderThread.status === "active"
-                  ? { status: "idle" as const }
-                  : {}),
-                contextUsage:
-                  (yield* Ref.get(contextUsageBySessionId)).get(notification.sessionId) ??
-                  knownProviderThread.contextUsage ??
-                  null,
-                nativeMetadata:
-                  (yield* Ref.get(nativeMetadataBySessionId)).get(notification.sessionId) ??
-                  knownProviderThread.nativeMetadata ??
-                  null,
-                updatedAt: now,
-              };
-              yield* Ref.update(providerThreadByNativeSessionId, (current) =>
-                new Map(current).set(notification.sessionId, providerThread),
-              );
-              yield* emitProviderEvent({
-                type: "provider_thread.updated",
-                driver,
-                providerThread,
-                // Agents like Kimi report usage after the prompt settles, when no run receives it.
-                ...(context === null ? { sessionScoped: true } : {}),
-              });
-            }
             return;
           }
           if (yield* followNativeChild(notification, context)) return;
@@ -4974,10 +4960,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             function* (rawNotification: EffectAcpSchema.SessionNotification) {
               // Replayed history feeds snapshots only; it must not drive live turn or wake state.
               if (sessionUpdateIsReplay(rawNotification)) {
-                yield* recordLoadedHistory(
-                  flavor.normalizeSessionUpdate?.(rawNotification, runtime) ?? rawNotification,
-                  false,
-                );
+                const normalized =
+                  flavor.normalizeSessionUpdate?.(rawNotification, runtime) ?? rawNotification;
+                yield* contextUsageProjection.projectExtractedContextUsage(normalized, false);
+                yield* recordLoadedHistory(normalized, false);
                 return;
               }
               yield* notePromptProgress(rawNotification);
@@ -7750,9 +7736,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     ...(itemIdentityVersion === undefined ? {} : { itemIdentityVersion }),
                     now,
                   });
+                  const contextUsage =
+                    yield* contextUsageProjection.resolveReplayedContextUsage(sessionId);
                   const providerThread = threadInput.existingProviderThread
-                    ? { ...created, id: threadInput.existingProviderThread.id }
-                    : created;
+                    ? {
+                        ...created,
+                        id: threadInput.existingProviderThread.id,
+                        ...(threadInput.forceNewNativeThread ? {} : { contextUsage }),
+                      }
+                    : { ...created, contextUsage };
                   yield* Ref.update(providerThreadByNativeSessionId, (current) =>
                     new Map(current).set(sessionId, providerThread),
                   );

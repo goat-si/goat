@@ -10,6 +10,7 @@ import type {
   ProviderDriverKind,
   ProviderUserInputAnswers,
   ThreadId,
+  ThreadTokenUsageSnapshot,
 } from "@goat/contracts";
 import type { SelfInvocation } from "@goat/shared/nodeRuntime";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
@@ -169,6 +170,10 @@ export interface AcpAdapterV2Flavor {
     notification: EffectAcpSchema.SessionNotification,
     runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => EffectAcpSchema.SessionNotification;
+  /** Extract provider-specific context usage while preserving the original session update. */
+  readonly extractContextUsage?: (
+    notification: EffectAcpSchema.SessionNotification,
+  ) => ThreadTokenUsageSnapshot | undefined;
   readonly releaseRuntime?: (
     runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => Effect.Effect<void>;
