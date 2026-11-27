@@ -18,6 +18,7 @@ import {
   PR_LIST_PAGE_SIZE,
   pullRequestFilterChoices,
   pullRequestLabelColors,
+  pullRequestListFacets,
   pullRequestListHead,
   pullRequestListInput,
   scopedPullRequestListKey,
@@ -31,6 +32,7 @@ import {
   withoutScratchProjectScope,
   pullRequestProjectChoices,
   pullRequestListErrorMessages,
+  toggledPullRequestLabels,
 } from "./pullRequestList";
 
 it("summarizes unreachable environments and keeps other PR list errors (#2464)", () => {
@@ -676,6 +678,27 @@ describe("pullRequestLabelColors", () => {
         { name: "size:S", color: "#69C35F" },
       ]),
     ).toEqual({ bug: "#d73a4a", "size:s": "#69C35F" });
+  });
+});
+
+describe("filter menu values ignore case", () => {
+  const label = (name: string) => ({ name, color: null });
+
+  it("lists each loaded author and label once whatever its case", () => {
+    const facets = pullRequestListFacets([
+      entry(1, {
+        author: { login: "Octocat", name: null, avatarUrl: null },
+        labels: [label("Bug")],
+      }),
+      entry(2, { labels: [label("bug"), label("docs")] }),
+    ]);
+    expect(facets.authors).toEqual(["Octocat"]);
+    expect(facets.labels).toEqual(["Bug", "docs"]);
+  });
+
+  it("drops a picked label when a differently-cased one is tapped", () => {
+    expect(toggledPullRequestLabels(["bug", "docs"], "Bug")).toEqual(["docs"]);
+    expect(toggledPullRequestLabels(["bug"], "docs")).toEqual(["bug", "docs"]);
   });
 });
 
