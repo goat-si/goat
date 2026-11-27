@@ -24,6 +24,7 @@ import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 import { formatTokens } from "@goat/shared/usageFormat";
 import {
   classifyToolActivity,
+  collectToolFilePaths,
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
@@ -641,24 +642,21 @@ export function resolveViewedImageAsset(
   return { resource: media.resource, alt: media.name, srcFragment: media.srcFragment };
 }
 
+function toolGroupEntryFiles(
+  action: "edit" | "read",
+  entry: WorkLogPresentationEntry,
+): ReadonlyArray<string> {
+  if (action === "edit") return entry.changedFiles ?? [];
+  const item = entry.structuredPayload;
+  return collectToolFilePaths(
+    item?.type === "dynamic_tool" ? { input: item.input } : entry.toolData,
+  );
+}
+
 function toolGroupActionCount(
   action: ToolGroupAction,
   entries: ReadonlyArray<WorkLogPresentationEntry>,
 ): number {
-  if (action === "read") {
-    // One command can read several files, and agents often reread a file.
-    const commandReadPaths = new Set<string>();
-    let otherReads = 0;
-    for (const entry of entries) {
-      const actions = workEntryCommandActions(entry);
-      if (actions === null) otherReads += 1;
-      else
-        for (const commandAction of actions) {
-          if (commandAction.type === "read") commandReadPaths.add(commandAction.path ?? "");
-        }
-    }
-    return otherReads + commandReadPaths.size;
-  }
   if (action === "list" || action === "code-search") {
     // A command counts each listing or search it ran.
     const type = action === "list" ? "list" : "search";
@@ -668,17 +666,28 @@ function toolGroupActionCount(
       return count + actions.filter((commandAction) => commandAction.type === type).length;
     }, 0);
   }
-  if (action !== "edit") return entries.length;
-  const changedFiles = new Set<string>();
-  let editsWithoutFileDetails = 0;
+  if (action !== "edit" && action !== "read") return entries.length;
+  const files = new Set<string>();
+  let entriesWithoutFiles = 0;
   for (const entry of entries) {
-    if (!entry.changedFiles || entry.changedFiles.length === 0) {
-      editsWithoutFileDetails += 1;
+    if (action === "read") {
+      // One command can read several files, and agents often reread a file.
+      const actions = workEntryCommandActions(entry);
+      if (actions !== null) {
+        for (const commandAction of actions) {
+          if (commandAction.type === "read") files.add(commandAction.path ?? "");
+        }
+        continue;
+      }
+    }
+    const entryFiles = toolGroupEntryFiles(action, entry);
+    if (entryFiles.length === 0) {
+      entriesWithoutFiles += 1;
     } else {
-      for (const file of entry.changedFiles) changedFiles.add(file);
+      for (const file of entryFiles) files.add(file);
     }
   }
-  return changedFiles.size + editsWithoutFileDetails;
+  return files.size + entriesWithoutFiles;
 }
 
 function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
