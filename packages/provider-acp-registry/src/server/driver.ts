@@ -1,17 +1,10 @@
 import { resolveAcpCustomModels } from "../customModels.ts";
-import {
-  officialAcpRegistryIconUrlForAgentId,
-  ProviderDriverKind,
-  resolveOfficialAcpRegistryIconUrl,
-  type AcpRegistryOperationError,
-  type ServerProvider,
-} from "@goat/contracts";
+import { ProviderDriverKind, type ServerProvider } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -41,9 +34,6 @@ import {
   type ProviderSnapshotSettings,
 } from "@goat/provider-core/server/snapshotSettings";
 import {
-  type AcpRegistryAvailableCommands,
-  type AcpRegistryConfigurationProbe,
-  type AcpRegistryConfigurationProbeResult,
   type AcpRegistryLiveConfiguration,
   deleteAcpRegistrySession,
   disableAcpRegistryProvider,
@@ -59,16 +49,33 @@ import {
   acpRegistryProbeTtlMs,
   updateAcpRegistryEnrichmentCache as updateEnrichmentCache,
 } from "./enrichmentCache.ts";
-import { modelsFromDiscovery } from "./discoveredModels.ts";
 import { applyAcpRegistryLiveConfiguration } from "./liveModelConfiguration.ts";
 export { applyAcpRegistryLiveConfiguration } from "./liveModelConfiguration.ts";
 import { makeAcpRegistryLearnedModels, type LearnedModelsCheck } from "./learnedModels.ts";
+import {
+  acpRegistryCurrentModelOptions,
+  acpRegistryModelsToDiscover,
+  makeAcpRegistryLearnedModelOptionsStore,
+  withAcpRegistryLearnedModelOptions,
+} from "./learnedModelOptions.ts";
 import { environmentText, untilEnvironmentHolds } from "./environmentCheck.ts";
 import {
   acpRegistryEnvironmentKey,
   acpRegistrySessionEnvironment,
 } from "./sessionEnvironmentKey.ts";
-import { acpRegistrySnapshotReadiness } from "./snapshotReadiness.ts";
+import {
+  applyAcpRegistryAvailableCommands,
+  applyAcpRegistryUrlAuthAction,
+  buildInitialAcpRegistrySnapshot,
+  checkAcpRegistryProviderReadiness,
+  checkAcpRegistryProviderStatus,
+} from "./driverSnapshots.ts";
+export {
+  applyAcpRegistryAvailableCommands,
+  buildCheckedAcpRegistrySnapshot,
+  checkAcpRegistryProviderReadiness,
+  checkAcpRegistryProviderStatus,
+} from "./driverSnapshots.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
@@ -82,271 +89,6 @@ export const updateAcpRegistryEnrichmentCache = (
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
-});
-
-interface SnapshotIdentity {
-  readonly instanceId: ProviderInstance["instanceId"];
-  readonly displayName: string | undefined;
-  readonly accentColor: string | undefined;
-  readonly continuationKey: string;
-}
-
-function baseSnapshot(
-  input: SnapshotIdentity & {
-    readonly settings: AcpRegistrySettings;
-    readonly checkedAt: string;
-    readonly installed: boolean;
-    readonly version: string | null;
-    readonly status: ServerProvider["status"];
-    readonly auth: ServerProvider["auth"];
-    readonly documentationUrl?: string;
-    readonly message?: string;
-    readonly probe?: AcpRegistryConfigurationProbeResult;
-    readonly probeError?: AcpRegistryOperationError;
-  },
-): ServerProvider {
-  const iconUrl =
-    input.settings.source === "local"
-      ? null
-      : (resolveOfficialAcpRegistryIconUrl(input.probe?.probe.icon) ??
-        officialAcpRegistryIconUrlForAgentId(input.settings.agentId));
-  return {
-    instanceId: input.instanceId,
-    driver: DRIVER_KIND,
-    ...(input.displayName ? { displayName: input.displayName } : {}),
-    ...(input.accentColor ? { accentColor: input.accentColor } : {}),
-    ...(iconUrl ? { iconUrl } : {}),
-    continuation: { groupKey: input.continuationKey },
-    supportsTextGeneration: false,
-    supportsStructuredCustomModels: true,
-    enabled: input.settings.enabled,
-    installed: input.installed,
-    version: input.version,
-    status: input.settings.enabled ? input.status : "disabled",
-    auth: { ...input.auth, canLogout: input.auth.canLogout ?? false },
-    checkedAt: input.checkedAt,
-    setup: {
-      canInstall: false,
-      ...(input.documentationUrl ? { documentationUrl: input.documentationUrl } : {}),
-      canAuthenticate:
-        input.installed &&
-        (input.probe
-          ? input.probe.probe.authMethods.length > 0
-          : input.settings.source === "local"
-            ? (input.probeError?.authMethods?.length ?? 0) > 0
-            : input.settings.agentId.length > 0),
-    },
-    ...(input.message ? { message: input.message } : {}),
-    models: modelsFromDiscovery(input.probe?.probe, resolveAcpCustomModels(input.settings)),
-    ...(input.probe === undefined
-      ? {}
-      : {
-          nativeSessions: {
-            canList: input.probe.probe.sessionManagement.canList,
-            canLoad: input.probe.probe.sessionManagement.canLoad,
-            canResume: input.probe.probe.sessionManagement.canResume,
-            canDelete: input.probe.probe.sessionManagement.canDelete,
-          },
-          configurableProviders: input.probe.probe.sessionManagement.canConfigureProviders,
-        }),
-    slashCommands: input.probe?.slashCommands ?? [],
-    skills: input.probe?.skills ?? [],
-  };
-}
-
-export function applyAcpRegistryAvailableCommands(
-  provider: ServerProvider,
-  commands: Option.Option<AcpRegistryAvailableCommands>,
-): ServerProvider {
-  return Option.match(commands, {
-    onNone: () => provider,
-    onSome: ({ slashCommands, skills }) => ({ ...provider, slashCommands, skills }),
-  });
-}
-
-function applyAcpRegistryUrlAuthAction(
-  provider: ServerProvider,
-  action: Option.Option<NonNullable<ServerProvider["auth"]["action"]>>,
-): ServerProvider {
-  const { action: _previousAction, ...auth } = provider.auth;
-  return {
-    ...provider,
-    auth: Option.match(action, {
-      onNone: () => auth,
-      onSome: (nextAction) => ({ ...auth, action: nextAction }),
-    }),
-  };
-}
-
-const buildInitialAcpRegistrySnapshot = Effect.fn("AcpRegistryDriver.buildInitialSnapshot")(
-  function* (input: SnapshotIdentity & { readonly settings: AcpRegistrySettings }) {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    return baseSnapshot({
-      ...input,
-      checkedAt,
-      installed: false,
-      version: null,
-      status: "warning",
-      auth: { status: "unknown" },
-      message: input.settings.enabled
-        ? "Checking ACP Registry agent readiness..."
-        : "ACP Registry is disabled in GOAT settings.",
-    });
-  },
-);
-
-export function buildCheckedAcpRegistrySnapshot(
-  input: SnapshotIdentity & {
-    readonly settings: AcpRegistrySettings;
-    readonly checkedAt: string;
-    readonly inspection:
-      | AcpRegistrySupport.AcpRegistryInspection
-      | { readonly status: "failed"; readonly message: string };
-    readonly probe?: AcpRegistryConfigurationProbeResult;
-    readonly probeError?: AcpRegistryOperationError;
-  },
-): ServerProvider {
-  const readiness = acpRegistrySnapshotReadiness(input.inspection);
-  const probeFailed = input.probeError !== undefined;
-  const advertisedAuthMethod =
-    input.probeError?.reason === "authentication_failed"
-      ? (input.probeError.authMethods?.find(
-          (method) => method.id === input.settings.authMethodId,
-        ) ?? input.probeError.authMethods?.[0])
-      : undefined;
-  const authenticationMessage = advertisedAuthMethod
-    ? advertisedAuthMethod.type === "terminal" && advertisedAuthMethod.command
-      ? `Sign in in provider settings using "${advertisedAuthMethod.name}". The login terminal runs on this environment.`
-      : advertisedAuthMethod.type === "env_var" &&
-          (advertisedAuthMethod.envVarNames?.length ?? 0) > 0
-        ? `Set ${advertisedAuthMethod.envVarNames!.join(", ")} under this instance's environment variables in provider settings. GOAT will detect it on the next provider refresh.`
-        : `Sign in in provider settings using "${advertisedAuthMethod.name}".`
-    : undefined;
-  return baseSnapshot({
-    ...input,
-    ...(input.inspection.status === "ready" && input.inspection.documentationUrl
-      ? { documentationUrl: input.inspection.documentationUrl }
-      : {}),
-    installed: input.probeError?.reason === "runner_unavailable" ? false : readiness.installed,
-    version:
-      input.probeError?.reason === "runner_unavailable"
-        ? null
-        : input.settings.source === "local"
-          ? (input.probe?.probe.agentVersion ?? readiness.version)
-          : readiness.version,
-    // Failed discovery is a warning: an installed agent may still run real turns.
-    status: probeFailed ? "warning" : readiness.status,
-    auth: input.probe
-      ? {
-          // Discovery sessions and an empty auth-method list do not prove sign-in.
-          status: "unknown",
-          canLogout: input.probe.probe.sessionManagement.canLogout,
-        }
-      : input.probeError?.reason === "authentication_failed"
-        ? {
-            status: "unauthenticated",
-            ...(advertisedAuthMethod
-              ? { type: advertisedAuthMethod.type, label: advertisedAuthMethod.name }
-              : {}),
-            ...(input.probeError.authAction === undefined
-              ? {}
-              : { action: input.probeError.authAction }),
-          }
-        : { status: "unknown" },
-    ...(input.probeError
-      ? { message: authenticationMessage ?? input.probeError.message }
-      : readiness.message
-        ? { message: readiness.message }
-        : {}),
-  });
-}
-
-export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.checkProviderStatus")(
-  function* <Requirements>(
-    input: SnapshotIdentity & {
-      readonly settings: AcpRegistrySettings;
-      readonly cwd: string;
-      readonly environment: NodeJS.ProcessEnv;
-    },
-    probeConfiguration: AcpRegistryConfigurationProbe<Requirements>,
-  ): Effect.fn.Return<ServerProvider, never, AcpRegistrySupport.AcpRegistryCatalog | Requirements> {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    if (!input.settings.enabled) {
-      return yield* buildInitialAcpRegistrySnapshot(input);
-    }
-    const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
-    const inspected = yield* Effect.result(catalog.inspect(input.settings, input.environment));
-    if (Result.isFailure(inspected)) {
-      return buildCheckedAcpRegistrySnapshot({
-        ...input,
-        checkedAt,
-        inspection: {
-          status: "failed",
-          message: `Could not inspect ACP Registry agent: ${inspected.failure.message}`,
-        },
-      });
-    }
-    if (inspected.success.status !== "ready") {
-      return buildCheckedAcpRegistrySnapshot({
-        ...input,
-        checkedAt,
-        inspection: inspected.success,
-      });
-    }
-    const probed = yield* Effect.result(
-      probeConfiguration({
-        instanceId: input.instanceId,
-        settings: input.settings,
-        cwd: input.cwd,
-        environment: providerProbeEnvironment(input.environment),
-      }),
-    );
-    return Result.isFailure(probed)
-      ? buildCheckedAcpRegistrySnapshot({
-          ...input,
-          checkedAt,
-          inspection: inspected.success,
-          probeError: probed.failure,
-        })
-      : buildCheckedAcpRegistrySnapshot({
-          ...input,
-          checkedAt,
-          inspection: inspected.success,
-          probe: probed.success,
-        });
-  },
-);
-
-export const checkAcpRegistryProviderReadiness = Effect.fn(
-  "AcpRegistryDriver.checkProviderReadiness",
-)(function* (
-  input: SnapshotIdentity & {
-    readonly settings: AcpRegistrySettings;
-    readonly environment: NodeJS.ProcessEnv;
-  },
-): Effect.fn.Return<ServerProvider, never, AcpRegistrySupport.AcpRegistryCatalog> {
-  const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  if (!input.settings.enabled) {
-    return yield* buildInitialAcpRegistrySnapshot(input);
-  }
-  const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
-  const inspected = yield* Effect.result(catalog.inspect(input.settings, input.environment));
-  const snapshot = buildCheckedAcpRegistrySnapshot({
-    ...input,
-    checkedAt,
-    inspection: Result.isFailure(inspected)
-      ? {
-          status: "failed",
-          message: `Could not inspect ACP Registry agent: ${inspected.failure.message}`,
-        }
-      : inspected.success,
-  });
-  return inspected._tag === "Success" && inspected.success.status === "ready"
-    ? {
-        ...snapshot,
-        message: "Checking ACP authentication, models, and commands in the background...",
-      }
-    : snapshot;
 });
 
 export type AcpRegistryDriverEnv =
@@ -449,19 +191,44 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         previous,
       ),
     );
-    const applyLiveConfiguration = (
+    // Refreshes rebuild the snapshot from the probe, so per-model options
+    // reported by sessions and probe discovery are kept here and on disk.
+    const learnedModelOptions = yield* makeAcpRegistryLearnedModelOptionsStore({
+      cacheDir: host.paths.providerStatusCacheDir,
+      instanceId,
+      settings: effectiveConfig,
+    });
+    const envKeyFor = (env: NodeJS.ProcessEnv) =>
+      acpRegistryEnvironmentKey(acpRegistrySessionEnvironment(effectiveConfig, env));
+    const applyLiveConfiguration = Effect.fn("AcpRegistryDriver.applyLiveConfiguration")(function* (
       provider: ServerProvider,
       reported: AcpRegistryLiveConfiguration | undefined,
       environment: NodeJS.ProcessEnv,
       check: LearnedModelsCheck | undefined,
-    ) =>
-      learnedModels.apply(
-        provider,
-        reported,
-        acpRegistryEnvironmentKey(acpRegistrySessionEnvironment(effectiveConfig, environment)),
-        check,
+    ) {
+      const envKey = envKeyFor(environment);
+      const applied = yield* learnedModels.applyWithStatus(provider, reported, envKey, check);
+      if (!applied.verified) return applied.provider;
+      if (
+        reported !== undefined &&
+        (reported.environmentKey === undefined || reported.environmentKey === envKey)
+      ) {
+        const currentOptions = acpRegistryCurrentModelOptions(reported);
+        if (currentOptions !== undefined) {
+          yield* learnedModelOptions.learn(
+            currentOptions.modelId,
+            currentOptions.options,
+            "live",
+            envKey,
+          );
+        }
+      }
+      return withAcpRegistryLearnedModelOptions(
+        applied.provider,
+        yield* learnedModelOptions.get(envKey),
       );
-    const clearLearnedModels = learnedModels.clear;
+    });
+    const clearLearnedModels = learnedModels.clear.pipe(Effect.andThen(learnedModelOptions.clear));
     const withLiveRuntimeState = Effect.fn("AcpRegistryDriver.withLiveRuntimeState")(function* (
       input: ServerProvider,
       environment: NodeJS.ProcessEnv,
@@ -469,6 +236,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     ) {
       if (input.auth.status === "unauthenticated")
         yield* confirmedAuthentication.set(false, environment);
+      if (input.installed) yield* learnedModelOptions.setVersion(input.version);
       const provider =
         input.enabled &&
         input.installed &&
@@ -476,27 +244,28 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         (yield* confirmedAuthentication.get)
           ? { ...input, auth: { ...input.auth, status: "authenticated" as const } }
           : input;
-      return yield* Option.isNone(runtimeCoordinator)
-        ? Effect.succeed(provider)
-        : Effect.all({
-            commands: runtimeCoordinator.value.getAvailableCommands(instanceId),
-            configuration: runtimeCoordinator.value.getLiveConfiguration(instanceId),
-            authAction: runtimeCoordinator.value.getUrlAuthAction(instanceId),
-          }).pipe(
-            Effect.flatMap(({ commands, configuration, authAction }) => {
-              const withCommands = applyAcpRegistryAvailableCommands(provider, commands);
-              return applyLiveConfiguration(
-                withCommands,
-                Option.getOrUndefined(configuration),
-                environment,
-                check,
-              ).pipe(
-                Effect.map((withConfiguration) =>
-                  applyAcpRegistryUrlAuthAction(withConfiguration, authAction),
-                ),
-              );
-            }),
-          );
+      if (Option.isNone(runtimeCoordinator)) {
+        return withAcpRegistryLearnedModelOptions(
+          provider,
+          yield* learnedModelOptions.get(envKeyFor(environment)),
+        );
+      }
+      const coordinator = runtimeCoordinator.value;
+      const withCommands = applyAcpRegistryAvailableCommands(
+        provider,
+        yield* coordinator.getAvailableCommands(instanceId),
+      );
+      const configuration = yield* coordinator.getLiveConfiguration(instanceId);
+      const withConfiguration = yield* applyLiveConfiguration(
+        withCommands,
+        Option.getOrUndefined(configuration),
+        environment,
+        check,
+      );
+      return applyAcpRegistryUrlAuthAction(
+        withConfiguration,
+        yield* coordinator.getUrlAuthAction(instanceId),
+      );
     });
     const reportedLocalVersion = yield* Ref.make<{
       readonly key: string;
@@ -510,9 +279,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         const environment = yield* currentEnvironment;
         const provider = yield* checkAcpRegistryProviderReadiness(readinessInput(environment));
         const reported = yield* Ref.get(reportedLocalVersion);
-        const key = acpRegistryEnvironmentKey(
-          acpRegistrySessionEnvironment(effectiveConfig, environment),
-        );
+        const key = envKeyFor(environment);
         const readyProvider =
           effectiveConfig.source === "local" &&
           provider.installed &&
@@ -524,11 +291,49 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         return { environment, result };
       }),
     ).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
-    const enrichProvider = (environment: NodeJS.ProcessEnv) =>
-      checkAcpRegistryProviderStatus(
+    const modelsToDiscover = Effect.fn("AcpRegistryDriver.modelsToDiscover")(function* (
+      provider: ServerProvider,
+      envKey: string,
+    ) {
+      yield* learnedModelOptions.setVersion(provider.version);
+      const settings = yield* host.settings.get.pipe(Effect.option);
+      // Without settings the hidden models are unknown, so nothing is opened.
+      if (Option.isNone(settings)) return [];
+      return acpRegistryModelsToDiscover({
+        provider,
+        settings: settings.value,
+        learned: yield* learnedModelOptions.get(envKey),
+      });
+    });
+    const enrichProvider = (
+      environment: NodeJS.ProcessEnv,
+      publishProbed: (provider: ServerProvider) => Effect.Effect<void>,
+    ) => {
+      const envKey = envKeyFor(environment);
+      return checkAcpRegistryProviderStatus(
         {
           ...readinessInput(environment),
           cwd: host.paths.cwd,
+          modelDiscovery: {
+            // Publish what the probe found first; discovery only adds options to it.
+            onProbed: (provider) =>
+              modelsToDiscover(provider, envKey).pipe(
+                Effect.tap((modelIds) =>
+                  modelIds.length === 0 ? Effect.void : publishProbed(provider),
+                ),
+              ),
+            onDiscovered: (configuration) => {
+              const discovered = acpRegistryCurrentModelOptions(configuration);
+              return discovered === undefined
+                ? Effect.void
+                : learnedModelOptions.learn(
+                    discovered.modelId,
+                    discovered.options,
+                    "discovered",
+                    envKey,
+                  );
+            },
+          },
         },
         probeAcpRegistryConfiguration,
       ).pipe(
@@ -539,6 +344,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.provideService(Digest.Digest, digest),
         Effect.provideService(SecureRandom.SecureRandom, random),
       );
+    };
     const enrichmentCache = yield* Ref.make<{
       readonly generation: number;
       readonly entry: {
@@ -553,8 +359,15 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       generation: current.generation + 1,
       entry: null,
     }));
+    interface EnrichedSnapshotPayload {
+      readonly provider: ServerProvider;
+      readonly generation: number;
+      readonly learnedGeneration: number;
+      readonly environment: NodeJS.ProcessEnv;
+    }
     const enrichProviderCached = Effect.fn("AcpRegistryDriver.enrichProviderCached")(function* (
       baseSnapshot: ServerProvider,
+      publish: (enriched: EnrichedSnapshotPayload) => Effect.Effect<void>,
     ) {
       const now = yield* Clock.currentTimeMillis;
       const learnedGeneration = yield* learnedModels.generation;
@@ -587,25 +400,39 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           environment,
         };
       }
-      const enriched = yield* enrichProvider(environment);
-      if (enriched.status === "ready" && key !== null) {
-        const completedAt = yield* Clock.currentTimeMillis;
-        yield* Ref.update(enrichmentCache, (current) =>
-          current.generation === cacheState.generation
-            ? {
-                ...current,
-                entry: {
-                  provider: enriched,
-                  key,
-                  environmentKey: acpRegistryEnvironmentKey(
-                    acpRegistrySessionEnvironment(effectiveConfig, environment),
-                  ),
-                  expiresAt: completedAt + acpRegistryProbeTtlMs(enriched),
-                },
-              }
-            : current,
-        );
-      }
+      const remember = Effect.fn("AcpRegistryDriver.rememberEnrichment")(function* (
+        enriched: ServerProvider,
+      ) {
+        if (enriched.status === "ready" && key !== null) {
+          const completedAt = yield* Clock.currentTimeMillis;
+          yield* Ref.update(enrichmentCache, (current) =>
+            current.generation === cacheState.generation
+              ? {
+                  ...current,
+                  entry: {
+                    provider: enriched,
+                    key,
+                    environmentKey: envKeyFor(environment),
+                    expiresAt: completedAt + acpRegistryProbeTtlMs(enriched),
+                  },
+                }
+              : current,
+          );
+        }
+      });
+      const enriched = yield* enrichProvider(environment, (provider) =>
+        remember(provider).pipe(
+          Effect.andThen(
+            publish({
+              provider,
+              generation: cacheState.generation,
+              learnedGeneration,
+              environment,
+            }),
+          ),
+        ),
+      );
+      yield* remember(enriched);
       return {
         provider: enriched,
         generation: cacheState.generation,
@@ -632,48 +459,53 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         publishSnapshot,
       }) {
         if (!snapshot.installed) return Effect.void;
+        const publishEnriched = ({
+          provider,
+          generation,
+          learnedGeneration,
+          environment,
+        }: EnrichedSnapshotPayload) =>
+          liveSnapshotSemaphore.withPermit(
+            Effect.gen(function* () {
+              const matchesEnvironment = Effect.map(
+                currentEnvironment,
+                (current) => environmentText(current) === environmentText(environment),
+              );
+              const current = yield* Ref.get(enrichmentCache);
+              if (current.generation !== generation || !(yield* matchesEnvironment)) return;
+              const enriched = yield* withLiveRuntimeState(provider, environment, {
+                generation: learnedGeneration,
+              });
+              if (yield* matchesEnvironment) {
+                if (
+                  effectiveConfig.source === "local" &&
+                  enriched.version !== null &&
+                  enriched.status === "ready"
+                ) {
+                  yield* Ref.set(reportedLocalVersion, {
+                    key: envKeyFor(environment),
+                    version: enriched.version,
+                  });
+                }
+                yield* publishSnapshot(enriched);
+              }
+            }),
+          );
+        const enrichment = enrichProviderCached(snapshot, publishEnriched);
         const publishEnrichment = (
           Option.isSome(runtimeCoordinator)
             ? runtimeCoordinator.value.runBackgroundProbe(
                 effectiveConfig.source === "local"
                   ? `local:${instanceId}`
                   : effectiveConfig.agentId,
-                enrichProviderCached(snapshot),
+                enrichment,
               )
-            : enrichProviderCached(snapshot).pipe(Effect.asSome)
+            : enrichment.pipe(Effect.asSome)
         ).pipe(
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.void,
-              onSome: ({ provider, generation, learnedGeneration, environment }) =>
-                liveSnapshotSemaphore.withPermit(
-                  Effect.gen(function* () {
-                    const matchesEnvironment = Effect.map(
-                      currentEnvironment,
-                      (current) => environmentText(current) === environmentText(environment),
-                    );
-                    const current = yield* Ref.get(enrichmentCache);
-                    if (current.generation !== generation || !(yield* matchesEnvironment)) return;
-                    const enriched = yield* withLiveRuntimeState(provider, environment, {
-                      generation: learnedGeneration,
-                    });
-                    if (yield* matchesEnvironment) {
-                      if (
-                        effectiveConfig.source === "local" &&
-                        enriched.version !== null &&
-                        enriched.status === "ready"
-                      ) {
-                        yield* Ref.set(reportedLocalVersion, {
-                          key: acpRegistryEnvironmentKey(
-                            acpRegistrySessionEnvironment(effectiveConfig, environment),
-                          ),
-                          version: enriched.version,
-                        });
-                      }
-                      yield* publishSnapshot(enriched);
-                    }
-                  }),
-                ),
+              onSome: publishEnriched,
             }),
           ),
         );

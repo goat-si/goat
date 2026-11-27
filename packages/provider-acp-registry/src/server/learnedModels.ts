@@ -48,25 +48,20 @@ export const makeAcpRegistryLearnedModels = Effect.fn("makeAcpRegistryLearnedMod
   ) => ServerProvider,
 ) {
   const learnedRef = yield* Ref.make(nothingLearned);
-  return {
-    /** Taken by a check before it reads its environment. */
-    generation: Ref.get(learnedRef).pipe(Effect.map((learned) => learned.generation)),
-    /**
-     * With `check`, `provider` was just built by that check under `environmentKey`; otherwise it
-     * is the published snapshot, which may still come from an earlier environment.
-     */
-    apply: (
-      provider: ServerProvider,
-      reported: AcpRegistryLiveConfiguration | undefined,
-      environmentKey: string,
-      check: LearnedModelsCheck | undefined,
-    ) =>
-      Ref.modify(learnedRef, (learned): [ServerProvider, Learned] => {
+  const applyWithStatus = (
+    provider: ServerProvider,
+    reported: AcpRegistryLiveConfiguration | undefined,
+    environmentKey: string,
+    check: LearnedModelsCheck | undefined,
+  ) =>
+    Ref.modify(
+      learnedRef,
+      (learned): [{ readonly provider: ServerProvider; readonly verified: boolean }, Learned] => {
         const known = learned.environmentKey === environmentKey;
         // The entry moved to another environment after this check began, so the check's own
         // environment is no longer current: it leaves the entry alone and shows nothing learned.
         if (check !== undefined && !known && check.generation < learned.generation) {
-          return [provider, learned];
+          return [{ provider, verified: false }, learned];
         }
         const current: Learned = known
           ? learned
@@ -82,21 +77,30 @@ export const makeAcpRegistryLearnedModels = Effect.fn("makeAcpRegistryLearnedMod
           // Until this environment is checked, the published models may be another's: an update
           // that lists its own models stands alone, and any other clears them and waits.
           if (configuration === undefined || configuration.models.length === 0) {
-            return [forget(provider), { ...current, configuration }];
+            return [
+              { provider: forget(provider), verified: false },
+              { ...current, configuration },
+            ];
           }
           const next = merge(provider, configuration, []);
-          return [next, { ...current, verified: true, models: next.models, configuration }];
+          return [
+            { provider: next, verified: true },
+            { ...current, verified: true, models: next.models, configuration },
+          ];
         }
         const base =
           check !== undefined && !(current.verified && current.configuration !== undefined)
             ? provider.models
             : current.models;
         if (configuration === undefined) {
-          return [provider, { ...current, verified: true, models: base }];
+          return [
+            { provider, verified: true },
+            { ...current, verified: true, models: base },
+          ];
         }
         const next = merge(provider, configuration, base);
         return [
-          next,
+          { provider: next, verified: true },
           {
             ...current,
             verified: true,
@@ -104,7 +108,25 @@ export const makeAcpRegistryLearnedModels = Effect.fn("makeAcpRegistryLearnedMod
             configuration,
           },
         ];
-      }),
+      },
+    );
+  return {
+    /** Taken by a check before it reads its environment. */
+    generation: Ref.get(learnedRef).pipe(Effect.map((learned) => learned.generation)),
+    /**
+     * With `check`, `provider` was just built by that check under `environmentKey`; otherwise it
+     * is the published snapshot, which may still come from an earlier environment.
+     */
+    apply: (
+      provider: ServerProvider,
+      reported: AcpRegistryLiveConfiguration | undefined,
+      environmentKey: string,
+      check: LearnedModelsCheck | undefined,
+    ) =>
+      applyWithStatus(provider, reported, environmentKey, check).pipe(
+        Effect.map((r) => r.provider),
+      ),
+    applyWithStatus,
     clear: Ref.update(learnedRef, (learned) => ({
       ...nothingLearned,
       generation: learned.generation + 1,
