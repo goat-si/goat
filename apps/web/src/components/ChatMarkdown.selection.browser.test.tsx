@@ -1,4 +1,5 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { CHAT_USER_MARKDOWN_REMARK_PLUGINS } from "@goat/shared/markdownPipeline";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -58,6 +59,7 @@ vi.mock(import("../hooks/useTheme"), async (original) => ({
 }));
 
 import ChatMarkdown from "./ChatMarkdown";
+import { chatMarkdownClipboardPayload } from "../markdown-clipboard";
 
 function setup() {
   nativeFileDrag.enabled = false;
@@ -102,5 +104,36 @@ describe("ChatMarkdown draggable file chip selection", () => {
       },
     });
     expect(window.getSelection()?.toString().trim()).toBe(paragraph.textContent?.trim());
+  });
+});
+
+describe("ChatMarkdown copy of line breaks", () => {
+  it.each([
+    { text: "first line\nsecond line", user: true },
+    { text: "first line  \nsecond line", user: false },
+    { text: "first line\\\nsecond line", user: false },
+  ])("copies each line break once: $text", async ({ text, user }) => {
+    setup();
+    await using screen = await render(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={text}
+        {...(user
+          ? {
+              className: "user-message-markdown",
+              lineBreaks: true,
+              parseRawHtml: false,
+              extraRemarkPlugins: CHAT_USER_MARKDOWN_REMARK_PLUGINS,
+            }
+          : {})}
+      />,
+    );
+    const range = document.createRange();
+    range.selectNodeContents(screen.container);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    expect(chatMarkdownClipboardPayload(selection)?.text).toBe("first line\nsecond line");
   });
 });
