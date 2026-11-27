@@ -24,7 +24,8 @@ irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | i
 
 This installs the `goat` binary to `~/.local/bin`. If your shell reports `command not found`
 afterwards, that directory is not on your `PATH` yet; the installer prints the
-line to add. Set `GOAT_CHANNEL=nightly` to install the nightly train, or
+line to add. The shell and PowerShell scripts default to Nightly. Set
+`GOAT_CHANNEL=stable` for the stable release, or
 `GOAT_VERSION` to pin an exact version.
 
 | Task                                             | Command                                                                   |

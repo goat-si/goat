@@ -44,12 +44,12 @@ Each machine you work on runs a GOAT server. The server and the state it owns (p
 
 GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) and keeps its fast, event-sourced core. On top of it, GOAT adds:
 
-- **GOAT Bot.** One standing conversation that is not tied to a project. Ask it for work and it starts a coding thread in the right project and machine, then reports the result. The same bot answers in Slack, and over iMessage when the server runs on a Mac.
+- **GOAT Bot.** Ask a question in the bot’s standing conversation, or give it work to delegate to a coding thread in the right project and environment. For delegated work, it tracks required results and shows the evidence in the task. The same bot answers in Slack, and over iMessage when the server runs on a Mac. See [GOAT Bot](./docs/user/goat-bot.md).
 - **Agents that cross machines.** An agent can browse folders on an SSH host, start a thread or worktree there, move a thread over with its uncommitted changes, and wait for the result. Hosts download their own GOAT runtime, and [Boat](https://boat.dev) cloud machines work like any other SSH host.
 - **Fleet.** One view of every connected machine and the agents working on it, with counts of threads that are running or waiting for you.
-- **Memory.** Finished conversations become memories scoped to all projects, one project or one thread. You can import memories from Codex, Claude and OMO, and share them across devices through a hub.
+- **Memory.** GOAT can summarize finished conversations into memories for all projects, one project or one thread. You can pause conversation memory for an environment, or open **Turn memory** to see which memories reached a particular turn. The [memory guide](./docs/user/memory.md) covers importing and sharing memories.
 - **Orchestration tools.** The GOAT MCP server gives agents `goat_*` tools to launch threads, watch them, get notified when they end, and report results to the thread that started them. Outside agents such as Claude Code, Codex and ChatGPT can connect to the same server.
-- **Computer use.** Agents read and operate desktop apps and browser tabs from short screen-code cells, checking each step against what is on screen. Desktop apps run through [goat-cu](https://github.com/goat-si/goat-cu), GOAT's driver for macOS, Windows and Linux, which refuses an input it cannot aim at the right window instead of guessing. You approve which apps an agent may use, and Stop ends it at once.
+- **Computer use.** Turn on computer use to let agents operate desktop apps and browser tabs. Desktop control uses Cua Driver on macOS, Windows and Linux. You can restrict which apps they use and enable **Strict input guards**. See [Computer use](./docs/user/computer-use.md) for setup and permissions.
 - **Cloud agents.** Claude Cloud, Cursor Cloud and Devin Cloud appear as providers next to the local ones.
 - **Its own desktop app.** The GOAT desktop app has its own app ID, data folder and update feed, so it installs beside the T3 Code app without sharing state. Its command line is `goat`.
 
@@ -73,7 +73,7 @@ GOAT is published to the public [goat-si/goat-releases](https://github.com/goat-
 
 <!-- Hub extension point: describe hub features here as they land on dev. Keep every claim to what dev ships. -->
 
-Every environment starts as its own memory hub. Add another device from the hub's **Settings → Memory**, and both save to and search the same memories. See [Memory](./docs/user/memory.md#share-between-devices).
+Enable **Settings → Hub** on one environment to [run your fleet](./docs/user/hub.md). Pair your phone with that hub to reach its linked devices. To [share memories between devices](./docs/user/memory.md#share-between-devices), add the other device in the memory hub’s **Settings → Memory**.
 
 ## Documentation
 
