@@ -28,7 +28,7 @@ import {
   type Transaction,
 } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
-import type { ResolvedPos } from "@tiptap/pm/model";
+import { Fragment, Slice, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import type {
   AssistantCitation,
   ComposerContextClipboardFragment,
@@ -977,7 +977,20 @@ function ComposerPromptEditorTiptapInner(
             })
             // Pasted chips and lines would split shown Markdown, so parse it first.
             .command(collapseShownMarkdownSource)
-            .insertContent(content)
+            .command(({ tr, commands }) => {
+              const nodes = Array.isArray(content)
+                ? content.map((json) => tr.doc.type.schema.nodeFromJSON(json))
+                : [];
+              const first = nodes[0];
+              const last = nodes.at(-1);
+              if (!first || !last || nodes.length < 2 || !nodes.every((node) => node.isBlock)) {
+                return commands.insertContent(content);
+              }
+              // Open paragraph edges join the caret's line and the text after it, as typed lines do.
+              const open = (node: ProseMirrorNode) => (node.type.name === "paragraph" ? 1 : 0);
+              tr.replaceSelection(new Slice(Fragment.from(nodes), open(first), open(last)));
+              return true;
+            })
             .command(({ tr }) => {
               // Move after a pasted rule so the next keystroke cannot replace it; add a trailing line
               // if needed.
