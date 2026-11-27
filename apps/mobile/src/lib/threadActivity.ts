@@ -40,7 +40,7 @@ import {
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
   toolGroupSummaryKind,
-  workEntriesViewedImagePaths,
+  workEntriesViewedImages,
   type WorkLogPresentationEntry,
 } from "@goat/client-runtime/work-log/presentation";
 import { itemLifecycleStatus, itemWorkLogTone } from "./threadActivityItemStatus.ts";
@@ -1403,14 +1403,14 @@ function appendActivityGroupRows(
       isWorking,
       activeTail && isTrailingRun,
     );
-    const paths = workEntriesViewedImagePaths(groupableRun.map((activity) => activity.workEntry));
-    if (paths.length > 0) {
+    const images = workEntriesViewedImages(groupableRun.map((activity) => activity.workEntry));
+    if (images.length > 0) {
       result.push({
         type: "viewed-images",
         id: `${groupId}:viewed-images`,
         createdAt: first.createdAt,
         runId: first.runId,
-        paths,
+        images,
       });
     }
     groupableRun = [];

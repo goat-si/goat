@@ -1,6 +1,7 @@
 import type { WorkLogLineCounts } from "@goat/client-runtime/work-log/line-counts";
 import type {
   ToolGroupSummaryKind,
+  ViewedImage,
   WorkLogPresentationEntry,
   WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
@@ -162,7 +163,7 @@ type ThreadFeedEntryContent =
       readonly id: string;
       readonly createdAt: string;
       readonly runId: RunId | null;
-      readonly paths: ReadonlyArray<string>;
+      readonly images: ReadonlyArray<ViewedImage>;
     }
   | {
       readonly type: "run-fold";
