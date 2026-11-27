@@ -35,4 +35,11 @@ describe("linkReferenceAutolinks", () => {
     });
     expect(linkReferenceAutolinks("Closes #123", forgejo)).toBe("Closes #123");
   });
+
+  it("keeps autolinks aligned after a leading BOM", () => {
+    const text = '\uFEFFSee <a href="https://example.com">#12</a>, Fixes #14.';
+    expect(linkReferenceAutolinks(text, github)).toBe(
+      '\uFEFFSee <a href="https://example.com">#12</a>, Fixes [#14](https://github.com/team/repo/issues/14).',
+    );
+  });
 });

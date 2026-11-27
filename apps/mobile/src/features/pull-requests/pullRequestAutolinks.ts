@@ -3,6 +3,8 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 
+import { splitLeadingBom } from "../../lib/markdownDocument";
+
 type MarkdownNode = {
   readonly type: string;
   readonly position?:
@@ -35,6 +37,7 @@ export function linkReferenceAutolinks(
   autolinks: ((text: string) => ReadonlyArray<ReferenceAutolink>) | null,
 ): string {
   if (autolinks === null) return markdown;
+  const [bom, source] = splitLeadingBom(markdown);
   const edits: { start: number; end: number; value: string }[] = [];
   const visit = (node: MarkdownNode) => {
     if (UNLINKED_TYPES.has(node.type)) return;
@@ -42,7 +45,7 @@ export function linkReferenceAutolinks(
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
       if (start === undefined || end === undefined) return;
-      for (const link of autolinks(markdown.slice(start, end))) {
+      for (const link of autolinks(source.slice(start, end))) {
         edits.push({
           start: start + link.index,
           end: start + link.index + link.text.length,
@@ -55,7 +58,7 @@ export function linkReferenceAutolinks(
         if (child.type === "html") {
           const start = child.position?.start.offset;
           const end = child.position?.end.offset;
-          const tag = start === undefined || end === undefined ? "" : markdown.slice(start, end);
+          const tag = start === undefined || end === undefined ? "" : source.slice(start, end);
           for (const match of tag.matchAll(/<(\/)?(?:a|code|pre|script|style)(?=[\s>])[^>]*>/giu)) {
             protectedHtmlDepth = Math.max(0, protectedHtmlDepth + (match[1] ? -1 : 1));
           }
@@ -64,10 +67,12 @@ export function linkReferenceAutolinks(
     }
   };
   visit(parser.parse(markdown));
-  let linked = markdown;
+  if (edits.length === 0) return markdown;
+  let linked = source;
   for (let index = edits.length - 1; index >= 0; index--) {
-    const edit = edits[index]!;
+    const edit = edits[index];
+    if (!edit) continue;
     linked = linked.slice(0, edit.start) + edit.value + linked.slice(edit.end);
   }
-  return linked;
+  return bom + linked;
 }
