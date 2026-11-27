@@ -3812,5 +3812,6 @@
   "4e506a7c2f37a858": "A seleção mudou. Visualize novamente antes de importar.",
   "68a5236a421d0f4c": "Verifique o resultado e visualize novamente antes de importar mais itens.",
   "95cec271a3e79153": "O resultado salvo está indisponível. Itens anteriores podem ter sido aplicados. Visualize novamente.",
-  "a766a8ac2670096c": "{count, plural, one {{count} merge carregado} other {{count} merges carregados}}"
+  "a766a8ac2670096c": "{count, plural, one {{count} merge carregado} other {{count} merges carregados}}",
+  "2bc15e77eb0c700f": "Desatualizada"
 }

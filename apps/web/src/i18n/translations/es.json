@@ -3812,5 +3812,6 @@
   "4e506a7c2f37a858": "La selección cambió. Vuelve a obtener la vista previa antes de importar.",
   "68a5236a421d0f4c": "Revisa el resultado y vuelve a obtener la vista previa antes de importar más elementos.",
   "95cec271a3e79153": "El resultado guardado no está disponible. Es posible que se hayan aplicado elementos anteriores. Vuelve a obtener la vista previa.",
-  "a766a8ac2670096c": "{count, plural, one {{count} fusión cargada} other {{count} fusiones cargadas}}"
+  "a766a8ac2670096c": "{count, plural, one {{count} fusión cargada} other {{count} fusiones cargadas}}",
+  "2bc15e77eb0c700f": "Desactualizada"
 }

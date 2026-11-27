@@ -3812,5 +3812,6 @@
   "4e506a7c2f37a858": "Die Auswahl hat sich geändert. Prüfe die Vorschau vor dem Import erneut.",
   "68a5236a421d0f4c": "Prüfe das Ergebnis und die Vorschau erneut, bevor du weitere Elemente importierst.",
   "95cec271a3e79153": "Das gespeicherte Ergebnis ist nicht verfügbar. Frühere Elemente wurden möglicherweise angewendet. Prüfe die Vorschau erneut.",
-  "a766a8ac2670096c": "{count, plural, one {{count} Merge geladen} other {{count} Merges geladen}}"
+  "a766a8ac2670096c": "{count, plural, one {{count} Merge geladen} other {{count} Merges geladen}}",
+  "2bc15e77eb0c700f": "Veraltet"
 }

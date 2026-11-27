@@ -14,6 +14,7 @@ import {
   CircleCheckIcon,
   CircleIcon,
 } from "~/components/solar";
+import { T } from "gt-react";
 import { useRef, useState } from "react";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 
@@ -258,7 +259,11 @@ export function ReviewThreadCard({
           {thread.isResolved ? "Resolved" : "Open"} · {commentCount}{" "}
           {commentCount === 1 ? "comment" : "comments"}
         </button>
-        {thread.isOutdated ? <span>outdated</span> : null}
+        {thread.isOutdated ? (
+          <span>
+            <T context="review thread state">Outdated</T>
+          </span>
+        ) : null}
         {onFix ? (
           <Button
             size="xs"

@@ -1,7 +1,9 @@
 import { EnvironmentId, ProjectId, type PullRequestReviewThread } from "@goat/contracts";
+import { getTranslationsSnapshot, GTProvider } from "gt-react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
+import { initializeI18n } from "~/i18n/initializeI18n";
 import { registerCommands } from "~/shortcuts/dispatcher";
 import { act, render } from "../../../test/render";
 import { ReviewThreadCard } from "./PullRequestReviewAnnotation";
@@ -86,4 +88,37 @@ it("leaves IME keys in a review reply to the composition", async () => {
   await reply().fill("Draft");
   await userEvent.keyboard("{Control>}{Enter}{/Control}");
   expect(onReply).toHaveBeenCalledExactlyOnceWith("Draft");
+});
+
+it("renders the outdated label in the UI language", async () => {
+  const translations = await getTranslationsSnapshot("de");
+  using _locale = {
+    [Symbol.dispose]() {
+      // GTProvider leaves its locale in a cookie; this sets it back to English.
+      initializeI18n(() => {});
+    },
+  };
+  await using screen = await render(
+    <GTProvider locale="de" translations={translations}>
+      <ReviewThreadCard
+        thread={{ ...thread, isOutdated: true }}
+        workspaceRoot="/workspace"
+        canReply
+        canResolve={false}
+        canReact={false}
+        environmentId={EnvironmentId.make("environment")}
+        reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+        completionScope={null}
+        pending={false}
+        onReply={async () => true}
+        onLoadMore={async () => null}
+        canEditComment={() => false}
+        onEditComment={async () => false}
+        onToggleResolved={() => {}}
+        onReacted={() => {}}
+      />
+    </GTProvider>,
+  );
+
+  await expect.element(screen.getByText("Veraltet", { exact: true })).toBeVisible();
 });
