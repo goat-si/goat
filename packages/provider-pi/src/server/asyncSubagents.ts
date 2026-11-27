@@ -122,5 +122,6 @@ export function makeAsyncSubagents(callbacks: {
   const hasAny = () => tracked.size > 0;
   const hasForThread = (providerThreadId: string) =>
     [...tracked.values()].some((run) => run.turn.turnInput.providerThread.id === providerThreadId);
-  return { track, snapshot, clear, hasAny, hasForThread };
+  const hasForTurn = (turn: ActivePiTurn) => [...tracked.values()].some((run) => run.turn === turn);
+  return { track, snapshot, clear, hasAny, hasForThread, hasForTurn };
 }
