@@ -1,6 +1,8 @@
+import { ProjectId, SourceControlProviderKind, type PullRequestListEntry } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  matchesPullRequestFilters,
   rememberPullRequestAuthors,
   rememberPullRequestLabels,
   selectedPullRequestAuthor,
@@ -44,5 +46,46 @@ describe("filter picker choices", () => {
     expect(
       selectedPullRequestAuthor([], rememberPullRequestAuthors(first, [moved]), "juliana")?.actor,
     ).toEqual(moved);
+  });
+});
+
+function entry(
+  overrides: Partial<PullRequestListEntry> & { number: number },
+): PullRequestListEntry {
+  return {
+    provider: SourceControlProviderKind.make("github"),
+    host: "github.com",
+    projectId: ProjectId.make("project"),
+    projectTitle: "Project",
+    repository: "owner/repo",
+    title: `PR #${overrides.number}`,
+    url: `https://github.com/owner/repo/pull/${overrides.number}`,
+    author: { login: "author", name: null, avatarUrl: null },
+    state: "open",
+    isDraft: false,
+    headBranch: `feat/${overrides.number}`,
+    baseBranch: "main",
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-01T00:00:00Z",
+    reviewers: [],
+    labels: [],
+    ...overrides,
+  };
+}
+
+describe("matchesPullRequestFilters", () => {
+  it.each([
+    ["passing", [1, 4]],
+    ["failing", [2, 4]],
+  ] as const)("narrows rows by checks:%s and keeps unknown check state", (checks, kept) => {
+    const rows = [
+      entry({ number: 1, checksState: "passing" }),
+      entry({ number: 2, checksState: "failing" }),
+      entry({ number: 3, checksState: "pending" }),
+      entry({ number: 4 }),
+    ];
+    expect(
+      rows.filter((row) => matchesPullRequestFilters(row, { checks })).map((row) => row.number),
+    ).toEqual(kept);
   });
 });
