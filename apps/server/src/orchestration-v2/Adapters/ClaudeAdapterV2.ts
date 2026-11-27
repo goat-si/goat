@@ -2828,7 +2828,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   context.streamUsage?.requestedAt,
                   maxTokens,
                 );
-          if (typeof usage !== "number" && claudeMessageInputTokens(usage) <= 0) return;
+          if ("inputTokens" in tokenUsage && tokenUsage.inputTokens <= 0) return;
           lastContextUsage.set(context, usage);
           yield* emitProviderEvent({
             type: "provider_turn.updated",
