@@ -80,6 +80,7 @@ import {
 } from "./platformPen";
 import {
   desktopLocalConnectionId,
+  readDesktopPrimaryBootstrap,
   readDesktopSecondaryBootstrapsResult,
   type DesktopSecondaryBootstrapsRead,
 } from "./desktopLocal";
@@ -679,20 +680,14 @@ export function desktopOwnsSshHostConfig(
   primaryHttpBaseUrl: string | null,
 ) {
   if (bridge === undefined || primaryHttpBaseUrl === null) return false;
-  try {
-    const primary = bridge
-      .getLocalEnvironmentBootstraps()
-      .find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
-    return (
-      primary !== undefined &&
-      !primary.runningDistro &&
-      typeof primary.bootstrapToken === "string" &&
-      primary.bootstrapToken.length > 0 &&
-      primary.httpBaseUrl === primaryHttpBaseUrl
-    );
-  } catch {
-    return false;
-  }
+  const primary = readDesktopPrimaryBootstrap(bridge);
+  return (
+    primary !== null &&
+    !primary.runningDistro &&
+    typeof primary.bootstrapToken === "string" &&
+    primary.bootstrapToken.length > 0 &&
+    primary.httpBaseUrl === primaryHttpBaseUrl
+  );
 }
 
 const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);

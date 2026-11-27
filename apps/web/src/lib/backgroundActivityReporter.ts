@@ -15,6 +15,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
@@ -26,6 +27,7 @@ const CLIENT_ID_STORAGE_KEY = "goat.backgroundActivity.clientId";
 const REPORT_INTERVAL_MS = 25_000;
 // Shorter than the interval, so a report that never settles cannot hold up the next one.
 const REPORT_TIMEOUT_MS = 15_000;
+const MAX_REPORT_CONCURRENCY = 4;
 const LEASE_TTL_MS = 45_000;
 const RECENT_INTERACTION_WINDOW_MS = LEASE_TTL_MS;
 const BASELINE_SCOPES: ReadonlyArray<BackgroundScope> = [{ type: "provider-status" }];
@@ -199,8 +201,16 @@ export const layer = Layer.effectDiscard(
     const report = Effect.gen(function* () {
       const observedAtMs = yield* Clock.currentTimeMillis;
       const entries = yield* SubscriptionRef.get(registry.entries);
+      const connectedEnvironmentIds: EnvironmentId[] = [];
+      for (const [environmentId, entry] of entries) {
+        if (entry.enabled === false) continue;
+        const state = yield* registry.state(environmentId).pipe(Effect.option);
+        if (Option.isSome(state) && state.value.phase === "connected") {
+          connectedEnvironmentIds.push(environmentId);
+        }
+      }
       yield* Effect.forEach(
-        entries.keys(),
+        connectedEnvironmentIds,
         (environmentId) =>
           registry
             .run(
@@ -214,7 +224,7 @@ export const layer = Layer.effectDiscard(
             // and an interrupt leaking out here would end the reporting loop for good.
             // The timeout covers a live connection that never answers, which would stall it.
             .pipe(Effect.timeout(`${REPORT_TIMEOUT_MS} millis`), Effect.ignoreCause),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: MAX_REPORT_CONCURRENCY, discard: true },
       );
     }).pipe(Effect.withSpan("web.backgroundActivity.report"));
 

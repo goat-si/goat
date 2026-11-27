@@ -1,7 +1,7 @@
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { deriveTrayMenu } from "./desktopTray";
+import { createTrayMenuScheduler, deriveTrayMenu } from "./desktopTray";
 
 const local = EnvironmentId.make("local");
 const remote = EnvironmentId.make("remote");
@@ -192,5 +192,45 @@ describe("deriveTrayMenu", () => {
     const long = { ...shell("long", { pinOrderKey: "a" }), title: "x".repeat(5_000) };
     const menu = deriveTrayMenu([long], [], new Set([local]));
     expect(menu.pinned[0]?.title).toHaveLength(200);
+  });
+});
+
+describe("createTrayMenuScheduler", () => {
+  it("flushes the first burst promptly, throttles rapid updates, and stops cleanly on dispose", async () => {
+    vi.useFakeTimers();
+    try {
+      const publish = vi.fn();
+      const scheduler = createTrayMenuScheduler(publish, 1_500);
+
+      // Initial burst coalesces into one microtask flush.
+      scheduler.schedule();
+      scheduler.schedule();
+      scheduler.schedule();
+      await Promise.resolve();
+      expect(publish).toHaveBeenCalledTimes(1);
+
+      // Rapid churn during the cooldown window is coalesced to one trailing flush.
+      scheduler.schedule();
+      vi.advanceTimersByTime(500);
+      scheduler.schedule();
+      vi.advanceTimersByTime(999);
+      expect(publish).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1);
+      expect(publish).toHaveBeenCalledTimes(2);
+
+      // Quiet cooldown finishes with no extra publish.
+      vi.advanceTimersByTime(1_500);
+      expect(publish).toHaveBeenCalledTimes(2);
+
+      // Pending update cancelled on dispose never publishes.
+      scheduler.schedule();
+      scheduler.dispose();
+      await Promise.resolve();
+      vi.advanceTimersByTime(2_000);
+      expect(publish).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

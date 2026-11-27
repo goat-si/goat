@@ -11,11 +11,13 @@ import type {
   AuthSessionId,
   AuthSessionState,
 } from "@goat/contracts";
-import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@goat/contracts";
+import { EnvironmentHttpCommonError } from "@goat/contracts";
 import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClientError } from "effect/http";
+
+import { readDesktopPrimaryBootstrap } from "../../connection/desktopLocal";
 
 import {
   getPairingTokenFromUrl,
@@ -169,8 +171,7 @@ export function takePairingTokenFromUrl(): string | null {
 
 function getDesktopBootstrapCredential(): string | null {
   // DesktopBackendConfiguration gives primary and WSL the same bootstrap token.
-  const bootstraps = window.desktopBridge?.getLocalEnvironmentBootstraps() ?? [];
-  const primary = bootstraps.find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
+  const primary = readDesktopPrimaryBootstrap();
   return typeof primary?.bootstrapToken === "string" && primary.bootstrapToken.length > 0
     ? primary.bootstrapToken
     : null;

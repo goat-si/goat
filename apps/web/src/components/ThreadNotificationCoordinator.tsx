@@ -274,40 +274,80 @@ export function startThreadNotifications(
     isRemoteChannelWorkerThreadId(threadId) ||
     usesLocalBotAlerts(environmentId, threadId);
 
+  const BOT_OWNERSHIP_CACHE_LIMIT = 500;
+  const BOT_OWNERSHIP_CONCURRENCY = 4;
+  // Caches confirmed worker-ownership answers per origin/destination/thread so repeated
+  // notifications on an MCP thread do not re-broadcast listBotAttention across environments.
+  const botOwnershipCache = new Map<string, boolean>();
+  const botOwnershipKey = (origin: EnvironmentId, destination: EnvironmentId, threadId: ThreadId) =>
+    `${origin}\u0000${destination}\u0000${threadId}`;
+  const rememberBotOwnership = (key: string, owned: boolean) => {
+    if (botOwnershipCache.size >= BOT_OWNERSHIP_CACHE_LIMIT && !botOwnershipCache.has(key)) {
+      const oldest = botOwnershipCache.keys().next().value;
+      if (oldest !== undefined) botOwnershipCache.delete(oldest);
+    }
+    botOwnershipCache.set(key, owned);
+  };
+
   const owningOrigins = (destination: EnvironmentId, source?: OrchestrationV2ThreadShell) =>
     source?.creationSource !== undefined && source.creationSource !== "mcp"
       ? []
-      : registry
-          .get(environmentSummaries.environmentIdsAtom)
-          .filter(
-            (origin) =>
-              origin !== destination &&
-              (source?.launchedBy?.environmentId == null ||
-                source.launchedBy.environmentId === origin) &&
-              registry.get(environmentPresentations.presentationAtom(origin))?.serverConfig
-                ?.environment.capabilities.goatBotAttention === true &&
-              registry.get(channelEnvironment.listBotAttention.permissionAtom(origin)),
+      : registry.get(environmentSummaries.environmentIdsAtom).filter((origin) => {
+          if (
+            origin === destination ||
+            (source?.launchedBy?.environmentId != null &&
+              source.launchedBy.environmentId !== origin)
+          ) {
+            return false;
+          }
+          const presentation = registry.get(environmentPresentations.presentationAtom(origin));
+          if (
+            presentation?.connection !== undefined &&
+            presentation.connection.phase !== "connected"
+          ) {
+            return false;
+          }
+          return (
+            presentation?.serverConfig?.environment.capabilities.goatBotAttention === true &&
+            registry.get(channelEnvironment.listBotAttention.permissionAtom(origin))
           );
+        });
 
   const ownedByBot = async (
     origins: readonly EnvironmentId[],
     environmentId: EnvironmentId,
     threadId: ThreadId,
   ) => {
-    const results = await Promise.all(
-      origins.map((origin) =>
-        runAtomCommand(
-          registry,
-          channelEnvironment.listBotAttention,
-          {
-            environmentId: origin,
-            input: { worker: { environmentId, threadId } },
-          },
-          { reportFailure: false },
-        ),
-      ),
-    );
-    return results.some((result) => result._tag === "Success" && result.value.ownsWorker === true);
+    const uncached: EnvironmentId[] = [];
+    for (const origin of origins) {
+      const cached = botOwnershipCache.get(botOwnershipKey(origin, environmentId, threadId));
+      if (cached === true) return true;
+      if (cached === undefined) uncached.push(origin);
+    }
+    for (let index = 0; index < uncached.length; index += BOT_OWNERSHIP_CONCURRENCY) {
+      const batch = uncached.slice(index, index + BOT_OWNERSHIP_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (origin) => {
+          const result = await runAtomCommand(
+            registry,
+            channelEnvironment.listBotAttention,
+            {
+              environmentId: origin,
+              input: { worker: { environmentId, threadId } },
+            },
+            { reportFailure: false },
+          );
+          if (result._tag === "Success") {
+            const owned = result.value.ownsWorker === true;
+            rememberBotOwnership(botOwnershipKey(origin, environmentId, threadId), owned);
+            return owned;
+          }
+          return false;
+        }),
+      );
+      if (results.some(Boolean)) return true;
+    }
+    return false;
   };
 
   // Completions fire from a timer, so read settings, focus and route when presenting.
@@ -710,6 +750,17 @@ export function startThreadNotifications(
       pending.delete(tag);
     }
     if (count !== pending.size) setNotificationBadge(pending.size);
+    for (const key of botOwnershipCache.keys()) {
+      const [origin, destination] = key.split("\u0000");
+      if (
+        origin === undefined ||
+        destination === undefined ||
+        !activeIds.has(origin as EnvironmentId) ||
+        !activeIds.has(destination as EnvironmentId)
+      ) {
+        botOwnershipCache.delete(key);
+      }
+    }
   };
 
   // Listeners that only exist for some notification modes, rebuilt when the mode changes.
@@ -773,6 +824,7 @@ export function startThreadNotifications(
     unsubscribeEnvironmentIds();
     for (const entry of watched.values()) entry.unsubscribe();
     watched.clear();
+    botOwnershipCache.clear();
     stopModeListeners();
     closeToasts();
   };
