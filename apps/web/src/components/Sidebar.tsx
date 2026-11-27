@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { olderSettledScopes } from "./sidebar/olderSettledScopes";
 import { scrollSidebarToTop, threadShellKey } from "./sidebar/sidebarKeys";
 import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
@@ -221,6 +222,7 @@ import { SIDEBAR_DRAG_DISTANCE, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import { sameHolds, sameKeys } from "./Sidebar.equality";
 import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
+import { threadDeleteConfirmation, threadsDeleteConfirmation } from "./threadDeleteConfirmation";
 import { useSidebarSnooze, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { SidebarProjectScope } from "./sidebar/SidebarProjectScope";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
@@ -724,6 +726,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const gt = useGT();
   const { resolveSnoozePresets, pickSnoozePreset, snoozeLabels, bulkSnoozeLabel } =
     useSidebarSnooze(timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -2197,13 +2200,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (clicked.value !== "delete") return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
-          api.dialogs.confirm(
-            [
-              `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-              "This permanently clears conversation history for these threads.",
-            ].join("\n"),
-            { variant: "destructive" },
-          ),
+          api.dialogs.confirm(threadsDeleteConfirmation(gt, count), { variant: "destructive" }),
         );
         if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
@@ -2263,6 +2260,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildDraftActionMenuItems({
+              gt,
               hasPath: Boolean(workspacePath),
               hasBranch: Boolean(session.branch),
               hasProject: projectGroup != null,
@@ -2307,7 +2305,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       return;
     if (confirmThreadArchive) {
       const confirmed = await settlePromise(() =>
-        api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+        api.dialogs.confirm(gt('Archive thread "{title}"?', { title: thread.title })),
       );
       if (confirmed._tag === "Failure" || !confirmed.value) return;
     }
@@ -2478,6 +2476,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
+              gt,
               canFollowWithBot: webThreadFollowAvailable(threadRef),
               canOperate: readEnvironmentScope(
                 threadRef.environmentId,
@@ -2661,13 +2660,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    `Delete thread "${thread.title}"?`,
-                    "This permanently clears conversation history for this thread.",
-                  ].join("\n"),
-                  { variant: "destructive" },
-                ),
+                api.dialogs.confirm(threadDeleteConfirmation(gt, thread.title), {
+                  variant: "destructive",
+                }),
               );
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }

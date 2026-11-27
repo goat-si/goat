@@ -1,3 +1,5 @@
+import { threadDeleteConfirmation } from "../components/threadDeleteConfirmation";
+import { useGT } from "gt-react";
 import {
   handleWebThreadFollowAction,
   webThreadFollowAvailable,
@@ -118,6 +120,7 @@ export function useThreadActionMenu(input: {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const gt = useGT();
   const { pickSnoozePreset, resolveSnoozePresets, snoozeLabels } =
     useSidebarSnooze(timestampFormat);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
@@ -161,6 +164,7 @@ export function useThreadActionMenu(input: {
       const isRegeneratingTitle = thread.titleRegeneration != null;
       const snoozePresets = resolveSnoozePresets(now, threadRef.environmentId);
       const items = buildThreadActionMenuItems({
+        gt,
         canOpenSshHandoff: true,
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
         canFollowWithBot: webThreadFollowAvailable(threadRef),
@@ -341,7 +345,7 @@ export function useThreadActionMenu(input: {
         case "archive": {
           if (confirmThreadArchive) {
             const confirmed = await settlePromise(() =>
-              api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+              api.dialogs.confirm(gt('Archive thread "{title}"?', { title: thread.title })),
             );
             if (confirmed._tag === "Failure" || !confirmed.value) return;
           }
@@ -362,13 +366,9 @@ export function useThreadActionMenu(input: {
         case "delete": {
           if (confirmThreadDelete) {
             const confirmed = await settlePromise(() =>
-              api.dialogs.confirm(
-                [
-                  `Delete thread "${thread.title}"?`,
-                  "This permanently clears conversation history for this thread.",
-                ].join("\n"),
-                { variant: "destructive" },
-              ),
+              api.dialogs.confirm(threadDeleteConfirmation(gt, thread.title), {
+                variant: "destructive",
+              }),
             );
             if (confirmed._tag === "Failure" || !confirmed.value) return;
           }

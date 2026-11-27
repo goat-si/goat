@@ -1,3 +1,4 @@
+import { threadDeleteConfirmation, threadsDeleteConfirmation } from "./threadDeleteConfirmation";
 import { projectGroupingModeDescription } from "~/sidebarProjectGrouping";
 import { useGT } from "gt-react";
 import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
@@ -1197,6 +1198,7 @@ interface SidebarProjectItemProps {
 }
 
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
+  const gt = useGT();
   const {
     displayedThreadKeys,
     remoteConnectionStatus,
@@ -1864,13 +1866,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (clicked !== "delete") return;
 
     if (appSettingsConfirmThreadDelete) {
-      const confirmed = await api.dialogs.confirm(
-        [
-          `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-          "This permanently clears conversation history for these threads.",
-        ].join("\n"),
-        { variant: "destructive" },
-      );
+      const confirmed = await api.dialogs.confirm(threadsDeleteConfirmation(gt, count), {
+        variant: "destructive",
+      });
       if (!confirmed) return;
     }
     if (
@@ -2141,27 +2139,32 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             ? [
                 {
                   id: thread.pinnedAt != null ? "unpin" : "pin",
-                  label: thread.pinnedAt != null ? "Unpin thread" : "Pin thread",
+                  label: thread.pinnedAt != null ? gt("Unpin thread") : gt("Pin thread"),
                   disabled: !canOperateThread,
                 },
               ]
             : []),
           ...(thread.branch
-            ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
+            ? [
+                {
+                  id: "new-thread-on-branch",
+                  label: gt("New thread on {branch}", { branch: thread.branch }),
+                },
+              ]
             : []),
-          ...buildForkMenuItems(readThreadForkMenuState(threadRef), canOperateThread),
-          { id: "rename", label: "Rename thread", disabled: !canOperateThread },
+          ...buildForkMenuItems(readThreadForkMenuState(threadRef), canOperateThread, gt),
+          { id: "rename", label: gt("Rename thread"), disabled: !canOperateThread },
           ...(appAtomRegistry.get(canShareWithGuestAtom(thread.environmentId))
-            ? [{ id: "share-guest", label: "Share with guest" }]
+            ? [{ id: "share-guest", label: gt("Share with guest") }]
             : []),
-          { id: "mark-unread", label: "Mark unread" },
-          { id: "copy-path", label: "Copy Path" },
-          { id: "copy-thread", label: "Copy Thread" },
-          { id: "copy-thread-id", label: "Copy Thread ID" },
-          { id: "project-settings", label: "Project settings" },
+          { id: "mark-unread", label: gt("Mark unread") },
+          { id: "copy-path", label: gt("Copy Path") },
+          { id: "copy-thread", label: gt("Copy Thread") },
+          { id: "copy-thread-id", label: gt("Copy Thread ID") },
+          { id: "project-settings", label: gt("Project settings") },
           {
             id: "delete",
-            label: "Delete",
+            label: gt("Delete"),
             destructive: true,
             icon: "trash",
             disabled: !canOperateThread,
@@ -2255,13 +2258,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (clicked !== "delete") return;
       if (!checkTaskPermission(threadRef.environmentId)) return;
       if (appSettingsConfirmThreadDelete) {
-        const confirmed = await api.dialogs.confirm(
-          [
-            `Delete thread "${thread.title}"?`,
-            "This permanently clears conversation history for this thread.",
-          ].join("\n"),
-          { variant: "destructive" },
-        );
+        const confirmed = await api.dialogs.confirm(threadDeleteConfirmation(gt, thread.title), {
+          variant: "destructive",
+        });
         if (!confirmed) {
           return;
         }

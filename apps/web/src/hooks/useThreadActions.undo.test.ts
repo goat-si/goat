@@ -33,6 +33,10 @@ const router = vi.hoisted(() => {
     },
   };
 });
+vi.mock("gt-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("gt-react")>();
+  return { ...actual, useGT: () => actual.gtFallback };
+});
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/session", async (original) => ({
   ...(await original<typeof import("../state/session")>()),
