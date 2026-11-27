@@ -39,7 +39,7 @@ export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import { makeShellJobs } from "./shellJobs.ts";
 import { validateOpenCodeCompatibility } from "../validateCompatibility.ts";
-import { finishIdleCommand } from "./commandCompletion.ts";
+import { finishIdleCommand, runOpenCode2Command } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
@@ -237,6 +237,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const announced = new Map<string, EventOf<"session.created">["data"]>();
     const strays = new Map<string, ThreadState>();
     const busy = new Set<string>();
+    const commandStarts = new Map<string, Deferred.Deferred<void>>();
     const pending = new Map<RuntimeRequestId, PendingRequest>();
     const lock = yield* Semaphore.make(1);
     const clearing = new Map<string, Deferred.Deferred<void>>();
@@ -2073,6 +2074,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             else state.unsettledStarted = true;
           }
           busy.add(sessionId);
+          const commandStart = commandStarts.get(sessionId);
+          if (commandStart !== undefined) yield* Deferred.succeed(commandStart, undefined);
         } else if (event.type === "unreadable.execution.ended" || executionEnd(event.type)) {
           busy.delete(sessionId);
         }
@@ -3364,9 +3367,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          yield* client.session
-            .command({ sessionID, ...command })
-            .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
+          const started = yield* runOpenCode2Command({
+            sessionId,
+            commandStarts,
+            sessionScope,
+            run: client.session.command({ sessionID, ...command }),
+            onSubmitted: turnInput.inputDelivery?.submitted(),
+          });
+          if (started) return;
           return yield* finishIdleCommand({
             client,
             sessionId,
