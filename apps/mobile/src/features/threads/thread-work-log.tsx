@@ -1280,7 +1280,6 @@ export function ThreadWorkGroupToggle(props: {
   readonly shimmer: boolean;
   readonly thought?: string | undefined;
   readonly lineCounts?: WorkLogLineCounts | undefined;
-  readonly trailing?: ReactNode;
   readonly onToggle: () => void;
 }) {
   const summaryLabel = props.lineCounts
@@ -1370,7 +1369,6 @@ export function ThreadWorkGroupToggle(props: {
             />
           </WorkLogPressable>
         </View>
-        {props.trailing}
       </View>
     </WorkLogBlock>
   );

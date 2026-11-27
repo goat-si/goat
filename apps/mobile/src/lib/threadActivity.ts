@@ -15,7 +15,6 @@ import type {
   ThreadUserInputQuestion,
 } from "@goat/client-runtime/state/thread-requests";
 import { turnItemIsWorkspacePreparation } from "@goat/client-runtime/state/turn-item-presentation";
-import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatSubagentDisplayTitle } from "@goat/client-runtime/state/subagent-display";
 import {
   isLiveSubagentTurnItem,
@@ -81,7 +80,6 @@ import {
 } from "@goat/shared/toolOutput";
 import {
   setsEqual,
-  checkpointSummariesEqual,
   mapsEqual,
   setMapsEqual,
   firstChangedIndex,
@@ -1228,39 +1226,6 @@ export function deriveThreadFeedPresentation(
       thinkingRow(activeWorkStartedAt, activeRunId, latestRun?.providerStartingLabel ?? preview),
     );
   }
-  const checkpointByRunId = new Map<RunId, ThreadCheckpointSummary>();
-  for (const entry of sourceFeed) {
-    if (entry.type === "message" && entry.message.checkpointSummary) {
-      checkpointByRunId.set(entry.message.checkpointSummary.runId, entry.message.checkpointSummary);
-    }
-  }
-  const workRowByRunId = new Map<RunId, number>();
-  for (let index = tailStart; index < result.length; index += 1) {
-    const row = result[index]!;
-    if (
-      (row.type === "run-fold" || row.type === "work-toggle") &&
-      row.runId !== null &&
-      checkpointByRunId.has(row.runId) &&
-      (row.type === "run-fold" || !workRowByRunId.has(row.runId))
-    ) {
-      workRowByRunId.set(row.runId, index);
-    }
-  }
-  for (const [runId, index] of workRowByRunId) {
-    result[index] = { ...result[index]!, checkpointSummary: checkpointByRunId.get(runId)! };
-  }
-  for (let index = tailStart; index < result.length; index += 1) {
-    const row = result[index]!;
-    if (
-      row.type !== "message" ||
-      !row.message.checkpointSummary ||
-      !workRowByRunId.has(row.message.checkpointSummary.runId)
-    )
-      continue;
-    const message = { ...row.message };
-    delete message.checkpointSummary;
-    result[index] = { ...row, message };
-  }
   // Reused rows are final: the user message after them never continues a work log.
   for (let index = tailStart; index < result.length; index += 1) {
     const row = result[index]!;
@@ -1604,7 +1569,6 @@ interface ThreadFeedBuild {
   readonly rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
   readonly attempts: ReadonlyArray<OrchestrationV2RunAttempt> | undefined;
   readonly nodes: ReadonlyArray<OrchestrationV2ExecutionNode> | undefined;
-  readonly checkpointSummaries: ReadonlyArray<ThreadCheckpointSummary> | undefined;
   readonly foldedAnswerRunIdByMessageId: ReadonlyMap<string, RunId | null>;
   readonly delegatedChildrenByRun: ReadonlyMap<RunId, ReadonlySet<string>>;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
@@ -1631,7 +1595,6 @@ export function buildThreadFeed(
     readonly anchoredMessages?: ReadonlyArray<LocalThreadMessage>;
     readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
     readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
-    readonly checkpointSummaries?: ReadonlyArray<ThreadCheckpointSummary>;
     readonly cache?: ThreadFeedCache;
   },
 ): ThreadFeedEntry[] {
@@ -1679,7 +1642,6 @@ export function buildThreadFeed(
     anchoredMessages.length === 0 &&
     previous.attempts === options?.attempts &&
     previous.nodes === options?.nodes &&
-    checkpointSummariesEqual(previous.checkpointSummaries, options?.checkpointSummaries) &&
     mapsEqual(previous.foldedAnswerRunIdByMessageId, foldedAnswerRunIdByMessageId) &&
     setMapsEqual(previous.delegatedChildrenByRun, delegatedChildrenByRun)
   ) {
@@ -1853,18 +1815,8 @@ export function buildThreadFeed(
     if (insertionIndex === -1) entries.push(entry);
     else entries.splice(insertionIndex, 0, entry);
   }
-  const checkpointByMessageId = new Map(
-    (options?.checkpointSummaries ?? [])
-      .filter((checkpoint) => checkpoint.status === "ready" && checkpoint.files.length > 0)
-      .map((checkpoint) => [checkpoint.assistantMessageId, checkpoint]),
-  );
   const grouped = groupAdjacentActivities(
-    entries.map((entry) => {
-      if (entry.type !== "message" || entry.message.role !== "assistant") return entry;
-      const checkpointSummary = checkpointByMessageId.get(entry.message.id);
-      if (!checkpointSummary || checkpointSummary.runId !== entry.message.runId) return entry;
-      return { ...entry, message: { ...entry.message, checkpointSummary } };
-    }),
+    entries,
     delegatedChildrenByRun,
     // Anchored messages shift entries away from their rows; such a build is not reused.
     anchoredMessages.length > 0
@@ -1884,7 +1836,6 @@ export function buildThreadFeed(
             rows: visibleTurnItems,
             attempts: options?.attempts,
             nodes: options?.nodes,
-            checkpointSummaries: options?.checkpointSummaries,
             foldedAnswerRunIdByMessageId,
             delegatedChildrenByRun,
             feed,
