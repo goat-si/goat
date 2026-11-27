@@ -11,10 +11,12 @@ import { toProtocolError } from "./CodexProtocolError.ts";
 import { codexTimestamp, codexSkillMentionText } from "./CodexTextHelpers.ts";
 export { codexTimestamp } from "./CodexTextHelpers.ts";
 import {
-  decodeCodexBackgroundTerminalTerminateResponse,
-  decodeCodexBackgroundTerminalsListResponse,
-  type CodexBackgroundTerminalsListPage,
-} from "./CodexBackgroundTerminalSchemas.ts";
+  addUnknownOutcomeCommandItems,
+  listCodexBackgroundTerminalProcessIds,
+  selectExitedCodexCommandItemIds,
+  takeUnknownOutcomeCommandItem,
+  terminateCodexBackgroundTerminal,
+} from "./CodexExitedCommandItems.ts";
 import { sendCodexSteerContext } from "./CodexSteerAppContext.ts";
 import { providerSession } from "./CodexSessionProjection.ts";
 import {
@@ -1165,6 +1167,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, Map<string, CodexDynamicToolItem>>(),
         );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
+        // Commands settled as cancelled, by turn, while their item/completed may still arrive.
+        const unknownOutcomeCommandItemsByTurn = yield* Ref.make(new Map<string, Set<string>>());
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
         /** Turns Stop ended; failed turns are not among them, their children keep working. */
         const stoppedNativeTurns = new Set<string>();
@@ -1636,6 +1640,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (yield* turnHasRetainedBackgroundWork(nativeTurnId)) {
               return;
             }
+            // Not pending work, but a late item/completed still needs this context to route.
+            if ((yield* Ref.get(unknownOutcomeCommandItemsByTurn)).has(nativeTurnId)) return;
             yield* Ref.update(settledTurns, (current) => {
               if (!current.has(nativeTurnId)) {
                 return current;
@@ -1681,14 +1687,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         )(function* (
           context: ActiveCodexTurnContext,
           nativeTurnId: string,
-          status: "interrupted" | "failed",
+          status: "interrupted" | "failed" | "cancelled",
           completedAt: DateTime.Utc,
+          only?: ReadonlySet<string>,
         ) {
           const items = (yield* Ref.get(runningCommandItemsByTurn)).get(nativeTurnId);
           if (items === undefined || items.size === 0) {
             return;
           }
           for (const tracked of items.values()) {
+            if (only !== undefined && !only.has(tracked.id)) continue;
             const nodeId = idAllocator.derive.nodeFromProviderItem({
               driver: CODEX_PROVIDER,
               nativeItemId: tracked.id,
@@ -1750,47 +1758,53 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }
         });
 
-        const terminateBackgroundTerminal = Effect.fn("CodexAdapterV2.terminateBackgroundTerminal")(
-          function* (nativeThreadId: string, processId: string) {
-            const response = yield* client.raw
-              .request("thread/backgroundTerminals/terminate", {
-                threadId: nativeThreadId,
-                processId,
-              })
-              .pipe(
-                Effect.catchTags({
-                  CodexAppServerProcessExitedError: () => Effect.succeed({ terminated: true }),
-                  CodexAppServerInputStreamEndedError: () => Effect.succeed({ terminated: true }),
-                  // Unloading kills terminals, so "thread not found" means nothing remains to stop.
-                  CodexAppServerRequestError: (error) =>
-                    error.code === -32600 && error.errorMessage.startsWith("thread not found:")
-                      ? Effect.succeed({ terminated: true })
-                      : Effect.fail(error),
-                }),
-              );
-            const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response);
-            if (result.terminated) return;
-            let cursor: string | null = null;
-            while (true) {
-              const response: unknown = yield* client.raw.request(
-                "thread/backgroundTerminals/list",
-                {
-                  threadId: nativeThreadId,
-                  ...(cursor === null ? {} : { cursor }),
-                },
-              );
-              const page: CodexBackgroundTerminalsListPage =
-                yield* decodeCodexBackgroundTerminalsListResponse(response);
-              if (page.data.some((terminal) => terminal.processId === processId)) {
-                return yield* toProtocolError(
-                  `Codex background terminal ${processId} remained active after termination.`,
+        const terminateBackgroundTerminal = (nativeThreadId: string, processId: string) =>
+          terminateCodexBackgroundTerminal(client, nativeThreadId, processId);
+
+        /**
+         * Codex can end a turn without item/completed for a command whose shell already
+         * exited. Only a live background terminal keeps a command running past its turn;
+         * the rest settle as cancelled since their result is unknown.
+         */
+        const settleExitedCommandItems = Effect.fn("CodexAdapterV2.settleExitedCommandItems")(
+          function* (nativeThreadId: string, nativeTurnId: string) {
+            const liveProcessIds = yield* listCodexBackgroundTerminalProcessIds(
+              (method, params) => client.raw.request(method, params),
+              nativeThreadId,
+            );
+            yield* turnTerminalizationPermit.withPermits(1)(
+              Effect.gen(function* () {
+                const context = (yield* Ref.get(settledTurns)).get(nativeTurnId);
+                const runningByTurn = yield* Ref.get(runningCommandItemsByTurn);
+                const items = runningByTurn.get(nativeTurnId);
+                if (context === undefined || items === undefined) return;
+                if ((yield* Ref.get(interruptingNativeTurns)).has(nativeTurnId)) return;
+                const exited = selectExitedCodexCommandItemIds(
+                  runningByTurn,
+                  items,
+                  liveProcessIds,
                 );
-              }
-              if (page.nextCursor === null) return;
-              cursor = page.nextCursor;
-            }
+                if (exited.size === 0) return;
+                yield* terminalizeRunningCommandItems(
+                  context,
+                  nativeTurnId,
+                  "cancelled",
+                  yield* DateTime.now,
+                  exited,
+                );
+                // Keep the settled context: a late item/completed still routes its result and wake.
+                for (const itemId of exited) yield* clearRunningCommandItem(nativeTurnId, itemId);
+                yield* Ref.update(unknownOutcomeCommandItemsByTurn, (current) =>
+                  addUnknownOutcomeCommandItems(current, nativeTurnId, exited),
+                );
+              }),
+            );
           },
           Effect.timeout("10 seconds"),
+          // Older Codex builds lack the list method; their commands keep today's behaviour.
+          Effect.catch((cause) =>
+            Effect.logWarning("orchestration-v2.codex-exited-command-settle-failed", { cause }),
+          ),
         );
 
         /**
@@ -4500,6 +4514,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // Other tools can retain the context after thread closure.
               if (context.closedCommandItemIds?.has(payload.item.id)) return;
               const turnDrained = yield* clearRunningCommandItem(payload.turnId, payload.item.id);
+              // Its run stopped listening once the command settled, so the result is session-scoped.
+              const settledUnknown = yield* Ref.modify(
+                unknownOutcomeCommandItemsByTurn,
+                (current) =>
+                  takeUnknownOutcomeCommandItem(current, payload.turnId, payload.item.id),
+              );
               const artifacts = yield* buildCommandExecutionArtifacts(context, payload.item);
               yield* emitProviderEvent({
                 type: "node.updated",
@@ -4510,6 +4530,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 type: "turn_item.updated",
                 driver: CODEX_PROVIDER,
                 turnItem: artifacts.turnItem,
+                ...(settledUnknown ? { sessionScoped: true } : {}),
               });
               if (settled) {
                 if (
@@ -4564,7 +4585,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     );
                   }
                 }
-                if (turnDrained) {
+                if (turnDrained || settledUnknown) {
                   yield* releaseSettledTurnIfIdle(payload.turnId);
                 }
               }
@@ -6111,6 +6132,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 });
                 // Recheck after recording settlement; background work may have finished before a settled turn existed to release.
                 yield* releaseSettledTurnIfIdle(input.nativeTurnId);
+                const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(
+                  input.nativeTurnId,
+                );
+                if (nativeThreadId != null && commands !== undefined && commands.size > 0) {
+                  // Fork requests off the notification reader so it can read their responses.
+                  yield* settleExitedCommandItems(nativeThreadId, input.nativeTurnId).pipe(
+                    Effect.forkIn(scope, { startImmediately: true }),
+                  );
+                }
               }
               yield* Ref.update(activeTurns, (current) => {
                 const updated = new Map(current);
