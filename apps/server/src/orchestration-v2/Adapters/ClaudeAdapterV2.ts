@@ -9,10 +9,12 @@ import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
 import {
   CLAUDE_ATTACHMENT_MAX_BYTES,
   CLAUDE_ATTACHMENT_MAX_PAGES,
+  decorateClaudeProviderThread,
   isSupportedClaudeImageMimeType,
   makeClaudeAttachmentBudget,
   reserveClaudePdfBudget,
 } from "./ClaudeAttachmentBudget.ts";
+import { makeClaudeForkedSkillController } from "./ClaudeForkedSkillTranscript.ts";
 export { loggedClaudeQueryOptions } from "./ClaudeLoggedQueryOptions.ts";
 import {
   claudeAutoCompactThreshold,
@@ -2731,59 +2733,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const runtimeContext = yield* Effect.context<never>();
         const runPromise = Effect.runPromiseWith(runtimeContext);
 
-        const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) => {
-          if (event.type === "provider_thread.updated") {
-            const appliedTitle = appliedTitles.get(
-              event.providerThread.nativeThreadRef?.nativeId ?? "",
-            );
-            if (appliedTitle !== undefined)
-              event = {
-                ...event,
-                providerThread: {
-                  ...event.providerThread,
-                  nativeMetadata: { ...event.providerThread.nativeMetadata, title: appliedTitle },
+        const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
+          events.offer(
+            event.type !== "provider_thread.updated"
+              ? event
+              : {
+                  ...event,
+                  providerThread: decorateClaudeProviderThread(event.providerThread, {
+                    appliedTitles,
+                    pdfBudgets,
+                    applyAppContext: appContextDelivery.applyNativeMetadata,
+                    clearedNativeSessions,
+                  }),
                 },
-              };
-            const budget = pdfBudgets.get(event.providerThread.nativeThreadRef?.nativeId ?? "");
-            if (budget !== undefined) {
-              event = {
-                ...event,
-                providerThread: {
-                  ...event.providerThread,
-                  nativeMetadata: {
-                    ...event.providerThread.nativeMetadata,
-                    claudeAttachmentBudget: {
-                      bytesUsed: budget.committed.bytes,
-                      pagesUsed: budget.committed.pages,
-                    },
-                  },
-                },
-              };
-            }
-            event = {
-              ...event,
-              providerThread: appContextDelivery.applyNativeMetadata(event.providerThread),
-            };
-            const nativeSessionId = clearedNativeSessions.get(
-              event.providerThread.nativeThreadRef?.nativeId ?? "",
-            );
-            if (nativeSessionId !== undefined) {
-              event = {
-                ...event,
-                providerThread: {
-                  ...event.providerThread,
-                  nativeThreadRef: {
-                    driver: CLAUDE_PROVIDER,
-                    nativeId: nativeSessionId,
-                    strength: "strong",
-                  },
-                  nativeConversationHeadRef: null,
-                },
-              };
-            }
-          }
-          return events.offer(event);
-        };
+          );
 
         const persistAttachmentBudget = Effect.fnUntraced(function* (nativeThreadId: string) {
           const providerThread = (yield* Ref.get(lastProviderThreadByNativeThread)).get(
@@ -7420,6 +7383,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 reopen: true,
                 ...(message.run_id === undefined ? {} : { nativeRunId: message.run_id }),
               });
+              yield* forkedSkills.onTaskStarted(liveQuery.nativeThreadId, message);
               yield* Ref.update(wakeBuffers, (current) => {
                 const entry = current.get(liveQuery.nativeThreadId);
                 if (entry === undefined) return current;
@@ -7540,13 +7504,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               !context.ignoredTaskIds.has(message.task_id) &&
               !appliedSubagentOutcomes.has(message)
             ) {
+              const result = yield* forkedSkills.resultForTaskNotification(
+                message.task_id,
+                message.summary,
+              );
               yield* updateClaudeSubagentNode({
                 context,
                 taskId: message.task_id,
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 workflowFrame: message,
                 nativeOutcome: message,
-                result: message.summary,
+                ...(result === undefined ? {} : { result }),
                 status:
                   message.status === "completed"
                     ? "completed"
@@ -8034,7 +8002,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
-        const handleRoutedSdkMessage = Effect.fnUntraced(function* (input: {
+        const forkedSkills = makeClaudeForkedSkillController({
+          configDir: homePath,
+          fileSystem,
+          path,
+          sessionScope,
+          flushMs: WORKFLOW_MEMBER_TRANSCRIPT_FLUSH_MS,
+          subagentsByTaskId: sessionSubagentsByTaskId,
+          taskIdsByToolUseId: sessionSubagentTaskIdsByToolUseId,
+          projectLine: (subagent, line) =>
+            projectSubagentTranscriptLine(subagentProjectionTarget(subagent), line),
+        });
+
+        const routeSdkMessage = Effect.fnUntraced(function* (input: {
           readonly query: ClaudeAgentSdkQuerySession;
           readonly message: SDKMessage;
         }) {
@@ -8048,6 +8028,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* handleSdkMessageFrame({ query: input.query, message, replayed: true });
           }
         });
+
+        const handleRoutedSdkMessage = (input: {
+          readonly query: ClaudeAgentSdkQuerySession;
+          readonly message: SDKMessage;
+        }) => forkedSkills.routeMessage(input, routeSdkMessage);
 
         const heldToolUseIds = (context: ActiveClaudeTurnContext): ReadonlySet<string> =>
           new Set(
