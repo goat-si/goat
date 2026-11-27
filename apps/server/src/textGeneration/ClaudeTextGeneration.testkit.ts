@@ -88,6 +88,7 @@ export function withFakeClaudeEnv<A, E, R>(
     rejectsImages?: boolean | "auth" | "reverse";
     configDirMustBe?: string;
     cwdMustNotBe?: string;
+    settingsLog?: string;
     claudeConfig?: Partial<ClaudeSettings>;
   },
   effectFn: (textGeneration: ProviderTextGeneration) => Effect.Effect<A, E, R>,
@@ -129,6 +130,7 @@ export function withFakeClaudeEnv<A, E, R>(
             ? "1"
             : undefined,
       GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE: input.cwdMustNotBe,
+      GOAT_FAKE_CLAUDE_SETTINGS_LOG: input.settingsLog,
       GOAT_FAKE_CLAUDE_CONFIG_DIR_MUST_BE: input.configDirMustBe,
     };
     const config = decodeClaudeSettings({

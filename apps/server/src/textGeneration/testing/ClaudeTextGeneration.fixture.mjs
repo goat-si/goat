@@ -62,6 +62,9 @@ if (process.env.GOAT_FAKE_CLAUDE_CHECK_SETTINGS_MODE === "1") {
 const settingsJson = NodeFS.readFileSync(settingsArg, "utf8");
 if (JSON.parse(settingsJson).disableAllHooks !== true)
   fail("text generation must disable hooks", 10);
+if (process.env.GOAT_FAKE_CLAUDE_SETTINGS_LOG) {
+  NodeFS.writeFileSync(process.env.GOAT_FAKE_CLAUDE_SETTINGS_LOG, settingsJson);
+}
 const settingsMustContain = process.env.GOAT_FAKE_CLAUDE_SETTINGS_MUST_CONTAIN;
 if (settingsMustContain && !settingsJson.includes(settingsMustContain)) {
   fail("settings missing expected content", 10);

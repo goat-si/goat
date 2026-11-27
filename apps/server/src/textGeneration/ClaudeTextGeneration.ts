@@ -17,12 +17,14 @@ import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { verifyClaudeMemoryHooks } from "./ClaudeMemoryIsolation.ts";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { type ClaudeSettings, TextGenerationError } from "@goat/contracts";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { deepMerge } from "@goat/shared/Struct";
 
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 import {
@@ -48,7 +50,8 @@ import {
   hasClaudeManagedMcpConfig,
   makeClaudeEnvironment,
 } from "../provider/Drivers/ClaudeHome.ts";
-import { pinClaudeHomeSettings } from "../provider/ClaudeHomeSettings.ts";
+import { readClaudeUserSettings } from "../provider/Drivers/ClaudeSkills.ts";
+import { claudeHomeFlagSettings } from "../provider/ClaudeHomeSettings.ts";
 
 import { readClaudeLaunchArgSettings } from "../orchestration-v2/Adapters/ClaudeLaunchArgs.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
@@ -57,7 +60,7 @@ import * as ServerConfig from "../config.ts";
 const CLAUDE_TIMEOUT_MS = 180_000;
 /** `--tools` takes bare names; patterns go in the allow list. */
 const CLAUDE_INVESTIGATION_TOOLS = "Read,Grep,Glob,Bash";
-/** In dontAsk mode every call outside this list, Bash included, is refused. */
+/** In dontAsk mode every call outside this list, Bash included, is refused; investigationSettings keeps settings from adding to it. */
 const CLAUDE_INVESTIGATION_ALLOWED = [
   "Read",
   "Grep",
@@ -68,6 +71,26 @@ const CLAUDE_INVESTIGATION_ALLOWED = [
 ].join(",");
 // Denies override allows; block git --output/-o because allowed trailing args can otherwise write anywhere.
 const CLAUDE_INVESTIGATION_DENIED = ["Bash(git * --output*)", "Bash(git * -o *)"].join(",");
+
+/**
+ * Settings for an investigation, which runs with `--setting-sources ""`: the user's settings file
+ * and the launch argument's settings as Claude Code would merge them, keeping from `permissions`
+ * only the deny rules. Allow rules, extra directories and a default mode would approve calls
+ * beyond the investigation's own list.
+ */
+function investigationSettings(
+  userSettings: Record<string, unknown> | undefined,
+  launchArgSettings: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const { permissions: _, ...settings } = deepMerge(userSettings ?? {}, launchArgSettings ?? {});
+  const deny = [userSettings, launchArgSettings].flatMap((source) => {
+    const permissions = source?.permissions;
+    return Predicate.isObject(permissions) && Array.isArray(permissions.deny)
+      ? permissions.deny
+      : [];
+  });
+  return deny.length > 0 ? { ...settings, permissions: { deny: [...new Set(deny)] } } : settings;
+}
 
 const claudeOutputDiagnostics = {
   permission_denials: Schema.optionalKey(Schema.Array(Schema.Unknown)),
@@ -316,7 +339,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       ? undefined
       : yield* readClaudeLaunchArgSettings({
           settings: claudeSettings,
-          cwd,
+          // The investigated checkout holds the change under review, not the user's files.
+          cwd: investigate?.projectCwd ?? cwd,
           fileSystem,
           path,
         }).pipe(
@@ -332,7 +356,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           baseCatalog,
           operation === "generateThreadTitle" || operation === "generateChannelReception"
             ? null
-            : cwd,
+            : (investigate?.projectCwd ?? cwd),
           launchSettings,
           claudeEnvironment,
         );
@@ -375,16 +399,32 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
             ? true
             : undefined))
         : undefined;
-    const { settings } = pinClaudeHomeSettings({
-      env: claudeEnvironment,
-      settings: {
-        ...launchSettings,
-        disableAllHooks: true,
-        ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
-        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-        ...(typeof ultracode === "boolean" ? { ultracode } : {}),
-      },
-    });
+    const baseSettings: Record<string, unknown> = investigate
+      ? investigationSettings(
+          yield* readClaudeUserSettings(claudeSettings, cwd, claudeEnvironment).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(HostProcess.HomeDirectory, home),
+          ),
+          launchSettings,
+        )
+      : { ...launchSettings };
+    const { env: homePinnedEnv } = claudeHomeFlagSettings(claudeEnvironment);
+    const settings: Record<string, unknown> = {
+      ...baseSettings,
+      ...(homePinnedEnv === undefined
+        ? {}
+        : {
+            env: {
+              ...(Predicate.isObject(baseSettings.env) ? baseSettings.env : {}),
+              ...homePinnedEnv,
+            },
+          }),
+      disableAllHooks: true,
+      ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+      ...(typeof ultracode === "boolean" ? { ultracode } : {}),
+    };
     const settingsJson = yield* encodeJsonForOperation(
       operation,
       settings,
@@ -474,7 +514,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
                 CLAUDE_INVESTIGATION_DENIED,
               ]
             : ["--tools", ""]),
-          ...(investigate ? ["--setting-sources", "user"] : []),
+          ...(investigate ? ["--setting-sources", ""] : []),
           "--disable-slash-commands",
           ...(noSessionPersistence ? [NO_SESSION_PERSISTENCE] : []),
           // managed-mcp.json already isolates servers and makes Claude reject this flag.
