@@ -1,6 +1,6 @@
 import { npmProviderPackageNames, resolveNpmGlobalLatestVersion } from "./maintenanceNpm.ts";
 import { resolveMacPortsOwner } from "./maintenanceMacPorts.ts";
-import { runProbe } from "./maintenanceProbe.ts";
+import { NPM_REGISTRY_PROBE_TIMEOUT, runProbe } from "./maintenanceProbe.ts";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
 import { quoteShellWord, quoteUpdateExecutable } from "./maintenanceShellQuote.ts";
 import { followVitePlusSystemFirstShim, vitePlusLatestVersion } from "./maintenanceVitePlus.ts";
@@ -735,6 +735,8 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
       "version",
     ],
     env,
+    [0],
+    NPM_REGISTRY_PROBE_TIMEOUT,
   ).pipe(
     Effect.map((stdout) => {
       const value = stdout ? Option.getOrNull(decodeNpmViewVersion(stdout.trim())) : null;

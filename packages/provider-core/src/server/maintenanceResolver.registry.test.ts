@@ -5,19 +5,23 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind } from "@goat/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
 import * as ProviderLatestVersions from "./ProviderLatestVersions.ts";
 import {
+  enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
   resolveLatestProviderVersion,
@@ -40,6 +44,28 @@ const packageToolUpdate = makePackageManagedProviderMaintenanceResolver({
   npmPackageName: "@example/package-tool",
   nativeUpdate: null,
 });
+const nativePackageToolUpdate = makePackageManagedProviderMaintenanceResolver({
+  provider: driver("nativePackageTool"),
+  npmPackageName: "@example/native-package-tool",
+  nativeUpdate: {
+    executable: "native-package-tool",
+    args: ["update"],
+    lockKey: "native-package-tool",
+  },
+});
+const installedPackageToolProvider: ServerProvider = {
+  instanceId: ProviderInstanceId.make("nativePackageTool"),
+  driver: driver("nativePackageTool"),
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-04-10T00:00:00.000Z",
+  models: [],
+  slashCommands: [],
+  skills: [],
+};
 function writeExecutable(path: string) {
   NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
   NodeFS.writeFileSync(path, "#!/bin/sh\n");
@@ -134,6 +160,83 @@ it.layer(
         Effect.provideService(
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die("configured registries must not use public npm")),
+        ),
+      ),
+  );
+
+  // A killed `npm view` leaves its partial packument in npm's cache tmp dir.
+  it.effect.skipIf(!symlinksSupported || windowsHost)(
+    "neither a refresh nor the probe timeout kills a slow npm version check or starts another download",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDir("goat-interrupted-npm-view");
+        const npmBinDir = NodePath.join(tempDir, "npm-bin");
+        writeExecutable(NodePath.join(npmBinDir, "npm"));
+        const binaryPath = NodePath.join(tempDir, ".local/bin/native-package-tool");
+        writeExecutable(binaryPath);
+        const spawned = yield* Deferred.make<void>();
+        const download = yield* Deferred.make<void>();
+        let spawns = 0;
+        let downloaded = false;
+        let killedMidDownload = 0;
+        const slowNpmView = ChildProcessSpawner.make(() =>
+          Effect.sync(() => {
+            spawns++;
+            Deferred.doneUnsafe(spawned, Effect.void);
+            return ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(spawns),
+              exitCode: Deferred.await(download).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              isRunning: Effect.succeed(true),
+              kill: () =>
+                Effect.sync(() => {
+                  if (!downloaded) killedMidDownload++;
+                }),
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.fromEffect(Deferred.await(download)).pipe(
+                Stream.as('"1.2.0"'),
+                Stream.encodeText,
+              ),
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            });
+          }),
+        );
+        const capabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(
+          nativePackageToolUpdate,
+          { binaryPath, env: { PATH: "" } },
+        ).pipe(
+          Effect.provideService(HostProcess.Environment, { PATH: npmBinDir }),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, slowNpmView),
+        );
+        const check = enrichProviderSnapshotWithVersionAdvisory(
+          installedPackageToolProvider,
+          capabilities,
+        );
+
+        const first = yield* Effect.forkChild(check);
+        yield* Deferred.await(spawned);
+        // A provider refresh interrupts the enrichment still in flight.
+        yield* Fiber.interrupt(first);
+        const second = yield* Effect.forkChild(check);
+        yield* Effect.yieldNow;
+        // A slow registry outlasts the probe timeout.
+        yield* TestClock.adjust("1 minute");
+        downloaded = true;
+        yield* Deferred.succeed(download, undefined);
+        const snapshot = yield* Fiber.join(second);
+
+        expect(snapshot.versionAdvisory?.latestVersion).toBe("1.2.0");
+        expect({ spawns, killedMidDownload }).toEqual({ spawns: 1, killedMidDownload: 0 });
+      }).pipe(
+        Effect.provide(ProviderLatestVersions.layer),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() =>
+            Effect.die("a configured npm lookup must not fall back to public npm"),
+          ),
         ),
       ),
   );

@@ -9,6 +9,9 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { providerProbeEnvironment } from "./probeEnvironment.ts";
 const PROBE_TIMEOUT_MS = 10_000;
+// npm leaves a killed packument download in its cache's tmp dir, so registry probes are
+// bounded by npm's own fetch-timeout instead of being killed.
+export const NPM_REGISTRY_PROBE_TIMEOUT = null;
 const PROBE_MAX_BYTES = 256 * 1_024;
 
 export const runProbe = Effect.fn("runProbe")(function* (
@@ -16,6 +19,7 @@ export const runProbe = Effect.fn("runProbe")(function* (
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
   okExitCodes: ReadonlyArray<number> = [0],
+  timeoutMs: number | null = PROBE_TIMEOUT_MS,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const collect = Effect.gen(function* () {
@@ -43,8 +47,13 @@ export const runProbe = Effect.fn("runProbe")(function* (
   });
   return yield* collect.pipe(
     Effect.scoped,
-    Effect.timeoutOption(Duration.millis(PROBE_TIMEOUT_MS)),
-    Effect.map(Option.getOrNull),
+    (scoped) =>
+      timeoutMs === null
+        ? scoped
+        : scoped.pipe(
+            Effect.timeoutOption(Duration.millis(timeoutMs)),
+            Effect.map(Option.getOrNull),
+          ),
     Effect.catchCause((cause) =>
       Effect.logWarning("Maintenance probe failed", {
         command,

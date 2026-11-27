@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
-import { runProbe } from "./maintenanceProbe.ts";
+import { NPM_REGISTRY_PROBE_TIMEOUT, runProbe } from "./maintenanceProbe.ts";
 import type { ProviderMaintenanceResolverServices } from "./maintenanceResolver.ts";
 
 const nonEmptyString = (value: unknown) =>
@@ -63,6 +63,7 @@ const runNpmGlobalLatestVersions = Effect.fn("runNpmGlobalLatestVersions")(funct
     env,
     // npm outdated exits 1 when updates are available.
     [0, 1],
+    NPM_REGISTRY_PROBE_TIMEOUT,
   );
   const outdatedEntries = outdated ? Option.getOrUndefined(decodeOutdated(outdated)) : undefined;
   // npm prints failures such as an unreachable registry as `{"error": ...}`, also exiting 1.
