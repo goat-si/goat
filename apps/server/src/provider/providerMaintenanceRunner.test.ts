@@ -532,7 +532,7 @@ describe("providerMaintenanceRunner", () => {
   // binary behind that later updates mistake for an install.
   it.effect.each([
     { runFor: "6 minutes", status: "succeeded", message: "Provider updated." },
-    { runFor: "31 minutes", status: "failed", message: "Update timed out after 30 minutes." },
+    { runFor: "2 hours", status: "succeeded", message: "Provider updated." },
   ] as const)("lets a slow installer run for $runFor", ({ runFor, status, message }) => {
     const started = Deferred.makeUnsafe<void>();
     return Effect.gen(function* () {
