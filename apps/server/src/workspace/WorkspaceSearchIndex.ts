@@ -10,6 +10,8 @@ import type {
   MixedItem,
   Result,
 } from "@ff-labs/fff-node";
+import * as Clock from "effect/Clock";
+import * as Semaphore from "effect/Semaphore";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -134,7 +136,7 @@ export class WorkspaceSearchIndex extends Context.Service<
       ProjectSearchContentsResult,
       WorkspaceSearchIndexScanTimedOut | WorkspaceSearchIndexSearchFailed
     >;
-    readonly refresh: () => Effect.Effect<void, WorkspaceSearchIndexRefreshFailed>;
+    readonly refresh: (mode?: "passive") => Effect.Effect<void, WorkspaceSearchIndexRefreshFailed>;
   }
 >()("goat/workspace/WorkspaceSearchIndex") {}
 
@@ -525,40 +527,54 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
     }
   });
 
+  const refreshPermit = yield* Semaphore.make(1);
+  let lastRefreshStartedAt: number | undefined;
   const refresh: WorkspaceSearchIndex["Service"]["refresh"] = Effect.fn(
     "WorkspaceSearchIndex.refresh",
-  )(function* () {
-    // scanFiles waits on fff's picker lock, which its watcher can hold for seconds.
-    const result = yield* Effect.tryPromise({
-      try: () => finder.scanFilesAsync(),
-      catch: (cause) =>
-        new WorkspaceSearchIndexRefreshFailed({
-          cwd,
-          reason: "FileFinder.scanFilesAsync rejected unexpectedly.",
-          cause,
-        }),
-    });
-    if (!result.ok) {
-      return yield* new WorkspaceSearchIndexRefreshFailed({
-        cwd,
-        reason: result.error,
+  )(
+    function* (mode) {
+      const now = yield* Clock.currentTimeMillis;
+      if (mode === "passive") {
+        if (lastRefreshStartedAt !== undefined && now - lastRefreshStartedAt < 60_000) return;
+        if (yield* isScanning) return;
+      }
+      // scanFiles waits on fff's picker lock, which its watcher can hold for seconds.
+      const result = yield* Effect.tryPromise({
+        try: () => finder.scanFilesAsync(),
+        catch: (cause) =>
+          new WorkspaceSearchIndexRefreshFailed({
+            cwd,
+            reason: "FileFinder.scanFilesAsync rejected unexpectedly.",
+            cause,
+          }),
       });
-    }
-    // A rescan that outlasts the wait keeps running, and the finder answers
-    // from its previous index until it finishes, so the index stays usable.
-    yield* waitForIndexReady(
-      cwd,
-      finder,
-      ({ reason, cause }) =>
-        new WorkspaceSearchIndexRefreshFailed({
+      if (!result.ok) {
+        return yield* new WorkspaceSearchIndexRefreshFailed({
           cwd,
-          reason,
-          cause,
-        }),
-    ).pipe(Effect.catchTags({ WorkspaceSearchIndexScanTimedOut: () => Effect.void }));
-    gitIgnore = yield* loadGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
-    invalidateSymlinkScan();
-  });
+          reason: result.error,
+        });
+      }
+      lastRefreshStartedAt = now;
+      // A rescan that outlasts the wait keeps running, and the finder answers
+      // from its previous index until it finishes, so the index stays usable.
+      yield* waitForIndexReady(
+        cwd,
+        finder,
+        ({ reason, cause }) =>
+          new WorkspaceSearchIndexRefreshFailed({
+            cwd,
+            reason,
+            cause,
+          }),
+      ).pipe(Effect.catchTags({ WorkspaceSearchIndexScanTimedOut: () => Effect.void }));
+      gitIgnore = yield* loadGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
+      invalidateSymlinkScan();
+    },
+    (effect, mode) =>
+      mode === "passive"
+        ? refreshPermit.withPermitsIfAvailable(1)(effect).pipe(Effect.asVoid)
+        : refreshPermit.withPermit(effect),
+  );
 
   const list: WorkspaceSearchIndex["Service"]["list"] = Effect.fn("WorkspaceSearchIndex.list")(
     function* () {
