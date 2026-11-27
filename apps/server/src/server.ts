@@ -84,6 +84,7 @@ import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as RelayClient from "@goat/shared/relayClient";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
@@ -1052,7 +1053,7 @@ const layerMakeRoutes = Layer.mergeAll(
       ScreenCodeLayers.withScreenCode,
     ),
   ),
-  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(Layer.merge(PreviewAutomationBroker.layer, ProviderMaintenanceRunner.layer)),
   Layer.provide(ConnectionCatalogBroker.layer),
   Layer.provide(
     ServerSelfUpdate.layer.pipe(
@@ -1062,8 +1063,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(layerCommandReadiness),
-  Layer.provide(ServerHttp.layerBrowserApiCors),
-  Layer.provide(ServerHttp.layerHttpCompression),
+  Layer.provide(Layer.merge(ServerHttp.layerBrowserApiCors, ServerHttp.layerHttpCompression)),
   Layer.provide(ServerHttp.layerUnloggedSignedRequests),
 );
 

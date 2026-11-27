@@ -4,6 +4,7 @@ import {
   type ServerProvider,
   type ServerProviderUpdateState,
 } from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -225,27 +226,25 @@ const makeTestRunner = (
   },
   latestVersions: Layer.Layer<ProviderLatestVersions.ProviderLatestVersions> = ProviderLatestVersions.layer,
 ) =>
-  Effect.service(ProviderMaintenanceRunner.ProviderMaintenanceRunner).pipe(
-    Effect.provide(
-      ProviderMaintenanceRunner.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(ProviderRegistry.ProviderRegistry, registry),
-            Layer.succeed(ModelManifest.ModelManifest, {
-              current: Effect.succeed(manifest),
-              refresh: Effect.succeed(manifest),
-              forceRefresh: Effect.succeed(manifest),
-              refreshOnDemand: Effect.succeed(manifest),
-              refreshInBackground: Effect.void,
-            }),
-            latestVersions,
-            // Layers memoize by reference, so a test that provides the gate shares it.
-            ProviderInstallationGate.layer,
-          ),
+  Layer.build(
+    ProviderMaintenanceRunner.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(ProviderRegistry.ProviderRegistry, registry),
+          Layer.succeed(ModelManifest.ModelManifest, {
+            current: Effect.succeed(manifest),
+            refresh: Effect.succeed(manifest),
+            forceRefresh: Effect.succeed(manifest),
+            refreshOnDemand: Effect.succeed(manifest),
+            refreshInBackground: Effect.void,
+          }),
+          latestVersions,
+          // Layers memoize by reference, so a test that provides the gate shares it.
+          ProviderInstallationGate.layer,
         ),
       ),
     ),
-  );
+  ).pipe(Effect.map(Context.get(ProviderMaintenanceRunner.ProviderMaintenanceRunner)));
 
 function layerFailingLatestLookupAfterFirst() {
   let lookups = 0;
