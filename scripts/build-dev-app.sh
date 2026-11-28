@@ -11,6 +11,8 @@
 # Lane branches can build with --no-install.
 # Refuses to build when `pnpm -r typecheck` or `cargo test --workspace --locked` fails, so a broken
 # goat2 is never installed (owner 2026-11-28). --locked also refuses a Cargo.lock that is out of date.
+# Installing also takes /tmp/goat2-merge.lock (refusing while a lane merges) and builds only when HEAD
+# is origin/goat2 after a fetch, with a clean tree, so the stamp is a commit that exists on origin.
 set -euo pipefail
 
 APP_NAME="GOAT 2 (Dev)"
@@ -37,6 +39,28 @@ if [[ "$BRANCH" != "goat2" && $INSTALL == 1 ]]; then
   echo "the installed Dev app is built from goat2 (this checkout is on $BRANCH)." >&2
   echo "run it in ~/Developer/goat2, or pass --no-install" >&2
   exit 1
+fi
+MERGE_LOCK="/tmp/goat2-merge.lock"
+if [[ $INSTALL == 1 ]]; then
+  # The merge procedure (docs/lanes/PART1.md) holds this lock while a lane merges into this checkout
+  # and tests the result; HEAD can then be a merge that is not pushed yet. Take it for the whole
+  # build so no merge changes the checkout under the build either.
+  if ! mkdir "$MERGE_LOCK" 2>/dev/null; then
+    echo "a merge into goat2 is in progress ($MERGE_LOCK exists): not building. Run again when it is gone." >&2
+    exit 1
+  fi
+  trap 'rmdir "$MERGE_LOCK"' EXIT
+  git fetch -q origin goat2
+  if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/goat2)" ]]; then
+    echo "HEAD $COMMIT is not origin/goat2 $(git rev-parse --short=12 origin/goat2): not building." >&2
+    echo "bring this checkout to origin/goat2 first (git pull --ff-only origin goat2)" >&2
+    exit 1
+  fi
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "this checkout has local changes: not building (the stamp must be origin/goat2 $COMMIT)" >&2
+    git status --short >&2
+    exit 1
+  fi
 fi
 DIRTY=false
 # Untracked files count too: cargo uses an untracked Cargo.lock, vite and tsc read untracked sources.
