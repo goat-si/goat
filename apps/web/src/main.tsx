@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./app.css";
 // v1 CSS scoped to [data-v1] (postcss.config.js); loaded with the app so the bot-home baselines prove it leaks nothing.
+import "./v1/index.css";
 import "./v1/seam/v1-entry.css";
 import { App } from "./App.tsx";
 import { HostProvider, createHostFromLocation } from "./host/HostProvider.tsx";

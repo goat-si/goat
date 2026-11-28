@@ -1,5 +1,5 @@
 // postcss-prefix-selector transform for the v1 CSS (devlog 070 Revision A2.3): runs after @tailwindcss/postcss, only on
-// files under src/v1 (the entry seam/v1-entry.css with v1 index.css and Tailwind inlined).
+// files under src/v1 (v1 index.css with Tailwind inlined, and the seam rules in seam/v1-entry.css).
 //   :root / :host               -> [data-v1]                    (tokens, color-scheme, preflight font and line-height
 //                                                                live on every v1 boundary; same specificity as :root)
 //   html / body                 -> [data-v1-body]               (v1's page rules: height 100%, overflow hidden,

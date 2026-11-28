@@ -194,7 +194,10 @@ export class FakeProviders {
             models: [model("default", `${a?.name ?? f.driver} default`, true)], message: "Not signed in" }),
           ...(f.driver === "acpRegistry" ? { authFlow: agentAuth(f.instanceId) } : {}),
         };
-        this.replace({ ...base, driver: f.driver, enabled: f.enabled, ...(f.displayName ? { displayName: f.displayName } : {}), ...(f.acpAgentId ? { acpAgentId: f.acpAgentId } : {}) });
+        // The whole instance is replaced, as lane E's host does (core/commands.rs SetProviderInstance): an omitted name
+        // or registry agent is cleared.
+        const { displayName: _name, acpAgentId: _agent, ...rest } = base;
+        this.replace({ ...rest, driver: f.driver, enabled: f.enabled, ...(f.displayName ? { displayName: f.displayName } : {}), ...(f.acpAgentId ? { acpAgentId: f.acpAgentId } : {}) });
         return { ok: true, value: {} };
       }
       default:

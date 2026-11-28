@@ -32,6 +32,21 @@ describe("provider seam: fake host data through v1 schemas", () => {
     expect(s.providerInstances["codex" as never]).toBeUndefined();
     expect(withHostInstances(s, demoProviderEntries(AT) as unknown as Goat2ProviderEntry[])).toBe(s);
   });
+  it("each host list replaces the instances: removed ones go, a cleared name clears, a plain default turns implicit again", () => {
+    const entries = demoProviderEntries(AT) as unknown as Goat2ProviderEntry[];
+    const named = entries.map((e) => (e.instanceId === "codex" ? { ...e, displayName: "Work Codex" } : e));
+    const s = withHostInstances(DEFAULT_SERVER_SETTINGS, named);
+    expect(s.providerInstances["codex" as never]).toMatchObject({ displayName: "Work Codex" });
+    const kimi = s.providerInstances["acp-kimi-code" as never] as { config: Record<string, unknown> };
+    const withExtra = { ...s, providerInstances: { ...s.providerInstances, ["acp-kimi-code" as never]: { ...kimi, config: { ...kimi.config, env: "x" } } } };
+    const after = withHostInstances(withExtra, entries.filter((e) => e.instanceId !== "acp-kilo").map((e) => (e.instanceId === "acp-kimi-code" ? { ...e, displayName: undefined } : e)));
+    expect(after.providerInstances["codex" as never]).toBeUndefined();
+    expect(after.providerInstances["acp-kilo" as never]).toBeUndefined();
+    expect(s.providerInstances["acp-kilo" as never]).toBeDefined();
+    const kimiAfter = after.providerInstances["acp-kimi-code" as never] as Record<string, unknown>;
+    expect(kimiAfter.displayName).toBeUndefined();
+    expect(kimiAfter.config).toEqual({ env: "x", agentId: "kimi-code" });
+  });
   it("drivers the host does not report show switched off with the reason; host entries win", () => {
     const codexOnly = demoProviderEntries(AT).filter((e) => e.instanceId === "codex") as unknown as Goat2ProviderEntry[];
     const placeholders = unservedPlaceholders(codexOnly, AT);

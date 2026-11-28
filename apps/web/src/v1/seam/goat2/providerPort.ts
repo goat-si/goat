@@ -181,37 +181,35 @@ export function unservedPlaceholders(entries: ReadonlyArray<Goat2ProviderEntry>,
 
 /**
  * v1's provider settings list rows from settings.providerInstances (plus each driver's default slot,
- * ProviderSettingsPanel.tsx:763-830). On GOAT 2 the host owns the instances, so each entry is folded in: driver,
- * enablement, display name and the ACP registry agent (v1 acpRegistry config.agentId) come from the host; other
- * config fields set in this window stay. An enabled, unnamed default slot stays implicit, as in v1.
+ * ProviderSettingsPanel.tsx:763-830). On GOAT 2 the host owns the instances and every providers frame is the full list,
+ * so the list replaces them: an instance the host no longer reports is removed, and driver, enablement, display name
+ * and the ACP registry agent (v1 acpRegistry config.agentId) are the host's, including a cleared name. Other config
+ * fields on an instance the host still reports stay. An enabled, unnamed default slot is implicit, as in v1.
  */
 export function withHostInstances(settings: ServerSettings, entries: ReadonlyArray<Goat2ProviderEntry>): ServerSettings {
-  const instances: Record<string, ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]]> = {
-    ...settings.providerInstances,
-  };
-  let changed = false;
+  type Instance = ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]];
+  const previous = settings.providerInstances as Record<string, Instance>;
+  const instances: Record<string, Instance> = {};
   for (const entry of entries) {
-    const existing = instances[entry.instanceId];
+    const existing = previous[entry.instanceId];
     // v1 lists an unconfigured default slot only for its enabled-by-default drivers (Codex, Claude); every other
     // instance the host reports is configured here, so it gets a row as it would in v1 once set up.
-    if (!existing && entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId
+    if (entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId
       && isUnconfiguredDefaultInstanceEnabled(ProviderInstanceId.make(entry.instanceId))) continue;
-    const config = entry.acpAgentId
-      ? { ...((existing?.config as object | undefined) ?? {}), agentId: entry.acpAgentId }
-      : existing?.config;
-    const next = {
-      ...existing,
-      driver: entry.driver as ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]]["driver"],
+    const { displayName: _name, config: oldConfig, ...kept } = (existing ?? {}) as Instance & { displayName?: string; config?: unknown };
+    const { agentId: _agent, ...otherConfig } = (oldConfig && typeof oldConfig === "object" ? oldConfig : {}) as Record<string, unknown>;
+    const config = entry.acpAgentId ? { ...otherConfig, agentId: entry.acpAgentId } : Object.keys(otherConfig).length > 0 ? otherConfig : undefined;
+    instances[entry.instanceId] = {
+      ...kept,
+      driver: entry.driver as Instance["driver"],
       enabled: entry.enabled,
       ...(entry.displayName ? { displayName: entry.displayName } : {}),
       ...(config !== undefined ? { config } : {}),
-    };
-    if (JSON.stringify(next) !== JSON.stringify(existing)) {
-      instances[entry.instanceId] = next;
-      changed = true;
-    }
+    } as Instance;
   }
-  return changed ? { ...settings, providerInstances: instances as ServerSettings["providerInstances"] } : settings;
+  const same = Object.keys(instances).length === Object.keys(previous).length
+    && Object.entries(instances).every(([id, next]) => JSON.stringify(next) === JSON.stringify(previous[id]));
+  return same ? settings : { ...settings, providerInstances: instances as ServerSettings["providerInstances"] };
 }
 
 /** Server settings the provider screens read and write (favorites, provider instances). */
