@@ -73,6 +73,8 @@ export function createThreadTriageOutbox<R, E>(input: {
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
   readonly shellStatusAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellStatus>;
+  /** When false (e.g. a surface without shell status wiring), offline queueing is disabled. */
+  readonly enabled?: boolean;
   /** Returns the thread itself when the action cannot apply to it. */
   readonly apply: (
     thread: OrchestrationV2ThreadShell,
@@ -85,9 +87,35 @@ export function createThreadTriageOutbox<R, E>(input: {
     entry: PendingThreadTriage,
   ) => Promise<AtomCommandResult<unknown, unknown>>;
 }) {
+  const enabled = input.enabled ?? true;
+  const emptyPendingAtom = Atom.make(new Set<ThreadId>() as ReadonlySet<ThreadId>).pipe(
+    Atom.keepAlive,
+  );
   const entriesAtom = Atom.make<PendingThreadTriages>([]).pipe(Atom.keepAlive);
   // Storage is shared with other tabs, so memory takes each result in the order storage gave it.
   const order = Semaphore.makeUnsafe(1);
+  // Per-thread lock serializing replay check+send against queue persistence and cancel/undo.
+  const threadLocks = new Map<string, Semaphore.Semaphore>();
+  const threadLock = (environmentId: EnvironmentId, threadId: ThreadId) => {
+    const key = `${environmentId}\0${threadId}`;
+    let lock = threadLocks.get(key);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      threadLocks.set(key, lock);
+    }
+    return lock;
+  };
+  const replayGenerationAtom = Atom.family((_environmentId: EnvironmentId) =>
+    Atom.make(0).pipe(Atom.keepAlive),
+  );
+  const triggerReplayIfLive = (
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+  ) => {
+    if (registry.get(input.shellStatusAtom(environmentId)) === "live") {
+      registry.update(replayGenerationAtom(environmentId), (generation) => generation + 1);
+    }
+  };
   const update = Effect.fn("ThreadTriageOutbox.update")(function* (
     registry: AtomRegistry.AtomRegistry,
     change: (stored: PendingThreadTriages) => PendingThreadTriages,
@@ -148,34 +176,50 @@ export function createThreadTriageOutbox<R, E>(input: {
     registry: AtomRegistry.AtomRegistry,
     environmentId: EnvironmentId,
   ) {
-    for (const entry of yield* read(registry)) {
-      if (entry.environmentId !== environmentId) continue;
-      // Read again: this or another tab may have cancelled or replaced it while an earlier
-      // change was being sent.
-      const stored = yield* read(registry);
-      if (!stored.some((current) => current.commandId === entry.commandId)) continue;
-      const thread = registry
-        .get(input.sourceSnapshotAtom(environmentId))
-        ?.threads.find((candidate) => candidate.id === entry.threadId);
-      if (
-        thread !== undefined &&
-        seenState(thread) === entry.seen &&
-        input.apply(thread, entry.action, DateTime.nowUnsafe()) !== thread
-      ) {
-        const sent = yield* Effect.promise(() => input.send(registry, entry));
-        if (sent._tag === "Failure" && isTransient(sent.cause)) continue;
+    while (registry.get(input.shellStatusAtom(environmentId)) === "live") {
+      let hadTransientFailure = false;
+      for (const entry of yield* read(registry)) {
+        if (entry.environmentId !== environmentId) continue;
+        const transient = yield* threadLock(environmentId, entry.threadId).withPermit(
+          Effect.gen(function* () {
+            // Read again under the per-thread lock: undo or another tab may have cancelled or
+            // replaced this entry while an earlier change was being sent.
+            const stored = yield* read(registry);
+            if (!stored.some((current) => current.commandId === entry.commandId)) return false;
+            const thread = registry
+              .get(input.sourceSnapshotAtom(environmentId))
+              ?.threads.find((candidate) => candidate.id === entry.threadId);
+            if (
+              thread !== undefined &&
+              seenState(thread) === entry.seen &&
+              input.apply(thread, entry.action, DateTime.nowUnsafe()) !== thread
+            ) {
+              const sent = yield* Effect.promise(() => input.send(registry, entry));
+              if (sent._tag === "Failure" && isTransient(sent.cause)) return true;
+            }
+            yield* forgetEffect(registry, entry.commandId);
+            return false;
+          }),
+        );
+        if (transient) hadTransientFailure = true;
       }
-      yield* forgetEffect(registry, entry.commandId);
+      if (!hadTransientFailure || registry.get(input.shellStatusAtom(environmentId)) !== "live") {
+        break;
+      }
+      // Retry transiently failed entries while the shell stays live; interrupted automatically if
+      // the shell leaves "live" or another queue event bumps replayGenerationAtom.
+      yield* Effect.sleep("2 seconds");
     }
   });
-  // Rebuilt on each shell status, which stops a replay when the shell is no longer synchronized
-  // and so keeps one replay per environment. Any other status only loads what is stored.
+  // Rebuilt on each shell status or live-queue bump, which stops a replay when the shell is no
+  // longer synchronized and keeps one replay per environment. Any other status only loads storage.
   const syncAtom = Atom.family((environmentId: EnvironmentId) =>
-    input.runtime.atom((get) =>
-      get(input.shellStatusAtom(environmentId)) === "live"
+    input.runtime.atom((get) => {
+      get(replayGenerationAtom(environmentId));
+      return get(input.shellStatusAtom(environmentId)) === "live"
         ? replay(get.registry, environmentId)
-        : Effect.asVoid(read(get.registry)),
-    ),
+        : Effect.asVoid(read(get.registry));
+    }),
   );
   const environmentEntriesAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
@@ -185,26 +229,32 @@ export function createThreadTriageOutbox<R, E>(input: {
   );
 
   const snapshotAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get) => {
-      const snapshot = get(input.sourceSnapshotAtom(environmentId));
-      const entries = get(environmentEntriesAtom(environmentId));
-      if (snapshot === null || entries.length === 0) return snapshot;
-      const byThread = new Map(entries.map((entry) => [entry.threadId, entry]));
-      return {
-        ...snapshot,
-        threads: snapshot.threads.map((thread) => {
-          const entry = byThread.get(thread.id);
-          return entry === undefined ? thread : input.apply(thread, entry.action, entry.queuedAt);
-        }),
-      };
-    }),
+    enabled
+      ? Atom.make((get) => {
+          const snapshot = get(input.sourceSnapshotAtom(environmentId));
+          const entries = get(environmentEntriesAtom(environmentId));
+          if (snapshot === null || entries.length === 0) return snapshot;
+          const byThread = new Map(entries.map((entry) => [entry.threadId, entry]));
+          return {
+            ...snapshot,
+            threads: snapshot.threads.map((thread) => {
+              const entry = byThread.get(thread.id);
+              return entry === undefined
+                ? thread
+                : input.apply(thread, entry.action, entry.queuedAt);
+            }),
+          };
+        })
+      : input.sourceSnapshotAtom(environmentId),
   );
 
   const pendingSyncAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get): ReadonlySet<ThreadId> =>
-        new Set(get(environmentEntriesAtom(environmentId)).map((entry) => entry.threadId)),
-    ),
+    enabled
+      ? Atom.make(
+          (get): ReadonlySet<ThreadId> =>
+            new Set(get(environmentEntriesAtom(environmentId)).map((entry) => entry.threadId)),
+        )
+      : emptyPendingAtom,
   );
 
   const queue = Effect.fn("ThreadTriageOutbox.queue")(function* (
@@ -242,6 +292,7 @@ export function createThreadTriageOutbox<R, E>(input: {
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
     toAction: (input: I) => PendingThreadTriage["action"],
   ): AtomCommand<Target<I>, { readonly sequence: number }, CE> {
+    if (!enabled) return command;
     return {
       label: command.label,
       run: async (registry, target) => {
@@ -271,7 +322,15 @@ export function createThreadTriageOutbox<R, E>(input: {
         const queued = await runInRuntime(
           registry,
           "thread-triage-outbox:queue",
-          queue(registry, environmentId, thread, action, queuedAt),
+          threadLock(environmentId, threadId).withPermit(
+            queue(registry, environmentId, thread, action, queuedAt).pipe(
+              Effect.tap((stored) =>
+                Effect.sync(() => {
+                  if (stored) triggerReplayIfLive(registry, environmentId);
+                }),
+              ),
+            ),
+          ),
         );
         return queued._tag === "Success" && queued.value
           ? AsyncResult.success({ sequence: snapshot.snapshotSequence })
@@ -294,44 +353,52 @@ export function createThreadTriageOutbox<R, E>(input: {
     { readonly sequence: number; readonly cancelledOnDevice?: true },
     CE | ThreadTriageOutboxStorageError | E
   > {
+    if (!enabled) return command;
     const cancelled = { sequence: 0, cancelledOnDevice: true } as const;
     return {
       label: command.label,
       run: async (registry, target) => {
         const { environmentId } = target;
         const { threadId } = target.input;
-        const live = registry.get(input.shellStatusAtom(environmentId)) === "live";
-        let removed = false;
-        const removeResult = await runInRuntime(
+        const outcome = await runInRuntime(
           registry,
           "thread-triage-outbox:cancel",
-          update(registry, (stored) => {
-            const kept = stored.filter(
-              (entry) =>
-                entry.environmentId !== environmentId ||
-                entry.threadId !== threadId ||
-                entry.action.type !== cancels,
-            );
-            removed = kept.length !== stored.length;
-            return removed ? kept : stored;
-          }),
+          threadLock(environmentId, threadId).withPermit(
+            Effect.gen(function* () {
+              let removed = false;
+              yield* update(registry, (stored) => {
+                const kept = stored.filter(
+                  (entry) =>
+                    entry.environmentId !== environmentId ||
+                    entry.threadId !== threadId ||
+                    entry.action.type !== cancels,
+                );
+                removed = kept.length !== stored.length;
+                return removed ? kept : stored;
+              });
+              // Re-read shell status under the per-thread lock after removal so a reconnect/replay
+              // that raced with this undo never leaves the server with the original action applied.
+              const live = registry.get(input.shellStatusAtom(environmentId)) === "live";
+              if (removed && !live) {
+                return AsyncResult.success(cancelled);
+              }
+              const result = yield* Effect.promise(() => command.run(registry, target));
+              if (result._tag === "Success") {
+                yield* forgetEffect(
+                  registry,
+                  pendingFor(registry, environmentId, threadId)?.commandId,
+                );
+                return result;
+              }
+              // The connection dropped before the shell noticed, so nothing was sent.
+              if (removed && hasUnavailableReason(result.cause)) {
+                return AsyncResult.success(cancelled);
+              }
+              return result;
+            }),
+          ),
         );
-        if (removeResult._tag === "Failure") {
-          return AsyncResult.failure(removeResult.cause);
-        }
-        if (removed && !live) {
-          return AsyncResult.success(cancelled);
-        }
-        const result = await command.run(registry, target);
-        if (result._tag === "Success") {
-          await forgetAsync(registry, pendingFor(registry, environmentId, threadId)?.commandId);
-          return result;
-        }
-        // The connection dropped before the shell noticed, so nothing was sent.
-        if (removed && hasUnavailableReason(result.cause)) {
-          return AsyncResult.success(cancelled);
-        }
-        return result;
+        return outcome._tag === "Success" ? outcome.value : AsyncResult.failure(outcome.cause);
       },
     };
   }

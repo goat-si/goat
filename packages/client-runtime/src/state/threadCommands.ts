@@ -214,9 +214,7 @@ export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | SecureRandom.SecureRandom | R, E>,
   snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationV2ShellSnapshot | null>,
   /** Offline settle and snooze are sent once this reports a synchronized shell. */
-  shellStatusAtom: (
-    environmentId: EnvironmentId,
-  ) => Atom.Atom<EnvironmentShellStatus> = DEFAULT_SHELL_STATUS_ATOM,
+  shellStatusAtom?: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellStatus>,
 ) {
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
@@ -599,7 +597,8 @@ export function createThreadEnvironmentAtoms<R, E>(
   const triage = createThreadTriageOutbox({
     runtime,
     sourceSnapshotAtom: snapshotAtom,
-    shellStatusAtom,
+    shellStatusAtom: shellStatusAtom ?? DEFAULT_SHELL_STATUS_ATOM,
+    enabled: shellStatusAtom !== undefined,
     apply: (thread, action, queuedAt) =>
       action.type === "settle"
         ? applySettle(thread, queuedAt, false)

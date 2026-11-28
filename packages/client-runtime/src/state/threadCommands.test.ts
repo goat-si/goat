@@ -15,6 +15,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -25,6 +26,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 import { RpcClientError } from "effect/rpc";
 import * as Socket from "effect/socket/Socket";
 import { Atom, AtomRegistry } from "effect/reactivity";
@@ -104,6 +106,8 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
   readonly connected?: boolean;
   /** Shared between harnesses to stand in for a restart. */
   readonly storage?: { value: string | null };
+  readonly withShellStatus?: boolean;
+  readonly beforeStorageWrite?: () => Effect.Effect<void>;
 }) {
   const requests = yield* Queue.unbounded<{
     command: OrchestrationV2Command;
@@ -136,12 +140,18 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
   } as EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
   const storage = options?.storage ?? { value: null };
   const store = makeThreadTriageOutboxStore((next) =>
-    Effect.sync(() => {
-      storage.value = next(storage.value) ?? storage.value;
+    Effect.gen(function* () {
+      const updated = next(storage.value);
+      if (updated !== null) {
+        if (options?.beforeStorageWrite) yield* options.beforeStorageWrite();
+        storage.value = updated;
+      }
     }),
   );
+  const clock = yield* Clock.Clock;
   const runtime = Atom.runtime(
     Layer.mergeAll(
+      Layer.succeed(Clock.Clock, clock),
       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
         run: (_environmentId, effect) =>
           Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -176,7 +186,10 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (optio
   const statusAtom = Atom.family((_environmentId: EnvironmentId) =>
     Atom.make<EnvironmentShellStatus>(options?.connected === false ? "cached" : "live"),
   );
-  const commands = createThreadEnvironmentAtoms(runtime, snapshotAtom, statusAtom);
+  const commands =
+    options?.withShellStatus === false
+      ? createThreadEnvironmentAtoms(runtime, snapshotAtom)
+      : createThreadEnvironmentAtoms(runtime, snapshotAtom, statusAtom);
   const registry = AtomRegistry.make();
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   const visibleAtom = commands.snapshotAtom(ENVIRONMENT_ID);
@@ -903,6 +916,82 @@ describe("settle and snooze while the environment is offline", () => {
         message: "Test is not connected.",
       });
       expect(yield* queued(h)).toEqual(before);
+    }),
+  );
+
+  it.effect("replays a settle whose storage write finishes after reconnect flips live", () =>
+    Effect.gen(function* () {
+      const writeStarted = yield* Deferred.make<void>();
+      const releaseWrite = yield* Deferred.make<void>();
+      let gate = true;
+      const h = yield* makeHarness({
+        connected: false,
+        beforeStorageWrite: () =>
+          gate
+            ? Effect.sync(() => {
+                gate = false;
+              }).pipe(
+                Effect.andThen(Deferred.succeed(writeStarted, undefined)),
+                Effect.andThen(Deferred.await(releaseWrite)),
+              )
+            : Effect.void,
+      });
+      const pending = h.commands.settle.run(h.registry, target);
+      yield* Deferred.await(writeStarted);
+      yield* h.reconnect();
+      yield* Deferred.succeed(releaseWrite, undefined);
+      expect((yield* Effect.promise(() => pending))._tag).toBe("Success");
+      const request = yield* Queue.take(h.requests);
+      expect(request.command.type).toBe("thread.settle");
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      yield* nothingPending(h);
+    }),
+  );
+
+  it.effect("retries a transiently failed replay while staying live", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false });
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      yield* h.reconnect();
+      const first = yield* Queue.take(h.requests);
+      yield* Deferred.fail(
+        first.reply,
+        new RpcClientError.RpcClientError({ reason: new Socket.SocketCloseError({ code: 1006 }) }),
+      );
+      yield* TestClock.adjust("2 seconds");
+      const retry = yield* Queue.take(h.requests);
+      expect(retry.command.type).toBe("thread.settle");
+      yield* Deferred.succeed(retry.reply, { sequence: 2 });
+      yield* nothingPending(h);
+    }),
+  );
+
+  it.effect("sends unsettle to the server when undo races with a live replay send", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false });
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      yield* h.reconnect();
+      const replayed = yield* Queue.take(h.requests);
+      const undoing = h.commands.unsettle.run(h.registry, undo);
+      yield* Deferred.succeed(replayed.reply, { sequence: 2 });
+      const reverse = yield* Queue.take(h.requests);
+      expect(reverse.command.type).toBe("thread.unsettle");
+      yield* Deferred.succeed(reverse.reply, { sequence: 3 });
+      const result = yield* Effect.promise(() => undoing);
+      expect(result._tag).toBe("Success");
+      expect(result._tag === "Success" && result.value.cancelledOnDevice).toBeUndefined();
+    }),
+  );
+
+  it.effect("does not queue offline actions when shellStatusAtom is omitted", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ connected: false, withShellStatus: false });
+      const result = yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      expect(result._tag === "Failure" && Cause.squash(result.cause)).toMatchObject({
+        _tag: "EnvironmentRpcUnavailableError",
+      });
+      expect(yield* queued(h)).toEqual([]);
+      expect(h.registry.get(h.pendingSyncAtom).size).toBe(0);
     }),
   );
 });

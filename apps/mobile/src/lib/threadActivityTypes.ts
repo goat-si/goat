@@ -1,3 +1,4 @@
+import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import type { WorkLogLineCounts } from "@goat/client-runtime/work-log/line-counts";
 import type {
   ToolGroupSummaryKind,
@@ -71,6 +72,7 @@ export interface ThreadFeedMessage {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly projectedItem?: OrchestrationV2ProjectedTurnItem;
+  readonly checkpointSummary?: ThreadCheckpointSummary;
 }
 
 export interface LocalThreadMessage {
@@ -126,6 +128,7 @@ export type RawThreadFeedEntry =
 
 export type ThreadFeedEntry = ThreadFeedEntryContent & {
   readonly continuesWorkLog?: boolean;
+  readonly checkpointSummary?: ThreadCheckpointSummary;
 };
 
 type ThreadFeedEntryContent =

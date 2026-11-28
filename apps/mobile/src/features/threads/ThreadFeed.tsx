@@ -63,6 +63,7 @@ import {
   IDLE_COMPACTING_LABELS,
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
+import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { assistantReplyStatusBadge } from "@goat/client-runtime/state/thread-workflows";
 import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
 import {
@@ -106,6 +107,7 @@ import {
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { TurnDiffStat } from "./TurnDiffStat";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
@@ -178,6 +180,8 @@ import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
 import { UserMessageCopyButton } from "./UserMessageCopyButton";
 import { PendingMessageWaitReason } from "./PendingMessageWaitReason";
+import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
+import { setReviewSelectedSectionId } from "../review/reviewState";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
 import {
@@ -831,6 +835,7 @@ function renderFeedEntry(
     readonly onToggleWorkGroup: (groupId: string, anchorKey?: string) => void;
     readonly onToggleWorkRow: (rowId: string, anchorKey?: string, groupId?: string) => void;
     readonly onToggleTurnFold: (runId: RunId) => void;
+    readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
     readonly onPressPreview: (source: FilePreviewSource) => void;
     readonly onPlaybackStart: () => void;
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
@@ -908,6 +913,12 @@ function renderFeedEntry(
             {...props.worktreeSetup}
             detailsOpen={props.setupDetailsOpen}
             onOpenDetails={props.onOpenSetupDetails}
+          />
+        ) : null}
+        {entry.checkpointSummary ? (
+          <TurnDiffStat
+            checkpoint={entry.checkpointSummary}
+            onOpenTurnDiff={props.onOpenTurnDiff}
           />
         ) : null}
       </View>
@@ -1008,9 +1019,17 @@ function renderFeedEntry(
         toolIcon={entry.toolIcon}
         summaryToolIcon={entry.summaryToolIcon}
         hasFailure={entry.hasFailure}
-        lineCounts={entry.lineCounts}
+        lineCounts={entry.checkpointSummary ? undefined : entry.lineCounts}
         shimmer={entry.shimmer}
         thought={entry.thought}
+        trailing={
+          entry.checkpointSummary ? (
+            <TurnDiffStat
+              checkpoint={entry.checkpointSummary}
+              onOpenTurnDiff={props.onOpenTurnDiff}
+            />
+          ) : null
+        }
         onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
       />
     );
@@ -1475,6 +1494,12 @@ function renderFeedEntry(
           onPressPreview={props.onPressPreview}
           onPlaybackStart={props.onPlaybackStart}
         />
+        {showAssistantMeta && message.checkpointSummary ? (
+          <TurnDiffStat
+            checkpoint={message.checkpointSummary}
+            onOpenTurnDiff={props.onOpenTurnDiff}
+          />
+        ) : null}
         {!showAssistantMeta && statusBadge ? (
           <View className="mt-1 flex-row">
             <AssistantStatusBadge status={statusBadge} />
@@ -1824,6 +1849,19 @@ export const ThreadFeed = memo(function ThreadFeed({
   const openPullRequest = useOpenPullRequest();
   const navigation = useNavigation();
   const openLinkedThread = useOpenLinkedThread();
+  const onOpenTurnDiff = useCallback(
+    (checkpoint: ThreadCheckpointSummary) => {
+      setReviewSelectedSectionId(
+        scopedThreadKey(props.environmentId, props.threadId),
+        getReviewSectionIdForCheckpoint(checkpoint),
+      );
+      navigation.navigate("ThreadReview", {
+        environmentId: props.environmentId,
+        threadId: props.threadId,
+      });
+    },
+    [navigation, props.environmentId, props.threadId],
+  );
   const { themeAppearance } = useAppearancePreferences();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
@@ -2884,7 +2922,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     if (entry.type === "html-render") {
       return htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
     }
-    if (workRowSizing.fixedRowHeight === undefined) {
+    if (workRowSizing.fixedRowHeight === undefined || entry.checkpointSummary) {
       return undefined;
     }
     switch (entry.type) {
@@ -2979,6 +3017,7 @@ export const ThreadFeed = memo(function ThreadFeed({
                 onToggleWorkGroup,
                 onToggleWorkRow,
                 onToggleTurnFold,
+                onOpenTurnDiff,
                 onPressPreview,
                 onPlaybackStart: onInlinePlaybackStart,
                 markdownLinkHandlers,
