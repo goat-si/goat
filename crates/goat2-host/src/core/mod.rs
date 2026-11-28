@@ -480,6 +480,11 @@ impl Host {
             .remove(parent_run);
     }
 
+    /// Whether a wait call is blocked on this child now (diagnostics and tests).
+    pub fn waiting_on(&self, child: &ThreadId) -> bool {
+        self.has_live_waiter(child)
+    }
+
     /// A wait call is still blocked on this child.
     pub(crate) fn has_live_waiter(&self, child: &ThreadId) -> bool {
         self.inner

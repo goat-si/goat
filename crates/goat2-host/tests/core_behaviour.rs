@@ -1589,7 +1589,10 @@ async fn a_keyed_wait_mode_retry_still_waits() {
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    eventually("the retry is waiting on the child", || {
+        t.host.waiting_on(&child)
+    })
+    .await;
     assert!(!retry.is_finished(), "the retry waits");
     t.fake.finish_turn(&child, "done now");
     let result = retry.await.unwrap();
