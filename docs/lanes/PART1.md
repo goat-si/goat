@@ -5,6 +5,12 @@ Design source of truth (read first): https://goat-si.github.io/goat2-design/prd/
 Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `storage`, `runtime`,
 `mcp`, `plan` (decisions, "host is Rust", "GOAT v1 equal-behaviour port", lane table).
 
+## structure/ (code-structure SSOT)
+- `structure/` on `goat2` is the single source of truth for where code lives and how parts talk
+  (map, processes, data, wire, deps, lanes, gaps). Read it before adding a crate, module, frame or dependency.
+- Code must match it. Do not edit it yourself: propose changes with
+  `aside session queue <owner> "[goat2_<lane> thread <id>] structure: <file> - <what/why>"`; the owner updates it.
+
 ## PRD repo
 - PRD source: `goat-si/goat2-design` (local `~/Developer/goat2-design`, pages in `prd-src/`, Part 1 in
   `prd-src/part1/*.md`, decisions in `prd-src/decisions.md`, roadmap in `prd-src/roadmap.md`).
