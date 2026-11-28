@@ -683,6 +683,15 @@ dependencies = [
 [[package]]
 name = "goat2-engine-codex"
 version = "0.0.0"
+dependencies = [
+ "goat2-contracts",
+ "jsonschema",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "goat2-host"
