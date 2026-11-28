@@ -27,11 +27,15 @@ use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::time::{Instant, timeout_at};
 
-use crate::engine::{CodexEngineOptions, base_launch};
+use crate::engine::{
+    CodexEngineOptions, base_launch, instance_layout, instance_options, materialize,
+};
+use crate::home_layout::HomeLayout;
 use crate::process::{ChildProcess, Launch};
 use crate::protocol::client::InitializeParams;
 use crate::protocol::methods;
 use crate::transport::Connection;
+use goat2_engine_api::ProviderTarget;
 
 /// v1 `CODEX_AUTH_PROBE_TIMEOUT_MS`: handshake plus account and models can exceed 10 s.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -54,13 +58,61 @@ const FORCE_KILL_AFTER: Duration = Duration::from_secs(2);
 
 /// [probe] with an explicit budget (tests).
 pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> ProviderProbeResult {
+    probe_layout(options, None, codex_home_setting(options), budget).await
+}
+
+/// [probe] for one provider instance: its launch settings and its own Codex home, laid out first
+/// (v1 materializes it before probing, CodexDriver.ts:310). The sign-in hint names the shared
+/// home from settings (v1 `homePath`, CodexProvider.ts:789), never the private one.
+pub async fn probe_instance(
+    options: &CodexEngineOptions,
+    target: &ProviderTarget,
+) -> ProviderProbeResult {
+    probe_instance_with(options, target, PROBE_TIMEOUT).await
+}
+
+/// [probe_instance] with an explicit budget (tests).
+pub async fn probe_instance_with(
+    options: &CodexEngineOptions,
+    target: &ProviderTarget,
+    budget: Duration,
+) -> ProviderProbeResult {
+    let options = instance_options(options, target.launch.as_ref());
+    let layout = instance_layout(&options, Some(target));
+    let hint = target
+        .shared_home
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .or_else(|| codex_home_setting(&options));
+    if let Some(layout) = &layout
+        && let Err(message) = materialize(layout)
+    {
+        let binary_path = resolve_binary(&options.program, &options);
+        return failed(
+            rfc3339_now(),
+            binary_path.is_some(),
+            None,
+            None,
+            binary_path,
+            message,
+        );
+    }
+    probe_layout(&options, layout.as_ref(), hint, budget).await
+}
+
+async fn probe_layout(
+    options: &CodexEngineOptions,
+    layout: Option<&HomeLayout>,
+    login_hint_home: Option<String>,
+    budget: Duration,
+) -> ProviderProbeResult {
     let checked_at = rfc3339_now();
     let program = options.program.clone();
     let binary_path = resolve_binary(&program, options);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
     let deadline = Instant::now() + budget;
     let spawned_at_ms = now_ms();
-    let mut launch = base_launch(options, &program, cwd.clone());
+    let mut launch = base_launch(options, &program, cwd.clone(), layout);
     launch.kill_grace = FORCE_KILL_AFTER;
     let mut child = match ChildProcess::spawn(&launch) {
         Ok(child) => child,
@@ -136,7 +188,7 @@ pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> Provi
             )
             .await
         }
-        Ok(Ok(snapshot)) => from_snapshot(snapshot, options, checked_at, binary_path),
+        Ok(Ok(snapshot)) => from_snapshot(snapshot, login_hint_home, checked_at, binary_path),
     }
 }
 
@@ -626,13 +678,12 @@ fn cache_fetched_at_ms(path: &Path) -> Option<i64> {
 
 fn from_snapshot(
     snapshot: Snapshot,
-    options: &CodexEngineOptions,
+    login_hint_home: Option<String>,
     checked_at: String,
     binary_path: Option<String>,
 ) -> ProviderProbeResult {
     let effective = snapshot.effective_base_url.as_deref();
-    let (status, mut auth, message) =
-        account_status(&snapshot.account, effective, codex_home_setting(options));
+    let (status, mut auth, message) = account_status(&snapshot.account, effective, login_hint_home);
     let config = snapshot.config.as_ref();
     auth.endpoint = codex_endpoint(config, effective);
     let models = snapshot.models.as_ref().map(|models| {

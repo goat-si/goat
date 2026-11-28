@@ -689,3 +689,156 @@ async fn a_silent_codex_times_out() {
         Some("Timed out while checking Codex app-server provider status.")
     );
 }
+
+/// A fresh empty folder (canonical, so symlink targets compare on macOS).
+#[cfg(unix)]
+fn fresh_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("goat2-probe-home-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.canonicalize().unwrap()
+}
+
+/// The fake codex behind a wrapper that records the CODEX_HOME and arguments it was started with.
+#[cfg(unix)]
+fn recording_codex(name: &str, record: &std::path::Path) -> std::path::PathBuf {
+    script(
+        name,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\" > '{}'\nprintf '%s\\n' \"$@\" >> '{}'\nexec '{}' \"$@\"\n",
+            record.display(),
+            record.display(),
+            env!("CARGO_BIN_EXE_goat2-fake-codex")
+        ),
+    )
+}
+
+/// v1 CodexHomeLayout: a second instance probes in its own auth overlay over the shared home,
+/// with CODEX_HOME set to it and the bundled-marketplace override before its own arguments.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_probe_runs_codex_in_its_own_overlay_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("overlay");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("config.toml"), "").unwrap();
+    std::fs::write(shared.join("auth.json"), "{}").unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let record = root.join("record");
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let f = factory(api_key_catalog(page));
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex("overlay", &record)),
+            args: vec!["--instance-arg".into()],
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(shared.clone()),
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    let lines: Vec<String> = std::fs::read_to_string(&record)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines[0], instance.display().to_string(), "CODEX_HOME");
+    let marketplace = format!(
+        "marketplaces.openai-bundled.source={}",
+        serde_json::to_string(
+            instance
+                .join(".tmp/bundled-marketplaces/openai-bundled")
+                .to_str()
+                .unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        lines[1..],
+        [
+            "app-server",
+            "-c",
+            "thread_unload_delay_secs=0",
+            "-c",
+            marketplace.as_str(),
+            "--instance-arg"
+        ]
+    );
+    assert_eq!(
+        std::fs::read_link(instance.join("config.toml")).unwrap(),
+        shared.join("config.toml")
+    );
+    assert!(
+        !instance.join("auth.json").exists(),
+        "the account file stays private"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The default instance (no private home) runs exactly as the factory's probe: the driver sets
+/// no CODEX_HOME of its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_default_instance_probe_keeps_the_shared_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::ProviderTarget;
+    let root = fresh_dir("default");
+    let record = root.join("record");
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let mut f = factory(api_key_catalog(page));
+    f.options.program = recording_codex("default", &record);
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex"),
+        launch: None,
+        home: None,
+        shared_home: None,
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    let first = std::fs::read_to_string(&record).unwrap();
+    let inherited = std::env::var("CODEX_HOME").unwrap_or_default();
+    assert_eq!(first.lines().next().unwrap_or(""), inherited);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// v1: a home that cannot be laid out stops the instance ("Failed to materialize the Codex
+/// shadow home."); the message names no path.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_home_that_cannot_be_laid_out_fails_without_naming_it() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::ProviderTarget;
+    let root = fresh_dir("conflict");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("config.toml"), "").unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    std::fs::write(instance.join("config.toml"), "mine").unwrap();
+    let f = factory(Vec::new());
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: None,
+        home: Some(instance.clone()),
+        shared_home: Some(shared),
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    let message = p.message.unwrap();
+    assert!(
+        message.starts_with("Failed to materialize the Codex shadow home:"),
+        "{message}"
+    );
+    assert!(message.contains("config.toml"), "{message}");
+    assert!(!message.contains(root.to_str().unwrap()), "{message}");
+    assert_eq!(
+        std::fs::read_to_string(instance.join("config.toml")).unwrap(),
+        "mine"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

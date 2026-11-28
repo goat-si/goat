@@ -74,6 +74,32 @@ pub enum HomeLayoutError {
     Unsupported,
 }
 
+impl HomeLayoutError {
+    /// The error without its paths (home paths are never shown or logged).
+    pub fn summary(&self) -> String {
+        match self {
+            HomeLayoutError::FileSystem {
+                operation, source, ..
+            } => format!(
+                "filesystem operation '{operation}' failed ({})",
+                source.kind()
+            ),
+            HomeLayoutError::PathConflict { .. } => {
+                "the instance home must differ from the shared home".into()
+            }
+            HomeLayoutError::EntryConflict { entry, .. } => {
+                format!("'{entry}' already exists in the instance home and is not a symlink")
+            }
+            HomeLayoutError::PrivateEntrySymlink { entry, .. } => {
+                format!("the private entry '{entry}' must be a real file, not a symlink")
+            }
+            HomeLayoutError::Unsupported => {
+                "symlinks are not supported on this platform yet".into()
+            }
+        }
+    }
+}
+
 /// What a materialization noticed but did not treat as an error (v1 logs these).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Materialized {

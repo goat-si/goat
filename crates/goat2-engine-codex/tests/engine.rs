@@ -1534,3 +1534,92 @@ async fn an_image_attachment_is_sent_as_a_data_url_with_its_path_in_the_text() {
     finish(h).await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- per-instance homes (v1 CodexHomeLayout) ----
+
+#[cfg(unix)]
+fn instance_target(
+    home: &std::path::Path,
+    shared: &std::path::Path,
+) -> goat2_engine_api::ProviderTarget {
+    goat2_engine_api::ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: None,
+        home: Some(home.to_path_buf()),
+        shared_home: Some(shared.to_path_buf()),
+    }
+}
+
+#[cfg(unix)]
+fn instance_root(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("goat2-engine-home-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("shared")).unwrap();
+    std::fs::create_dir_all(dir.join("instance")).unwrap();
+    std::fs::write(dir.join("shared/config.toml"), "").unwrap();
+    dir.canonicalize().unwrap()
+}
+
+/// A session for a second instance starts Codex in that instance's overlay home.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_session_for_an_instance_starts_in_its_own_home() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = instance_root("start");
+    let record = root.join("record");
+    let wrapper = root.join("codex");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\" > '{}'\nexec '{}' \"$@\"\n",
+            record.display(),
+            env!("CARGO_BIN_EXE_goat2-fake-codex")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let t = load("codex-0.167.0/basic.json");
+    let mut o = options(&t);
+    o.program = wrapper;
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(
+        &root.join("instance"),
+        &root.join("shared"),
+    ));
+    let h = CodexEngineFactory::new(o).start(s).await.expect("start");
+    assert_eq!(h.engine_ref.id, recorded_thread(&t));
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap().trim_end(),
+        root.join("instance").display().to_string()
+    );
+    assert_eq!(
+        std::fs::read_link(root.join("instance/config.toml")).unwrap(),
+        root.join("shared/config.toml")
+    );
+    h.session.shutdown().await;
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// v1: a home that cannot be laid out stops the start; the error names no path.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_session_whose_home_cannot_be_laid_out_does_not_start() {
+    let root = instance_root("conflict");
+    std::fs::write(root.join("instance/config.toml"), "mine").unwrap();
+    let t = load("codex-0.167.0/basic.json");
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(
+        &root.join("instance"),
+        &root.join("shared"),
+    ));
+    let error = match CodexEngineFactory::new(options(&t)).start(s).await {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("started with a conflicting home"),
+    };
+    assert!(
+        error.contains("Failed to materialize the Codex shadow home"),
+        "{error}"
+    );
+    assert!(!error.contains(root.to_str().unwrap()), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}

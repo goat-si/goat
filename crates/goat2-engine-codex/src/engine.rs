@@ -14,8 +14,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use goat2_engine_api::{
-    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
+    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession, LaunchSpec,
+    ProviderTarget, RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings,
+    TurnStartResult,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -27,6 +28,7 @@ use crate::contract::{
     EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderRequestKind, RequestId,
     RequestKind, RequestOutcome, RuntimeMode, ThreadId,
 };
+use crate::home_layout::{self, HomeLayout};
 use crate::items::{self, ItemContext};
 use crate::process::{ChildProcess, Launch, group_rss_bytes_of};
 use crate::protocol::client::{
@@ -117,14 +119,33 @@ impl EngineFactory for CodexEngineFactory {
     async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
         Ok(crate::probe::probe(&self.options).await)
     }
+
+    /// [Self::probe] for one instance: its launch settings and its own Codex home (v1 probes each
+    /// instance with its CODEX_HOME; a second account's sign-in differs from the first).
+    async fn probe_instance(
+        &self,
+        target: &goat2_engine_api::ProviderTarget,
+    ) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        Ok(crate::probe::probe_instance(&self.options, target).await)
+    }
 }
 
 /// v1 `codexAppServerArgs(launchArgs, routeArgs, unloadImmediately = true)` with v1's client
 /// identity: the factory's binary, arguments and environment.
-pub(crate) fn base_launch(options: &CodexEngineOptions, program: &Path, cwd: PathBuf) -> Launch {
+/// With an instance home layout, v1 `codexHomeLaunchArgs` go before the launch arguments (so an
+/// explicit source still wins) and its CODEX_HOME is set last.
+pub(crate) fn base_launch(
+    options: &CodexEngineOptions,
+    program: &Path,
+    cwd: PathBuf,
+    layout: Option<&HomeLayout>,
+) -> Launch {
     let mut launch = Launch::new(program).without_host_identity();
     for arg in ["app-server", "-c", "thread_unload_delay_secs=0"] {
         launch = launch.arg(arg);
+    }
+    if let Some(layout) = layout {
+        launch.args.extend(layout.launch_args());
     }
     launch.args.extend(options.extra_args.iter().cloned());
     launch.cwd = Some(cwd);
@@ -135,26 +156,94 @@ pub(crate) fn base_launch(options: &CodexEngineOptions, program: &Path, cwd: Pat
         CODEX_CLIENT_NAME.into(),
     ));
     launch.env_set.extend(options.env_set.iter().cloned());
+    if let Some(home) = layout.and_then(HomeLayout::codex_home) {
+        launch
+            .env_set
+            .push(("CODEX_HOME".into(), home.as_os_str().to_owned()));
+    }
     launch
 }
 
-/// The launch for one session: [base_launch], then the host's [LaunchSpec] (binary, extra
-/// arguments, environment) on top.
-fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
-    let program = spec
-        .launch()
-        .and_then(|l| l.binary.clone())
-        .unwrap_or_else(|| options.program.clone());
-    let mut launch = base_launch(options, &program, PathBuf::from(&spec.engine.cwd));
-    if let Some(host) = spec.launch() {
-        launch.args.extend(host.args.iter().map(OsString::from));
-        launch.env_set.extend(
-            host.env
+/// The factory's options for one provider instance: its binary, and its arguments and
+/// environment after the factory's (v1 `codexAppServerArgs` puts the instance's launch arguments
+/// after GOAT's own).
+pub(crate) fn instance_options(
+    options: &CodexEngineOptions,
+    launch: Option<&LaunchSpec>,
+) -> CodexEngineOptions {
+    let mut out = options.clone();
+    if let Some(launch) = launch {
+        if let Some(binary) = &launch.binary {
+            out.program = binary.clone();
+        }
+        out.extra_args
+            .extend(launch.args.iter().map(OsString::from));
+        out.env_set.extend(
+            launch
+                .env
                 .iter()
                 .map(|(k, v)| (OsString::from(k), OsString::from(v))),
         );
     }
-    launch
+    out
+}
+
+/// v1 `resolveManagedCodexHomeLayout` for a provider instance (src/home_layout.rs). `None` when the
+/// target names neither a private home nor a shared one: the default instance runs as today.
+/// The shared home is the one the default instance uses: the target's `shared_home` (v1 `homePath`),
+/// else the factory's or the host's CODEX_HOME, else `~/.codex`.
+pub(crate) fn instance_layout(
+    options: &CodexEngineOptions,
+    target: Option<&ProviderTarget>,
+) -> Option<HomeLayout> {
+    let target = target?;
+    if target.home.is_none() && target.shared_home.is_none() {
+        return None;
+    }
+    let env = |name: &str| {
+        options
+            .env_set
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| PathBuf::from(v))
+            .or_else(|| std::env::var_os(name).map(PathBuf::from))
+            .filter(|p| !p.as_os_str().is_empty())
+    };
+    let shared = target.shared_home.clone().or_else(|| env("CODEX_HOME"));
+    let user_home = env("HOME").unwrap_or_default();
+    Some(home_layout::resolve(
+        shared.as_deref(),
+        target.home.as_deref(),
+        &user_home,
+    ))
+}
+
+/// v1 materializes the instance's home before it starts or probes it (CodexAdapterV2.ts:598-608,
+/// CodexDriver.ts:310); the message names no path (home paths are never shown or logged).
+pub(crate) fn materialize(layout: &HomeLayout) -> Result<(), String> {
+    layout.materialize().map(|_| ()).map_err(|e| {
+        format!(
+            "Failed to materialize the Codex shadow home: {}.",
+            e.summary()
+        )
+    })
+}
+
+/// The launch for one session: the instance's options and home ([instance_options],
+/// [instance_layout]) through [base_launch].
+fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Result<Launch, EngineError> {
+    let options = instance_options(options, spec.launch());
+    let layout = instance_layout(&options, spec.instance.as_ref());
+    if let Some(layout) = &layout {
+        materialize(layout).map_err(EngineError::StartFailed)?;
+    }
+    Ok(base_launch(
+        &options,
+        &options.program,
+        PathBuf::from(&spec.engine.cwd),
+        layout.as_ref(),
+    ))
 }
 
 /// GOAT's instructions go into Codex's developer instructions (its system slot) on thread/start
@@ -180,7 +269,7 @@ async fn start_session(
     options: CodexEngineOptions,
     spec: SessionSpec,
 ) -> Result<EngineHandle, EngineError> {
-    let launch = launch_for(&options, &spec);
+    let launch = launch_for(&options, &spec)?;
     let mut child = ChildProcess::spawn(&launch).map_err(|error| {
         EngineError::StartFailed(format!("spawn {}: {error}", launch.program.display()))
     })?;
