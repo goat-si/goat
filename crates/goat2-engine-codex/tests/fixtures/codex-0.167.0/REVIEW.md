@@ -9,8 +9,8 @@ fails `tests/recording_privacy.rs`; re-review after any change.
 
 | File | sha256 | Reviewer | Date | Note |
 |---|---|---|---|---|
-| approval.json | 4b70eb6d6b6bbe0c1c289c537c7fed5149b5367961ca4ee90b6a4fd93c088fe9 | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
-| basic.json | a2252587705f186444987c9fe07557617a3fcc6556cdad3bd011aa910f6a3ccf | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
-| interrupt.json | 36b7eeda38c26b4a2931d8cb256b87547c668479f44587ee560dace41292be3f | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
-| resume.json | 84a5ffa6f1e57b80c344542b608faa5b2d259bc8c19f5e4939f36cca75ea1488 | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
-| steer.json | 75218bff7971e4b4c95aabd7640365545485402e3fc50653c7fdd78a05cc161a | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
+| approval.json | b2d54968a923c45900477d3a216cc3f6d509e4a6949e21cdc74c5f02309a3552 | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
+| basic.json | 4095806de91363973c02a9a188a39b4790247978430e57006c06113ec3effb3f | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
+| interrupt.json | f056f0c597ae09d2ea01834decbd9f637f0d997f8099081aa109cc032fcf896f | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
+| resume.json | 4500c38a1adc2588b63588e9a6e29f7d17f6d8d7a34577b34255cd05f9edc308 | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |
+| steer.json | b9847a2688f2539f90492e49f8678ac919a67f52b86df1582eba3bb4e5ace5c5 | JUN (lane B agent, claude-opus-5-5) | 2026-11-28 | read every kept string; synthetic prompt/answers only |

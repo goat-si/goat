@@ -39,7 +39,7 @@
           "userAgent": "<redacted>"
         }
       },
-      "afterMs": 4223
+      "afterMs": 5064
     },
     {
       "type": "expect_outbound",
@@ -51,31 +51,6 @@
       "type": "expect_outbound",
       "frame": {
         "id": 2,
-        "method": "config/read",
-        "params": {
-          "cwd": "/redacted/1",
-          "includeLayers": false
-        }
-      },
-      "wildcards": [
-        "/params/cwd"
-      ]
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "id": 2,
-        "result": {
-          "config": {},
-          "origins": {}
-        }
-      },
-      "afterMs": 13
-    },
-    {
-      "type": "expect_outbound",
-      "frame": {
-        "id": 3,
         "method": "thread/resume",
         "params": {
           "config": {
@@ -89,7 +64,7 @@
           "cwd": "/redacted/1",
           "excludeTurns": true,
           "model": "gpt-6-luna",
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8"
         }
       },
       "wildcards": [
@@ -99,21 +74,21 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872400466,
+        "emittedAtMs": 1795876987141,
         "method": "thread/status/changed",
         "params": {
           "status": {
             "type": "idle"
           },
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8"
         }
       },
-      "afterMs": 1
+      "afterMs": 4
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "id": 3,
+        "id": 2,
         "result": {
           "activePermissionProfile": null,
           "approvalPolicy": "untrusted",
@@ -150,7 +125,7 @@
             "agentRole": null,
             "canAcceptDirectInput": true,
             "cliVersion": "<redacted>",
-            "createdAt": 1795872396,
+            "createdAt": 1795876982,
             "cwd": "/redacted/3",
             "daybreakEnabled": null,
             "environments": [
@@ -167,7 +142,7 @@
             "forkedFromId": null,
             "gitInfo": null,
             "historyMode": "paginated",
-            "id": "01a22256-1406-75c2-a77d-c5112774ac56",
+            "id": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
             "model": "gpt-6-luna",
             "modelProvider": "openai",
             "name": null,
@@ -177,22 +152,47 @@
             "preview": "<redacted>",
             "projectId": null,
             "reasoningEffort": "high",
-            "recencyAt": 1795872396,
+            "recencyAt": 1795876983,
             "section": null,
             "sectionEnteredAt": null,
-            "sessionId": "01a22256-1406-75c2-a77d-c5112774ac56",
+            "sessionId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
             "source": "vscode",
             "status": {
               "type": "idle"
             },
             "threadSource": null,
             "turns": [],
-            "updatedAt": 1795872400
+            "updatedAt": 1795876987
           },
           "turnsBackwardsCursor": "<redacted>"
         }
       },
-      "afterMs": 0
+      "afterMs": 2
+    },
+    {
+      "type": "expect_outbound",
+      "frame": {
+        "id": 3,
+        "method": "config/read",
+        "params": {
+          "cwd": "/redacted/1",
+          "includeLayers": false
+        }
+      },
+      "wildcards": [
+        "/params/cwd"
+      ]
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "id": 3,
+        "result": {
+          "config": {},
+          "origins": {}
+        }
+      },
+      "afterMs": 35
     },
     {
       "type": "expect_outbound",
@@ -224,7 +224,7 @@
             "type": "readOnly"
           },
           "summary": "auto",
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8"
         }
       },
       "wildcards": [
@@ -240,7 +240,7 @@
             "completedAt": null,
             "durationMs": null,
             "error": null,
-            "id": "01a22256-2459-7413-96c3-a6797d360518",
+            "id": "01a2229c-214b-7161-818e-ebb251671c42",
             "items": [],
             "itemsView": "notLoaded",
             "rootTurnId": "<redacted>",
@@ -249,39 +249,39 @@
           }
         }
       },
-      "afterMs": 0
+      "afterMs": 1
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872400478,
+        "emittedAtMs": 1795876987228,
         "method": "thread/status/changed",
         "params": {
           "status": {
             "activeFlags": [],
             "type": "active"
           },
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8"
         }
       },
-      "afterMs": 1
+      "afterMs": 6
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872400478,
+        "emittedAtMs": 1795876987228,
         "method": "turn/started",
         "params": {
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
           "turn": {
             "completedAt": null,
             "durationMs": null,
             "error": null,
-            "id": "01a22256-2459-7413-96c3-a6797d360518",
+            "id": "01a2229c-214b-7161-818e-ebb251671c42",
             "items": [],
             "itemsView": "notLoaded",
             "rootTurnId": "<redacted>",
-            "startedAt": 1795872400,
+            "startedAt": 1795876987,
             "status": "inProgress"
           }
         }
@@ -291,7 +291,7 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872401868,
+        "emittedAtMs": 1795876988435,
         "method": "item/started",
         "params": {
           "item": {
@@ -304,27 +304,27 @@
                 "type": "text"
               }
             ],
-            "id": "01a22256-29cb-74e3-b024-65e10bc57b03",
-            "startedAtMs": 1795872401868,
+            "id": "01a2229c-2612-7782-875c-030248fb0831",
+            "startedAtMs": 1795876988435,
             "type": "userMessage"
           },
-          "startedAtMs": 1795872401868,
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
+          "startedAtMs": 1795876988435,
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
         }
       },
-      "afterMs": 257
+      "afterMs": 229
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872401869,
+        "emittedAtMs": 1795876988437,
         "method": "item/completed",
         "params": {
-          "completedAtMs": 1795872401868,
+          "completedAtMs": 1795876988435,
           "item": {
             "clientId": "goat-input-1",
-            "completedAtMs": 1795872401868,
+            "completedAtMs": 1795876988435,
             "content": [
               {
                 "text": "Reply with exactly: RESUMED",
@@ -332,12 +332,102 @@
                 "type": "text"
               }
             ],
-            "id": "01a22256-29cb-74e3-b024-65e10bc57b03",
-            "startedAtMs": 1795872401868,
+            "id": "01a2229c-2612-7782-875c-030248fb0831",
+            "startedAtMs": 1795876988435,
             "type": "userMessage"
           },
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
+        }
+      },
+      "afterMs": 2
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795876989688,
+        "method": "item/started",
+        "params": {
+          "item": {
+            "completedAtMs": null,
+            "delivery": null,
+            "id": "msg_0030ab16f070911a016b0ae87d9fb887d0aae6cb33de9fa51c",
+            "memoryCitation": null,
+            "phase": "final_answer",
+            "questions": null,
+            "startedAtMs": 1795876989688,
+            "text": "",
+            "type": "agentMessage"
+          },
+          "startedAtMs": 1795876989688,
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
+        }
+      },
+      "afterMs": 809
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795876989689,
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "RES",
+          "itemId": "msg_0030ab16f070911a016b0ae87d9fb887d0aae6cb33de9fa51c",
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795876989689,
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "UM",
+          "itemId": "msg_0030ab16f070911a016b0ae87d9fb887d0aae6cb33de9fa51c",
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795876989689,
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "ED",
+          "itemId": "msg_0030ab16f070911a016b0ae87d9fb887d0aae6cb33de9fa51c",
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795876989755,
+        "method": "item/completed",
+        "params": {
+          "completedAtMs": 1795876989753,
+          "item": {
+            "completedAtMs": 1795876989753,
+            "delivery": null,
+            "id": "msg_0030ab16f070911a016b0ae87d9fb887d0aae6cb33de9fa51c",
+            "memoryCitation": null,
+            "phase": "final_answer",
+            "questions": null,
+            "startedAtMs": 1795876989688,
+            "text": "RESUMED",
+            "type": "agentMessage"
+          },
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
+          "turnId": "01a2229c-214b-7161-818e-ebb251671c42"
         }
       },
       "afterMs": 1
@@ -345,103 +435,13 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872404199,
-        "method": "item/started",
-        "params": {
-          "item": {
-            "completedAtMs": null,
-            "delivery": null,
-            "id": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
-            "memoryCitation": null,
-            "phase": "final_answer",
-            "questions": null,
-            "startedAtMs": 1795872404199,
-            "text": "",
-            "type": "agentMessage"
-          },
-          "startedAtMs": 1795872404199,
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
-        }
-      },
-      "afterMs": 1953
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "emittedAtMs": 1795872404199,
-        "method": "item/agentMessage/delta",
-        "params": {
-          "delta": "RES",
-          "itemId": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
-        }
-      },
-      "afterMs": 0
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "emittedAtMs": 1795872404199,
-        "method": "item/agentMessage/delta",
-        "params": {
-          "delta": "UM",
-          "itemId": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
-        }
-      },
-      "afterMs": 0
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "emittedAtMs": 1795872404238,
-        "method": "item/agentMessage/delta",
-        "params": {
-          "delta": "ED",
-          "itemId": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
-        }
-      },
-      "afterMs": 38
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "emittedAtMs": 1795872404563,
-        "method": "item/completed",
-        "params": {
-          "completedAtMs": 1795872404562,
-          "item": {
-            "completedAtMs": 1795872404562,
-            "delivery": null,
-            "id": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
-            "memoryCitation": null,
-            "phase": "final_answer",
-            "questions": null,
-            "startedAtMs": 1795872404199,
-            "text": "RESUMED",
-            "type": "agentMessage"
-          },
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
-          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
-        }
-      },
-      "afterMs": 0
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "emittedAtMs": 1795872404578,
+        "emittedAtMs": 1795876989777,
         "method": "thread/status/changed",
         "params": {
           "status": {
             "type": "idle"
           },
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8"
         }
       },
       "afterMs": 0
@@ -449,31 +449,31 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795872404578,
+        "emittedAtMs": 1795876989777,
         "method": "turn/completed",
         "params": {
-          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "threadId": "01a2229c-0f38-72f1-9e6a-41a396848ce8",
           "turn": {
-            "completedAt": 1795872404,
-            "durationMs": 4099,
+            "completedAt": 1795876989,
+            "durationMs": 2552,
             "error": null,
-            "id": "01a22256-2459-7413-96c3-a6797d360518",
+            "id": "01a2229c-214b-7161-818e-ebb251671c42",
             "items": [
               {
-                "completedAtMs": 1795872404562,
+                "completedAtMs": 1795876989753,
                 "delivery": null,
-                "id": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
+                "id": "msg_0030ab16f070911a016b0ae87d9fb887d0aae6cb33de9fa51c",
                 "memoryCitation": null,
                 "phase": "final_answer",
                 "questions": null,
-                "startedAtMs": 1795872404199,
+                "startedAtMs": 1795876989688,
                 "text": "RESUMED",
                 "type": "agentMessage"
               }
             ],
             "itemsView": "summary",
             "rootTurnId": "<redacted>",
-            "startedAt": 1795872400,
+            "startedAt": 1795876987,
             "status": "completed"
           }
         }

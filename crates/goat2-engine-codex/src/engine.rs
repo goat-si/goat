@@ -146,7 +146,7 @@ async fn start_session(
     );
 
     let opened = open_thread(&conn, &options, &spec).await;
-    let (codex_thread_id, reasoning_summary, opened_active) = match opened {
+    let (codex_thread_id, opened_active) = match opened {
         Ok(opened) => opened,
         Err((stage, error)) => {
             conn.close_input();
@@ -168,7 +168,6 @@ async fn start_session(
         cwd: spec.engine.cwd.clone(),
         process_generation: spec.process_generation,
         codex_thread: codex_thread_id.clone(),
-        reasoning_summary,
         runtime_mode: spec.engine.runtime_mode,
         child: Some(child),
         conn,
@@ -188,6 +187,7 @@ async fn start_session(
         thread_active: opened_active,
         allowance_epoch: 0,
         resume_busy: opened_active,
+        status_gen: 0,
         stopped_turns: HashSet::new(),
         early: Vec::new(),
         pending: HashMap::new(),
@@ -217,7 +217,7 @@ async fn open_thread(
     conn: &Connection,
     options: &CodexEngineOptions,
     spec: &SessionSpec,
-) -> Result<(String, Option<String>, bool), (&'static str, String)> {
+) -> Result<(String, bool), (&'static str, String)> {
     let _: Value = conn
         .request(
             methods::INITIALIZE,
@@ -227,20 +227,6 @@ async fn open_thread(
         .map_err(|e| ("initialize", e.to_string()))?;
     conn.notify(methods::INITIALIZED, &Value::Null)
         .map_err(|e| ("initialized", e.to_string()))?;
-    // v1 reads the user's model_reasoning_summary from config/read before each start
-    // (CodexAdapterV2.ts:6597-6606); the per-thread process reads it once.
-    let reasoning_summary = conn
-        .request_value(
-            "config/read",
-            &json!({ "cwd": spec.engine.cwd, "includeLayers": false }),
-        )
-        .await
-        .ok()
-        .and_then(|v| {
-            v.pointer("/config/model_reasoning_summary")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
     let thread = ThreadOptions {
         model: Some(spec.engine.model_selection.model.clone()),
         cwd: spec.engine.cwd.clone(),
@@ -267,7 +253,7 @@ async fn open_thread(
         .status
         .as_ref()
         .is_some_and(ThreadStatusWire::is_active);
-    Ok((opened.thread.id, reasoning_summary, active))
+    Ok((opened.thread.id, active))
 }
 
 fn tail(text: &str, max: usize) -> &str {
@@ -399,7 +385,16 @@ impl EngineSession for CodexSession {
 }
 
 enum Internal {
-    TurnsListed(Result<Value, CallError>),
+    /// `status_gen` when the list was asked for: a status change since then makes it stale.
+    TurnsListed {
+        status_gen: u64,
+        result: Result<Value, CallError>,
+    },
+    /// config/read before a start (v1 CodexAdapterV2.ts:6597-6606); None when unread.
+    ConfigRead {
+        attempt: u64,
+        summary: Option<String>,
+    },
     TurnStartAnswered {
         attempt: u64,
         result: Result<Value, CallError>,
@@ -423,6 +418,8 @@ enum DispatchPhase {
         listed: bool,
         quiet_wait: Option<(String, Instant)>,
     },
+    /// The thread is free; reading the reasoning-summary setting. Nothing sent yet.
+    Configuring,
     /// turn/start sent.
     Sending,
 }
@@ -471,7 +468,6 @@ struct Actor {
     cwd: String,
     process_generation: u64,
     codex_thread: String,
-    reasoning_summary: Option<String>,
     runtime_mode: RuntimeMode,
     child: Option<ChildProcess>,
     conn: Connection,
@@ -493,6 +489,8 @@ struct Actor {
     /// lists turns before sending (v1 CodexTurnStartGuard.ts:58-73), whatever status
     /// notifications were queued around that answer.
     resume_busy: bool,
+    /// Bumped on every thread status and turn start/completion notification.
+    status_gen: u64,
     stopped_turns: HashSet<String>,
     early: Vec<Inbound>,
     pending: HashMap<String, Pending>,
@@ -511,6 +509,15 @@ fn far_future() -> Instant {
 
 impl Actor {
     async fn run(mut self) {
+        // Everything Codex sent before its thread/start or thread/resume answer is already
+        // queued; handle it before any host command, so a status notification older than that
+        // answer is never taken for a newer one.
+        while let Ok(inbound) = self.inbound.try_recv() {
+            self.on_inbound_event(Some(inbound)).await;
+            if self.exited {
+                break;
+            }
+        }
         loop {
             if self.exited {
                 // Answer whatever is still asked, then stop.
@@ -525,16 +532,7 @@ impl Actor {
                     Some(command) => self.on_command(command).await,
                     None => self.exit("the GOAT session was dropped", true).await,
                 },
-                inbound = self.inbound.recv() => match inbound {
-                    Some(Inbound::Retired { method }) => {
-                        self.exit(&format!("Codex stopped answering ({method} past its deadline)"), false).await;
-                    }
-                    Some(Inbound::Closed) | None => {
-                        let reason = self.exit_reason();
-                        self.exit(&reason, false).await;
-                    }
-                    Some(inbound) => self.on_inbound(inbound).await,
-                },
+                inbound = self.inbound.recv() => self.on_inbound_event(inbound).await,
                 Some(internal) = self.internal_rx.recv() => self.on_internal(internal).await,
                 _ = tokio::time::sleep_until(deadline) => self.on_timer().await,
             }
@@ -545,16 +543,32 @@ impl Actor {
         }
     }
 
-    fn exit_reason(&mut self) -> String {
-        let stderr = self
-            .child
-            .as_ref()
-            .map(|c| tail(&c.stderr_tail(), 2000).to_string())
-            .unwrap_or_default();
-        if stderr.trim().is_empty() {
-            "codex app-server exited".to_string()
-        } else {
-            format!("codex app-server exited; stderr: {stderr}")
+    /// Codex closed its output: end the group and read stderr to its end first, so the exit
+    /// reason carries Codex's last lines.
+    async fn exit_after_close(&mut self) {
+        let mut reason = "codex app-server exited".to_string();
+        if let Some(mut child) = self.child.take() {
+            self.conn.close_input();
+            child.terminate_group().await;
+            let stderr = tail(&child.stderr_tail(), 2000).to_string();
+            if !stderr.trim().is_empty() {
+                reason = format!("codex app-server exited; stderr: {stderr}");
+            }
+        }
+        self.exit(&reason, false).await;
+    }
+
+    async fn on_inbound_event(&mut self, inbound: Option<Inbound>) {
+        match inbound {
+            Some(Inbound::Retired { method }) => {
+                self.exit(
+                    &format!("Codex stopped answering ({method} past its deadline)"),
+                    false,
+                )
+                .await;
+            }
+            Some(Inbound::Closed) | None => self.exit_after_close().await,
+            Some(inbound) => self.on_inbound(inbound).await,
         }
     }
 
@@ -770,6 +784,7 @@ impl Actor {
         let internal = self.internal.clone();
         let thread = self.codex_thread.clone();
         let limit = self.options.guard_list_timeout;
+        let status_gen = self.status_gen;
         tokio::spawn(async move {
             let params = ThreadTurnsListParams::recent(&thread);
             let call = conn.request_value(methods::THREAD_TURNS_LIST, &params);
@@ -779,14 +794,46 @@ impl Actor {
                     .unwrap_or(Err(CallError::Deadline {
                         method: methods::THREAD_TURNS_LIST.into(),
                     }));
-            let _ = internal.send(Internal::TurnsListed(result));
+            let _ = internal.send(Internal::TurnsListed { status_gen, result });
         });
     }
 
+    /// The thread is free: read the reasoning-summary setting for this start, then send it
+    /// (v1 reads it once the start is admitted, CodexAdapterV2.ts:6597-6606; a failed read
+    /// leaves the setting unset).
     fn send_turn_start(&mut self) {
         let Some(dispatch) = self.dispatch.as_mut() else {
             return;
         };
+        dispatch.phase = DispatchPhase::Configuring;
+        let attempt = dispatch.attempt;
+        let conn = self.conn.clone();
+        let internal = self.internal.clone();
+        let cwd = self.cwd.clone();
+        tokio::spawn(async move {
+            let summary = conn
+                .request_value(
+                    methods::CONFIG_READ,
+                    &json!({ "cwd": cwd, "includeLayers": false }),
+                )
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/config/model_reasoning_summary")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+            let _ = internal.send(Internal::ConfigRead { attempt, summary });
+        });
+    }
+
+    fn send_configured_turn_start(&mut self, attempt: u64, summary: Option<String>) {
+        let Some(dispatch) = self.dispatch.as_mut() else {
+            return;
+        };
+        if dispatch.attempt != attempt || !matches!(dispatch.phase, DispatchPhase::Configuring) {
+            return;
+        }
         dispatch.phase = DispatchPhase::Sending;
         let settings = &dispatch.settings;
         let selection = &settings.model_selection;
@@ -804,11 +851,7 @@ impl Actor {
         params.approval_policy = Some(defaults.approval_policy);
         params.approvals_reviewer = Some(defaults.approvals_reviewer.to_string());
         params.sandbox_policy = Some(defaults.sandbox_policy);
-        params.summary = Some(
-            self.reasoning_summary
-                .clone()
-                .unwrap_or_else(|| "auto".into()),
-        );
+        params.summary = Some(summary.unwrap_or_else(|| "auto".into()));
         params.service_tier = runtime::service_tier(selection);
         params.collaboration_mode = Some(runtime::collaboration_mode(
             &selection.model,
@@ -912,7 +955,7 @@ impl Actor {
         }
         match self.dispatch.as_ref().map(|d| &d.phase) {
             // Nothing was sent yet: the stop cancels the start; there is nothing to kill.
-            Some(DispatchPhase::Guarding { .. }) => {
+            Some(DispatchPhase::Guarding { .. } | DispatchPhase::Configuring) => {
                 self.finish_dispatch(TurnStartResult::Declined {
                     reason: "GOAT stopped this before it was sent to Codex".into(),
                 });
@@ -1054,6 +1097,14 @@ impl Actor {
     }
 
     async fn on_notification(&mut self, notification: Notification) {
+        if matches!(
+            notification,
+            Notification::ThreadStatusChanged { .. }
+                | Notification::TurnStarted(_)
+                | Notification::TurnCompleted(_)
+        ) {
+            self.status_gen += 1;
+        }
         match notification {
             Notification::ThreadStatusChanged { status, .. } => {
                 self.thread_active = status.is_active();
@@ -1444,12 +1495,31 @@ impl Actor {
 
     async fn on_internal(&mut self, internal: Internal) {
         match internal {
-            Internal::TurnsListed(result) => {
+            Internal::TurnsListed { status_gen, result } => {
                 let list = result
                     .ok()
                     .and_then(|value| serde_json::from_value::<TurnsListResponse>(value).ok())
                     // The schema requires every turn's status; one without it cannot be judged.
                     .filter(|list| list.data.iter().all(|turn| turn.status.is_some()));
+                if status_gen != self.status_gen {
+                    // A status or turn notification came after the list was asked for (so after
+                    // the open answer too): the live status is current and settles a busy
+                    // resume. As v1 re-checks after the list (CodexTurnStartGuard.ts:78-86), the
+                    // listed turn counts only while the thread is still working.
+                    self.resume_busy = false;
+                    if self.thread_active
+                        && self.native_running.is_none()
+                        && let Some(list) = list
+                    {
+                        self.native_running = list
+                            .data
+                            .into_iter()
+                            .find(|t| t.status == Some(TurnStatusWire::InProgress))
+                            .map(|t| t.id);
+                    }
+                    self.advance_dispatch().await;
+                    return;
+                }
                 match list {
                     Some(list) => {
                         // Only a readable list settles a busy resume.
@@ -1476,6 +1546,9 @@ impl Actor {
             }
             Internal::TurnStartAnswered { attempt, result } => {
                 self.on_turn_start_answer(attempt, result).await;
+            }
+            Internal::ConfigRead { attempt, summary } => {
+                self.send_configured_turn_start(attempt, summary);
             }
             Internal::SteerAnswered { steer, result } => {
                 let Some(mut waiting) = self.steers.remove(&steer) else {

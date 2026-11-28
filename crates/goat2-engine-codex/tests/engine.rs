@@ -793,6 +793,14 @@ async fn resume_onto_an_active_thread_lists_turns_and_refuses() {
 /// A later turn/start in another runtime mode: the recorded frame with the mode-dependent
 /// fields left open, answered with a fresh turn.
 fn later_turn(template: &Value, rpc: u64, thread: &str, turn: &str) -> Vec<Entry> {
+    // v1 reads the reasoning-summary setting before every start (CodexAdapterV2.ts:6597-6606).
+    let read = Entry::ExpectOutbound {
+        label: None,
+        frame: json!({"id": rpc + 1000, "method": "config/read", "params": {
+            "cwd": template["params"]["cwd"], "includeLayers": false}}),
+        wildcards: vec!["/params/cwd".into()],
+    };
+    let read_answer = emit(json!({"id": rpc + 1000, "result": {"config": {}}}));
     let mut frame = template.clone();
     frame["id"] = json!(rpc);
     let start = Entry::ExpectOutbound {
@@ -810,6 +818,8 @@ fn later_turn(template: &Value, rpc: u64, thread: &str, turn: &str) -> Vec<Entry
     };
     let info = json!({"id": turn, "items": [], "status": "inProgress", "error": null});
     vec![
+        read,
+        read_answer,
         start,
         emit(json!({"id": rpc, "result": {"turn": info.clone()}})),
         emit(json!({"method": "turn/started", "params": {"threadId": thread, "turn": info}})),
@@ -1144,6 +1154,131 @@ async fn a_stop_while_codex_declines_the_start_clears_the_stop_timer() {
     let quiet = tokio::time::timeout(Duration::from_millis(1200), h.events.recv()).await;
     assert!(quiet.is_err(), "no stop-timer exit: {quiet:?}");
     finish(h).await;
+}
+
+#[tokio::test]
+async fn a_turn_list_overtaken_by_an_idle_status_is_ignored() {
+    // v1 re-checks the thread after the list (CodexTurnStartGuard.ts:78-86): a thread that went
+    // idle while the list was in flight is free, whatever the list said.
+    let t = load("codex-0.167.0/resume.json");
+    let (mut entries, thread) = busy_resume_prefix();
+    entries.push(turns_list(50, &thread));
+    entries.push(thread_idle(&thread));
+    entries.push(emit_after(
+        json!({"id": 50, "result": {"data": [
+            {"id": "foreign-turn", "items": [], "status": "inProgress", "error": null}]}}),
+        50,
+    ));
+    let from = t
+        .entries
+        .iter()
+        .position(|e| method_of(e) == Some("config/read"))
+        .unwrap();
+    entries.extend(t.entries[from..].iter().cloned());
+    let t = synthetic("stale-list", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |_| {}).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-1", "Reply with exactly: RESUMED"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
+/// basic.json with its config/read answer and expected turn/start summary rewritten.
+fn basic_with_config(answer: Value, summary: &str) -> Transcript {
+    let mut t = load("codex-0.167.0/basic.json");
+    let mut read_id = None;
+    for e in &mut t.entries {
+        match e {
+            Entry::ExpectOutbound { frame, .. } if frame["method"] == "config/read" => {
+                read_id = Some(frame["id"].clone());
+            }
+            Entry::EmitInbound { frame, .. }
+                if read_id.is_some() && frame.get("id") == read_id.as_ref() =>
+            {
+                let id = frame["id"].clone();
+                *frame = answer.clone();
+                frame["id"] = id;
+                read_id = None;
+            }
+            Entry::ExpectOutbound { frame, .. } if frame["method"] == "turn/start" => {
+                frame["params"]["summary"] = json!(summary);
+            }
+            _ => {}
+        }
+    }
+    t
+}
+
+#[tokio::test]
+async fn each_start_uses_the_reasoning_summary_read_just_before_it() {
+    // v1 reads model_reasoning_summary before every start (CodexAdapterV2.ts:6597-6606).
+    let t = basic_with_config(
+        json!({"result": {"config": {"model_reasoning_summary": "detailed"}}}),
+        "detailed",
+    );
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-1", "Reply with exactly: GOAT2-OK"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn a_failed_config_read_still_starts_with_the_default_summary() {
+    let t = basic_with_config(
+        json!({"error": {"code": -32603, "message": "config unavailable"}}),
+        "auto",
+    );
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-1", "Reply with exactly: GOAT2-OK"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn an_unexpected_exit_reports_codex_last_stderr_lines() {
+    // The fake names a mismatching frame on stderr and exits; the Exited reason carries it.
+    let t = load("codex-0.167.0/basic.json");
+    let mut entries = entries_until(&t, |e| method_of(e) == Some("thread/started"));
+    entries.push(expect(
+        json!({"id": 9, "method": "thread/read", "params": {}}),
+    ));
+    let t = synthetic("exit-stderr", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    let _ = h
+        .session
+        .start_turn(
+            input("goat-input-1", "hi"),
+            &settings(RuntimeMode::ApprovalRequired),
+        )
+        .await;
+    let events = until(&mut h, |e| matches!(e, EngineEvent::Exited { .. })).await;
+    let Some(EngineEvent::Exited { reason }) = events.last() else {
+        unreachable!()
+    };
+    assert!(
+        reason.contains("stderr: goat2-fake-codex") && reason.contains("mismatch at /method"),
+        "{reason}"
+    );
 }
 
 fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {

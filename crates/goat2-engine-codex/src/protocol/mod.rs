@@ -166,6 +166,7 @@ pub mod methods {
     pub const THREAD_START: &str = "thread/start";
     pub const THREAD_RESUME: &str = "thread/resume";
     pub const THREAD_TURNS_LIST: &str = "thread/turns/list";
+    pub const CONFIG_READ: &str = "config/read";
     pub const TURN_START: &str = "turn/start";
     pub const TURN_STEER: &str = "turn/steer";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
