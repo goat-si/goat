@@ -59,7 +59,7 @@ impl LogLine {
     }
 }
 
-/// The 13 log events.
+/// The 14 log events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(tag = "type")]
 pub enum LogEvent {
@@ -69,6 +69,8 @@ pub enum LogEvent {
     ThreadChanged(ThreadChanged),
     #[serde(rename = "input.accepted")]
     InputAccepted(InputAccepted),
+    #[serde(rename = "input.delivered")]
+    InputDelivered(InputDelivered),
     #[serde(rename = "run.started")]
     RunStarted(RunStarted),
     #[serde(rename = "run.accepted")]
@@ -93,10 +95,11 @@ pub enum LogEvent {
 
 impl LogEvent {
     /// Every wire `type` tag, in declaration order.
-    pub const TYPE_TAGS: [&'static str; 13] = [
+    pub const TYPE_TAGS: [&'static str; 14] = [
         "thread.created",
         "thread.changed",
         "input.accepted",
+        "input.delivered",
         "run.started",
         "run.accepted",
         "item.completed",
@@ -115,6 +118,7 @@ impl LogEvent {
             Self::ThreadCreated(_) => "thread.created",
             Self::ThreadChanged(_) => "thread.changed",
             Self::InputAccepted(_) => "input.accepted",
+            Self::InputDelivered(_) => "input.delivered",
             Self::RunStarted(_) => "run.started",
             Self::RunAccepted(_) => "run.accepted",
             Self::ItemCompleted(_) => "item.completed",
@@ -131,6 +135,7 @@ impl LogEvent {
     /// The run this event belongs to, if any.
     pub fn run_id(&self) -> Option<&RunId> {
         match self {
+            Self::InputDelivered(e) => Some(&e.run_id),
             Self::RunStarted(e) => Some(&e.run_id),
             Self::RunAccepted(e) => Some(&e.run_id),
             Self::ItemCompleted(e) => Some(&e.run_id),
@@ -209,19 +214,46 @@ pub enum InputMode {
 pub struct InputAccepted {
     pub input_id: InputId,
     pub from: InputSource,
-    /// The mode the host applies.
+    /// The mode the sender asked for. What reached the engine is in `input.delivered`.
     pub mode: InputMode,
-    /// Present when the host changed the requested mode, e.g. a steer the engine declined after
-    /// admission is queued as `followup` with the same input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub requested_mode: Option<InputMode>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ChatAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub client_request_id: Option<String>,
+}
+
+/// How an input was handed to the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveredAs {
+    /// Into the running turn (Codex `turn/steer`).
+    Steer,
+    /// As a new turn (Codex `turn/start`).
+    Turn,
+}
+
+/// What the engine answered for a delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryOutcome {
+    Accepted,
+    /// A declined steer stays queued and is later delivered as a turn with the same inputId.
+    Declined,
+    /// No answer (transport failure, restart).
+    Unknown,
+}
+
+/// `input.delivered`: the engine answered a steer or a turn start carrying this input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InputDelivered {
+    pub input_id: InputId,
+    pub run_id: RunId,
+    #[serde(rename = "as")]
+    pub delivered_as: DeliveredAs,
+    pub outcome: DeliveryOutcome,
 }
 
 /// `run.started`: written to disk before anything is sent to the engine (send boundary).
@@ -395,15 +427,35 @@ pub struct UserNotified {
     pub text: String,
 }
 
-/// `checkpoint`: card and view summary as of this line, written at the end of every run.
+/// Fold state beyond the card: what a reader needs to continue folding from a checkpoint
+/// without reading earlier lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Fold {
+    /// The run between `run.started` and `run.finished`, if any.
+    pub active_run_id: Option<RunId>,
+    /// Inputs accepted but not yet delivered, in order.
+    pub queued_input_ids: Vec<InputId>,
+    /// Requests still open (including `resend`), so the inbox renders without earlier lines.
+    pub open_requests: Vec<RequestOpened>,
+    pub counters: FoldCounters,
+}
+
+/// Running totals kept by the fold.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldCounters {
+    pub inputs: u64,
+    pub runs: u64,
+    pub items: u64,
+}
+
+/// `checkpoint`: card and fold as of this line, written at the end of every run.
 /// Replay after a reset starts from the latest checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Checkpoint {
     /// The card with `appliedSeq` equal to this line's seq.
     pub card: ThreadCard,
-    /// Requests still open, so the inbox renders without reading earlier lines.
-    pub open_requests: Vec<RequestOpened>,
-    /// Inputs accepted but not yet part of a run, in order.
-    pub queued_input_ids: Vec<InputId>,
+    pub fold: Fold,
 }

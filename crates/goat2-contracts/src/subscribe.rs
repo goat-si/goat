@@ -133,7 +133,8 @@ pub enum HostFrame {
     },
     /// Append-only streaming text for an unfinished item. Not stored. `offset` counts UTF-16
     /// code units (JavaScript `string.length`) of text already sent for this item; on
-    /// reconnect the host first sends the whole text so far with offset 0.
+    /// reconnect the host first sends the whole text so far with offset 0. One append never
+    /// splits a UTF-16 surrogate pair.
     TextAppend {
         sub_id: String,
         thread_id: ThreadId,
