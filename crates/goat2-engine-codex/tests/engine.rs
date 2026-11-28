@@ -1729,3 +1729,85 @@ async fn an_instance_session_redacts_its_home_from_every_event() {
     h.session.shutdown().await;
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// API-key review r2 P1: Codex text that quotes a key never leaves in a failed-turn reason, even
+/// without an unauthorized code (codexErrorInfo absent or null).
+#[tokio::test]
+async fn a_failed_turn_reason_never_carries_a_quoted_key() {
+    let key = "sk-proj-EchoedSecret0123456789";
+    let t = load("codex-0.167.0/basic.json");
+    let mut entries: Vec<Entry> = t.entries[..12].to_vec();
+    let Entry::EmitInbound {
+        frame: mut done, ..
+    } = t.entries[22].clone()
+    else {
+        panic!("entry 22 is turn/completed")
+    };
+    done["params"]["turn"]["status"] = json!("failed");
+    done["params"]["turn"]["error"] = json!({
+        "message": format!("stream error: Incorrect API key provided: {key}"),
+        "codexErrorInfo": null});
+    entries.push(Entry::EmitInbound {
+        label: None,
+        frame: done,
+        after_ms: None,
+    });
+    let t = synthetic("failed-quotes-key", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-1", "Reply with exactly: GOAT2-OK"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    let events = until(&mut h, is_finished).await;
+    let Some(EngineEvent::TurnFinished {
+        outcome: TurnOutcome::Failed { reason },
+        ..
+    }) = events.last()
+    else {
+        panic!("{events:#?}")
+    };
+    assert_eq!(
+        reason,
+        "stream error: Incorrect API key provided: <redacted credential>"
+    );
+    assert!(!format!("{events:?}").contains(key));
+    // Not an unauthorized code: nothing asks for sign-in.
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::AuthRequired { .. }))
+    );
+    finish(h).await;
+}
+
+/// API-key review r2 P1: Codex's stderr that quotes a key never leaves in the exit reason.
+#[tokio::test]
+async fn an_exit_reason_never_carries_a_key_from_stderr() {
+    let key = "sk-test-StderrSecret0123456789";
+    let t = load("codex-0.167.0/basic.json");
+    let mut entries = entries_until(&t, |e| method_of(e) == Some("thread/started"));
+    // The fake prints the frame it expected on stderr when GOAT sends another one.
+    entries.push(expect(
+        json!({"id": 9, "method": "thread/read", "params": {"note": format!("Incorrect API key provided: {key}")}}),
+    ));
+    let t = synthetic("exit-stderr-key", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    let _ = h
+        .session
+        .start_turn(
+            input("goat-input-1", "hi"),
+            &settings(RuntimeMode::ApprovalRequired),
+        )
+        .await;
+    let events = until(&mut h, |e| matches!(e, EngineEvent::Exited { .. })).await;
+    let Some(EngineEvent::Exited { reason }) = events.last() else {
+        unreachable!()
+    };
+    assert!(reason.contains("stderr: goat2-fake-codex"), "{reason}");
+    assert!(reason.contains("<redacted credential>"), "{reason}");
+    assert!(!format!("{events:?}").contains(key), "{reason}");
+}

@@ -16,6 +16,7 @@ pub mod probe;
 pub mod process;
 pub mod protocol;
 pub mod runtime;
+pub mod scrub;
 pub mod transcript;
 pub mod transport;
 

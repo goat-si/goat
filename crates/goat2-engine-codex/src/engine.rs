@@ -338,6 +338,7 @@ fn launch_for(
 /// so a new event kind needs a decision here.
 fn redact_event(redact: &Redactor, event: EngineEvent) -> EngineEvent {
     let text = |t: String| redact.apply(&t);
+    let diagnostic = |t: String| redact.diagnostic(&t);
     let item = |i: Box<goat2_contracts::TurnItem>| Box::new(redact.value(*i));
     match event {
         EngineEvent::TextDelta {
@@ -408,7 +409,7 @@ fn redact_event(redact: &Redactor, event: EngineEvent) -> EngineEvent {
             key,
             turn_id,
             url: url.map(text),
-            message: text(message),
+            message: diagnostic(message),
         },
         EngineEvent::TokenUsage { turn_id, usage } => EngineEvent::TokenUsage { turn_id, usage },
         EngineEvent::SubagentUpdate {
@@ -437,7 +438,7 @@ fn redact_event(redact: &Redactor, event: EngineEvent) -> EngineEvent {
             turn_id,
             outcome: match outcome {
                 TurnOutcome::Failed { reason } => TurnOutcome::Failed {
-                    reason: text(reason),
+                    reason: diagnostic(reason),
                 },
                 other => other,
             },
@@ -446,18 +447,18 @@ fn redact_event(redact: &Redactor, event: EngineEvent) -> EngineEvent {
             EngineEvent::ContinuationRequested { key, text: text(t) }
         }
         EngineEvent::Exited { reason } => EngineEvent::Exited {
-            reason: text(reason),
+            reason: diagnostic(reason),
         },
     }
 }
 
-/// [EngineError] with an instance's private home replaced.
+/// [EngineError] with an instance's private home replaced and credentials removed.
 fn redact_error(redact: &Redactor, error: EngineError) -> EngineError {
     match error {
-        EngineError::Unavailable(m) => EngineError::Unavailable(redact.apply(&m)),
-        EngineError::StartFailed(m) => EngineError::StartFailed(redact.apply(&m)),
-        EngineError::Transport(m) => EngineError::Transport(redact.apply(&m)),
-        EngineError::Unsupported(m) => EngineError::Unsupported(redact.apply(&m)),
+        EngineError::Unavailable(m) => EngineError::Unavailable(redact.diagnostic(&m)),
+        EngineError::StartFailed(m) => EngineError::StartFailed(redact.diagnostic(&m)),
+        EngineError::Transport(m) => EngineError::Transport(redact.diagnostic(&m)),
+        EngineError::Unsupported(m) => EngineError::Unsupported(redact.diagnostic(&m)),
     }
 }
 
@@ -679,7 +680,7 @@ pub struct CodexSession {
 
 impl CodexSession {
     fn redact_start(&self, result: TurnStartResult) -> TurnStartResult {
-        let r = |reason: String| self.redact.apply(&reason);
+        let r = |reason: String| self.redact.diagnostic(&reason);
         match result {
             TurnStartResult::Accepted { turn_id } => TurnStartResult::Accepted { turn_id },
             TurnStartResult::RefusedUnowned { reason } => {
@@ -691,7 +692,7 @@ impl CodexSession {
     }
 
     fn redact_steer(&self, result: SteerResult) -> SteerResult {
-        let r = |reason: String| self.redact.apply(&reason);
+        let r = |reason: String| self.redact.diagnostic(&reason);
         match result {
             SteerResult::Accepted => SteerResult::Accepted,
             SteerResult::Declined { reason } => SteerResult::Declined { reason: r(reason) },

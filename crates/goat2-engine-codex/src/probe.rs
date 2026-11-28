@@ -58,14 +58,15 @@ const FORCE_KILL_AFTER: Duration = Duration::from_secs(2);
 
 /// [probe] with an explicit budget (tests).
 pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> ProviderProbeResult {
-    probe_layout(
+    let result = probe_layout(
         options,
         None,
         LoginHint::Home(codex_home_setting(options)),
         budget,
         &Redactor::default(),
     )
-    .await
+    .await;
+    without_credentials(result)
 }
 
 /// What the sign-in message names (v1 `accountProbeStatus` names the CODEX_HOME setting).
@@ -122,7 +123,14 @@ pub async fn probe_instance_with(
         }
         Ok(_) => probe_layout(&options, layout.as_ref(), hint, budget, &redact).await,
     };
-    without_private_home(result, &redact)
+    without_credentials(without_private_home(result, &redact))
+}
+
+/// The probe message can carry Codex's stderr or an RPC message: credential-shaped tokens are
+/// removed (src/scrub.rs).
+fn without_credentials(mut result: ProviderProbeResult) -> ProviderProbeResult {
+    result.message = result.message.map(|m| crate::scrub::credentials(&m));
+    result
 }
 
 /// Owner decision: credentials Codex refused on a turn show on the provider. An API key is

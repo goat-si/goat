@@ -1026,3 +1026,76 @@ async fn a_refusal_from_before_a_new_key_is_saved_is_ignored() {
     let p = f.probe_instance(&target).await.unwrap();
     assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
 }
+
+/// API-key review r2 P1: a turn on the newly saved key that Codex refuses before the sign-in
+/// finishes (here Codex confirms the account 2.5 s after saving the key) stays marked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refusal_of_the_new_key_before_the_sign_in_finishes_stays() {
+    use goat2_contracts::{ProviderAuthResponse, ServerProviderState};
+    use goat2_engine_api::EngineEvent;
+    let key = "sk-test-0123456789abcdef";
+    let slow_confirm = session(vec![
+        expect(
+            json!({"id": 2, "method": "account/login/start", "params": {"type": "apiKey", "apiKey": key}}),
+        ),
+        emit(json!({"id": 2, "result": {"type": "apiKey"}})),
+        expect(json!({"id": 3, "method": "account/read", "params": {}})),
+        Entry::EmitInbound {
+            label: None,
+            frame: json!({"id": 3, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+            after_ms: Some(2500),
+        },
+    ]);
+    let (multi, options) = Multi::new(
+        "new-key-refused",
+        vec![
+            slow_confirm,
+            session_with_refused_key(None),
+            probe_api_key_ready(),
+        ],
+    );
+    let f = CodexEngineFactory::new(options);
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let flow = f
+        .auth_start(&target, Some("api-key".into()), tx)
+        .await
+        .unwrap()
+        .flow_id
+        .unwrap();
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Waiting
+    );
+    f.auth_respond(
+        &target,
+        &flow,
+        &flow,
+        ProviderAuthResponse::Credentials {
+            values: [("apiKey".to_string(), key.to_string())].into(),
+        },
+    )
+    .await
+    .unwrap();
+    // The sign-in Codex is up and has the key (it answers login/start at once; the account
+    // confirmation is what takes 2.5 s).
+    multi.started(0).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mut h = start_turn_on(&f).await;
+    let seen = until_finished(&mut h).await;
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, EngineEvent::AuthRequired { .. })),
+        "{seen:#?}"
+    );
+    h.session.shutdown().await;
+    let mut last = None;
+    while let Some(state) = next(&mut updates).await {
+        last = Some(state.phase);
+    }
+    assert_eq!(last, Some(ProviderAuthPhase::Succeeded));
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error, "{:?}", p.message);
+    assert_eq!(p.auth.label.as_deref(), Some("Key rejected"));
+}

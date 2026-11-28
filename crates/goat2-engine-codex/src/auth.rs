@@ -96,10 +96,13 @@ pub struct AuthFlows {
 /// restart the next refused turn marks it again.
 ///
 /// Results are ordered by ticket: a turn takes one just before turn/start is written, and a
-/// credential change (sign-in or logout) takes one when it resets the instance. A result is
-/// applied only when its ticket is newer than the last one applied, so a turn that started on
-/// the old credentials cannot mark the instance after a new sign-in, and an older turn
-/// finishing late cannot undo what a newer one reported.
+/// credential change takes a fence ticket just before Codex can write the new credentials
+/// (before `account/login/start {apiKey}` and `account/logout` are sent, and when
+/// `account/login/completed` arrives for a ChatGPT login). A result or a reset is applied only
+/// when its ticket is newer than the last one applied. So a turn on the old credentials cannot
+/// mark the instance after a new sign-in, an older turn finishing late cannot undo what a newer
+/// one reported, and a turn already refused on the new key is not cleared when the sign-in
+/// finishes afterwards.
 #[derive(Default)]
 pub struct Rejections {
     next: std::sync::atomic::AtomicU64,
@@ -137,18 +140,11 @@ impl Rejections {
         }
     }
 
-    /// The instance's credentials changed (a sign-in succeeded or it signed out): clear it, and
-    /// ignore every turn that started before.
-    pub fn reset(&self, instance: &str) {
-        let mut state = lock(&self.state);
-        let ticket = self.ticket();
-        state.insert(
-            instance.to_string(),
-            RejectionState {
-                rejected: false,
-                last: ticket,
-            },
-        );
+    /// The instance's credentials changed (a sign-in succeeded or it signed out) at `fence`,
+    /// a ticket taken just before Codex could write them: clear it and ignore every turn that
+    /// started before. A turn started after the fence and already reported stays applied.
+    pub fn reset_from(&self, instance: &str, fence: u64) -> bool {
+        self.report(instance, fence, false)
     }
 
     pub fn contains(&self, instance: &str) -> bool {
@@ -179,12 +175,22 @@ mod rejection_tests {
         assert!(!r.contains("codex"));
         // A turn on the old credentials refused after a sign-in does not mark it.
         let before_sign_in = r.ticket();
-        r.reset("codex");
+        let fence = r.ticket();
+        assert!(r.reset_from("codex", fence));
         assert!(!r.report("codex", before_sign_in, true));
         assert!(!r.contains("codex"));
-        // A turn started after the sign-in still can.
-        let after_sign_in = r.ticket();
-        assert!(r.report("codex", after_sign_in, true));
+        // ...and one refused before the sign-in finishes is cleared by it.
+        let old = r.ticket();
+        let fence = r.ticket();
+        assert!(r.report("codex", old, true));
+        assert!(r.reset_from("codex", fence));
+        assert!(!r.contains("codex"));
+        // Review r2 P1: a turn on the new key (after the fence) refused before the sign-in
+        // finishes stays marked.
+        let fence = r.ticket();
+        let new_key_turn = r.ticket();
+        assert!(r.report("codex", new_key_turn, true));
+        assert!(!r.reset_from("codex", fence));
         assert!(r.contains("codex"));
     }
 }
@@ -707,14 +713,16 @@ impl AuthFlows {
                         return slot.finish(&id, failed(&message));
                     }
                 }
+                // Set by the flow just before Codex can write the new credentials.
+                let mut fence = 0u64;
                 let end = tokio::select! {
                     biased;
                     _ = &mut stopped => None,
                     _ = tokio::time::sleep_until(deadline) => Some(expired()),
                     end = async {
                         match key {
-                            Some(key) => run_api_key(&mut codex, &target, &id, key).await,
-                            None => run(&mut codex, &target, &id, &method, &expires_at, &slot).await,
+                            Some(key) => run_api_key(&mut codex, &target, &id, key, &rejected, &mut fence).await,
+                            None => run(&mut codex, &target, &id, &method, &expires_at, &slot, &rejected, &mut fence).await,
                         }
                     } => Some(end),
                 };
@@ -723,7 +731,7 @@ impl AuthFlows {
                 codex.close().await;
                 if let Some(end) = end {
                     if end.phase == ProviderAuthPhase::Succeeded {
-                        rejected.reset(instance.as_str());
+                        let _ = rejected.reset_from(instance.as_str(), fence);
                     }
                     slot.finish(&id, end);
                 }
@@ -852,8 +860,11 @@ impl AuthFlows {
                 .end(Some(&id), Some(last), options.kill_grace + STOP_MARGIN)
                 .await;
         }
+        let mut fence = 0u64;
         let signed_out = tokio::time::timeout(LOGOUT_TIMEOUT, async {
             let codex = Codex::open(options, target).await.ok()?;
+            // Codex may remove the credentials from here on.
+            fence = self.rejected.ticket();
             let done = codex
                 .call(methods::ACCOUNT_LOGOUT, json!({}))
                 .await
@@ -866,7 +877,7 @@ impl AuthFlows {
         .flatten()
         .unwrap_or(false);
         if signed_out {
-            self.rejected.reset(instance.as_str());
+            let _ = self.rejected.reset_from(instance.as_str(), fence);
         }
         let (phase, message) = if signed_out {
             (ProviderAuthPhase::Idle, SIGNED_OUT)
@@ -882,7 +893,9 @@ fn redactor(options: &CodexEngineOptions, target: &ProviderTarget) -> Redactor {
 }
 
 /// One flow in an open Codex: its login, the person's sign-in, Codex's confirmation; returns
-/// the end state. The caller ends the process.
+/// the end state and sets `fence` (auth::Rejections) once Codex has the new credentials. The
+/// caller ends the process.
+#[allow(clippy::too_many_arguments)]
 async fn run(
     codex: &mut Codex,
     target: &ProviderTarget,
@@ -890,6 +903,8 @@ async fn run(
     method: &str,
     expires_at: &str,
     slot: &Slot,
+    rejected: &Rejections,
+    fence: &mut u64,
 ) -> ProviderAuthState {
     let instance = &target.instance_id;
     let end = |phase, message: &str| state(instance, phase, Some(flow_id), None, message, None);
@@ -932,6 +947,9 @@ async fn run(
     if !completed {
         return end(ProviderAuthPhase::Failed, NOT_COMPLETED);
     }
+    // Codex writes the new credentials just before it reports the login complete: turns from
+    // here on use them.
+    *fence = rejected.ticket();
     slot.publish(
         flow_id,
         state(
@@ -958,9 +976,13 @@ async fn run_api_key(
     target: &ProviderTarget,
     flow_id: &str,
     key: String,
+    rejected: &Rejections,
+    fence: &mut u64,
 ) -> ProviderAuthState {
     let instance = &target.instance_id;
     let end = |phase, message: &str| state(instance, phase, Some(flow_id), None, message, None);
+    // Codex saves the key while it answers this call: turns from here on may use it.
+    *fence = rejected.ticket();
     let answer = codex
         .call(
             methods::ACCOUNT_LOGIN_START,

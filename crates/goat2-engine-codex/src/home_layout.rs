@@ -388,6 +388,12 @@ impl Redactor {
             .fold(text.to_string(), |t, n| t.replace(n.as_str(), REDACTED))
     }
 
+    /// Diagnostic text (a failure, exit or refusal reason, an error): the private home
+    /// replaced and credential-shaped tokens removed (src/scrub.rs).
+    pub fn diagnostic(&self, text: &str) -> String {
+        crate::scrub::credentials(&self.apply(text))
+    }
+
     /// Whether `text` names the private home.
     pub fn mentions(&self, text: &str) -> bool {
         self.needles.iter().any(|n| text.contains(n.as_str()))
