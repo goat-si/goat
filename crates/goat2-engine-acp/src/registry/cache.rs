@@ -1,5 +1,7 @@
 //! v1 `registryIndexCache.ts:42-253`, `AcpRegistrySupport.ts:71-85,509-511,594-707`.
-use super::{Index, MAX_REGISTRY_BYTES, REGISTRY_URL, decode, valid_https_url};
+use super::super::contracts::AcpRegistryOperationErrorReason as Reason;
+use super::super::install::RegistryError;
+use super::{Index, MAX_REGISTRY_BYTES, REGISTRY_URL, decode, index_too_large, valid_https_url};
 use async_trait::async_trait;
 use futures::StreamExt;
 use std::{
@@ -43,24 +45,38 @@ impl HttpsFetch {
 }
 #[async_trait]
 impl RegistryFetch for HttpsFetch {
+    /// v1 `AcpRegistrySupport.ts:647-708` messages.
     async fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
         if !valid_https_url(url) {
-            return Err("registry URL must use HTTPS without credentials".into());
+            return Err("ACP Registry index URL must use HTTPS.".into());
         }
+        let fetch_failed = |e: reqwest::Error| {
+            if e.is_timeout() {
+                "Timed out fetching ACP Registry index.".to_owned()
+            } else {
+                format!("Could not fetch ACP Registry index from {url}.")
+            }
+        };
         let response = self
             .client
             .get(url)
             .send()
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(fetch_failed)?
             .error_for_status()
-            .map_err(|e| e.to_string())?;
+            .map_err(fetch_failed)?;
         let mut body = Vec::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| e.to_string())?;
+            let chunk = chunk.map_err(|e| {
+                if e.is_timeout() {
+                    "Timed out reading ACP Registry response body.".to_owned()
+                } else {
+                    "Could not read ACP Registry response body.".to_owned()
+                }
+            })?;
             if body.len() + chunk.len() > MAX_REGISTRY_BYTES {
-                return Err("index too large".into());
+                return Err(index_too_large());
             }
             body.extend_from_slice(&chunk);
         }
@@ -174,7 +190,7 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
             s.generation
         };
         let result = if !valid_https_url(&self.url) {
-            Err("registry URL must use HTTPS without credentials".into())
+            Err("ACP Registry index URL must use HTTPS.".into())
         } else {
             match self.fetcher.fetch(&self.url).await {
                 Ok(bytes) => decode(&bytes).map(|i| (i, bytes)),
@@ -253,32 +269,27 @@ mod tests {
 
 /// v1 `registryResolveRefresh.ts:12-52`: refresh only on download failure and retry
 /// only when the selected agent's launch identity changed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolveError {
-    pub reason: String,
-    pub detail: String,
-}
 pub async fn resolve_with_refresh<F, T, R, Fut>(
     cache: &RegistryIndexCache<F>,
     settings: &super::RegistrySettings,
     allow_install: bool,
     target: Option<&str>,
     mut resolve: R,
-) -> Result<T, ResolveError>
+) -> Result<T, RegistryError>
 where
     F: RegistryFetch,
     R: FnMut(Option<Index>) -> Fut,
-    Fut: std::future::Future<Output = Result<T, ResolveError>>,
+    Fut: std::future::Future<Output = Result<T, RegistryError>>,
 {
     if matches!(settings.source, super::Source::Local) || !allow_install {
         return resolve(None).await;
     }
-    let original = cache.load().await.map_err(|e| ResolveError {
-        reason: "registry_unavailable".into(),
-        detail: e,
-    })?;
+    let original = cache
+        .load()
+        .await
+        .map_err(|e| RegistryError::new(Reason::RegistryUnavailable, e))?;
     match resolve(Some(original.clone())).await {
-        Err(error) if error.reason == "download_failed" => {
+        Err(error) if error.reason == Reason::DownloadFailed => {
             let latest = match cache.refresh(None, None).await {
                 Ok((i, _)) => i,
                 Err(_) => return Err(error),
@@ -328,10 +339,7 @@ mod retry_tests {
             async move {
                 assert!(i.is_some());
                 if n == 0 {
-                    Err(ResolveError {
-                        reason: "download_failed".into(),
-                        detail: "bad".into(),
-                    })
+                    Err(RegistryError::new(Reason::DownloadFailed, "bad"))
                 } else {
                     Ok(())
                 }
