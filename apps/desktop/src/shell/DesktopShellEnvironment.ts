@@ -87,14 +87,37 @@ export type CommandRunner = (
  * earlier probe is known to be gone.
  */
 export class LiveShellProbes {
-  readonly #running = new Set<object>();
-  track(child: { once(event: "exit", listener: () => void): unknown }): void {
-    const token = {};
+  /** Live probes; pid is the probe's process group (probes are spawned detached). */
+  readonly #running = new Set<{ readonly pid: number | undefined }>();
+  #stopped = false;
+  track(child: { readonly pid?: number | undefined; once(event: "exit", listener: () => void): unknown }): void {
+    const token = { pid: child.pid };
     this.#running.add(token);
     child.once("exit", () => this.#running.delete(token));
   }
   get allGone(): boolean {
     return this.#running.size === 0;
+  }
+  /** True after stop(): no further probe may start. */
+  get stopped(): boolean {
+    return this.#stopped;
+  }
+  /**
+   * App quit ends discovery: no new probe starts, every live probe's group gets SIGKILL (the probe's
+   * own deadline timer dies with the app), and we wait at most waitMs for their exits.
+   */
+  async stop(waitMs = 2_000): Promise<void> {
+    this.#stopped = true;
+    for (const { pid } of this.#running) {
+      if (pid === undefined) continue;
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    const deadline = Date.now() + waitMs;
+    while (!this.allGone && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
@@ -110,6 +133,10 @@ const trimmed = (value: string | undefined): string | undefined => {
  */
 export const runCommandOutput: CommandRunner = (command, args, options) =>
   new Promise((resolve) => {
+    if (options.probes?.stopped === true) {
+      resolve("");
+      return;
+    }
     let settled = false;
     const finish = (value: string) => {
       if (settled) return;
@@ -167,6 +194,7 @@ export async function installPosixEnvironment(env: Env, options: ShellEnvironmen
   const candidates = listLoginShellCandidates(platform, env.SHELL, options.userShell);
   let answeredBy: string | undefined;
   for (const shell of candidates) {
+    if (options.probes?.stopped === true) break;
     // A timed-out probe that has not exited (stuck after SIGKILL) must not overlap another login
     // shell; launchctl below only reads launchd state and still runs.
     if (options.probes !== undefined && !options.probes.allGone) {
@@ -187,7 +215,7 @@ export async function installPosixEnvironment(env: Env, options: ShellEnvironmen
   }
 
   let launchctlPath: string | undefined;
-  if (platform === "darwin" && !shellEnvironment.PATH) {
+  if (platform === "darwin" && !shellEnvironment.PATH && options.probes?.stopped !== true) {
     const value = (await run("/bin/launchctl", ["getenv", "PATH"], {
       env,
       timeoutMs: LAUNCHCTL_TIMEOUT_MS,
@@ -373,12 +401,17 @@ export class DesktopShellEnvironment {
       return answered;
     };
     const probes = this.#options.probes ?? this.#probes;
-    const settled = discoverWithRetries(discover, this.#options.platform, () => probes.allGone, {
+    const settled = discoverWithRetries(discover, this.#options.platform, () => probes.allGone && !probes.stopped, {
       ...(options.delays ? { delays: options.delays } : {}),
       ...(options.sleep ? { sleep: options.sleep } : {}),
       ...(this.#options.log ? { log: this.#options.log } : {}),
     });
     return { first, settled };
+  }
+
+  /** App quit: ends discovery and kills any login shell still probing (bounded wait). */
+  stop(waitMs?: number): Promise<void> {
+    return (this.#options.probes ?? this.#probes).stop(waitMs);
   }
 
   /** Asks the login shell; true when the person's own shell answered with a PATH. */

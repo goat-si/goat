@@ -559,14 +559,15 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Quitting ends the work: hold the quit until the host and its whole process group are gone.
+// Quitting ends the work: hold the quit until the host and its whole process group are gone, and
+// kill a login-shell probe still running (its deadline timer would die with the app).
 let hostStopped = false;
 app.on("before-quit", (event) => {
   if (hostStopped) return;
   event.preventDefault();
   if (supervisor.state.phase === "stopping") return;
   log("quit: stopping host group");
-  void supervisor.stop().finally(() => {
+  void Promise.allSettled([supervisor.stop(), shellEnvironment.stop()]).finally(() => {
     hostStopped = true;
     log("quit: host stopped");
     app.quit();

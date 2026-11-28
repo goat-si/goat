@@ -230,6 +230,40 @@ describe("login shell probe, for real", () => {
     for (let i = 0; i < 40 && !gone(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.ok(gone(), "the shell's child outlived the probe");
   });
+
+  it("stop() (app quit) kills a hung login shell and its children, and no further probe starts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "goat2-quitshell-"));
+    const shell = join(dir, "hang-shell");
+    const pidFile = join(dir, "child.pid");
+    const runs = join(dir, "runs");
+    writeFileSync(shell, `#!/bin/sh\necho run >> ${runs}\nsleep 30 &\necho $! > ${pidFile}\nwait\n`);
+    chmodSync(shell, 0o755);
+    const environment = new DesktopShellEnvironment(
+      { PATH: "/usr/bin:/bin", SHELL: shell },
+      { platform: "darwin", homeDirectory: HOME, cacheFile: join(dir, "cache.json"), userShell: shell, loginShellTimeoutMs: 60_000 },
+    );
+    const target: NodeJS.ProcessEnv = {};
+    const discovery = environment.startDiscovery(target, { delays: [0, 0, 0], sleep: async () => {} });
+    for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    const child = Number(readFileSync(pidFile, "utf8"));
+    const started = Date.now();
+    await environment.stop();
+    assert.ok(Date.now() - started < 3_000, "stop() waited out the probe deadline");
+    const gone = () => {
+      try {
+        process.kill(child, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    for (let i = 0; i < 40 && !gone(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(gone(), "the hung shell's child outlived app quit");
+    assert.equal(await discovery.first, false);
+    assert.equal(await discovery.settled, false);
+    assert.equal(readFileSync(runs, "utf8").trim().split("\n").length, 1, "a probe started after stop()");
+  });
+
 });
 
 describe("retries (v1 discoverWithRetries)", () => {
