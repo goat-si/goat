@@ -1,5 +1,38 @@
 {
   "$defs": {
+    "AcpRegistryUrlAuthAction": {
+      "description": "v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the\nperson to open, answered by its elicitation id.",
+      "properties": {
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elicitationId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitationId",
+        "url",
+        "message"
+      ],
+      "type": "object"
+    },
     "ModelBadge": {
       "description": "v1 model `badge`.",
       "enum": [
@@ -155,6 +188,17 @@
     "ServerProviderAuth": {
       "description": "v1 `ServerProviderAuth`.",
       "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpRegistryUrlAuthAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Pending ACP registry sign-in (v1 `action`)."
+        },
         "canLogout": {
           "type": [
             "boolean",

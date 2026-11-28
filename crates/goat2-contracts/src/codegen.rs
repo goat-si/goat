@@ -195,12 +195,23 @@ pub fn render_limits() -> String {
     out
 }
 
-/// Add `maximum: 2^53-1` to every `uint64` so JSON Schema enforces the safe-integer bound.
+/// Bound every `uint64` to `maximum: 2^53-1` and every `int64` to `+/-(2^53-1)`, matching serde_util.
 fn safe_integer(schema: &mut Schema) {
-    if let Some(obj) = schema.as_object_mut()
-        && obj.get("format").and_then(|f| f.as_str()) == Some("uint64")
-    {
-        obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+    match obj.get("format").and_then(|f| f.as_str()) {
+        Some("uint64") => {
+            obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+        }
+        Some("int64") => {
+            obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+            obj.insert(
+                "minimum".into(),
+                (-(limits::MAX_SAFE_WIRE_INTEGER as i64)).into(),
+            );
+        }
+        _ => {}
     }
 }
 
