@@ -1641,3 +1641,54 @@ async fn mcp_error_keys_outside_the_request_are_never_logged() {
     );
     handle.session.shutdown().await;
 }
+
+/// Final review 8 finding 1 (v1 `ClaudeAdapterV2.test.ts:12230-12253`): a subagent Claude reports
+/// with task_started before the root result, without a launch acknowledgement, is live work; it
+/// blocks a reopen until its notification.
+#[tokio::test]
+async fn a_started_subagent_task_blocks_a_reopen_until_it_finishes() {
+    let run = Run::new("wire/subagent_task_started_blocks_reopen.ndjson");
+    let mut factory = run.factory();
+    let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    factory.options.frame_hook = Some(std::sync::Arc::new(move |_, line: &str| {
+        if line.contains("keep_alive") {
+            let _ = seen_tx.send(());
+        }
+    }));
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::ApprovalRequired, None),
+    )
+    .await
+    .unwrap();
+    turn(
+        &handle,
+        "Spawn a background subagent and stop.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    let blocked = handle
+        .session
+        .start_turn(input("two"), &settings(MODEL, RuntimeMode::FullAccess))
+        .await;
+    match &blocked {
+        TurnStartResult::Declined { reason } => {
+            assert!(reason.contains("background agents"), "{reason}")
+        }
+        other => panic!("a reopen ran over a live subagent: {other:?}"),
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(10), seen_rx.recv())
+        .await
+        .expect("the subagent finished")
+        .expect("hook alive");
+    turn(&handle, "two", MODEL, RuntimeMode::FullAccess).await;
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(run.starts().len(), 2);
+    handle.session.shutdown().await;
+}
