@@ -581,6 +581,9 @@ impl Actor {
             },
             host_generation: self.host.inner.opts.host_generation,
             process_generation: pgen,
+            // Driver defaults: bot instructions and launch overrides come with Part 2 bots.
+            instructions: None,
+            launch: None,
         };
         self.phase = Phase::Starting(permit);
         let host = self.host.clone();
@@ -902,6 +905,33 @@ impl Actor {
                     self.finish_run(outcome, reason).await;
                 }
             }
+            EngineEvent::AuthRequired { url, message, .. } => {
+                // The engine needs a person to sign in: a `signin` request on the thread (the
+                // active run's, if any). It is answered by the person, not through the engine.
+                let summary = match &url {
+                    Some(url) => format!("{message} ({url})"),
+                    None => message,
+                };
+                let request_id = RequestId::new(new_id("req"));
+                self.append(vec![LogEvent::RequestOpened(RequestOpened {
+                    request_id: request_id.clone(),
+                    run_id: self.active_run_id(),
+                    item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
+                    kind: RequestKind::Signin,
+                    summary: goat2_contracts::text::clamp_chars(
+                        &summary,
+                        goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS,
+                    ),
+                    options: None,
+                    recommended: None,
+                })]);
+            }
+            EngineEvent::SubagentUpdate { subagent_id, .. } => {
+                // Progress of an unfinished native subagent: not stored (PRD storage.md: no
+                // progress updates in the log). The finished subagent arrives as an item. There
+                // is no live wire frame for it yet (structure/30_wire.md).
+                tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
@@ -1198,7 +1228,7 @@ impl Actor {
                 run.engine_requests.retain(|(k, _)| k != key);
             }
         } else if request.item_id.is_some()
-            && request.kind != RequestKind::Resend
+            && !matches!(request.kind, RequestKind::Resend | RequestKind::Signin)
             && r.outcome != RequestOutcome::Cancel
         {
             return Err(Refusal::new(

@@ -269,6 +269,11 @@ struct FakeSession {
 
 #[async_trait]
 impl EngineFactory for FakeEngine {
+    /// The fake stands in for Codex, so it reports v1's Codex capabilities.
+    fn capabilities(&self) -> goat2_contracts::ProviderCapabilities {
+        super::codex::codex_capabilities()
+    }
+
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
         let now = self.starting.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_starting.fetch_max(now, Ordering::SeqCst);
