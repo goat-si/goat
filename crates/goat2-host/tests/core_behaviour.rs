@@ -1937,11 +1937,10 @@ async fn part2_fields_carry_what_the_host_knows() {
     // A Part 2 command whose module has not landed is refused as not available.
     let refused = t
         .host
-        .command(ClientFrame::RefreshProviders {
+        .command(ClientFrame::ProviderInstallStart {
             req_id: "r".into(),
-            client_request_id: "p2-refresh".into(),
-            instance_id: None,
-            refresh_models: None,
+            client_request_id: "p2-install".into(),
+            instance_id: "codex".into(),
         })
         .await
         .unwrap_err();
