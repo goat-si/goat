@@ -684,6 +684,13 @@ export function requiredScopesForServerSettingsPatch(
       : []),
     ...(changesProviders ? [AuthProvidersManageScope] : []),
     ...(changesVoice ? [AuthVoiceManageScope] : []),
+    ...(patch.defaultProjectScripts !== undefined ||
+    Object.values(patch.projectScriptOverrides ?? {}).some((scripts) => scripts !== null) ||
+    Object.values(patch.projectSettingsOverrides ?? {}).some(
+      (overrides) => overrides?.defaultProjectScripts !== undefined,
+    )
+      ? [AuthOrchestrationOperateScope]
+      : []),
     ...(agentTerminalBinding !== undefined ? [AuthAccessWriteScope] : []),
   ];
 }
