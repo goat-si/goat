@@ -13,6 +13,11 @@
     blobs/<itemId>.txt         bodies > 64 KB
 ```
 
+Format freeze: v1 of `goat.jsonl` lines and `card.json` freezes at the `goat2` merge where lane A's store first
+writes them. Before that, contract changes need no legacy readers. After it, persisted shapes change only
+additively (new optional fields, new event types that readers skip) or bump `v` with a reader for the old one;
+a frozen v1 sample log + card.json fixture guards it. `cards.sqlite` is a cache and may change freely (rebuild).
+
 Rules (PRD storage.md): append-only log, completed items only, `run.started` written before sending to
 the engine, card index writes batched only during a run (dirty mark first, write-through otherwise),
 no "read every thread body" API, no log migrations (per-line `v`), index epoch new per host start.
