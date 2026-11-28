@@ -67,6 +67,9 @@ async fn ui_and_agent_paths_through_the_real_server() {
         engine: EngineChoice::Fake,
         codex_bin: None,
         claude_bin: None,
+        grok_bin: None,
+        fx_bin: None,
+        antigravity_bin: None,
         exit_on_stdin_close: false,
     };
     let running = goat2_host::server::start_with_engine(cfg, Some(Arc::new(fake.clone())))
@@ -289,6 +292,9 @@ async fn ui_and_agent_paths_through_the_real_server() {
             engine: EngineChoice::Fake,
             codex_bin: None,
             claude_bin: None,
+            grok_bin: None,
+            fx_bin: None,
+            antigravity_bin: None,
             exit_on_stdin_close: false,
         };
         match goat2_host::server::start_with_engine(cfg, Some(Arc::new(fake.clone()))).await {
@@ -330,6 +336,9 @@ async fn real_codex_turn_through_the_host() {
         engine: EngineChoice::Codex,
         codex_bin: None,
         claude_bin: None,
+        grok_bin: None,
+        fx_bin: None,
+        antigravity_bin: None,
         exit_on_stdin_close: false,
     };
     let running = goat2_host::server::start_with_engine(cfg, None)
@@ -399,6 +408,9 @@ async fn real_codex_provider_row_through_the_host() {
         engine: EngineChoice::Codex,
         codex_bin: None,
         claude_bin: None,
+        grok_bin: None,
+        fx_bin: None,
+        antigravity_bin: None,
         exit_on_stdin_close: false,
     };
     let running = goat2_host::server::start_with_engine(cfg, None)

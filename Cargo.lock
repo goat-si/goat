@@ -947,6 +947,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "goat2-contracts",
+ "goat2-engine-acp",
  "goat2-engine-api",
  "goat2-engine-claude",
  "goat2-engine-codex",

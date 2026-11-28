@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 goat2-contracts = { path = "../goat2-contracts" }
 goat2-engine-api = { path = "../goat2-engine-api" }
+goat2-engine-acp = { path = "../goat2-engine-acp" }
 goat2-engine-claude = { path = "../goat2-engine-claude" }
 goat2-engine-codex = { path = "../goat2-engine-codex" }
 goat2-thread-store = { path = "../goat2-thread-store" }
