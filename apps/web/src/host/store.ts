@@ -2,7 +2,7 @@
 // No I/O here: HostClient feeds frames in and sends whatever `apply` asks for (resync_item).
 import type {
   BotProfile, CardCursor, ClientFrame, Fold, HostFrame, LogLine, QueuedInput, RequestOpened, ThreadCard,
-  ThreadCursor, TurnItem,
+  ThreadCursor, TurnItem, ContentStreamKind, ThreadTokenUsageSnapshot,
 } from "./wire.ts";
 
 export interface ThreadView {
@@ -19,6 +19,10 @@ export interface ThreadView {
   pageReqId: string | null;
   /** Live text for unfinished items, by itemId (UTF-16 lengths match the host offsets). */
   streaming: Record<string, string>;
+  /** What each unfinished item streams (text_append streamKind; the first delta fixes it, absent = assistant_text). */
+  streamKinds: Record<string, ContentStreamKind>;
+  /** Latest live token usage (thread_usage frame, not stored by the host); the card's contextUsage is the fallback. */
+  usage: { usage: ThreadTokenUsageSnapshot; updatedAt: string } | null;
   /** Fold restored from the latest checkpoint line, if the replay started there. */
   checkpointFold: Fold | null;
 }
@@ -38,7 +42,7 @@ export const emptyState = (): HostState => ({
 
 export const emptyThread = (threadId: string, subId: string | null): ThreadView => ({
   threadId, subId, caughtUp: false, cursor: null, lines: [], hasOlder: false, pageReqId: null,
-  streaming: {}, checkpointFold: null,
+  streaming: {}, streamKinds: {}, usage: null, checkpointFold: null,
 });
 
 /** Merge lines by seq (dedupe, ascending). */
@@ -106,7 +110,9 @@ export function apply(state: HostState, frame: HostFrame): ApplyResult {
         }
         if (line.type === "item.completed" && next.streaming[line.item.id] !== undefined) {
           const { [line.item.id]: _done, ...rest } = next.streaming;
+          const { [line.item.id]: _kind, ...kinds } = next.streamKinds;
           next.streaming = rest;
+          next.streamKinds = kinds;
         }
         return next;
       }));
@@ -127,16 +133,21 @@ export function apply(state: HostState, frame: HostFrame): ApplyResult {
       const t = state.threads[frame.threadId];
       if (!t || t.subId !== frame.subId) return none(state);
       const have = t.streaming[frame.itemId] ?? "";
+      // The item's first delta fixes its kind; a resync snapshot (offset 0) keeps the kind already known.
+      const kinds = (v: ThreadView) => ({ ...v.streamKinds, [frame.itemId]: v.streamKinds[frame.itemId] ?? frame.streamKind ?? "assistant_text" });
       if (frame.offset === 0) {
-        return none(withThread(state, frame.threadId, (v) => ({ ...v, streaming: { ...v.streaming, [frame.itemId]: frame.text } })));
+        return none(withThread(state, frame.threadId, (v) => ({ ...v, streaming: { ...v.streaming, [frame.itemId]: frame.text }, streamKinds: kinds(v) })));
       }
       if (frame.offset !== have.length) {
         return { state, outgoing: [{ type: "resync_item", subId: frame.subId, itemId: frame.itemId }] };
       }
-      return none(withThread(state, frame.threadId, (v) => ({ ...v, streaming: { ...v.streaming, [frame.itemId]: have + frame.text } })));
+      return none(withThread(state, frame.threadId, (v) => ({ ...v, streaming: { ...v.streaming, [frame.itemId]: have + frame.text }, streamKinds: kinds(v) })));
     }
-    case "thread_usage":
-      return none(state);
+    case "thread_usage": {
+      const t = state.threads[frame.threadId];
+      if (!t || t.subId !== frame.subId) return none(state);
+      return none(withThread(state, frame.threadId, (v) => ({ ...v, usage: { usage: frame.usage, updatedAt: frame.updatedAt } })));
+    }
     case "providers":
       // Provider instances belong to the providers UI (goat2_providers_ui); the thread store ignores them.
       return none(state);
@@ -309,6 +320,8 @@ export function deriveThread(view: ThreadView | undefined): DerivedThread {
   }
   // Streaming text for unfinished items goes last, as a live bot entry.
   for (const [itemId, text] of Object.entries(view.streaming)) {
+    // Only answer text is the bot speaking; reasoning, plans and command output are work.
+    if ((view.streamKinds[itemId] ?? "assistant_text") !== "assistant_text") continue;
     out.entries.push({ kind: "bot", key: `stream-${itemId}`, text, at: "", streaming: true });
   }
   out.openRequests = [...requests.values()];

@@ -206,7 +206,7 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
           {thread.hasOlder && <div {...(btn("Load earlier messages", () => client.readOlder(card.id)) as object)} data-load-older=""
             style={{ color: "#5D5D5DD9", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12.5, padding: "0 0 12px", textAlign: "center" }}>Load earlier messages</div>}
           {view && <V1Boundary style={{ display: "contents" }}>
-            <V1ThreadTimeline threadId={card.id} lines={view.lines} streaming={view.streaming} onOpenThread={onStarted}
+            <V1ThreadTimeline threadId={card.id} lines={view.lines} streaming={view.streaming} streamKinds={view.streamKinds} onOpenThread={onStarted}
               renderMessage={(m) => m.role === "user" ? <P.TlUser text={m.text} /> : <P.TlAnswer text={m.text} />} />
           </V1Boundary>}
           {thread.openRequests.filter((rq) => !hidden.has(rq.requestId)).map((rq) => (

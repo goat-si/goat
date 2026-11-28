@@ -90,6 +90,26 @@ describe("text_append", () => {
     expect(c.outgoing).toEqual([{ type: "resync_item", subId: "s1", itemId: "x" }]);
     expect(c.state.threads.t!.streaming.x).toBe("hi 👋!");
   });
+  it("fixes the stream kind at the first delta, keeps it on resync, clears it when the item completes", () => {
+    let s = run(withSub(), { type: "text_append", subId: "s1", threadId: "t", itemId: "r", offset: 0, text: "think", streamKind: "reasoning_text" });
+    s = run(s, { type: "text_append", subId: "s1", threadId: "t", itemId: "r", offset: 5, text: "ing" });
+    expect(s.threads.t!.streamKinds.r).toBe("reasoning_text");
+    s = run(s, { type: "text_append", subId: "s1", threadId: "t", itemId: "r", offset: 0, text: "thinking!" });
+    expect(s.threads.t!.streamKinds.r).toBe("reasoning_text");
+    s = run(s, { type: "text_append", subId: "s1", threadId: "t", itemId: "a", offset: 0, text: "answer" });
+    expect(s.threads.t!.streamKinds.a).toBe("assistant_text");
+    // Only answer text is the bot speaking.
+    expect(deriveThread(s.threads.t).entries.map((e) => e.kind === "bot" ? e.text : e.kind)).toEqual(["answer"]);
+    s = run(s, ev(line(1, "t", { type: "item.completed", runId: "r1", engineLocator: null, item: item("t", "r1", "r", "t", { type: "reasoning", text: "thinking!", streaming: false }) })));
+    expect(s.threads.t!.streamKinds).toEqual({ a: "assistant_text" });
+    expect(s.threads.t!.streaming).toEqual({ a: "answer" });
+  });
+  it("keeps the latest live usage of the subscription", () => {
+    const usage = { usedTokens: 1200, maxTokens: 200000 } as never;
+    const s = run(withSub(), { type: "thread_usage", subId: "s1", threadId: "t", usage, updatedAt: "2026-11-29T01:00:00Z" },
+      { type: "thread_usage", subId: "stale", threadId: "t", usage, updatedAt: "2026-11-29T02:00:00Z" });
+    expect(s.threads.t!.usage).toEqual({ usage, updatedAt: "2026-11-29T01:00:00Z" });
+  });
   it("answers ping with pong", () => {
     expect(apply(withSub(), { type: "ping", at: "now" }).outgoing).toEqual([{ type: "pong", at: "now" }]);
   });

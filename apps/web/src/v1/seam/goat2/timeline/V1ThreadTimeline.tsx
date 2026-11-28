@@ -74,12 +74,15 @@ const noop = () => {};
 const reportedKinds = new Set<string>();
 
 export function V1ThreadTimeline(props: V1ThreadTimelineProps) {
-  const { threadId, lines, streaming, renderMessage, onOpenThread } = props;
+  const { threadId, lines, streaming, streamKinds, renderMessage, onOpenThread } = props;
   const listRef = useRef<LegendListRef | null>(null);
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(() => new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(() => new Set());
   const [workGroupViewState] = useState<WorkGroupViewState>(() => ({ scrollPositions: new Map(), expandedEntries: new Set() }));
-  const projected = useMemo(() => projectGoat2Thread({ threadId, lines, streaming }), [threadId, lines, streaming]);
+  const projected = useMemo(
+    () => projectGoat2Thread({ threadId, lines, streaming, ...(streamKinds ? { streamKinds } : {}) }),
+    [threadId, lines, streaming, streamKinds],
+  );
   if (projected.undecodable.length > 0) console.error("v1 timeline: items v1 cannot decode", projected.undecodable);
   const latestRun = latestRunOf(projected.runs);
   const isWorking = projected.activeRunId !== null;

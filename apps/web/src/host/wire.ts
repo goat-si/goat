@@ -4,6 +4,7 @@ export type {
   BotFace, BotProfile, CardCursor, ChatAttachment, ClientFrame, CommandError, CommandValue, DecisionOption,
   Fold, ModelSelection, HostFrame, InputId, InputMode, ItemId, LogLine, QueuedInput, RequestId, RequestKind,
   RequestOpened, RequestOutcome, RunOutcome, ThreadCard, ThreadCursor, ThreadId, ThreadStatus, TurnItem,
+  ContentStreamKind, ThreadTokenUsageSnapshot,
 } from "@goat2/contracts-rs";
 import type { ClientFrame, HostFrame, LogLine } from "@goat2/contracts-rs";
 

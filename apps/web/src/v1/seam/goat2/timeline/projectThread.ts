@@ -6,16 +6,22 @@
 // silently.
 //
 // Rules: a user input shows once it reached a run (run.started inputIds, or input.delivered accepted into its run); queued inputs stay in the queue banner. An item is grouped under its origin run by item.runId, also when it
-// arrives after that run's run.finished (lane E, Part 2 late subagent completions). Streaming text for an unfinished
-// item is an in-progress assistant message at the end.
+// arrives after that run's run.finished (lane E, Part 2 late subagent completions). Streamed text for an unfinished
+// item becomes the in-progress v1 item of its stream kind, at the end, the way v1's server folds deltas into its
+// projection: assistant_text -> assistant_message, reasoning_text / reasoning_summary_text -> reasoning, plan_text ->
+// proposed_plan. command_output / file_change_output are not drawn here: v1 shows live output only in the expanded
+// item inspector (Part 2, details by engine locator), and GOAT 2 has no item before item.completed to hang it on.
+// unknown has no v1 rendering.
 import { OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import type { LogLine, TurnItem } from "../../../../host/wire.ts";
+import type { ContentStreamKind, LogLine, TurnItem } from "../../../../host/wire.ts";
 
 export interface Goat2ThreadInput {
   readonly threadId: string;
   readonly lines: ReadonlyArray<LogLine>;
   readonly streaming: Readonly<Record<string, string>>;
+  /** Stream kind per streaming item; absent means assistant_text (text_append without streamKind). */
+  readonly streamKinds?: Readonly<Record<string, ContentStreamKind>>;
 }
 
 export interface Goat2RunSummary {
@@ -134,13 +140,21 @@ export function projectGoat2Thread(input: Goat2ThreadInput): ProjectedThread {
   }
   for (const [itemId, text] of Object.entries(input.streaming)) {
     const at = activeRunStartedAt ?? new Date(0).toISOString();
-    order.push({
-      ...base(threadId, itemId, activeRunId, at, "running", ordinal++),
-      type: "assistant_message",
-      messageId: `stream:${itemId}`,
-      text,
-      streaming: true,
-    });
+    const head = base(threadId, itemId, activeRunId, at, "running", ordinal++);
+    switch (input.streamKinds?.[itemId] ?? "assistant_text") {
+      case "assistant_text":
+        order.push({ ...head, type: "assistant_message", messageId: `stream:${itemId}`, text, streaming: true });
+        break;
+      case "reasoning_text":
+      case "reasoning_summary_text":
+        order.push({ ...head, type: "reasoning", text, streaming: true });
+        break;
+      case "plan_text":
+        order.push({ ...head, type: "proposed_plan", planId: `plan:${itemId}`, markdown: text, streaming: true });
+        break;
+      default:
+        break; // command_output, file_change_output, unknown: see the header
+    }
   }
 
   const visibleTurnItems: OrchestrationV2ProjectedTurnItem[] = [];

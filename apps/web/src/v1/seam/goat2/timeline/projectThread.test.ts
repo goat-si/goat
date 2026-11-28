@@ -61,6 +61,22 @@ describe("projectGoat2Thread", () => {
     expect(p.activeRunStartedAt).toBe(at(2));
   });
 
+  it("draws each stream kind as v1's in-progress item; command output and unknown are not drawn", () => {
+    const p = projectGoat2Thread({
+      threadId: "t",
+      lines: [accepted(1, "i1", "hi"), started(2, "r1", ["i1"])],
+      streaming: { a: "answer", r: "thinking", s: "summary", pl: "# plan", c: "$ ls", u: "?" },
+      streamKinds: { r: "reasoning_text", s: "reasoning_summary_text", pl: "plan_text", c: "command_output", u: "unknown" },
+    });
+    expect(p.undecodable).toEqual([]);
+    expect(p.visibleTurnItems.slice(1).map((r) => r.item)).toMatchObject([
+      { type: "assistant_message", text: "answer", streaming: true, runId: "r1" },
+      { type: "reasoning", text: "thinking", streaming: true },
+      { type: "reasoning", text: "summary", streaming: true },
+      { type: "proposed_plan", markdown: "# plan", streaming: true },
+    ]);
+  });
+
   it("feeds v1's own timeline logic: user row, a work group with the command, the answer", () => {
     const p = project([accepted(1, "i1", "hello"), started(2, "r1", ["i1"]), command(3, "r1", "c1", "ls -la"), answer(4, "r1", "a1", "done"), finished(5, "r1")]);
     const entries = deriveTimelineEntriesFromVisibleTurnItems({ visibleTurnItems: p.visibleTurnItems, optimisticMessages: [] });

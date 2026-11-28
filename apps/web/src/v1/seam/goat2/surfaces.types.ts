@@ -101,6 +101,7 @@ export declare const V1ThreadTimeline: ComponentType<{
   threadId: string;
   lines: ReadonlyArray<import("@goat2/contracts-rs").LogLine>;
   streaming: Readonly<Record<string, string>>;
+  streamKinds?: Readonly<Record<string, import("@goat2/contracts-rs").ContentStreamKind>>;
   renderMessage: (message: V1TimelineMessage) => import("react").ReactNode;
   onOpenThread: (threadId: string) => void;
 }>;
