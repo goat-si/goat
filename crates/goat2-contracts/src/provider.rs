@@ -99,6 +99,77 @@ pub struct ProviderAuthMethod {
     pub r#type: ProviderAuthMethodType,
 }
 
+/// A response may contain credentials or typed secrets. Never log or persist the containing
+/// frame (including goat.jsonl and tracing).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ProviderAuthResponse {
+    Browser {
+        action: ProviderAuthBrowserAction,
+    },
+    Terminal {
+        #[serde(with = "crate::serde_util::auth_terminal_data")]
+        #[ts(as = "String")]
+        #[schemars(with = "String", length(max = 4096))]
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        size: Option<ProviderAuthTerminalSize>,
+    },
+    Credentials {
+        #[serde(with = "crate::serde_util::auth_values")]
+        #[ts(as = "std::collections::BTreeMap<String, String>")]
+        #[schemars(schema_with = "auth_values_schema")]
+        values: std::collections::BTreeMap<String, String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderAuthBrowserAction {
+    Accept,
+    Decline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+pub struct ProviderAuthTerminalSize {
+    #[serde(with = "crate::serde_util::auth_cols")]
+    #[ts(as = "u16")]
+    #[schemars(with = "u16", range(min = 1, max = 500))]
+    pub cols: u16,
+    #[serde(with = "crate::serde_util::auth_rows")]
+    #[ts(as = "u16")]
+    #[schemars(with = "u16", range(min = 1, max = 200))]
+    pub rows: u16,
+}
+
+fn auth_values_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "object", "maxProperties": 16,
+        "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128,
+          "pattern": r"^[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff](?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"},
+        "additionalProperties": {"type": "string", "maxLength": 16384}})
+}
+
+impl std::fmt::Debug for ProviderAuthResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Browser { action } => f.debug_struct("Browser").field("action", action).finish(),
+            Self::Terminal { size, .. } => f
+                .debug_struct("Terminal")
+                .field("data", &"<redacted>")
+                .field("size", size)
+                .finish(),
+            Self::Credentials { values } => {
+                let redacted: std::collections::BTreeMap<_, _> =
+                    values.keys().map(|k| (k, "<redacted>")).collect();
+                f.debug_struct("Credentials")
+                    .field("values", &redacted)
+                    .finish()
+            }
+        }
+    }
+}
+
 /// v1 `ProviderAuthInteraction`: what the person must do next in a sign-in flow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(

@@ -1,0 +1,16 @@
+{
+  "type": "provider_auth_respond",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "flowId": "flow",
+  "interactionId": "interaction",
+  "response": {
+    "type": "terminal",
+    "data": "input",
+    "size": {
+      "cols": 80,
+      "rows": 24
+    }
+  }
+}

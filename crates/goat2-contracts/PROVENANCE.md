@@ -31,3 +31,5 @@ All rows below are "ported to Rust" (serde + ts-rs + schemars); field names and 
 - `log.rs` `RunFinished.tokenUsage`, `card.rs` `ThreadCard.contextUsage`: v1 run and provider-thread usage projections; `subscribe.rs` `thread_usage` models live usage with host receipt time, analogous to `packages/client-runtime/src/state/contextWindow.ts:46-90`.
 
 - `subscribe.rs` `ContentStreamKind`: v1 `packages/contracts/src/providerRuntime.ts:83-91`, ported to Rust with identical wire literals.
+
+- `provider.rs` `ProviderAuthResponse`, `subscribe.rs` `provider_auth_respond`: v1 `packages/contracts/src/providerSetup.ts:33,84-106,121-127`, `packages/contracts/src/rpc.ts:571,881-884`. Serde counts UTF-16 code units; JSON Schema maxLength counts Unicode code points and is consequently looser for supplementary characters.

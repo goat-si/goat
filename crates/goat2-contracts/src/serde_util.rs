@@ -453,3 +453,78 @@ pub mod currency {
         Ok(v)
     }
 }
+
+/// v1 setup response validation; lengths are JavaScript UTF-16 code units.
+pub mod auth_terminal_data {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+    fn check(v: &str) -> Result<(), &'static str> {
+        if v.encode_utf16().count() > 4096 {
+            Err("terminal data too long")
+        } else {
+            Ok(())
+        }
+    }
+    pub fn serialize<S: Serializer>(v: &str, s: S) -> Result<S::Ok, S::Error> {
+        check(v).map_err(ser::Error::custom)?;
+        s.serialize_str(v)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        let v = String::deserialize(d)?;
+        check(&v).map_err(de::Error::custom)?;
+        Ok(v)
+    }
+}
+pub mod auth_values {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser};
+    use std::collections::BTreeMap;
+    fn check(v: &BTreeMap<String, String>) -> Result<(), &'static str> {
+        if v.len() > 16 {
+            return Err("too many credential fields");
+        }
+        for (k, value) in v {
+            if k.is_empty()
+                || k.trim_matches(super::is_ecmascript_whitespace) != k
+                || k.encode_utf16().count() > 128
+            {
+                return Err("invalid credential field name");
+            }
+            if value.encode_utf16().count() > 16384 {
+                return Err("credential value too long");
+            }
+        }
+        Ok(())
+    }
+    pub fn serialize<S: Serializer>(v: &BTreeMap<String, String>, s: S) -> Result<S::Ok, S::Error> {
+        check(v).map_err(ser::Error::custom)?;
+        v.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<BTreeMap<String, String>, D::Error> {
+        let v = BTreeMap::deserialize(d)?;
+        check(&v).map_err(de::Error::custom)?;
+        Ok(v)
+    }
+}
+macro_rules! bounded_auth_dimension {
+    ($module:ident, $max:expr) => {
+        pub mod $module {
+            use serde::{Deserialize, Deserializer, Serializer, de, ser};
+            pub fn serialize<S: Serializer>(v: &u16, s: S) -> Result<S::Ok, S::Error> {
+                if !(1..=$max).contains(v) {
+                    return Err(ser::Error::custom("invalid terminal dimension"));
+                }
+                s.serialize_u16(*v)
+            }
+            pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+                let v = u16::deserialize(d)?;
+                if !(1..=$max).contains(&v) {
+                    return Err(de::Error::custom("invalid terminal dimension"));
+                }
+                Ok(v)
+            }
+        }
+    };
+}
+bounded_auth_dimension!(auth_cols, 500);
+bounded_auth_dimension!(auth_rows, 200);

@@ -17,7 +17,8 @@ use crate::model::{ModelSelection, RuntimeMode};
 use crate::turn_item::{ChatAttachment, TurnItem};
 use crate::{
     AcpRegistryPrepareResult, AcpRegistrySearchResult, ChannelListBotNotesResult,
-    ProviderAuthState, ProviderInstallState, ProviderInstanceId, ServerProviderEntry,
+    ProviderAuthResponse, ProviderAuthState, ProviderInstallState, ProviderInstanceId,
+    ServerProviderEntry,
 };
 
 /// Kind of content streamed for an unfinished item (v1 RuntimeContentStreamKind).
@@ -170,6 +171,15 @@ pub enum ClientFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         method_id: Option<String>,
+    },
+    /// Contains secrets: never log or persist this frame, including goat.jsonl and tracing.
+    ProviderAuthRespond {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+        flow_id: String,
+        interaction_id: String,
+        response: ProviderAuthResponse,
     },
     ProviderAuthCancel {
         req_id: String,
@@ -453,6 +463,9 @@ impl ClientFrame {
                 client_request_id, ..
             }
             | Self::ProviderAuthStart {
+                client_request_id, ..
+            }
+            | Self::ProviderAuthRespond {
                 client_request_id, ..
             }
             | Self::ProviderAuthCancel {

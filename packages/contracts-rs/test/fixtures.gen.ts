@@ -306,6 +306,52 @@ export const client_frame__provider_auth_logout = {
   "type": "provider_auth_logout"
 } satisfies ClientFrame;
 
+export const client_frame__provider_auth_respond_browser = {
+  "clientRequestId": "c",
+  "flowId": "flow",
+  "instanceId": "codex",
+  "interactionId": "interaction",
+  "reqId": "r",
+  "response": {
+    "action": "accept",
+    "type": "browser"
+  },
+  "type": "provider_auth_respond"
+} satisfies ClientFrame;
+
+export const client_frame__provider_auth_respond_credentials = {
+  "clientRequestId": "c",
+  "flowId": "flow",
+  "instanceId": "codex",
+  "interactionId": "interaction",
+  "reqId": "r",
+  "response": {
+    "type": "credentials",
+    "values": {
+      "password": "example",
+      "username": "person"
+    }
+  },
+  "type": "provider_auth_respond"
+} satisfies ClientFrame;
+
+export const client_frame__provider_auth_respond_terminal = {
+  "clientRequestId": "c",
+  "flowId": "flow",
+  "instanceId": "codex",
+  "interactionId": "interaction",
+  "reqId": "r",
+  "response": {
+    "data": "input",
+    "size": {
+      "cols": 80,
+      "rows": 24
+    },
+    "type": "terminal"
+  },
+  "type": "provider_auth_respond"
+} satisfies ClientFrame;
+
 export const client_frame__provider_auth_start = {
   "clientRequestId": "c",
   "instanceId": "codex",

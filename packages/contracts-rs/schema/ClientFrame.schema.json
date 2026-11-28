@@ -189,6 +189,109 @@
       ],
       "type": "object"
     },
+    "ProviderAuthBrowserAction": {
+      "enum": [
+        "accept",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "ProviderAuthResponse": {
+      "description": "A response may contain credentials or typed secrets. Never log or persist the containing\nframe (including goat.jsonl and tracing).",
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ProviderAuthBrowserAction"
+            },
+            "type": {
+              "const": "browser",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "action"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProviderAuthTerminalSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "terminal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "credentials",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              "maxProperties": 16,
+              "propertyNames": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff](?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "values"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderAuthTerminalSize": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
     "ProviderInstanceId": {
       "description": "A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.",
       "type": "string"
@@ -638,6 +741,43 @@
         "reqId",
         "clientRequestId",
         "instanceId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Contains secrets: never log or persist this frame, including goat.jsonl and tracing.",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "flowId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "interactionId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "response": {
+          "$ref": "#/$defs/ProviderAuthResponse"
+        },
+        "type": {
+          "const": "provider_auth_respond",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId",
+        "flowId",
+        "interactionId",
+        "response"
       ],
       "type": "object"
     },
