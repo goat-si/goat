@@ -173,9 +173,21 @@ pub enum EngineEvent {
     /// Claude "not logged in"). The host records it as `request.opened` kind `signin` on the run
     /// named by `turn_id` when there is one.
     AuthRequired {
+        /// Engine handle answered through `answer_request` with Accept or Decline when the
+        /// person resolves sign-in (v1 ACP URL elicitation: provider-acp/src/server/adapter.ts:5329-5362).
+        /// Unique per engine request within a session: the host answers each key at most once,
+        /// gives a key at most one sign-in request, and ignores later events naming a key it
+        /// already answered.
+        key: Option<String>,
         turn_id: Option<String>,
         url: Option<String>,
         message: String,
+    },
+    /// Cumulative and last-turn usage reported by the engine. Cost is present only when
+    /// reported by the engine; the host never estimates it.
+    TokenUsage {
+        turn_id: Option<String>,
+        usage: goat2_contracts::ThreadTokenUsageSnapshot,
     },
     /// Progress of an engine-native subagent (Claude `task_*`, ACP `subagent_update`). Not stored;
     /// the finished subagent arrives as `ItemCompleted` with `TurnItemBody::Subagent`.

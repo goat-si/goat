@@ -10,6 +10,15 @@ first run.started order, wakes are `w1` through `wN` per parent in child.reporte
 order, and calls use the Mcp step's `call`. An unmappable id is an error naming
 that id. Global sequence numbers describe observation order across threads.
 
+Multi-thread and MCP scenarios: a call to a path that puts a message into a thread
+(`task.create`, `thread.send`) names that input after the call id. Child threads
+bind to the declared threads whose `parent` is the creating thread, in creation
+order. Mcp `args` may use `$thread:<alias>` for a thread id and
+`$result:<call>.<field>` for a field of an earlier call's result. A run-status
+wait for `running` is satisfied once the run's own engine turn runs. Tool results
+are ordered after every stored event at or below the highest sequence read when
+the call returned (events committed in between may precede them).
+
 Each scenario's provenance cites its pinned v1 transcript and the fixture input
 or integration test it mirrors. Stored transcript hashes are checked, and the
 source hash is checked against `GOAT_V1_ROOT` when set. Update schemas with

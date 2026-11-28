@@ -39,12 +39,12 @@
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "unsupported",
+      "reason": "v1 cannot be driven from recorded sessions: a thread.watch wake queues or steers a wake input into the watching thread (launchWatch.ts:735-781, threadWake.ts:8-29), which needs recorded Codex frames for that turn, and the watch path needs the real LaunchWatchService, which v1's MCP toolkit test mocks (OrchestratorMcpToolkit.integration.test.ts:224-228). No Codex recording contains a watch wake. GOAT 2 defers thread.watch (owner decision 2026-11-28, goat2-design prd-src/decisions.md:73) (goat2 target unsupported)."
     },
     "goat2": {
-      "status": "pending",
-      "reason": "no host yet"
+      "status": "unsupported",
+      "reason": "GOAT 2 Part 1 defers thread.watch (owner decision 2026-11-28, goat2-design prd-src/decisions.md:73; owner 2026-11-29: source-only)"
     }
   }
 }

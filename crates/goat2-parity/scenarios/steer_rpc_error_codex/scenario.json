@@ -87,12 +87,12 @@
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "unsupported",
+      "reason": "v1 cannot reach the source-derived end state with recorded frames: a Codex turn/steer RPC error becomes ProviderAdapterSteerRunError (CodexAdapterV2.ts:7338), a ProviderTurnControlError without steerDeclined/missedBeforeSubmit that EffectWorker rethrows (EffectWorker.ts:310-318); steer effects are retryable (providerTurnControlFailure.ts: only interrupts are not) with 100ms*2^n backoff up to 5 attempts (EffectWorker.ts:862-880); after the turn completes the retry fails missedBeforeSubmit (ProviderTurnControlService.ts:157-165) and the same message is re-dispatched start_immediately as a new run (EffectWorker.ts:310-360), which needs a second recorded Codex turn this synthetic transcript does not contain. Observed v1 replay of the recorded window (runner 2026-11-28): input.accepted i1 start, run.started r1, input.accepted i2 steer, run.finished r1 done, no steer.applied, stream consumed (6 outbound checked); the backoff retry did not fire within the replay."
     },
     "goat2": {
       "status": "pending",
-      "reason": "no host yet"
+      "reason": "needs the goat2 process target and the Codex driver; the GOAT 2 rule (an errored steer is requeued as a followup with the same inputId) is unit-tested on goat2 9f903733f4d: crates/goat2-engine-codex/src/engine.rs:1664 maps a turn/steer RPC error to SteerResult::Declined (test crates/goat2-engine-codex/tests/engine.rs:607 declined_steer_is_reported, -32600 'turn is compacting'); crates/goat2-host/src/core/actor.rs:472 logs input.delivered declined and leaves the input queued; host test crates/goat2-host/tests/core_behaviour.rs:256 declined_steer_is_requeued_as_followup_with_the_same_input_id asserts the next turn carries the same inputId and no second input.accepted."
     }
   }
 }

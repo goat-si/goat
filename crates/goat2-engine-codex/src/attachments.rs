@@ -20,10 +20,20 @@ use goat2_engine_api::EngineInput;
 
 use crate::protocol::client::UserInput;
 
+/// A saved attachment the host found: where it is (named in the text) and, when the driver asked
+/// for them, its bytes, read by the host (safely, from its own store) so the driver never opens a
+/// host path itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAttachment {
+    pub path: PathBuf,
+    pub bytes: Option<Vec<u8>>,
+}
+
 /// Finds the saved file of an attachment (the host knows the thread folder; v1
-/// `resolveAttachmentPath`). `None` means it cannot be found.
+/// `resolveAttachmentPath`). The flag asks for the bytes too (native images are sent inline).
+/// `None` means it cannot be found or read.
 pub type AttachmentResolver =
-    Arc<dyn Fn(&ThreadId, &ChatAttachment) -> Option<PathBuf> + Send + Sync>;
+    Arc<dyn Fn(&ThreadId, &ChatAttachment, bool) -> Option<ResolvedAttachment> + Send + Sync>;
 
 /// v1 `PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES` (packages/contracts/src/chatAttachment.ts:18-23).
 const NATIVE_IMAGE_MIME_TYPES: [&str; 4] = ["image/gif", "image/jpeg", "image/png", "image/webp"];
@@ -40,7 +50,7 @@ pub fn codex_input(
     inputs: &[EngineInput],
     resolver: Option<&AttachmentResolver>,
 ) -> Result<Vec<UserInput>, String> {
-    let resolve = |a: &ChatAttachment| resolver.and_then(|r| r(thread, a));
+    let resolve = |a: &ChatAttachment, bytes: bool| resolver.and_then(|r| r(thread, a, bytes));
     let mut text = skill_mention_text(
         &inputs
             .iter()
@@ -55,11 +65,11 @@ pub fn codex_input(
             ChatAttachmentType::Image => "image",
             ChatAttachmentType::File => "file",
         };
-        let context = match resolve(attachment) {
-            Some(path) => format!(
+        let context = match resolve(attachment, false) {
+            Some(found) => format!(
                 "[Attached {kind} \"{}\" is saved at: {}]",
                 attachment.name,
-                path.display()
+                found.path.display()
             ),
             None => format!(
                 "[Attached {kind} \"{}\" is unavailable: could not resolve a saved path for attachment '{}'.]",
@@ -77,10 +87,11 @@ pub fn codex_input(
         items.push(UserInput::text(text));
     }
     for attachment in attachments.into_iter().filter(|a| is_native_image(a)) {
-        let path = resolve(attachment)
+        let found = resolve(attachment, true)
             .ok_or_else(|| format!("Invalid attachment id '{}'", attachment.id))?;
-        let bytes = std::fs::read(&path)
-            .map_err(|_| format!("Failed to read attachment '{}'.", attachment.id))?;
+        let bytes = found
+            .bytes
+            .ok_or_else(|| format!("Failed to read attachment '{}'.", attachment.id))?;
         items.push(UserInput::Image {
             url: format!("data:{};base64,{}", attachment.mime_type, base64(&bytes)),
         });

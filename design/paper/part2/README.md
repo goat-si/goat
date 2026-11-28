@@ -26,36 +26,22 @@ currentColor drawn as #0d0d0d). Registry names/versions/descriptions match the l
 Remaining: model names and account states are placeholder data. P2-M lifts v1 components directly; these boards are
 the visual check.
 
-## Matched to v1 per P2-M report (2026-11-29)
-Lane P2-M lifted the real v1 components and listed where these boards differed; v1 code wins.
-- P1 1PBB-2: rebuilt as v1's list + detail split (ProviderSettingsPanel): rows = logo, name, v1 state line
-  ("Authenticated · ChatGPT Pro", "Not found · grok was not found on PATH", "Unavailable · Runtime target missing"),
-  enable toggle; actions (Sign in, Reset, Remove) in the detail pane. v1 order incl. Cursor Cloud, Claude Cloud, Devin
-  Cloud shown off with "Cloud providers come in a later GOAT 2 release." Label "Muse Code". Settings nav: Search on top (icons: see round 2),
-  Search on top, no "Settings" title, Memory and Project hidden (v1 availability rules). Devin logo from
-  packages/provider-devin-cloud/src/client.ts.
-- P3 1QAN-2: registry rows show Added/Add only (no versions, no progress bar).
-- P4 1QM8-2 / P5 1QYE-2: trigger "6.1 Sol" (no "gpt-", no chevron); model rows show names (GPT-6.1 Sol, GPT-6.1 Terra,
-  GPT-6 Luna) without description; GOAT Bot page keeps only the Model row.
-(The items that still differed here were redrawn in round 2 below.)
+## Boards generated from the rendered v1 components (2026-11-29)
 
-### Matched to v1, round 2 (2026-11-29)
-All points from the P2-M report are now drawn from v1 `916b5ccc` source:
-- P1 `1PBB-2`: settings nav icons are the real v1 Solar Linear glyphs from `SettingsSidebarNav.tsx`
-  `SETTINGS_SECTION_ICONS` (`solar.generated.ts` path data verbatim: tuning2, palette, keyboard, objectScan, testTube,
-  ghost, blocks, gitBranch, ssdRound, archive, chatRound, inbox, calendarMark, server, plugCircle; search = magnifer).
-- P2 `1Q0P-2`: same list + detail as P1 with Antigravity selected. Status card carries v1's URL auth action
-  (`ProviderInstanceCard.tsx:1170-1194`: agent message, the URL in mono, outline "Continue authentication" with the
-  external-link glyph). Account row in the waiting state (`ProviderAuthenticationSection.tsx`): "Finish signing in in
-  your browser." with Open browser, copy-link icon button and Cancel.
-- P3 `1QAN-2`: v1 `AddProviderInstanceDialog` step 0: header "Add provider" / "Add an account or configure a provider
-  on This Mac.", step bar Provider / Identity / Config / Set up (`ADD_PROVIDER_WIZARD_STEPS`), built-in provider grid in
-  two columns with setup badges (Signed in / Installed / Not installed) and the checked radio, "Or choose from ACP
-  Registry", the two local presets from `provider-acp-registry/src/localPresets.ts` (Oh My Pi, MiniMax Code: their inline
-  icons, install hints, Documentation, "Use …"), then `AcpRegistrySearchStep` (search field, rows Added / Add; Kiro
-  CLI's registry id is `kiro`), footer Cancel / Configure manually / Next. Behind it the new P1 list + detail. Cloud
-  kinds are left out of the grid (Part 3).
-- P4 `1QM8-2` / P5 `1QYE-2`: picker rail starts with the Favorites tab (filled Solar star) and a divider
-  (`ModelPickerSidebar.tsx:105-133`); providers that are not ready are at 50% opacity (`:159-161`) instead of status dots;
-  the add button is the Solar plus.
-Placeholder data only: model names, versions, account states.
+P1-P5 (`1PBB-2`, `1Q0P-2`, `1QAN-2`, `1QM8-2`, `1QYE-2`) are no longer hand-drawn. They are generated from P2-M's
+rendered v1 components at `goat2_providers_ui` **`145728d88f7`**: the web app runs on the fake host
+(`?fake=<board id>`, plus the same clicks as `apps/web/e2e/providers.spec.ts`), a headless browser serializes the
+DOM with computed styles inlined (colors resolved to hex, grids and portals flattened to absolute layers, scroll
+offsets applied, system font stack), and the HTML replaces the board content in Paper (board ids kept). Script:
+`scripts/paper/render-v1-boards.mjs`. Regenerate this way after P2-M changes instead of redrawing.
+
+Pixel difference vs the browser screenshot (threshold 48/255; hot 16px tiles = tiles with >25% differing pixels):
+P1 0.8% / 13, P2 1.0% / 33, P3 0.5% / 20, P4 0.8% / 21, P5 0.3% / 10. Look at the side-by-side too: a low overall
+percentage hid stray icons once (z-index from the page lifted its logos above the dialog in Paper).
+
+Serializer rules Paper needs (in the script): no z-index (Paper paints in tree order, layers re-sorted after write);
+absolute boxes anchored to their direct parent; grid and scrolled containers flattened to absolute children at their
+real boxes; auto margins pinned from the real box; translate/CSS `translate` written as `translate()`; colors as hex;
+SVG `<image>` (Antigravity PNG) as `<img>`; no backdrop-filter.
+Known gaps: v1's email privacy blur and the dialog backdrop blur are not reproduced (Paper has no backdrop blur).
+Data is the fake host's placeholder data.

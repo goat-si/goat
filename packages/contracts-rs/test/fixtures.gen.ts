@@ -1012,6 +1012,35 @@ export const host_frame__thread_reset = {
   "type": "thread_reset"
 } satisfies HostFrame;
 
+export const host_frame__thread_usage = {
+  "subId": "sub",
+  "threadId": "thread",
+  "type": "thread_usage",
+  "updatedAt": "2026-11-28T10:00:00Z",
+  "usage": {
+    "autoCompactThreshold": 90,
+    "cachedInputTokens": 2,
+    "compactsAutomatically": true,
+    "cost": {
+      "amount": 0.5,
+      "currency": "USD"
+    },
+    "durationMs": 99,
+    "inputTokens": 9,
+    "lastCachedInputTokens": 2,
+    "lastInputTokens": 9,
+    "lastOutputTokens": 3,
+    "lastReasoningOutputTokens": 1,
+    "lastUsedTokens": 12,
+    "maxTokens": 100,
+    "outputTokens": 3,
+    "reasoningOutputTokens": 1,
+    "toolUses": 1,
+    "totalProcessedTokens": 24,
+    "usedTokens": 12
+  }
+} satisfies HostFrame;
+
 export const log_event__checkpoint = {
   "card": {
     "appliedSeq": 1,
@@ -1639,6 +1668,34 @@ export const log_event__run_accepted = {
 export const log_event__run_finished = {
   "outcome": "completed",
   "runId": "example",
+  "type": "run.finished"
+} satisfies LogEvent;
+
+export const log_event__run_finished_usage = {
+  "outcome": "completed",
+  "runId": "example",
+  "tokenUsage": {
+    "autoCompactThreshold": 90,
+    "cachedInputTokens": 2,
+    "compactsAutomatically": true,
+    "cost": {
+      "amount": 0.5,
+      "currency": "USD"
+    },
+    "durationMs": 99,
+    "inputTokens": 9,
+    "lastCachedInputTokens": 2,
+    "lastInputTokens": 9,
+    "lastOutputTokens": 3,
+    "lastReasoningOutputTokens": 1,
+    "lastUsedTokens": 12,
+    "maxTokens": 100,
+    "outputTokens": 3,
+    "reasoningOutputTokens": 1,
+    "toolUses": 1,
+    "totalProcessedTokens": 24,
+    "usedTokens": 12
+  },
   "type": "run.finished"
 } satisfies LogEvent;
 
@@ -2424,6 +2481,37 @@ export const log_line__run_finished = {
   "outcome": "completed",
   "runId": "example",
   "seq": 1,
+  "type": "run.finished",
+  "v": 1
+} satisfies LogLine;
+
+export const log_line__run_finished_usage = {
+  "at": "2026-11-28T10:00:00Z",
+  "outcome": "completed",
+  "runId": "example",
+  "seq": 1,
+  "tokenUsage": {
+    "autoCompactThreshold": 90,
+    "cachedInputTokens": 2,
+    "compactsAutomatically": true,
+    "cost": {
+      "amount": 0.5,
+      "currency": "USD"
+    },
+    "durationMs": 99,
+    "inputTokens": 9,
+    "lastCachedInputTokens": 2,
+    "lastInputTokens": 9,
+    "lastOutputTokens": 3,
+    "lastReasoningOutputTokens": 1,
+    "lastUsedTokens": 12,
+    "maxTokens": 100,
+    "outputTokens": 3,
+    "reasoningOutputTokens": 1,
+    "toolUses": 1,
+    "totalProcessedTokens": 24,
+    "usedTokens": 12
+  },
   "type": "run.finished",
   "v": 1
 } satisfies LogLine;
@@ -3291,6 +3379,60 @@ export const thread_card__full_resend = {
     "kind": "resend",
     "summary": "Choose"
   },
+  "parent": null,
+  "projectId": null,
+  "status": "idle",
+  "title": "example",
+  "updatedAt": "2026-11-28T10:00:00Z"
+} satisfies ThreadCard;
+
+export const thread_card__with_context_usage = {
+  "appliedSeq": 1,
+  "archivedAt": null,
+  "botId": null,
+  "cardSeq": 1,
+  "children": {
+    "running": 1,
+    "total": 1
+  },
+  "contextUsage": {
+    "autoCompactThreshold": 90,
+    "cachedInputTokens": 2,
+    "compactsAutomatically": true,
+    "cost": {
+      "amount": 0.5,
+      "currency": "USD"
+    },
+    "durationMs": 99,
+    "inputTokens": 9,
+    "lastCachedInputTokens": 2,
+    "lastInputTokens": 9,
+    "lastOutputTokens": 3,
+    "lastReasoningOutputTokens": 1,
+    "lastUsedTokens": 12,
+    "maxTokens": 100,
+    "outputTokens": 3,
+    "reasoningOutputTokens": 1,
+    "toolUses": 1,
+    "totalProcessedTokens": 24,
+    "usedTokens": 12
+  },
+  "engine": {
+    "cwd": "example",
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
+  },
+  "engineRef": null,
+  "epoch": "example",
+  "followUpMode": "steer",
+  "id": "example",
+  "kind": "bot",
+  "latestAnswerExcerpt": "example",
+  "needsYou": null,
   "parent": null,
   "projectId": null,
   "status": "idle",

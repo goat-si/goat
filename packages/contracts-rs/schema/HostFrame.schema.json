@@ -3123,6 +3123,17 @@
         },
         "runId": {
           "$ref": "#/$defs/RunId"
+        },
+        "tokenUsage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadTokenUsageSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run's last token usage snapshot (v1 run `tokenUsage`), when the engine reported one.\nUsage is never stored while a run is going (no progress lines), so a run the store\nsettles after a host restart has none, and the card keeps its previous `contextUsage`."
         }
       },
       "required": [
@@ -3686,6 +3697,17 @@
         "children": {
           "$ref": "#/$defs/ChildCounts"
         },
+        "contextUsage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadTokenUsageSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The last finished run's token usage (v1 provider thread `contextUsage`), folded from\n`run.finished.tokenUsage`; a run without one keeps the previous value. Live numbers during a\nrun arrive as the non-stored `thread_usage` frame."
+        },
         "engine": {
           "$ref": "#/$defs/EngineConfig"
         },
@@ -3943,6 +3965,181 @@
         "failed"
       ],
       "type": "string"
+    },
+    "ThreadTokenUsageSnapshot": {
+      "properties": {
+        "autoCompactThreshold": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cachedInputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "compactsAutomatically": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenUsageCost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "durationMs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "inputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastCachedInputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastInputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastOutputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastReasoningOutputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastUsedTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reasoningOutputTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "toolUses": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "totalProcessedTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "usedTokens": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "usedTokens"
+      ],
+      "type": "object"
+    },
+    "TokenUsageCost": {
+      "properties": {
+        "amount": {
+          "format": "double",
+          "type": "number"
+        },
+        "currency": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff](?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "type": "object"
     },
     "ToolCapabilities": {
       "description": "v1 `OrchestrationV2ToolCapabilities`.",
@@ -5046,6 +5243,35 @@
         "subId",
         "threadId",
         "line"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Live, non-stored usage; updated_at is host receipt time (v1 contextWindow.ts:46-90).",
+      "properties": {
+        "subId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "thread_usage",
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/ThreadTokenUsageSnapshot"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId",
+        "usage",
+        "updatedAt"
       ],
       "type": "object"
     },
