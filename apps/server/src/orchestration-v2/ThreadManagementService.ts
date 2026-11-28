@@ -1,3 +1,5 @@
+import { makeStopDelegatedTasks } from "./StopDelegatedTasks.ts";
+export { makeStopDelegatedTasks } from "./StopDelegatedTasks.ts";
 import { existingThreadIdsForCommand } from "./existingThreadIdsForCommand.ts";
 export { existingThreadIdsForCommand } from "./existingThreadIdsForCommand.ts";
 import { stampThreadCreate } from "./threadCreateMessage.ts";
@@ -442,62 +444,6 @@ export function latestActiveRun(
   return projection.runs
     .filter(isActiveRun)
     .toSorted((left, right) => right.ordinal - left.ordinal)[0];
-}
-
-/** The `stopDelegatedTasks` walk over the given dispatcher, shared with test harnesses. */
-export function makeStopDelegatedTasks(deps: {
-  readonly dispatch: ThreadManagementServiceShape["dispatch"];
-  readonly getThreadRecords: Orchestrator.OrchestratorV2Shape["getThreadRecords"];
-}): ThreadManagementServiceShape["stopDelegatedTasks"] {
-  const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = Effect.fn(
-    "ThreadManagementService.stopDelegatedTasks",
-  )(function* (input) {
-    const { subagents } = yield* deps.getThreadRecords(input.threadId, ["subagents"]);
-    const failures: Array<
-      | Orchestrator.OrchestratorV2Error
-      | ThreadManagementProviderInstanceDisabledError
-      | ThreadManagementWorktreeUnrestorableError
-    > = [];
-    const stopCascadeFrom = input.stopCascadeFrom ?? input.threadId;
-    for (const task of subagents) {
-      if (
-        task.origin !== "app_owned" ||
-        task.childThreadId === null ||
-        task.promotedAt !== undefined
-      )
-        continue;
-      const threadId = task.childThreadId;
-      if (input.childThreadIds !== undefined && !input.childThreadIds.includes(threadId)) continue;
-      yield* deps
-        .dispatch({
-          type: "thread.stop",
-          commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
-          threadId,
-          stopDelegatedTasks: false,
-          ...(input.reason === undefined ? {} : { reason: input.reason }),
-          stopCascadeFrom,
-        })
-        .pipe(
-          Effect.andThen(
-            stopDelegatedTasks({
-              ...input,
-              threadId,
-              childThreadIds: undefined,
-              stopCascadeFrom,
-            }),
-          ),
-          Effect.catch((error) =>
-            Effect.logWarning("Unable to stop a delegated task", {
-              parentThreadId: input.threadId,
-              threadId,
-              error,
-            }).pipe(Effect.andThen(Effect.sync(() => failures.push(error)))),
-          ),
-        );
-    }
-    if (failures[0] !== undefined) return yield* Effect.fail(failures[0]);
-  });
-  return stopDelegatedTasks;
 }
 
 function latestSteerableRun(
