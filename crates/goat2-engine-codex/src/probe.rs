@@ -126,32 +126,34 @@ pub async fn probe_instance_with(
 }
 
 /// Owner decision: credentials Codex refused on a turn show on the provider. An API key is
-/// "Key rejected" (enter a new key); a ChatGPT sign-in is "Sign-in rejected" (sign in again).
+/// "Key rejected" (enter a new key); a ChatGPT sign-in is "Sign-in rejected" (sign in again);
+/// an unknown credential (a route away from OpenAI) is "Credentials rejected". A probe that
+/// already reports an error keeps its own, more direct diagnosis.
 pub(crate) fn mark_rejected(result: &mut ProviderProbeResult) {
-    if result.auth.status != ServerProviderAuthStatus::Authenticated
-        && result.auth.status != ServerProviderAuthStatus::Unknown
+    if result.status == ServerProviderState::Error
+        || (result.auth.status != ServerProviderAuthStatus::Authenticated
+            && result.auth.status != ServerProviderAuthStatus::Unknown)
     {
         return;
     }
-    let api_key = result.auth.auth_type.as_deref() == Some("apiKey");
+    let (label, message) = match result.auth.auth_type.as_deref() {
+        Some("apiKey") => (
+            "Key rejected",
+            "Codex rejected this API key. Enter a new key.",
+        ),
+        Some("chatgpt") => (
+            "Sign-in rejected",
+            "Codex rejected this sign-in. Sign in again.",
+        ),
+        _ => (
+            "Credentials rejected",
+            "Codex's credentials for this provider were rejected. Enter a new key or sign in again.",
+        ),
+    };
     result.status = ServerProviderState::Error;
     result.auth.status = ServerProviderAuthStatus::Unauthenticated;
-    result.auth.label = Some(
-        if api_key {
-            "Key rejected"
-        } else {
-            "Sign-in rejected"
-        }
-        .into(),
-    );
-    result.message = Some(
-        if api_key {
-            "Codex rejected this API key. Enter a new key."
-        } else {
-            "Codex rejected this sign-in. Sign in again."
-        }
-        .into(),
-    );
+    result.auth.label = Some(label.into());
+    result.message = Some(message.into());
 }
 
 /// A probe result with no trace of the instance's private home (never shown): every text,

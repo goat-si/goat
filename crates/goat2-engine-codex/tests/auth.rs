@@ -787,44 +787,54 @@ fn probe_api_key_ready() -> Vec<Entry> {
     e
 }
 
-/// The recorded basic session up to turn/started, then Codex fails the turn because the API
-/// key was refused (CodexErrorInfo "unauthorized").
+/// What Codex says when the upstream refuses a key: OpenAI's 401 quotes the key it got.
 #[cfg(unix)]
-fn session_with_refused_key() -> (Vec<Entry>, Value) {
+const ECHOED_KEY: &str = "sk-test-echoed-secret-9999";
+
+/// The recorded basic session up to turn/started, then Codex fails the turn because the API
+/// key was refused (CodexErrorInfo "unauthorized"), `delay_ms` after it started.
+#[cfg(unix)]
+fn session_with_refused_key(delay_ms: Option<u64>) -> Vec<Entry> {
     let t = load("codex-0.167.0/basic.json");
     let mut entries: Vec<Entry> = t.entries[..12].to_vec();
-    let Entry::EmitInbound { frame: done, .. } = t.entries[22].clone() else {
+    let Entry::EmitInbound {
+        frame: mut done, ..
+    } = t.entries[22].clone()
+    else {
         panic!("entry 22 is turn/completed")
     };
-    let mut done = done;
     done["params"]["turn"]["status"] = json!("failed");
-    done["params"]["turn"]["error"] = json!({"message": "unexpected status 401 Unauthorized: Incorrect API key provided",
+    done["params"]["turn"]["error"] = json!({
+        "message": format!("unexpected status 401 Unauthorized: Incorrect API key provided: {ECHOED_KEY}"),
         "codexErrorInfo": "unauthorized", "additionalDetails": null});
-    entries.push(emit(done.clone()));
-    (entries, done)
+    entries.push(Entry::EmitInbound {
+        label: None,
+        frame: done,
+        after_ms: delay_ms,
+    });
+    entries
 }
 
+/// An API-key sign-in Codex saves (account/login/start {type: apiKey}, then account/read).
 #[cfg(unix)]
-#[tokio::test]
-async fn a_refused_key_on_a_turn_shows_on_the_provider_until_sign_out() {
-    use goat2_contracts::{
-        EngineConfig, InputId, ModelSelection, RuntimeMode, ServerProviderAuthStatus,
-        ServerProviderState, ThreadId,
-    };
-    use goat2_engine_api::{
-        EngineEvent, EngineInput, McpEndpoint, SessionSpec, TurnOutcome, TurnSettings,
-        TurnStartResult,
-    };
-    let (turn, done) = session_with_refused_key();
-    let logout = session(vec![
-        expect(json!({"id": 2, "method": "account/logout", "params": {}})),
-        emit(json!({"id": 2, "result": {}})),
-    ]);
-    let (_multi, options) = Multi::new(
-        "refused-key",
-        vec![turn, probe_api_key_ready(), logout, probe_api_key_ready()],
-    );
-    let f = CodexEngineFactory::new(options);
+fn api_key_saved(key: &str) -> Vec<Entry> {
+    session(vec![
+        expect(
+            json!({"id": 2, "method": "account/login/start", "params": {"type": "apiKey", "apiKey": key}}),
+        ),
+        emit(json!({"id": 2, "result": {"type": "apiKey"}})),
+        expect(json!({"id": 3, "method": "account/read", "params": {}})),
+        emit(
+            json!({"id": 3, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+        ),
+    ])
+}
+
+/// Start a session on the default instance and its first turn; returns the handle.
+#[cfg(unix)]
+async fn start_turn_on(f: &CodexEngineFactory) -> goat2_engine_api::EngineHandle {
+    use goat2_contracts::{EngineConfig, InputId, ModelSelection, RuntimeMode, ThreadId};
+    use goat2_engine_api::{EngineInput, McpEndpoint, SessionSpec, TurnSettings, TurnStartResult};
     let selection: ModelSelection = serde_json::from_value(json!({"instanceId": "codex",
         "model": "gpt-6-luna", "options": [{"id": "reasoningEffort", "value": "low"}]}))
     .unwrap();
@@ -846,7 +856,7 @@ async fn a_refused_key_on_a_turn_shows_on_the_provider_until_sign_out() {
         instructions: None,
         instance: None,
     };
-    let mut h = f.start(spec).await.expect("session");
+    let h = f.start(spec).await.expect("session");
     let started = h
         .session
         .start_turn(
@@ -865,31 +875,65 @@ async fn a_refused_key_on_a_turn_shows_on_the_provider_until_sign_out() {
         matches!(started, TurnStartResult::Accepted { .. }),
         "{started:?}"
     );
+    h
+}
+
+/// Events until the turn finishes (inclusive).
+#[cfg(unix)]
+async fn until_finished(
+    h: &mut goat2_engine_api::EngineHandle,
+) -> Vec<goat2_engine_api::EngineEvent> {
     let mut seen = Vec::new();
     loop {
         let event = tokio::time::timeout(Duration::from_secs(10), h.events.recv())
             .await
             .expect("an event in time")
             .expect("events open");
-        let finished = matches!(event, EngineEvent::TurnFinished { .. });
+        let finished = matches!(event, goat2_engine_api::EngineEvent::TurnFinished { .. });
         seen.push(event);
         if finished {
-            break;
+            return seen;
         }
     }
-    let turn_id = done["params"]["turn"]["id"].as_str().unwrap().to_string();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_key_on_a_turn_shows_on_the_provider_until_sign_out() {
+    use goat2_contracts::{ServerProviderAuthStatus, ServerProviderState};
+    use goat2_engine_api::{EngineEvent, TurnOutcome};
+    let logout = session(vec![
+        expect(json!({"id": 2, "method": "account/logout", "params": {}})),
+        emit(json!({"id": 2, "result": {}})),
+    ]);
+    let (_multi, options) = Multi::new(
+        "refused-key",
+        vec![
+            session_with_refused_key(None),
+            probe_api_key_ready(),
+            logout,
+            probe_api_key_ready(),
+        ],
+    );
+    let f = CodexEngineFactory::new(options);
+    let mut h = start_turn_on(&f).await;
+    let seen = until_finished(&mut h).await;
     // The person is asked to fix the credentials (the host's sign-in path), then the turn fails
-    // with Codex's own reason.
+    // with a fixed reason: Codex's message quoted the key and is never passed on (review r1 P1).
     assert!(
         seen.iter().any(
             |e| matches!(e, EngineEvent::AuthRequired { key: None, url: None,
-        turn_id: Some(t), message } if *t == turn_id && message.contains("Enter a new key"))
+        turn_id: Some(_), message } if message.contains("Enter a new key"))
         ),
         "{seen:#?}"
     );
     assert!(
         matches!(seen.last(), Some(EngineEvent::TurnFinished { outcome: TurnOutcome::Failed { reason }, .. })
-        if reason.contains("401"))
+        if reason == "Codex rejected this provider's credentials (unauthorized).")
+    );
+    assert!(
+        !format!("{seen:?}").contains(ECHOED_KEY),
+        "the key Codex quoted is in no event"
     );
     h.session.shutdown().await;
 
@@ -911,4 +955,74 @@ async fn a_refused_key_on_a_turn_shows_on_the_provider_until_sign_out() {
     let p = f.probe_instance(&target).await.unwrap();
     assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
     assert_eq!(p.auth.status, ServerProviderAuthStatus::Authenticated);
+}
+
+/// Review r1 P1: a turn that started on the old key and is refused after a new key was saved
+/// neither marks the instance nor asks for sign-in again.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refusal_from_before_a_new_key_is_saved_is_ignored() {
+    use goat2_contracts::{ProviderAuthResponse, ServerProviderState};
+    use goat2_engine_api::{EngineEvent, TurnOutcome};
+    let key = "sk-test-0123456789abcdef";
+    let (_multi, options) = Multi::new(
+        "stale-refusal",
+        vec![
+            // The refusal arrives 2.5 s after the turn started, once the new key is saved.
+            session_with_refused_key(Some(2500)),
+            api_key_saved(key),
+            probe_api_key_ready(),
+        ],
+    );
+    let f = CodexEngineFactory::new(options);
+    let mut h = start_turn_on(&f).await;
+
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let flow = f
+        .auth_start(&target, Some("api-key".into()), tx)
+        .await
+        .unwrap()
+        .flow_id
+        .unwrap();
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Waiting
+    );
+    f.auth_respond(
+        &target,
+        &flow,
+        &flow,
+        ProviderAuthResponse::Credentials {
+            values: [("apiKey".to_string(), key.to_string())].into(),
+        },
+    )
+    .await
+    .unwrap();
+    let mut last = None;
+    while let Some(state) = next(&mut updates).await {
+        last = Some(state.phase);
+    }
+    assert_eq!(last, Some(ProviderAuthPhase::Succeeded));
+
+    let seen = until_finished(&mut h).await;
+    assert!(
+        matches!(
+            seen.last(),
+            Some(EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Failed { .. },
+                ..
+            })
+        ),
+        "{seen:#?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, EngineEvent::AuthRequired { .. })),
+        "a stale refusal asks for nothing: {seen:#?}"
+    );
+    h.session.shutdown().await;
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
 }

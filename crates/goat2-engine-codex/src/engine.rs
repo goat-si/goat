@@ -44,6 +44,11 @@ use crate::transport::{CallError, Connection, Inbound, Tap, TransportConfig};
 
 /// The AuthRequired message when Codex refuses an instance's credentials on a turn.
 const CREDENTIALS_REJECTED: &str = "Codex rejected this provider's credentials. Enter a new key or sign in again in provider settings.";
+/// The failed-turn reason for refused credentials. Codex's own message is not passed on: an
+/// upstream 401 can quote the key (OpenAI's "Incorrect API key provided: sk-..."), and the
+/// reason is stored in the thread log.
+const CREDENTIALS_REJECTED_REASON: &str =
+    "Codex rejected this provider's credentials (unauthorized).";
 
 /// Settings for every session a [CodexEngineFactory] starts.
 #[derive(Clone)]
@@ -825,6 +830,8 @@ struct Owned {
     started: bool,
     interrupting: bool,
     ordinal: u32,
+    /// Credentials ticket taken just before turn/start was written (auth::Rejections).
+    ticket: u64,
 }
 
 enum DispatchPhase {
@@ -841,6 +848,8 @@ enum DispatchPhase {
 
 struct Dispatch {
     attempt: u64,
+    /// Credentials ticket, taken just before turn/start is written (0 until then).
+    ticket: u64,
     inputs: Vec<EngineInput>,
     /// Codex input items, built before anything is sent.
     input: Vec<UserInput>,
@@ -1126,6 +1135,7 @@ impl Actor {
         self.next_attempt += 1;
         self.dispatch = Some(Dispatch {
             attempt: self.next_attempt,
+            ticket: 0,
             inputs,
             input,
             settings,
@@ -1258,6 +1268,7 @@ impl Actor {
             return;
         }
         dispatch.phase = DispatchPhase::Sending;
+        dispatch.ticket = self.rejected.ticket();
         let settings = &dispatch.settings;
         let selection = &settings.model_selection;
         let defaults = runtime::runtime_defaults(settings.runtime_mode);
@@ -1573,8 +1584,8 @@ impl Actor {
                             TurnOutcome::Interrupted
                         }
                         Some(TurnStatusWire::Completed) => {
-                            // A turn that ran proves the instance's credentials work again.
-                            self.rejected.clear(&self.instance);
+                            // A turn that ran proves the instance's credentials work.
+                            let _ = self.rejected.report(&self.instance, owned.ticket, false);
                             TurnOutcome::Done
                         }
                         Some(TurnStatusWire::Interrupted) => TurnOutcome::Interrupted,
@@ -1582,21 +1593,18 @@ impl Actor {
                             if n.turn.error.as_ref().is_some_and(|e| e.is_unauthorized()) =>
                         {
                             // Owner decision: refused credentials (a wrong API key) show on the
-                            // provider, not only as a failed turn.
-                            self.rejected.mark(&self.instance);
-                            self.emit(EngineEvent::AuthRequired {
-                                key: None,
-                                turn_id: Some(n.turn.id.clone()),
-                                url: None,
-                                message: CREDENTIALS_REJECTED.into(),
-                            });
+                            // provider, not only as a failed turn. A turn that started before a
+                            // newer sign-in or turn is stale and asks for nothing.
+                            if self.rejected.report(&self.instance, owned.ticket, true) {
+                                self.emit(EngineEvent::AuthRequired {
+                                    key: None,
+                                    turn_id: Some(n.turn.id.clone()),
+                                    url: None,
+                                    message: CREDENTIALS_REJECTED.into(),
+                                });
+                            }
                             TurnOutcome::Failed {
-                                reason: n
-                                    .turn
-                                    .error
-                                    .as_ref()
-                                    .map(|e| e.message.clone())
-                                    .unwrap_or_else(|| "the turn failed".into()),
+                                reason: CREDENTIALS_REJECTED_REASON.into(),
                             }
                         }
                         Some(TurnStatusWire::Failed) => TurnOutcome::Failed {
@@ -2088,11 +2096,13 @@ impl Actor {
                     if self.native_running.as_deref() == Some(turn) {
                         self.native_running = None;
                     }
+                    let ticket = self.dispatch.as_ref().map_or(0, |d| d.ticket);
                     self.owned = Some(Owned {
                         turn_id: turn.to_string(),
                         started,
                         interrupting: false,
                         ordinal: 0,
+                        ticket,
                     });
                     let interrupt = std::mem::take(&mut self.interrupt_pending);
                     self.finish_dispatch(TurnStartResult::Accepted {

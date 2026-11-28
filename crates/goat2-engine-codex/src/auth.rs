@@ -91,23 +91,101 @@ pub struct AuthFlows {
 }
 
 /// Instances whose saved credentials Codex refused on a turn (owner decision: a wrong API key
-/// must not stay silent). A session marks its instance; the instance probe then reports the
-/// key rejected until a sign-in completes or the instance signs out. Kept in memory: after a
-/// host restart the next refused turn marks it again.
+/// must not stay silent). The instance probe reports the key rejected until a sign-in
+/// completes, the instance signs out, or a newer turn completes. Kept in memory: after a host
+/// restart the next refused turn marks it again.
+///
+/// Results are ordered by ticket: a turn takes one just before turn/start is written, and a
+/// credential change (sign-in or logout) takes one when it resets the instance. A result is
+/// applied only when its ticket is newer than the last one applied, so a turn that started on
+/// the old credentials cannot mark the instance after a new sign-in, and an older turn
+/// finishing late cannot undo what a newer one reported.
 #[derive(Default)]
-pub struct Rejections(Mutex<std::collections::HashSet<String>>);
+pub struct Rejections {
+    next: std::sync::atomic::AtomicU64,
+    state: Mutex<HashMap<String, RejectionState>>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct RejectionState {
+    rejected: bool,
+    /// Ticket of the last result or credential change applied.
+    last: u64,
+}
 
 impl Rejections {
-    pub fn mark(&self, instance: &str) {
-        lock(&self.0).insert(instance.to_string());
+    /// A ticket for a turn about to use the instance's current credentials.
+    pub fn ticket(&self) -> u64 {
+        self.next
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1)
     }
 
-    pub fn clear(&self, instance: &str) {
-        lock(&self.0).remove(instance);
+    /// A turn holding `ticket` ended: Codex refused the credentials, or the turn ran.
+    /// Ignored (returns false) when a newer turn or a credential change has been applied since.
+    pub fn report(&self, instance: &str, ticket: u64, rejected: bool) -> bool {
+        let mut state = lock(&self.state);
+        let entry = state.entry(instance.to_string()).or_default();
+        if ticket > entry.last {
+            *entry = RejectionState {
+                rejected,
+                last: ticket,
+            };
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The instance's credentials changed (a sign-in succeeded or it signed out): clear it, and
+    /// ignore every turn that started before.
+    pub fn reset(&self, instance: &str) {
+        let mut state = lock(&self.state);
+        let ticket = self.ticket();
+        state.insert(
+            instance.to_string(),
+            RejectionState {
+                rejected: false,
+                last: ticket,
+            },
+        );
     }
 
     pub fn contains(&self, instance: &str) -> bool {
-        lock(&self.0).contains(instance)
+        lock(&self.state).get(instance).is_some_and(|s| s.rejected)
+    }
+}
+
+#[cfg(test)]
+mod rejection_tests {
+    use super::Rejections;
+
+    /// Review r1 P1: results apply in ticket order, and a credential change outranks every
+    /// turn that started before it.
+    #[test]
+    fn results_apply_in_ticket_order_and_a_credential_change_outranks_older_turns() {
+        let r = Rejections::default();
+        let older = r.ticket();
+        let newer = r.ticket();
+        // The newer turn is refused; the older one finishing later cannot clear it.
+        assert!(r.report("codex", newer, true));
+        assert!(!r.report("codex", older, false));
+        assert!(r.contains("codex"));
+        // Another instance is separate.
+        assert!(!r.contains("codex_2"));
+        // A turn started after the refusal and completing clears it.
+        let later = r.ticket();
+        assert!(r.report("codex", later, false));
+        assert!(!r.contains("codex"));
+        // A turn on the old credentials refused after a sign-in does not mark it.
+        let before_sign_in = r.ticket();
+        r.reset("codex");
+        assert!(!r.report("codex", before_sign_in, true));
+        assert!(!r.contains("codex"));
+        // A turn started after the sign-in still can.
+        let after_sign_in = r.ticket();
+        assert!(r.report("codex", after_sign_in, true));
+        assert!(r.contains("codex"));
     }
 }
 
@@ -645,7 +723,7 @@ impl AuthFlows {
                 codex.close().await;
                 if let Some(end) = end {
                     if end.phase == ProviderAuthPhase::Succeeded {
-                        rejected.clear(instance.as_str());
+                        rejected.reset(instance.as_str());
                     }
                     slot.finish(&id, end);
                 }
@@ -726,7 +804,9 @@ impl AuthFlows {
             .get(API_KEY_FIELD)
             .map(|k| k.trim().to_string())
             .unwrap_or_default();
-        if key.is_empty() {
+        // v1 ProviderAuthResponse bound (16384 UTF-16 units), kept here too for callers that
+        // do not come through the wire decoder.
+        if key.is_empty() || key.encode_utf16().count() > 16384 {
             return refuse(ENTER_KEY);
         }
         let Some(sender) = active.key.take() else {
@@ -786,7 +866,7 @@ impl AuthFlows {
         .flatten()
         .unwrap_or(false);
         if signed_out {
-            self.rejected.clear(instance.as_str());
+            self.rejected.reset(instance.as_str());
         }
         let (phase, message) = if signed_out {
             (ProviderAuthPhase::Idle, SIGNED_OUT)
