@@ -236,10 +236,8 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
             let started = Instant::now();
             let label = format!("{msg:?}");
             actor.handle(msg).await;
-            if actor.is_fenced() && actor.session.is_some() {
-                actor
-                    .stop_session("the thread log could not be written")
-                    .await;
+            if actor.is_fenced() {
+                actor.settle_fenced().await;
             }
             actor.sync_runtime();
             let took = started.elapsed();
@@ -254,6 +252,14 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
     });
     tracker.track(&task);
     tx
+}
+
+/// The refusal a fenced thread answers every write with (shown to the person as a command error).
+fn fenced_refusal() -> Refusal {
+    Refusal::new(
+        Reason::RestartRequired,
+        "this thread could not save its log; restart GOAT to continue",
+    )
 }
 
 fn input_mode_for(mode: FollowUpMode) -> InputMode {
@@ -273,20 +279,54 @@ fn to_engine(q: &QueuedInput) -> EngineInput {
 }
 
 impl Actor {
-    fn store_err(&self, err: impl std::fmt::Display) -> Refusal {
-        tracing::error!(thread = %self.id, %err, "store write failed");
-        Refusal::new(Reason::Internal, err.to_string())
-    }
-
     fn append(&self, events: Vec<LogEvent>) -> Option<crate::store::Appended> {
         match self.host.append(&self.id, events) {
             Ok(a) => Some(a),
             Err(err) => {
                 tracing::error!(thread = %self.id, %err, "append failed: fencing the thread");
-                self.fenced.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.trip_fence();
                 None
             }
         }
+    }
+
+    /// A write a command or the run depends on: refused while the thread is fenced, and a
+    /// failure fences it (every actor write goes through [Self::append], this, or
+    /// [Self::write_durable]).
+    fn write(&self, events: Vec<LogEvent>) -> Result<crate::store::Appended, Refusal> {
+        self.write_with(events, false)
+    }
+
+    /// [Self::write] flushed to disk before it returns (the send boundary `run.started`).
+    fn write_durable(&self, events: Vec<LogEvent>) -> Result<crate::store::Appended, Refusal> {
+        self.write_with(events, true)
+    }
+
+    fn write_with(
+        &self,
+        events: Vec<LogEvent>,
+        durable: bool,
+    ) -> Result<crate::store::Appended, Refusal> {
+        if self.is_fenced() {
+            return Err(fenced_refusal());
+        }
+        let written = if durable {
+            self.host.append_durable(&self.id, events)
+        } else {
+            self.host.append(&self.id, events)
+        };
+        written.map_err(|err| {
+            tracing::error!(thread = %self.id, %err, "write failed: fencing the thread");
+            self.trip_fence();
+            fenced_refusal()
+        })
+    }
+
+    /// Fence the thread: no further write or run until the host restarts. Shown to callers
+    /// through the runtime snapshot; the actor loop stops the engine and settles the phase.
+    fn trip_fence(&self) {
+        self.fenced.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.host.runtime_update(&self.id, |rt| rt.fenced = true);
     }
 
     fn active_run_id(&self) -> Option<RunId> {
@@ -421,6 +461,10 @@ impl Actor {
         input: NewInput,
         pre: Vec<LogEvent>,
     ) -> Result<InputAck, Refusal> {
+        // A fenced thread would never run it: refused, never accepted silently.
+        if self.is_fenced() {
+            return Err(fenced_refusal());
+        }
         let card = self
             .host
             .inner
@@ -446,9 +490,7 @@ impl Actor {
         };
         let mut events = pre;
         events.push(LogEvent::InputAccepted(accepted));
-        self.host
-            .append(&self.id, events)
-            .map_err(|e| self.store_err(e))?;
+        self.write(events)?;
         self.host.runtime_update(&self.id, |rt| rt.busy = true);
         let queued = QueuedInput {
             input_id: input_id.clone(),
@@ -509,7 +551,8 @@ impl Actor {
         };
         match session.steer(&turn_id, vec![to_engine(q)]).await {
             SteerResult::Accepted => {
-                self.append(vec![delivered(DeliveryOutcome::Accepted)]);
+                // Persisted before the input is acknowledged as steered.
+                self.write_durable(vec![delivered(DeliveryOutcome::Accepted)])?;
                 if let Phase::Running(run) = &mut self.phase
                     && run.run_id == run_id
                 {
@@ -518,7 +561,8 @@ impl Actor {
                 Ok(Some(run_id))
             }
             SteerResult::Declined { .. } => {
-                self.append(vec![delivered(DeliveryOutcome::Declined)]);
+                // Back in the queue only once that is on disk.
+                self.write_durable(vec![delivered(DeliveryOutcome::Declined)])?;
                 Ok(None)
             }
             SteerResult::RefusedUnowned { reason } => {
@@ -637,7 +681,8 @@ impl Actor {
         if !matches!(self.phase, Phase::WaitingPermit) {
             return;
         }
-        if self.held || self.resend_blocked() || self.pending().is_empty() {
+        // A start in flight never crosses the fence.
+        if self.held || self.is_fenced() || self.resend_blocked() || self.pending().is_empty() {
             self.phase = Phase::Idle;
             return;
         }
@@ -694,6 +739,14 @@ impl Actor {
             }
             return;
         };
+        if self.is_fenced() {
+            // Started after the fence tripped: shut it down, start no run.
+            if let Ok(handle) = result {
+                handle.session.shutdown().await;
+            }
+            drop(permit);
+            return;
+        }
         match result {
             Ok(handle) => {
                 let session: Arc<dyn EngineSession> = Arc::from(handle.session);
@@ -774,17 +827,14 @@ impl Actor {
         let run_id = RunId::new(new_id("run"));
         let input_ids: Vec<InputId> = batch.iter().map(|q| q.input_id.clone()).collect();
         // Send boundary: on disk before anything reaches the engine.
+        // A failed write fences the thread (inside the fence like every actor write).
         if self
-            .host
-            .append_durable(
-                &self.id,
-                vec![LogEvent::RunStarted(RunStarted {
-                    run_id: run_id.clone(),
-                    input_ids: input_ids.clone(),
-                    generation: self.host.inner.opts.host_generation,
-                    engine_ref,
-                })],
-            )
+            .write_durable(vec![LogEvent::RunStarted(RunStarted {
+                run_id: run_id.clone(),
+                input_ids: input_ids.clone(),
+                generation: self.host.inner.opts.host_generation,
+                engine_ref,
+            })])
             .is_err()
         {
             self.phase = Phase::Idle;
@@ -1727,18 +1777,13 @@ impl Actor {
                 "the engine that asked has stopped; the request can only be cancelled",
             ));
         }
-        self.host
-            .append(
-                &self.id,
-                vec![LogEvent::RequestResolved(RequestResolved {
-                    request_id: r.request_id.clone(),
-                    outcome: r.outcome,
-                    option_id: r.option_id.clone(),
-                    text: r.text.clone(),
-                    answers: r.answers.clone(),
-                })],
-            )
-            .map_err(|e| self.store_err(e))?;
+        self.write(vec![LogEvent::RequestResolved(RequestResolved {
+            request_id: r.request_id.clone(),
+            outcome: r.outcome,
+            option_id: r.option_id.clone(),
+            text: r.text.clone(),
+            answers: r.answers.clone(),
+        })])?;
         if request.kind == RequestKind::Signin {
             self.host.forget_signin_link(&r.request_id);
         }
@@ -1820,15 +1865,10 @@ impl Actor {
                 if !matches!(self.phase, Phase::Running(_)) {
                     return Err(Refusal::new(Reason::SteerRefused, "no run to steer into"));
                 }
-                self.host
-                    .append(
-                        &self.id,
-                        vec![LogEvent::InputChanged(InputChanged {
-                            mode: Some(InputMode::Steer),
-                            ..change(input_id)
-                        })],
-                    )
-                    .map_err(|e| self.store_err(e))?;
+                self.write(vec![LogEvent::InputChanged(InputChanged {
+                    mode: Some(InputMode::Steer),
+                    ..change(input_id)
+                })])?;
                 self.steer_now(&QueuedInput {
                     mode: InputMode::Steer,
                     ..q
@@ -1837,13 +1877,29 @@ impl Actor {
                 return Ok(());
             }
         };
-        self.host
-            .append(&self.id, events)
-            .map_err(|e| self.store_err(e))?;
+        self.write(events)?;
         Ok(())
     }
 
     // ------------------------------------------------------------------ session lifetime
+
+    /// After the fence tripped: stop the engine (its session sign-ins close with it) and settle
+    /// the run phase in memory. No `run.finished` is faked: the store settles the run at the
+    /// next start like any run cut off by a crash.
+    async fn settle_fenced(&mut self) {
+        if self.session.is_some() {
+            self.stop_session("the thread log could not be written")
+                .await;
+        }
+        if !matches!(self.phase, Phase::Idle) {
+            // Dropping the permit (Running, Starting) or abandoning the wait releases the slot.
+            self.phase = Phase::Idle;
+            self.host.runtime_update(&self.id, |rt| {
+                rt.active_run = None;
+                rt.run_slot = None;
+            });
+        }
+    }
 
     fn arm_idle(&mut self) {
         self.idle_gen += 1;

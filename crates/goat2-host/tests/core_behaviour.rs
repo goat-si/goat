@@ -3265,6 +3265,8 @@ async fn an_engine_closed_key_waiting_for_a_retry_is_never_answered() {
 struct FlakyStore {
     inner: LaneAStore,
     fail: Arc<std::sync::atomic::AtomicBool>,
+    /// Fail only appends that carry an event of this type (e.g. "run.started").
+    fail_type: Arc<std::sync::Mutex<Option<&'static str>>>,
 }
 
 impl goat2_host::store::ThreadStore for FlakyStore {
@@ -3284,6 +3286,13 @@ impl goat2_host::store::ThreadStore for FlakyStore {
         events: Vec<LogEvent>,
     ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
         if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
+                "injected append failure",
+            )));
+        }
+        if let Some(tag) = *self.fail_type.lock().unwrap()
+            && events.iter().any(|e| e.type_tag() == tag)
+        {
             return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
                 "injected append failure",
             )));
@@ -3337,6 +3346,157 @@ impl goat2_host::store::ThreadStore for FlakyStore {
     }
 }
 
+/// A host on a [FlakyStore]: `fail` fails every append, `fail_type` only appends with that event.
+async fn flaky_setup(
+    script: FakeScript,
+) -> (
+    T,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::Mutex<Option<&'static str>>>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(script);
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fail_type = Arc::new(std::sync::Mutex::new(None));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+        fail_type: fail_type.clone(),
+    };
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        StallRecorder::open(&path).unwrap(),
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    (
+        T {
+            host,
+            fake,
+            _dir: Some(dir),
+        },
+        fail,
+        fail_type,
+    )
+}
+
+fn send_frame(id: &ThreadId, key: &str, mode: InputMode) -> ClientFrame {
+    ClientFrame::SendInput {
+        req_id: format!("r-{key}"),
+        client_request_id: key.into(),
+        thread_id: id.clone(),
+        text: key.into(),
+        mode,
+        attachments: None,
+    }
+}
+
+fn turns_of(t: &T, id: &ThreadId) -> usize {
+    t.fake
+        .calls()
+        .iter()
+        .filter(|c| matches!(c, FakeCall::Turn { thread_id, .. } if thread_id == id))
+        .count()
+}
+
+#[tokio::test]
+async fn a_failed_run_start_fences_the_thread_and_input_is_refused_visibly() {
+    let (t, _fail, fail_type) = flaky_setup(manual()).await;
+    let id = start_user_thread(&t, "wf-start", None).await;
+    // The durable run start cannot be written: no turn reaches the engine, the thread fences.
+    *fail_type.lock().unwrap() = Some("run.started");
+    t.host
+        .command(send_frame(&id, "wf-start-1", InputMode::Followup))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(turns_of(&t, &id), 0);
+    *fail_type.lock().unwrap() = None;
+    // Writes work again, but the fenced thread refuses input instead of accepting it silently.
+    let refused = t
+        .host
+        .command(send_frame(&id, "wf-start-2", InputMode::Followup))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "restart_required");
+    assert_eq!(turns_of(&t, &id), 0);
+}
+
+#[tokio::test]
+async fn a_steer_whose_outcome_cannot_be_saved_is_not_acknowledged() {
+    let (t, _fail, fail_type) = flaky_setup(manual()).await;
+    let id = start_user_thread(&t, "wf-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    *fail_type.lock().unwrap() = Some("input.delivered");
+    let refused = t
+        .host
+        .command(send_frame(&id, "wf-steer-1", InputMode::Steer))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "restart_required");
+}
+
+#[tokio::test]
+async fn a_start_in_flight_does_not_cross_the_fence() {
+    let (t, fail, _fail_type) = flaky_setup(FakeScript {
+        auto_finish: false,
+        start_ms: 300,
+        ..FakeScript::default()
+    })
+    .await;
+    let id = start_user_thread(&t, "wf-flight", Some("go")).await;
+    // While the engine starts, a write fails and fences the thread.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = t
+        .host
+        .command(send_frame(&id, "wf-flight-1", InputMode::Followup))
+        .await;
+    fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    eventually("late start shut down", || shut_down(&t, &id)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(turns_of(&t, &id), 0, "no run after the fence");
+}
+
+#[tokio::test]
+async fn a_session_signin_on_an_idle_thread_closes_after_a_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let id = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let id = start_user_thread(&t, "wf-idle-signin", Some("go")).await;
+            eventually("running", || running(&t, &id)).await;
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    turn_id: None,
+                    key: None,
+                    url: None,
+                    message: "Sign in".into(),
+                },
+            );
+            eventually("sign-in open", || {
+                t.host.store().fold(&id).unwrap().open_requests.len() == 1
+            })
+            .await;
+            t.fake.finish_turn(&id, "done");
+            eventually("idle", || count(&t, &id, "run.finished") == 1).await;
+            id
+        })
+    });
+    // The next process: the thread is idle (nothing queued), its stale sign-in still closes.
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    eventually("stale sign-in closed", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_failed_log_write_fences_the_thread() {
     let dir = tempfile::tempdir().unwrap();
@@ -3347,6 +3507,7 @@ async fn a_failed_log_write_fences_the_thread() {
     let store = FlakyStore {
         inner,
         fail: fail.clone(),
+        fail_type: Arc::new(std::sync::Mutex::new(None)),
     };
     let stall = StallRecorder::open(&path).unwrap();
     let host = Host::open(
