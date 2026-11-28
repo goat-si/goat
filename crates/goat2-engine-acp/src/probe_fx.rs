@@ -18,9 +18,9 @@ use serde_json::Value;
 use super::support::{
     AUTH_PROBE_TIMEOUT_MS, SpawnFailure, auth_status, built_in_model, child_environment,
     classify_spawn_failure, create_model_capabilities, instance_environment,
-    parse_cli_version_result, provider_models_from_settings, resolve_executable,
-    resolve_provider_probe_timeout, safe_process_cwd, spawn_and_collect, spawn_failure_message,
-    with_login_shell_path_note,
+    parse_cli_version_result, probe_homes, provider_models_from_settings, resolve_executable,
+    resolve_provider_probe_timeout, safe_process_cwd, spawn_and_collect,
+    spawn_failure_message_with_homes, with_login_shell_path_note,
 };
 use super::{ProbeConfig, checked_at_now, effective_command};
 use crate::engine::AcpEngineFactory;
@@ -263,8 +263,13 @@ pub async fn check_fx_provider_status(
                 Some(if missing {
                     with_login_shell_path_note("fx is not installed or not on PATH.", &environment)
                 } else {
-                    spawn_failure_message(failure, spawn_cwd.as_deref(), &binary)
-                        .unwrap_or_else(|| "Failed to run `fx --version`.".into())
+                    spawn_failure_message_with_homes(
+                        failure,
+                        spawn_cwd.as_deref(),
+                        &binary,
+                        &probe_homes(&environment),
+                    )
+                    .unwrap_or_else(|| "Failed to run `fx --version`.".into())
                 }),
                 None,
                 &[],

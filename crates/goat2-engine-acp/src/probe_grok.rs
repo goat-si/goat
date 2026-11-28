@@ -21,9 +21,9 @@ use tokio::io::AsyncWriteExt;
 use super::support::{
     AUTH_PROBE_TIMEOUT_MS, SpawnFailure, auth_status, built_in_model, child_environment,
     classify_spawn_failure, create_model_capabilities, empty_capabilities, instance_environment,
-    parse_cli_version_result, provider_models_from_settings, resolve_executable,
-    resolve_provider_probe_timeout, safe_process_cwd, spawn_and_collect, spawn_failure_message,
-    with_login_shell_path_note,
+    parse_cli_version_result, probe_homes, provider_models_from_settings, resolve_executable,
+    resolve_provider_probe_timeout, safe_process_cwd, spawn_and_collect,
+    spawn_failure_message_with_homes, with_login_shell_path_note,
 };
 use super::{ProbeConfig, checked_at_now, effective_command};
 use crate::engine::AcpEngineFactory;
@@ -493,8 +493,13 @@ pub async fn check_grok_provider_status(
                         &environment,
                     )
                 } else {
-                    spawn_failure_message(failure, Some(&spawn_cwd), &binary)
-                        .unwrap_or_else(|| "Failed to execute Grok CLI health check.".into())
+                    spawn_failure_message_with_homes(
+                        failure,
+                        Some(&spawn_cwd),
+                        &binary,
+                        &probe_homes(&environment),
+                    )
+                    .unwrap_or_else(|| "Failed to execute Grok CLI health check.".into())
                 }),
                 None,
             );

@@ -817,6 +817,39 @@ fn fx() -> AcpEngineFactory {
     AcpEngineFactory::new(Arc::new(Fx::default()))
 }
 
+/// Final review 6 finding D2 (v1 spawnFailure.ts:130-144 interpolates absolute paths): an
+/// executable under the instance's home directory that cannot be started is named from `~` in the
+/// Grok and fx probe results.
+#[cfg(unix)]
+#[tokio::test]
+async fn cli_failure_messages_name_home_paths_from_tilde() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let home_text = home.path().to_str().unwrap().to_owned();
+    let bin = home.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    for (factory, name) in [(grok(), "grok"), (fx(), "fx")] {
+        let binary = bin.join(name);
+        std::fs::write(&binary, "not a program\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let result = probe(
+            factory,
+            cli_config(
+                home.path(),
+                binary.to_str().unwrap(),
+                &[("HOME", home_text.as_str())],
+            ),
+        )
+        .await;
+        let message = result.message.unwrap_or_default();
+        assert!(!message.contains(&home_text), "{name}: {message}");
+        assert!(
+            message.contains(&format!("`~/bin/{name}`")),
+            "{name}: {message}"
+        );
+    }
+}
+
 async fn fx_with(dir: &Path, status: &str, models: &str) -> ProviderProbeResult {
     probe(
         fx(),
