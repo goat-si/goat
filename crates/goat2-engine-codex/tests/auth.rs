@@ -665,7 +665,7 @@ async fn expiry_while_codex_initializes_ends_it_before_reporting() {
 /// only to Codex (account/login/start {type: apiKey}) and never into a state.
 #[tokio::test]
 async fn an_api_key_is_handed_to_codex_and_never_shown() {
-    use goat2_contracts::ProviderAuthResponse;
+    use goat2_contracts::{ProviderAuthBrowserAction, ProviderAuthResponse};
     let key = "sk-test-0123456789abcdef";
     let mut entries = session(vec![
         expect(
@@ -698,6 +698,14 @@ async fn an_api_key_is_handed_to_codex_and_never_shown() {
     let values = |k: &str| ProviderAuthResponse::Credentials {
         values: [("apiKey".to_string(), k.to_string())].into(),
     };
+    // Codex has no browser or terminal interaction.
+    let browser = ProviderAuthResponse::Browser {
+        action: ProviderAuthBrowserAction::Accept,
+    };
+    assert!(matches!(
+        auth.auth_respond(&target, &flow, &flow, browser).await,
+        Err(goat2_engine_api::EngineError::Unsupported(_))
+    ));
     assert!(
         auth.auth_respond(&target, &flow, "other", values(key))
             .await
