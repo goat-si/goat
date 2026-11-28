@@ -111,14 +111,17 @@ export const apiTextGeneration = (
             ? await cachedResolveSecret(secretProviders, config.apiKey)
             : config.apiKey;
           signal.throwIfAborted();
-          const base = config.baseUrl.replace(/\/+$/, "");
+          const endpoint = new URL(config.baseUrl);
+          endpoint.search = "";
+          endpoint.hash = "";
           const anthropic = config.kind === "anthropic";
           const headers: Record<string, string> = { "content-type": "application/json" };
           if (anthropic) {
             headers["x-api-key"] = key;
             headers["anthropic-version"] = "2023-06-01";
           } else if (key) headers["authorization"] = `Bearer ${key}`;
-          const response = await fetch(`${base}${anthropic ? "/messages" : "/chat/completions"}`, {
+          endpoint.pathname = `${endpoint.pathname.replace(/\/+$/, "")}${anthropic ? "/messages" : "/chat/completions"}`;
+          const response = await fetch(endpoint.toString(), {
             method: "POST",
             headers,
             redirect: "error",

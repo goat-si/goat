@@ -350,3 +350,36 @@ it.effect.each([
     expect(yield* generation.generateThreadTitle(title)).toEqual({ title: "Repair login" });
   }),
 );
+
+it.effect.each([
+  ["openaiCompatible", "?", "/chat/completions"],
+  ["openaiCompatible", "#", "/chat/completions"],
+  ["anthropic", "?", "/messages"],
+  ["anthropic", "#", "/messages"],
+] as const)("keeps the %s endpoint in the path after %s", ([kind, suffix, path]) =>
+  Effect.gen(function* () {
+    const response =
+      kind === "anthropic"
+        ? { content: [{ type: "text", text: '{"title":"Repair login"}' }] }
+        : { choices: [{ message: { content: '{"title":"Repair login"}' } }] };
+    using fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(response));
+    const configured = {
+      ...settings,
+      textGenerators: {
+        [instanceId]: {
+          ...settings.textGenerators[instanceId],
+          kind,
+          baseUrl: `https://model.example/v1/${suffix}`,
+        },
+      },
+    };
+    const generation = yield* TextGeneration.make.pipe(
+      Effect.provideService(ServerSettings.ServerSettingsService, {
+        getSettings: Effect.succeed(configured),
+      } as never),
+      Effect.provide(services),
+    );
+    expect(yield* generation.generateThreadTitle(title)).toEqual({ title: "Repair login" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`https://model.example/v1${path}`);
+  }),
+);
