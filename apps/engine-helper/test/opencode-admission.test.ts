@@ -53,6 +53,73 @@ test("an uncertain steer cannot be silently resent as a later turn", async () =>
   } finally { await session.shutdown(); }
 });
 
+test("accepted steers settle before the turn finishes, including unread cancellation", async () => {
+  for (const read of [true, false]) {
+    fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+    const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+    const session = await opencodeEngine.start(params, host);
+    try {
+      const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+      assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+      await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const result = await session.steer(turn.turnId, [{ inputId: "steer-a", text: "unread-steer", attachments: [] }, { inputId: "steer-b", text: "", attachments: [] }]);
+      assert.equal(result.status, "accepted");
+      if (read) {
+        const call = fake.calls.filter((entry) => entry.method === "prompt").at(-1)?.args as { messageID: string };
+        await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: call.messageID, sessionID: session.engineRef, role: "user", time: { created: 1 }, agent: "build", model: { providerID: "test", modelID: "model" } } });
+      }
+      await session.interrupt(turn.turnId); await finished.promise;
+      const settled = events.findIndex((event) => event.type === "steer_updated");
+      const ended = events.findIndex((event) => event.type === "turn_finished");
+      assert.ok(settled >= 0 && settled < ended);
+      const event = events[settled]; assert.equal(event?.type, "steer_updated");
+      if (event?.type === "steer_updated") { assert.deepEqual(event.inputIds, ["steer-a", "steer-b"]); assert.equal(event.status.type, read ? "completed" : "cancelled"); }
+      assert.equal(events.filter((event) => event.type === "steer_updated").length, 1);
+    } finally { await session.shutdown(); }
+  }
+});
+
+test("a steer observed before its reply settles before an early turn failure", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const gate = fake.holdPrompt(); const steering = session.steer(turn.turnId, [{ inputId: "steer-early", text: "unread-steer", attachments: [] }]);
+    await gate.reached;
+    const call = fake.calls.filter((entry) => entry.method === "prompt").at(-1)?.args as { messageID: string };
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: call.messageID, sessionID: session.engineRef, role: "user", time: { created: 1 }, agent: "build", model: { providerID: "test", modelID: "model" } } });
+    await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
+    assert.equal(events.some((event) => event.type === "turn_finished"), false);
+    gate.release(); assert.equal((await steering).status, "accepted"); await finished.promise;
+    const settled = events.findIndex((event) => event.type === "steer_updated"); const ended = events.findIndex((event) => event.type === "turn_finished");
+    assert.ok(settled >= 0 && settled < ended);
+    const event = events[settled]; assert.ok(event?.type === "steer_updated" && event.status.type === "completed");
+  } finally { await session.shutdown(); }
+});
+
+test("a server crash cancels an unread accepted steer before turn failure", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const failures: string[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { failures.push(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal((await session.steer(turn.turnId, [{ inputId: "steer-crash", text: "unread-steer", attachments: [] }])).status, "accepted");
+    fake.crashServer(0);
+    const settled = events.findIndex((event) => event.type === "steer_updated"); const ended = events.findIndex((event) => event.type === "turn_finished");
+    assert.ok(settled >= 0 && settled < ended);
+    const event = events[settled]; assert.ok(event?.type === "steer_updated" && event.status.type === "cancelled");
+    assert.deepEqual(failures, ["OpenCode server exited"]);
+  } finally { await session.shutdown(); }
+});
+
 test("the pinned SDK exposes HTTP rejection and transport failure separately", async () => {
   const input = { sessionID: "session-test", parts: [{ type: "text" as const, text: "hello" }] };
   const rejected = createOpencodeClient({ baseUrl: "http://example.invalid", fetch: async () => new Response('{"name":"BadRequestError"}', { status: 400, headers: { "content-type": "application/json" } }) });

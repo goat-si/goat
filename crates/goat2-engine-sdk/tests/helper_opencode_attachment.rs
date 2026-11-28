@@ -6,8 +6,8 @@ use goat2_contracts::{
     ProviderInstanceId, RuntimeMode, ThreadId, TurnItemBody,
 };
 use goat2_engine_api::{
-    EngineError, EngineEvent, EngineFactory, EngineInput, McpEndpoint, SessionSpec, TurnOutcome,
-    TurnSettings, TurnStartResult,
+    EngineError, EngineEvent, EngineFactory, EngineInput, McpEndpoint, SessionSpec, SteerResult,
+    SteerStatus, TurnOutcome, TurnSettings, TurnStartResult,
 };
 use goat2_engine_sdk::{HelperFactory, HelperLaunch};
 
@@ -89,7 +89,7 @@ async fn resolved_and_missing_attachment_paths_reach_opencode() {
                 ],
             }],
             &TurnSettings {
-                model_selection: model_b,
+                model_selection: model_b.clone(),
                 runtime_mode: RuntimeMode::FullAccess,
             },
         )
@@ -116,5 +116,72 @@ async fn resolved_and_missing_attachment_paths_reach_opencode() {
     assert!(message.contains("[Attached file \"missing.txt\" is unavailable: could not resolve a saved path for attachment 'missing'.]"));
     assert!(message.contains("FILE:file:///tmp/has%20space.txt"));
     assert!(message.contains("MODEL:test/model-b"));
+
+    let next = handle
+        .session
+        .start_turn(
+            vec![EngineInput {
+                input_id: InputId::from("next"),
+                text: "hold-for-steer".into(),
+                attachments: vec![],
+            }],
+            &TurnSettings {
+                model_selection: model_b,
+                runtime_mode: RuntimeMode::FullAccess,
+            },
+        )
+        .await;
+    let TurnStartResult::Accepted { turn_id } = next else {
+        panic!("second turn was not accepted")
+    };
+    loop {
+        match handle.events.recv().await.expect("event stream") {
+            EngineEvent::ItemCompleted { item, .. }
+                if matches!(item.body, TurnItemBody::AssistantMessage { .. }) =>
+            {
+                break;
+            }
+            EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
+            _ => {}
+        }
+    }
+    assert!(matches!(
+        handle
+            .session
+            .steer(
+                &turn_id,
+                vec![EngineInput {
+                    input_id: InputId::from("steer-one"),
+                    text: "unread-steer".into(),
+                    attachments: vec![]
+                }]
+            )
+            .await,
+        SteerResult::Accepted
+    ));
+    handle.session.interrupt(&turn_id).await.expect("interrupt");
+    let mut cancelled = false;
+    loop {
+        match handle.events.recv().await.expect("event stream") {
+            EngineEvent::SteerUpdated {
+                input_ids,
+                status: SteerStatus::Cancelled { .. },
+                ..
+            } => {
+                assert_eq!(input_ids, vec![InputId::from("steer-one")]);
+                cancelled = true;
+            }
+            EngineEvent::TurnFinished { outcome, .. } => {
+                assert!(
+                    cancelled,
+                    "steer settlement must precede the terminal event"
+                );
+                assert!(matches!(outcome, TurnOutcome::Interrupted));
+                break;
+            }
+            EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
+            _ => {}
+        }
+    }
     handle.session.shutdown().await;
 }

@@ -91,6 +91,7 @@ export function createOpencodeClient() {
         const { sessionID, messageID } = args; const text = args.parts[0]?.text ?? "";
         if (text.includes("reject-prompt")) return { error: { name: "BadRequestError" }, response: new Response(null, { status: 400 }) };
         if (text.includes("fail-prompt")) return { error: new TypeError("fake reset", { cause: { code: "ECONNRESET" } }), response: undefined };
+        if (text.includes("unread-steer")) return data(undefined);
         active = true;
         if (text.includes("inline-events")) { emitFinish(sessionID, messageID); return data(undefined); }
         setImmediate(() => {
@@ -98,6 +99,12 @@ export function createOpencodeClient() {
           push("session.status", { sessionID, status: { type: "busy" } });
           if (text.includes("approve")) push("permission.asked", { id: "request-1", sessionID, permission: "bash", patterns: ["*"], metadata: {}, always: [] });
           else if (text.includes("question")) push("question.asked", { id: "question-1", sessionID, questions: [{ header: "Color", question: "Choose", options: [{ label: "Blue", description: "Color" }] }] });
+          else if (text.includes("hold-for-steer")) {
+            const assistant = `assistant-${messageID}`;
+            push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: {} } });
+            push("message.part.updated", { sessionID, part: { id: `ready-${messageID}`, sessionID, messageID: assistant, type: "text", text: "ready" } });
+            push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: { completed: 1 } } });
+          }
           else if (!text.includes("hold")) emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}\nMODEL:${args.model?.providerID}/${args.model?.modelID}` : undefined);
         });
         return data(undefined);

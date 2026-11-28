@@ -13,7 +13,8 @@ import { promptParts } from "./attachments.ts";
 type Client = ReturnType<typeof client>;
 type ChildSnapshot = { id: string; permission: PermissionRuleset; metadata: Record<string, unknown> | undefined; parentBases: PermissionRuleset[] };
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
-type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
+type SteerReceipt = { inputIds: string[]; accepted: boolean; ready: boolean; observed: boolean };
+type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; heldOutcome?: TurnOutcome; steers: Map<string, SteerReceipt>; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
 let lastTime = 0, counter = 0;
 // Adapted from promptAdmission.ts:9-27.
@@ -128,7 +129,7 @@ export class OpenCodeSession implements EngineSession {
   private broken(reason: string) {
     if (this.closed) return;
     this.closed = true;
-    if (this.active?.admitted) this.finish(this.active, { type: "failed", reason });
+    if (this.active?.admitted) { this.prepareTerminalSteers(this.active); this.active.stopPending = false; this.finish(this.active, { type: "failed", reason }); }
     else this.active = undefined;
     this.abortEvents.abort();
     this.host.fail(reason);
@@ -145,6 +146,7 @@ export class OpenCodeSession implements EngineSession {
   }
   private finish(turn: Turn, outcome: TurnOutcome) {
     if (this.active !== turn) return;
+    if (turn.stopPending || [...turn.steers.values()].some((receipt) => !receipt.ready)) { turn.heldOutcome = outcome; return; }
     if (outcome.type !== "failed" && (turn.earlyDeltas.size > 0 || this.hasUnknownRoles(turn))) {
       if (!turn.reconciling) {
         turn.reconciling = true;
@@ -159,8 +161,28 @@ export class OpenCodeSession implements EngineSession {
       this.completed(turn, id, item(this.base(id, turn), "todo_list", { planId: id, steps }));
     }
     for (const key of this.requests.keys()) { this.requests.delete(key); this.host.emit({ type: "request_closed", key }); }
+    for (const [id, receipt] of turn.steers) this.settleSteer(turn, id, receipt.observed);
     this.active = undefined;
     this.host.emit({ type: "turn_finished", turnId: turn.id, outcome });
+  }
+  private settleSteer(turn: Turn, id: string, observed: boolean) {
+    const receipt = turn.steers.get(id); if (!receipt?.accepted || !receipt.ready) return;
+    turn.steers.delete(id);
+    this.host.emit({ type: "steer_updated", turnId: turn.id, inputIds: receipt.inputIds, status: observed ? { type: "completed" } : { type: "cancelled", reason: "OpenCode turn ended before steering was read" } });
+  }
+  private prepareTerminalSteers(turn: Turn) {
+    for (const [id, receipt] of turn.steers) { if (!receipt.accepted) turn.steers.delete(id); else receipt.ready = true; }
+  }
+  private releaseSteer(turn: Turn, id: string) {
+    if (this.active !== turn) return;
+    const receipt = turn.steers.get(id);
+    if (receipt) { receipt.ready = true; if (receipt.observed) this.settleSteer(turn, id, true); }
+    const outcome = turn.heldOutcome;
+    if (outcome && turn.interrupted) {
+      if (!turn.stopPending && turn.stopIdle) { delete turn.heldOutcome; this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" }); }
+      return;
+    }
+    if (outcome && !turn.stopPending && ![...turn.steers.values()].some((entry) => !entry.ready)) { delete turn.heldOutcome; this.finish(turn, outcome); }
   }
   private hasUnknownRoles(turn: Turn) {
     return [...turn.parts.values()].some((part) => (part.type === "text" || part.type === "reasoning") && !turn.roles.has(part.messageID));
@@ -275,6 +297,7 @@ export class OpenCodeSession implements EngineSession {
     switch (event.type) {
       case "message.updated": {
         const msg = event.properties.info; turn.roles.set(msg.id, msg.role);
+        if (msg.role === "user") { const receipt = turn.steers.get(msg.id); if (receipt) { receipt.observed = true; if (receipt.ready) this.settleSteer(turn, msg.id, true); } }
         if (msg.role === "assistant") for (const part of turn.parts.values()) if (part.messageID === msg.id && part.type === "text") this.emitText(turn, part);
         if (msg.role === "user" && msg.id === turn.admission.id) await this.admission(turn, "observed");
         if (msg.role === "assistant" && msg.time.completed !== undefined) {
@@ -392,7 +415,7 @@ export class OpenCodeSession implements EngineSession {
     if (this.active) return { status: "declined" as const, reason: "a turn is already running" };
     if (!parsedModel(settings.modelSelection.model)) return { status: "declined" as const, reason: "OpenCode model must use provider/model format" };
     if (!promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode requires text or an attachment" };
-    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, stopPending: false, stopIdle: false, controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
+    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, stopPending: false, stopIdle: false, steers: new Map(), controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
     this.active = turn;
     this.ownedMessages.add(turn.admission.id);
     try { await this.submit(turn, inputs, this.first); }
@@ -431,9 +454,19 @@ export class OpenCodeSession implements EngineSession {
     if (!turn || turn.id !== turnId || turn.interrupted || turn.admission.pending || !promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode turn is not available for steering" };
     const previous = turn.admission;
     turn.admission = { id: messageId(), accepted: false, observed: false, idle: false, pending: true };
-    this.ownedMessages.add(turn.admission.id);
-    try { await this.submit(turn, inputs, false); return { status: "accepted" as const }; }
-    catch (error) { if (promptRejected(error)) { turn.admission = previous; return { status: "declined" as const, reason: "OpenCode declined steering" }; } this.uncertain = true; return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" }; }
+    const id = turn.admission.id;
+    const receipt: SteerReceipt = { inputIds: inputs.map((input) => input.inputId), accepted: false, ready: false, observed: false };
+    turn.steers.set(id, receipt); this.ownedMessages.add(id);
+    try {
+      await this.submit(turn, inputs, false);
+      if (this.closed || this.active !== turn) return { status: "unknown" as const, reason: "OpenCode session ended during steering" };
+      receipt.accepted = true; setImmediate(() => this.releaseSteer(turn, id));
+      return { status: "accepted" as const };
+    } catch (error) {
+      turn.steers.delete(id); setImmediate(() => this.releaseSteer(turn, id));
+      if (promptRejected(error)) { turn.admission = previous; return { status: "declined" as const, reason: "OpenCode declined steering" }; }
+      this.uncertain = true; return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" };
+    }
   }
   async interrupt(turnId: string) {
     const turn = this.active; if (!turn || turn.id !== turnId) return;
@@ -477,5 +510,5 @@ export class OpenCodeSession implements EngineSession {
     } catch (error) { if (error instanceof HelperError) throw error; throw new HelperError("transport", "OpenCode request response failed"); }
     if (this.requests.delete(key)) this.host.emit({ type: "request_closed", key });
   }
-  async shutdown() { this.closed = true; if (this.active) { const turn = this.active; turn.controller.abort(); if (turn.admitted) this.finish(turn, turn.earlyDeltas.size || this.hasUnknownRoles(turn) ? { type: "failed", reason: "OpenCode message could not be reconciled during shutdown" } : { type: "interrupted" }); else this.active = undefined; } this.abortEvents.abort(); await this.server.close(); }
+  async shutdown() { this.closed = true; if (this.active) { const turn = this.active; turn.controller.abort(); if (turn.admitted) { this.prepareTerminalSteers(turn); turn.stopPending = false; this.finish(turn, turn.earlyDeltas.size || this.hasUnknownRoles(turn) ? { type: "failed", reason: "OpenCode message could not be reconciled during shutdown" } : { type: "interrupted" }); } else this.active = undefined; } this.abortEvents.abort(); await this.server.close(); }
 }
