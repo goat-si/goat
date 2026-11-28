@@ -65,6 +65,7 @@ async fn ui_and_agent_paths_through_the_real_server() {
         port: 0,
         ui_token: Some("ui-secret".into()),
         engine: EngineChoice::Fake,
+        codex_bin: None,
         exit_on_stdin_close: false,
     };
     let running = goat2_host::server::start_with_engine(cfg, Some(Arc::new(fake.clone())))
@@ -209,6 +210,7 @@ async fn ui_and_agent_paths_through_the_real_server() {
             port: 0,
             ui_token: Some("ui-secret".into()),
             engine: EngineChoice::Fake,
+            codex_bin: None,
             exit_on_stdin_close: false,
         };
         match goat2_host::server::start_with_engine(cfg, Some(Arc::new(fake.clone()))).await {
@@ -248,6 +250,7 @@ async fn real_codex_turn_through_the_host() {
         port: 0,
         ui_token: Some("ui-secret".into()),
         engine: EngineChoice::Codex,
+        codex_bin: None,
         exit_on_stdin_close: false,
     };
     let running = goat2_host::server::start_with_engine(cfg, None)

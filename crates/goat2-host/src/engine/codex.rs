@@ -9,14 +9,18 @@ use std::sync::Arc;
 use goat2_contracts::{ChatAttachment, ProviderCapabilities, ThreadId};
 use goat2_engine_codex::engine::{CodexEngineFactory, CodexEngineOptions};
 
-/// Lane B's Codex driver with defaults (`codex` on PATH) and the host's attachment lookup.
-pub fn codex_factory(data_dir: &Path) -> CodexEngineFactory {
+/// Lane B's Codex driver with the host's attachment lookup. `codex_bin` is the Codex program
+/// (`GOAT2_CODEX_BIN`); without it `codex` is looked up on the host's PATH, which the desktop
+/// shell sets from the person's login shell.
+pub fn codex_factory(data_dir: &Path, codex_bin: Option<&Path>) -> CodexEngineFactory {
     let threads = data_dir.join("threads");
+    let defaults = CodexEngineOptions::default();
     CodexEngineFactory::new(CodexEngineOptions {
+        program: codex_bin.map_or(defaults.program.clone(), Path::to_path_buf),
         attachment_resolver: Some(Arc::new(move |thread_id, attachment| {
             attachment_path(&threads, thread_id, attachment)
         })),
-        ..Default::default()
+        ..defaults
     })
 }
 
@@ -40,105 +44,10 @@ fn attachment_path(
     path.is_file().then_some(path)
 }
 
-/// v1 `CodexProviderCapabilitiesV2`, values verbatim from goat-si/goat origin/dev 916b5ccc
-/// `apps/server/src/orchestration-v2/Adapters/CodexCapabilities.ts:3-101` (v1 sets no `memory`).
+/// v1 `CodexProviderCapabilitiesV2`, from lane B's driver (one copy, compared whole with v1
+/// `CodexCapabilities.ts` by its tests). The fake engine reports the same flags.
 pub fn codex_capabilities() -> ProviderCapabilities {
-    serde_json::from_value(serde_json::json!({
-        "sessions": {
-            "supportsMultipleProviderThreadsPerSession": true,
-            "supportsModelSwitchInSession": true,
-            "supportsProviderSwitchingViaHandoff": true,
-            "supportsRuntimeModeSwitchInSession": true,
-            "pendingRequestsSurviveRestart": false
-        },
-        "threads": {
-            "canCreateEmptyThread": true,
-            "canReadThreadSnapshot": true,
-            "canRollbackThread": true,
-            "canForkThread": true,
-            "canForkFromTurn": true,
-            "canForkWhileSourceRunning": true,
-            "canForkFromSubagentThread": true,
-            "exposesNativeThreadId": true,
-            "forkHonorsTargetCwd": true
-        },
-        "turns": {
-            "exposesNativeTurnId": true,
-            "emitsTurnStarted": true,
-            "emitsTurnCompleted": true,
-            "supportsInterrupt": true,
-            "supportsNativeResume": true,
-            "supportsActiveSteering": true,
-            "activeSteeringDuringCompaction": true,
-            "supportsSteeringByInterruptRestart": true,
-            "supportsQueuedMessages": true,
-            "terminalStatusQuality": "strong"
-        },
-        "streaming": {
-            "streamsAssistantText": true,
-            "streamsReasoning": true,
-            "streamsToolOutput": true,
-            "streamsPlanText": true,
-            "emitsMessageCompleted": true
-        },
-        "tools": {
-            "exposesToolItemIds": true,
-            "emitsToolStarted": true,
-            "emitsToolCompleted": true,
-            "emitsToolOutput": true,
-            "supportsMcpTools": true,
-            "supportsDynamicToolCallbacks": true
-        },
-        "approvals": {
-            "supportsCommandApproval": true,
-            "supportsFileReadApproval": true,
-            "supportsFileChangeApproval": true,
-            "supportsApplyPatchApproval": true,
-            "approvalsHaveNativeRequestIds": true,
-            "approvalCallbacksAreLiveOnly": true,
-            "approvalsCanOriginateFromSubagents": true
-        },
-        "planning": {
-            "emitsPlanUpdated": true,
-            "emitsTodoList": true,
-            "emitsProposedPlan": true,
-            "supportsStructuredQuestions": true,
-            "planDeltasHaveItemIds": true
-        },
-        "subagents": {
-            "supportsSubagents": true,
-            "exposesSubagentThreadIds": true,
-            "emitsSubagentLifecycle": true,
-            "canWaitForSubagents": true,
-            "canCloseSubagents": true,
-            "canForkSubagentThread": true
-        },
-        "context": {
-            "acceptsSystemContext": true,
-            "acceptsDeveloperContext": true,
-            "acceptsSyntheticUserContext": true,
-            "canGenerateSummaries": true,
-            "canConsumeHandoffSummaries": true,
-            "supportsDeltaHandoff": true,
-            "supportsFullThreadHandoff": true,
-            "maxRecommendedHandoffChars": null
-        },
-        "checkpointing": {
-            "appCanCheckpointFilesystem": true,
-            "supportsNestedCheckpointScopes": true,
-            "providerCanRollbackConversation": true,
-            "providerRollbackReturnsSnapshot": true,
-            "providerCanReadConversationSnapshot": true
-        },
-        "identity": {
-            "nativeThreadIds": "strong",
-            "nativeTurnIds": "strong",
-            "nativeItemIds": "strong",
-            "nativeRequestIds": "strong"
-        },
-        "runtimePolicy": { "enforcement": "native" }
-    }))
-    .expect("v1 Codex capabilities decode as the contract type")
+    goat2_engine_codex::capabilities::codex_capabilities()
 }
 
 #[cfg(test)]
@@ -146,6 +55,26 @@ mod tests {
     use goat2_contracts::{BlobRef, ChatAttachment, ChatAttachmentType, ThreadId};
 
     use super::attachment_path;
+
+    #[test]
+    fn the_codex_program_comes_from_host_config_or_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = std::path::Path::new("/opt/parity/fake-codex");
+        assert_eq!(
+            super::codex_factory(dir.path(), Some(fake)).options.program,
+            fake
+        );
+        assert_eq!(
+            super::codex_factory(dir.path(), None).options.program,
+            std::path::PathBuf::from("codex")
+        );
+        assert!(
+            super::codex_factory(dir.path(), None)
+                .options
+                .attachment_resolver
+                .is_some()
+        );
+    }
 
     #[test]
     fn v1_codex_capabilities_decode() {

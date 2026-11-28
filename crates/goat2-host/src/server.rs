@@ -247,7 +247,7 @@ pub async fn start_with_engine(
     let engine: Arc<dyn EngineFactory> = match engine {
         Some(engine) => engine,
         None => match cfg.engine {
-            EngineChoice::Codex => Arc::new(codex_factory(&data_dir)),
+            EngineChoice::Codex => Arc::new(codex_factory(&data_dir, cfg.codex_bin.as_deref())),
             EngineChoice::Fake => Arc::new(FakeEngine::new(FakeScript {
                 turn_ms: 400,
                 ..FakeScript::default()
@@ -405,6 +405,7 @@ mod tests {
             port: 0,
             ui_token: Some("t".into()),
             engine: EngineChoice::Fake,
+            codex_bin: None,
             exit_on_stdin_close: false,
         };
         let first = start(cfg()).await.unwrap();
