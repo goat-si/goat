@@ -348,3 +348,13 @@ Per-slice detail and known gaps: crates/goat2-engine-acp/provenance/*.md, crates
 
 Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.ts is plain LF JSONL request/response plus events over stdio; a Node hop would add a process and a failure point with no SDK to host.
 
+
+## P2-S muse
+
+| GOAT 2 path | v1 path at 916b5ccc1b2 | Kind and note |
+|---|---|---|
+| `apps/engine-helper/src/engines/muse/sdk.ts` | `packages/provider-muse/src/server/sdk.ts:48-58,111-166,171-229` | adapted: environment filtering, serve arguments, SDK handshake, deadline and cleanup, using the helper SDK loader. |
+| `apps/engine-helper/test/muse.test.ts`, `test/fakes/muse-sdk.ts` | `packages/provider-muse/src/server/sdk.test.ts` | new: isolated handshake fixture and cleanup checks for the helper seam. |
+| `apps/engine-helper/package.json`, `pnpm-lock.yaml` | `packages/provider-muse/package.json` | adapted: exact Muse SDK version 1.4.6. |
+
+Not lifted yet: the Muse adapter and event projection, account pools, usage and limits, text generation, cloud and checkpoints; the SDK host above is not registered as an engine.
