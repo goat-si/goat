@@ -164,6 +164,7 @@ pub fn render_limits() -> String {
     }
     constant!(
         BOT_INSTRUCTIONS_MAX_BYTES,
+        REQUEST_CONTEXT_MAX_CHARS,
         LOG_FORMAT_VERSION,
         CARD_FILE_FORMAT_VERSION,
         MAX_SAFE_WIRE_INTEGER,
@@ -206,6 +207,9 @@ fn safe_integer(schema: &mut Schema) {
     match obj.get("format").and_then(|f| f.as_str()) {
         Some("uint64") => {
             obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+        }
+        Some("uint32") => {
+            obj.insert("maximum".into(), u32::MAX.into());
         }
         Some("int64") => {
             obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());

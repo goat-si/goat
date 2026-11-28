@@ -365,11 +365,13 @@
       "properties": {
         "attempt": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "maxAttempts": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -769,6 +771,7 @@
       "properties": {
         "additions": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -786,6 +789,7 @@
         },
         "deletions": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",

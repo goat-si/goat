@@ -107,6 +107,14 @@ pub struct ProviderAuthMethod {
 pub enum ProviderAuthInteraction {
     Browser {
         id: String,
+        /// v1 `SignInUrl`: http(s) only.
+        #[serde(with = "crate::serde_util::sign_in_url")]
+        #[ts(as = "String")]
+        #[schemars(
+            with = "String",
+            length(min = 1, max = 16384),
+            regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+        )]
         url: String,
         requires_consent: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,15 +123,29 @@ pub enum ProviderAuthInteraction {
     },
     DeviceCode {
         id: String,
+        /// v1 `SignInUrl`: http(s) only.
+        #[serde(with = "crate::serde_util::sign_in_url")]
+        #[ts(as = "String")]
+        #[schemars(
+            with = "String",
+            length(min = 1, max = 16384),
+            regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+        )]
         url: String,
         user_code: String,
     },
     Terminal {
         id: String,
         output: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        output_offset: Option<u32>,
+        /// v1 non-negative integer, within the safe wire integer range.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::serde_util::safe_u64_opt"
+        )]
+        #[ts(optional, as = "Option<u64>")]
+        #[schemars(with = "Option<u64>")]
+        output_offset: Option<u64>,
     },
     Credentials {
         id: String,
@@ -151,6 +173,14 @@ pub struct ProviderAuthState {
     pub instance_id: ProviderInstanceId,
     pub phase: ProviderAuthPhase,
     pub flow_id: Option<String>,
+    /// v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.
+    #[serde(default, with = "crate::serde_util::sign_in_url_opt")]
+    #[ts(as = "Option<String>")]
+    #[schemars(
+        with = "Option<String>",
+        length(min = 1, max = 16384),
+        regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+    )]
     pub authorization_url: Option<String>,
     pub expires_at: Option<String>,
     pub message: Option<String>,
