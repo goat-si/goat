@@ -449,18 +449,25 @@ describe("scoped SSH master", () => {
         Effect.gen(function* () {
           yield* manager.ensureEnvironment(uploadTarget);
           assert.include(f.events, "standalone-forward");
+          const userSocket = "/private/user/socket";
+          const socketOf = (args: ReadonlyArray<string>) =>
+            args.includes("-S") ? args[args.indexOf("-S") + 1] : undefined;
           if (mode === "user-path" || mode === "user-master" || mode === "windows") {
             assert.notInclude(f.events, "master");
-            for (const command of f.commands) assert.notInclude(commandArgs(command), "-S");
+            // Only the user's own ControlPath is ever named, never a GOAT master socket.
+            for (const command of f.commands)
+              assert.include([undefined, userSocket], socketOf(commandArgs(command)));
           }
           const forward = f.commands.find(
             (c) => commandArgs(c).includes("-N") && !commandArgs(c).includes("-M"),
           )!;
-          assert.includeMembers(
-            [...commandArgs(forward)],
-            ["ControlPath=none", "ControlMaster=no", "ControlPersist=no"],
-          );
-          assert.notInclude(commandArgs(forward), "-S");
+          // controlmaster auto without a ControlPath cannot share, so it keeps the isolated forward.
+          const joinsUserMaster = mode === "user-path";
+          assert.include(commandArgs(forward), "ControlMaster=no");
+          for (const option of ["ControlPath=none", "ControlPersist=no"])
+            if (joinsUserMaster) assert.notInclude(commandArgs(forward), option);
+            else assert.include(commandArgs(forward), option);
+          assert.equal(socketOf(commandArgs(forward)), joinsUserMaster ? userSocket : undefined);
           if (mode === "user-path" || mode === "user-master") {
             const remote = f.commands.find((c) => commandArgs(c).includes("sh"))!;
             assert.notInclude(commandArgs(remote), "ControlPath=none");
@@ -472,8 +479,33 @@ describe("scoped SSH master", () => {
           }
           yield* manager.disconnectEnvironment(uploadTarget);
           assert.include(f.events, "kill-forward");
+          // Only a configured ControlPath can hold the forward in a shared master after it exits.
+          const cancel = f.commands.find((c) => commandArgs(c).includes("cancel"));
+          if (mode === "user-path") {
+            const spec = (args: ReadonlyArray<string>) => args[args.indexOf("-L") + 1];
+            assert.equal(spec(commandArgs(cancel!)), spec(commandArgs(forward)));
+            assert.equal(socketOf(commandArgs(cancel!)), userSocket);
+            assert.isAbove(f.events.indexOf("cancel"), f.events.indexOf("kill-forward"));
+          } else assert.isUndefined(cancel);
         }),
       ),
+  );
+
+  it.effect("never lends a ControlPath recorded for another user of the alias", () =>
+    // The fixture's ssh -G always reports alex, as if bob's resolution was overwritten by alex's.
+    run("user-path", (f, manager) =>
+      Effect.gen(function* () {
+        const bob = { ...uploadTarget, username: "bob" };
+        yield* manager.ensureEnvironment(bob);
+        const forward = f.commands.find(
+          (c) => commandArgs(c).includes("-N") && !commandArgs(c).includes("-M"),
+        )!;
+        assert.include(commandArgs(forward), "ControlPath=none");
+        assert.notInclude(commandArgs(forward), "-S");
+        yield* manager.disconnectEnvironment(bob);
+        assert.isUndefined(f.commands.find((c) => commandArgs(c).includes("cancel")));
+      }),
+    ),
   );
 
   it("recognizes user sharing while ignoring OpenSSH defaults", () => {

@@ -12,7 +12,7 @@ import { SshCommandError, SshPreparationTimeoutError, SshReadinessError } from "
 import { runtimeFailureResult } from "./sshFailureDiagnostics.ts";
 
 const FIRST_RETRY_MS = 2_000;
-const MAX_RETRY_MS = 60_000;
+const MAX_RETRY_MS = 600_000;
 
 /** Set while a retry loop runs its own attempt, so that attempt's failure does not restart it. */
 const SshAutomaticRetry = Context.Reference<boolean>(
@@ -34,7 +34,7 @@ export function isTransientPreparationFailure(error: unknown) {
   return result.kind === "error" && result.fix?.actor !== "human";
 }
 
-/** Capped exponential backoff with jitter: 1-2 s, then 2-4 s, doubling up to 30-60 s. */
+/** Capped exponential backoff with jitter: 1-2 s, doubling up to 5-10 minutes. */
 export function preparationRetryDelayMs(attempt: number, random: number) {
   const ceiling = Math.min(MAX_RETRY_MS, FIRST_RETRY_MS * 2 ** attempt);
   return Math.round(ceiling / 2 + (ceiling / 2) * random);
@@ -123,7 +123,7 @@ export function makePreparationRetries<E, R>(options: {
   /** Refusal copy for a ready-only caller while the host reconnects on its own. */
   const refusal = (key: string, host: string) =>
     loops.has(key)
-      ? `GOAT lost its SSH connection to ${host} and is reconnecting automatically. Try again in a minute.`
+      ? `GOAT lost its SSH connection to ${host} and is reconnecting automatically. Try again in a few minutes.`
       : undefined;
   return { failed, cancel, refusal };
 }

@@ -188,6 +188,24 @@ describe("DesktopPenMembers", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("retries only unsettled members and stops until a new snapshot", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      h.trust("a");
+      h.watches[0]?.onSnapshot(snapshot(1, "a", "b"));
+      yield* TestClock.adjust("25 minutes");
+      assert.equal(h.state.inspected.filter((name) => name === `pen-${id("a")}`).length, 1);
+      assert.equal(h.state.inspected.filter((name) => name === `pen-${id("b")}`).length, 5);
+      h.trust("b");
+      h.watches[0]?.onSnapshot(snapshot(2, "a", "b"));
+      yield* TestClock.adjust(0);
+      assert.deepEqual(routes(h.last()), [
+        ["box-a", "trusted"],
+        ["box-b", "trusted"],
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("the watch is retried on a backoff that doubles and resets after a snapshot", () =>
     Effect.gen(function* () {
       const h = yield* harness();
