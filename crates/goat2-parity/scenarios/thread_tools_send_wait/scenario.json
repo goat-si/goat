@@ -1,0 +1,49 @@
+{
+  "v": 1,
+  "name": "thread_tools_send_wait",
+  "summary": "thread tools send wait",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson:1",
+    "apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts:105"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "4812b5ce112d3a125ed537a0cd4d4fca91bd3993451f348d349158e76a658973",
+        "sha256": "4812b5ce112d3a125ed537a0cd4d4fca91bd3993451f348d349158e76a658973"
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [],
+  "expect": {
+    "complete": false,
+    "exhaustive": [],
+    "threads": {
+      "t1": []
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}

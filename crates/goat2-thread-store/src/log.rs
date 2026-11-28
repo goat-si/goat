@@ -245,10 +245,37 @@ pub fn verify_tail(path: &Path, fsync: bool) -> Result<Tail, TailError> {
     let mut new_len = len;
     if frag_start < len {
         let frag = read_range(&file, frag_start, len)?;
-        let candidate = if frag_start == unterminated_only && frag.iter().any(|&b| b != 0) {
-            line::decode(&frag).ok().filter(|p| p.seq() == prev_seq + 1)
-        } else {
+        let only_nul = frag.iter().all(|&b| b == 0 || b == b'\n');
+        let candidate = if only_nul || frag_start != unterminated_only {
+            // Zero-filled growth (possibly ending in a partial line): incomplete.
+            if !only_nul {
+                let tail_part = &frag[(unterminated_only - frag_start) as usize..];
+                if !is_incomplete_json(tail_part) {
+                    return Err(TailError::Corrupt(
+                        "bytes after zero-filled lines are not an incomplete line".into(),
+                    ));
+                }
+            }
             None
+        } else if is_incomplete_json(&frag) {
+            None
+        } else {
+            // A complete JSON value: keep it only if it is the next valid line, else fail closed.
+            match line::decode(&frag) {
+                Ok(parsed) if parsed.seq() == prev_seq + 1 => Some(parsed),
+                Ok(parsed) => {
+                    return Err(TailError::Corrupt(format!(
+                        "unterminated last line has seq {}, expected {}",
+                        parsed.seq(),
+                        prev_seq + 1
+                    )));
+                }
+                Err(detail) => {
+                    return Err(TailError::Corrupt(format!(
+                        "unterminated last line is complete but invalid: {detail}"
+                    )));
+                }
+            }
         };
         let mut writer = &file;
         if let Some(parsed) = candidate {
@@ -258,8 +285,19 @@ pub fn verify_tail(path: &Path, fsync: bool) -> Result<Tail, TailError> {
             last = Some(parsed);
             repair = Some(Repair::NewlineAdded);
         } else {
+            // Keep the cut bytes for inspection, durably, before the log shrinks.
             let saved_to = torn_path(path);
-            std::fs::write(&saved_to, &frag)?;
+            let mut backup = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&saved_to)?;
+            backup.write_all(&frag)?;
+            if fsync {
+                backup.sync_all()?;
+                if let Some(dir) = path.parent() {
+                    crate::fsutil::sync_dir(dir)?;
+                }
+            }
             file.set_len(frag_start)?;
             new_len = frag_start;
             repair = Some(Repair::Truncated {
@@ -278,6 +316,15 @@ pub fn verify_tail(path: &Path, fsync: bool) -> Result<Tail, TailError> {
         last,
         repair,
     })
+}
+
+/// True when `bytes` are the start of a JSON value cut off before its end (a torn write). A
+/// complete value, or a syntax error before the end, is not incomplete.
+fn is_incomplete_json(bytes: &[u8]) -> bool {
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(_) => false,
+        Err(e) => e.is_eof(),
+    }
 }
 
 fn torn_path(path: &Path) -> PathBuf {

@@ -16,6 +16,8 @@ pub enum RebuildReason {
     Missing,
     Corrupt(String),
     SchemaMismatch(i64),
+    /// A previous rebuild did not finish or could not index every folder.
+    Incomplete,
 }
 
 impl std::fmt::Display for RebuildReason {
@@ -24,6 +26,7 @@ impl std::fmt::Display for RebuildReason {
             RebuildReason::Missing => f.write_str("missing"),
             RebuildReason::Corrupt(detail) => write!(f, "corrupt: {detail}"),
             RebuildReason::SchemaMismatch(v) => write!(f, "schema version {v}"),
+            RebuildReason::Incomplete => f.write_str("incomplete"),
         }
     }
 }
@@ -71,10 +74,11 @@ impl Index {
         }
         match Self::open_existing(path, fsync) {
             Ok(Ok(index)) => Ok((index, None)),
-            Ok(Err(version)) => Ok((
+            Ok(Err(Some(version))) => Ok((
                 Self::create(path, fsync)?,
                 Some(RebuildReason::SchemaMismatch(version)),
             )),
+            Ok(Err(None)) => Ok((Self::create(path, fsync)?, Some(RebuildReason::Incomplete))),
             Err(e) if is_corruption(&e) => Ok((
                 Self::create(path, fsync)?,
                 Some(RebuildReason::Corrupt(e.to_string())),
@@ -86,7 +90,7 @@ impl Index {
     fn open_existing(
         path: &Path,
         fsync: bool,
-    ) -> rusqlite::Result<std::result::Result<Index, i64>> {
+    ) -> rusqlite::Result<std::result::Result<Index, Option<i64>>> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -94,9 +98,22 @@ impl Index {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != SCHEMA_VERSION {
             drop(conn);
-            return Ok(Err(version));
+            return Ok(Err(Some(version)));
         }
         conn.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))?;
+        // Rows are only trusted once a rebuild committed its completion marker.
+        let complete: Option<String> =
+            match conn.query_row("SELECT value FROM meta WHERE key = 'complete'", [], |r| {
+                r.get(0)
+            }) {
+                Ok(v) => Some(v),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e),
+            };
+        if complete.as_deref() != Some("1") {
+            drop(conn);
+            return Ok(Err(None));
+        }
         let index = Index { conn, fsync };
         index.configure()?;
         Ok(Ok(index))
@@ -177,7 +194,8 @@ impl Index {
         self.set_sync(true)?;
         let result = self.conn.execute(
             "INSERT INTO cards (id, dirty, creating) VALUES (?1, ?2, ?3)
-             ON CONFLICT(id) DO UPDATE SET dirty = excluded.dirty, creating = excluded.creating",
+             ON CONFLICT(id) DO UPDATE SET dirty = excluded.dirty, creating = excluded.creating,
+               doc = CASE WHEN excluded.creating = 1 THEN NULL ELSE doc END",
             params![id, dirty as i64, creating as i64],
         );
         self.set_sync(false)?;
@@ -187,6 +205,27 @@ impl Index {
 
     /// Write card rows in one transaction. `dirty` is stored as given; `creating` is cleared.
     pub fn upsert(&mut self, rows: &[(&ThreadCard, bool, bool, String)]) -> Result<()> {
+        self.write_rows(rows, false)
+    }
+
+    /// Write the rebuilt rows and, when every folder was indexed, the completion marker, in one
+    /// durable transaction. Without the marker the next start rebuilds again.
+    pub fn finish_rebuild(
+        &mut self,
+        rows: &[(&ThreadCard, bool, bool, String)],
+        complete: bool,
+    ) -> Result<()> {
+        self.set_sync(true)?;
+        let result = self.write_rows(rows, complete);
+        self.set_sync(false)?;
+        result
+    }
+
+    fn write_rows(
+        &mut self,
+        rows: &[(&ThreadCard, bool, bool, String)],
+        mark_complete: bool,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
             let mut stmt = tx.prepare_cached(
@@ -223,6 +262,13 @@ impl Index {
                     doc,
                 ])?;
             }
+        }
+        if mark_complete {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('complete', '1')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )?;
         }
         tx.commit()?;
         Ok(())

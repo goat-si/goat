@@ -1,6 +1,6 @@
 //! The store: thread folders, card index, reads and startup.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -34,12 +34,40 @@ pub struct StoreOptions {
     /// Sync files, directories and index commits at the points DESIGN.md names. Turn off only for
     /// generated fixtures.
     pub fsync: bool,
+    /// Injected failures for crash and I/O tests. Not for production use.
+    #[doc(hidden)]
+    pub faults: Faults,
 }
 
 impl Default for StoreOptions {
     fn default() -> Self {
-        Self { fsync: true }
+        Self {
+            fsync: true,
+            faults: Faults::default(),
+        }
     }
+}
+
+/// Test-only fault switches (see `testing::set_faults`).
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Faults {
+    /// Opening or probing a thread's log or folder fails with an I/O error.
+    pub fail_log_reads: bool,
+    /// Syncing a thread's log fails with an I/O error.
+    pub fail_log_syncs: bool,
+    /// An index rebuild stops (returns an error) before it writes its rows.
+    pub stop_rebuild_before_rows: bool,
+    /// Writing card.json fails with an I/O error.
+    pub fail_cache_writes: bool,
+    /// `delete_thread`: syncing the threads directory after the rename fails.
+    pub fail_delete_dir_sync: bool,
+    /// `delete_thread`: removing the index row after the rename fails.
+    pub fail_delete_index: bool,
+}
+
+fn injected(what: &str) -> std::io::Error {
+    std::io::Error::other(format!("injected fault: {what}"))
 }
 
 /// What `Store::open` did.
@@ -57,6 +85,8 @@ pub struct StartupReport {
     pub removed_deleted: Vec<String>,
     pub corrupt: Vec<Problem>,
     pub unsupported: Vec<Problem>,
+    /// Folders an index rebuild could not index (the index stays incomplete).
+    pub unindexed: Vec<Problem>,
     pub timings: StartupTimings,
 }
 
@@ -64,7 +94,7 @@ pub struct StartupReport {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum IndexOutcome {
     Loaded,
-    Rebuilt { reason: String },
+    Rebuilt { reason: String, complete: bool },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +137,8 @@ pub struct StartupTimings {
 pub struct Appended {
     pub lines: Vec<LogLine>,
     pub card: ThreadCard,
+    /// The fold after these lines.
+    pub fold: Fold,
 }
 
 /// State a reader starts from.
@@ -206,6 +238,9 @@ enum Health {
     },
     Corrupt(String),
     Poisoned(String),
+    /// Deleted while another caller waited for this thread's lock; the id may already belong to a
+    /// new thread with its own slot.
+    Deleted,
 }
 
 struct Slot {
@@ -251,7 +286,12 @@ impl Slot {
                 thread: self.id.to_string(),
                 detail: detail.clone(),
             }),
+            Health::Deleted => Err(StoreError::ThreadMissing(self.id.to_string())),
         }
+    }
+
+    fn is_deleted(&self) -> bool {
+        matches!(self.health, Health::Deleted)
     }
 }
 
@@ -267,8 +307,17 @@ struct Shared {
 
 impl Shared {
     fn publish(&mut self, card: &mut ThreadCard) {
+        self.assign_seq(card);
+        self.announce(card);
+    }
+
+    fn assign_seq(&mut self, card: &mut ThreadCard) {
         card.card_seq = self.next_card_seq;
         self.next_card_seq += 1;
+    }
+
+    /// Put the card in the card set and tell card subscribers.
+    fn announce(&mut self, card: &ThreadCard) {
         self.cards.insert(card.id.clone(), card.clone());
         let update = CardUpdate::Changed(Box::new(card.clone()));
         self.subs.retain(|tx| {
@@ -293,6 +342,16 @@ pub struct Store {
     shared: Mutex<Shared>,
     crashed: std::sync::atomic::AtomicBool,
     logs_opened: std::sync::atomic::AtomicU64,
+    faults: Mutex<Faults>,
+    index_complete: std::sync::atomic::AtomicBool,
+    /// Test hook: `create_thread` waits on both barriers right before it announces the card.
+    create_pause: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    /// Test hook: `delete_thread` waits on barriers 0,1 after taking the thread lock and on 2,3
+    /// after removing the thread from the map, still holding the lock.
+    delete_pause: Mutex<Option<[Arc<std::sync::Barrier>; 4]>>,
+    /// Ids with a `create_thread` in progress: a second create of the same id loses at once with
+    /// ThreadExists instead of racing the first one's creation intent and folder.
+    creating: Mutex<HashSet<ThreadId>>,
 }
 
 fn ms(since: Instant) -> f64 {
@@ -309,6 +368,16 @@ fn tail_problem(err: TailError) -> std::result::Result<String, StoreError> {
         TailError::Missing => Ok("goat.jsonl is missing".into()),
         TailError::BadHeader(d) => Ok(format!("header: {d}")),
         TailError::Corrupt(d) => Ok(d),
+    }
+}
+
+fn tail_error(id: &ThreadId, err: TailError) -> StoreError {
+    match tail_problem(err) {
+        Ok(detail) => StoreError::CorruptLog {
+            thread: id.to_string(),
+            detail,
+        },
+        Err(io) => io,
     }
 }
 
@@ -331,9 +400,15 @@ fn card_doc(card: &ThreadCard, fold: &Fold) -> Result<String> {
     ))?)
 }
 
-fn read_card_file(dir: &Path) -> Option<CardFile> {
-    let bytes = fs::read(dir.join(CARD_FILE)).ok()?;
-    index::decode_doc(std::str::from_utf8(&bytes).ok()?)
+/// card.json of a folder: `Ok(None)` when it is missing or not a valid v1 card file (a cache miss);
+/// other I/O errors propagate.
+fn read_card_file(dir: &Path) -> Result<Option<CardFile>> {
+    let bytes = match fs::read(dir.join(CARD_FILE)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    Ok(std::str::from_utf8(&bytes).ok().and_then(index::decode_doc))
 }
 
 impl Store {
@@ -364,6 +439,7 @@ impl Store {
 
         let epoch = Epoch::new(new_uuid());
         index.set_meta("epoch", epoch.as_str())?;
+        let initial_faults = opts.faults;
         let store = Store {
             root,
             opts,
@@ -379,6 +455,11 @@ impl Store {
             }),
             crashed: std::sync::atomic::AtomicBool::new(false),
             logs_opened: std::sync::atomic::AtomicU64::new(0),
+            faults: Mutex::new(initial_faults),
+            index_complete: std::sync::atomic::AtomicBool::new(true),
+            create_pause: Mutex::new(None),
+            delete_pause: Mutex::new(None),
+            creating: Mutex::new(HashSet::new()),
         };
         let mut report = StartupReport {
             threads: 0,
@@ -391,6 +472,7 @@ impl Store {
             removed_deleted: Vec::new(),
             corrupt: Vec::new(),
             unsupported: Vec::new(),
+            unindexed: Vec::new(),
             timings: StartupTimings::default(),
         };
 
@@ -398,10 +480,11 @@ impl Store {
         match rebuild {
             Some(reason) => {
                 let t = Instant::now();
+                let complete = store.rebuild_from_folders(&mut report)?;
                 report.index = IndexOutcome::Rebuilt {
                     reason: reason.to_string(),
+                    complete,
                 };
-                store.rebuild_from_folders(&mut report)?;
                 timings.rebuild_ms = ms(t);
             }
             None => {
@@ -433,9 +516,6 @@ impl Store {
                             let epoch = shared.epoch.clone();
                             shared.index.set_meta("epoch", epoch.as_str())?;
                         }
-                        report.index = IndexOutcome::Rebuilt {
-                            reason: reason.to_string(),
-                        };
                         lock(&store.shared).cards.clear();
                         store
                             .slots
@@ -443,7 +523,11 @@ impl Store {
                             .unwrap_or_else(|p| p.into_inner())
                             .clear();
                         to_recover.clear();
-                        store.rebuild_from_folders(&mut report)?;
+                        let complete = store.rebuild_from_folders(&mut report)?;
+                        report.index = IndexOutcome::Rebuilt {
+                            reason: reason.to_string(),
+                            complete,
+                        };
                         timings.rebuild_ms = ms(t);
                     }
                 }
@@ -508,6 +592,8 @@ impl Store {
         }
         timings.settle_ms = ms(t);
 
+        store.sweep_trash()?;
+
         report.threads = lock(&store.shared).cards.len();
         report.logs_opened = store.logs_opened.load(std::sync::atomic::Ordering::Relaxed);
         timings.total_ms = ms(t_total);
@@ -521,6 +607,32 @@ impl Store {
 
     fn thread_dir(&self, id: &ThreadId) -> PathBuf {
         self.threads_dir().join(id.as_str())
+    }
+
+    fn faults(&self) -> Faults {
+        *lock(&self.faults)
+    }
+
+    /// Open a log for reading (honours injected read faults).
+    fn open_log_read(&self, path: &Path) -> std::io::Result<File> {
+        if self.faults().fail_log_reads {
+            return Err(injected("log read"));
+        }
+        log::open_read(path)
+    }
+
+    fn sync_file(&self, file: &File) -> std::io::Result<()> {
+        if self.faults().fail_log_syncs {
+            return Err(injected("log sync"));
+        }
+        file.sync_data()
+    }
+
+    /// False when the last index rebuild could not index every folder: the card list is degraded
+    /// until a later start rebuilds it completely.
+    pub fn index_complete(&self) -> bool {
+        self.index_complete
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn new_slot(&self, id: ThreadId, card: ThreadCard, fold: Fold, health: Health) -> Slot {
@@ -571,7 +683,13 @@ impl Store {
     ) -> Result<()> {
         let id = ThreadId::new(row.id.clone());
         let needs_check = row.dirty || row.creating || row.active_run;
-        let doc = row.doc.as_deref().and_then(index::decode_doc);
+        // A create in progress never trusts a cached card: the row may still hold the card of an
+        // earlier thread with the same id.
+        let doc = if row.creating {
+            None
+        } else {
+            row.doc.as_deref().and_then(index::decode_doc)
+        };
         match doc {
             Some(file) if !needs_check => {
                 self.insert_slot(self.new_slot(id, file.card, file.fold, Health::Unverified));
@@ -584,19 +702,30 @@ impl Store {
             }
             None => {
                 // No usable cached card: a create in progress, or a row to rebuild from the folder.
-                if !self.thread_dir(&id).join(LOG_FILE).exists() {
-                    if row.creating {
+                let dir = self.thread_dir(&id);
+                let log_path = dir.join(LOG_FILE);
+                let dir_meta = self.probe(&dir)?;
+                let log_meta = match dir_meta {
+                    Some(_) => self.probe(&log_path)?,
+                    None => None,
+                };
+                if row.creating {
+                    // Abandon only a create that provably never committed its one log write.
+                    let committed = log_meta.is_some() && self.create_committed(&log_path)?;
+                    if !committed {
                         self.abandon_create(&id)?;
                         report.abandoned_creates.push(row.id);
-                    } else if !self.thread_dir(&id).exists() {
-                        lock(&self.shared).index.delete(id.as_str())?;
-                        report.removed_deleted.push(row.id);
-                    } else {
-                        report.corrupt.push(Problem {
-                            thread_id: row.id,
-                            detail: "goat.jsonl is missing".into(),
-                        });
+                        return Ok(());
                     }
+                } else if dir_meta.is_none() {
+                    self.finish_missing_folder_delete(&id)?;
+                    report.removed_deleted.push(row.id);
+                    return Ok(());
+                } else if log_meta.is_none() {
+                    report.corrupt.push(Problem {
+                        thread_id: row.id,
+                        detail: "goat.jsonl is missing".into(),
+                    });
                     return Ok(());
                 }
                 match self.replay_folder(&id) {
@@ -607,33 +736,127 @@ impl Store {
                         self.insert_slot(slot);
                         to_recover.push(id);
                     }
-                    Ok(None) | Err(_) if row.creating => {
-                        self.abandon_create(&id)?;
-                        report.abandoned_creates.push(row.id);
-                    }
                     Ok(None) => report.corrupt.push(Problem {
                         thread_id: row.id,
                         detail: "no thread.created line".into(),
                     }),
-                    Err(e) => report.corrupt.push(Problem {
+                    Err(StoreError::CorruptLog { detail, .. }) => report.corrupt.push(Problem {
                         thread_id: row.id,
-                        detail: e.to_string(),
+                        detail,
                     }),
+                    Err(e) => return Err(e),
                 }
             }
         }
         Ok(())
     }
 
+    /// A dirty row whose folder is gone: make the rename durable first (a power loss could still
+    /// undo it), then clear this thread's leftover trash and drop the row. A failed sync fails
+    /// `open` and keeps the row.
+    fn finish_missing_folder_delete(&self, id: &ThreadId) -> Result<()> {
+        self.sync_threads_dir()?;
+        self.clear_trash(id)?;
+        lock(&self.shared).index.delete(id.as_str())?;
+        Ok(())
+    }
+
+    /// Sync `threads/` so earlier renames (deletes moving folders to trash) survive a power loss.
+    fn sync_threads_dir(&self) -> Result<()> {
+        if self.faults().fail_delete_dir_sync {
+            return Err(StoreError::Io(injected("threads directory sync")));
+        }
+        if self.opts.fsync {
+            sync_dir(&self.threads_dir())?;
+        }
+        Ok(())
+    }
+
+    /// Remove every leftover `.trash-*` folder once the renames that made them are durable. A
+    /// crash after a delete dropped its row, or a same-id create after a delete whose rename sync
+    /// failed, leaves trash no row points at. A failed sync keeps the trash for a later start.
+    fn sweep_trash(&self) -> Result<()> {
+        let mut trash = Vec::new();
+        for entry in fs::read_dir(self.threads_dir())? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(".trash-"))
+            {
+                trash.push(entry.path());
+            }
+        }
+        if trash.is_empty() || self.sync_threads_dir().is_err() {
+            return Ok(());
+        }
+        for path in trash {
+            let _ = fs::remove_dir_all(path);
+        }
+        Ok(())
+    }
+
+    /// Remove this thread's leftover trash folders. Call only after `sync_threads_dir` succeeded.
+    fn clear_trash(&self, id: &ThreadId) -> Result<()> {
+        let prefix = format!(".trash-{}-", id.as_str());
+        for entry in fs::read_dir(self.threads_dir())? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+            {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+        Ok(())
+    }
+
+    /// Metadata of `path`: `None` when it does not exist; any other error propagates.
+    fn probe(&self, path: &Path) -> Result<Option<fs::Metadata>> {
+        if self.faults().fail_log_reads {
+            return Err(StoreError::Io(injected("probe")));
+        }
+        match fs::symlink_metadata(path) {
+            Ok(meta) => Ok(Some(meta)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// True when the log holds a newline-terminated first event line: `create_thread` writes the
+    /// header and `thread.created` in one write, so anything less never committed.
+    fn create_committed(&self, path: &Path) -> Result<bool> {
+        use std::io::Read;
+        let mut file = self.open_log_read(path)?;
+        let mut buf = [0u8; 64 * 1024];
+        let mut newlines = 0;
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                return Ok(false);
+            }
+            newlines += buf[..n].iter().filter(|&&b| b == b'\n').count();
+            if newlines >= 2 {
+                return Ok(true);
+            }
+        }
+    }
+
+    /// Drop a create that never committed. The row may also cover an earlier delete of the same
+    /// id whose rename was never synced, so `threads/` is synced before anything is removed; a
+    /// failed sync fails `open` and keeps the row and any trash.
     fn abandon_create(&self, id: &ThreadId) -> Result<()> {
+        self.sync_threads_dir()?;
         let dir = self.thread_dir(id);
-        if dir.exists() {
+        if self.probe(&dir)?.is_some() {
             let trash =
                 self.threads_dir()
                     .join(format!(".trash-{}-{}", id.as_str(), random_hex(8)));
             fs::rename(&dir, &trash)?;
-            let _ = fs::remove_dir_all(&trash);
+            self.sync_threads_dir()?;
         }
+        self.clear_trash(id)?;
         lock(&self.shared).index.delete(id.as_str())?;
         Ok(())
     }
@@ -643,20 +866,24 @@ impl Store {
         let path = self.thread_dir(id).join(LOG_FILE);
         self.logs_opened
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let file = log::open_read(&path)?;
-        let len = file.metadata()?.len();
-        let (header, header_end) =
-            log::read_header(&file, len).map_err(|e| StoreError::CorruptLog {
-                thread: id.to_string(),
-                detail: tail_problem(e).unwrap_or_else(|e| e.to_string()),
-            })?;
+        if self.faults().fail_log_reads {
+            return Err(StoreError::Io(injected("log read")));
+        }
+        // Repair an incomplete tail first so a torn last write does not hide the thread.
+        let tail = log::verify_tail(&path, self.opts.fsync).map_err(|e| tail_error(id, e))?;
+        let file = self.open_log_read(&path)?;
+        let len = tail.len;
+        let (header, header_end) = log::read_header(&file, len).map_err(|e| tail_error(id, e))?;
         let mut state: Option<(ThreadCard, Fold)> = None;
         let mut health = Health::Ready;
         let mut expected = 1u64;
         log::scan_forward(&file, header_end, len, |_, bytes| -> Result<bool> {
             if bytes.is_empty() || bytes.iter().all(|&b| b == 0) {
-                // An incomplete tail; verify_tail repairs it on first touch.
-                return Ok(false);
+                // verify_tail already cut a trailing incomplete fragment, so this line is interior.
+                return Err(StoreError::CorruptLog {
+                    thread: id.to_string(),
+                    detail: format!("empty or zero-filled line where seq {expected} should be"),
+                });
             }
             let parsed = line::decode(bytes).map_err(|detail| StoreError::CorruptLog {
                 thread: id.to_string(),
@@ -701,11 +928,28 @@ impl Store {
         Ok(state.map(|(card, fold)| (card, fold, health)))
     }
 
-    fn rebuild_from_folders(&self, report: &mut StartupReport) -> Result<()> {
-        let mut rows: Vec<(ThreadCard, bool, bool, String)> = Vec::new();
+    /// Rebuild the card index from the folders. Returns whether every folder was indexed; only then
+    /// is the completion marker written with the rows, so an interrupted or partial rebuild is
+    /// redone at the next start. I/O errors fail `open`; corrupt folders are kept and reported.
+    fn rebuild_from_folders(&self, report: &mut StartupReport) -> Result<bool> {
+        let mut complete = true;
+        let mut built: Vec<ThreadId> = Vec::new();
         let mut entries: Vec<_> =
             fs::read_dir(self.threads_dir())?.collect::<std::io::Result<_>>()?;
         entries.sort_by_key(|e| e.file_name());
+        // Leftover trash means a delete renamed a folder; make those renames durable before the
+        // contents go, so a power loss cannot bring back an emptied folder.
+        let has_trash = entries.iter().any(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(".trash-"))
+        });
+        if has_trash && self.opts.fsync {
+            if self.faults().fail_delete_dir_sync {
+                return Err(StoreError::Io(injected("threads directory sync")));
+            }
+            sync_dir(&self.threads_dir())?;
+        }
         for entry in entries {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
@@ -720,64 +964,103 @@ impl Store {
                 continue;
             }
             let id = ThreadId::new(name);
-            let cached = read_card_file(&entry.path()).filter(|f| f.card.id == id);
-            let (card, fold) = match cached {
-                Some(file) => (file.card, file.fold),
+            let mut unindexed = |detail: String| {
+                complete = false;
+                report.unindexed.push(Problem {
+                    thread_id: id.to_string(),
+                    detail,
+                });
+            };
+            if self.faults().fail_log_reads {
+                return Err(StoreError::Io(injected("log read")));
+            }
+            self.logs_opened
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let tail = match log::verify_tail(&entry.path().join(LOG_FILE), self.opts.fsync) {
+                Ok(tail) => tail,
+                Err(TailError::Io(e)) => return Err(e.into()),
+                Err(e) => {
+                    unindexed(tail_problem(e)?);
+                    continue;
+                }
+            };
+            if let Some(repair) = &tail.repair {
+                report.repaired.push(Repaired {
+                    thread_id: id.to_string(),
+                    repair: repair_text(repair),
+                });
+            }
+            let cached = read_card_file(&entry.path())?.filter(|f| {
+                f.card.id == id
+                    && f.card.epoch == tail.epoch
+                    && f.card.applied_seq <= tail.last_seq()
+            });
+            let mut slot = match cached {
+                Some(file) => {
+                    let mut slot =
+                        self.new_slot(id.clone(), file.card, file.fold, Health::Unverified);
+                    match self.apply_tail(&mut slot, &tail) {
+                        Ok(()) => slot,
+                        Err(StoreError::CorruptLog { detail, .. }) => {
+                            unindexed(detail);
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
                 None => match self.replay_folder(&id) {
-                    Ok(Some((card, fold, _))) => {
+                    Ok(Some((card, fold, health))) => {
                         report.refolded.push(id.to_string());
-                        (card, fold)
+                        let mut slot = self.new_slot(id.clone(), card, fold, health);
+                        slot.header_end = tail.header_end;
+                        slot.len = tail.len;
+                        slot.synced_len = 0;
+                        slot
                     }
                     Ok(None) => {
-                        report.corrupt.push(Problem {
-                            thread_id: id.to_string(),
-                            detail: "no thread.created line".into(),
-                        });
+                        unindexed("no thread.created line".into());
                         continue;
                     }
-                    Err(e) => {
-                        report.corrupt.push(Problem {
-                            thread_id: id.to_string(),
-                            detail: e.to_string(),
-                        });
+                    Err(StoreError::CorruptLog { detail, .. }) => {
+                        unindexed(detail);
                         continue;
                     }
+                    Err(e) => return Err(e),
                 },
             };
-            let mut slot = self.new_slot(id.clone(), card, fold, Health::Unverified);
-            // Every log's tail is checked on the rebuild path.
-            if let Err(e) = self.verify_and_refold(&mut slot, report) {
-                report.corrupt.push(Problem {
-                    thread_id: id.to_string(),
-                    detail: e.to_string(),
-                });
-                continue;
-            }
-            let active = slot.fold.active_run_id.is_some();
-            rows.push((slot.card.clone(), active, active, String::new()));
+            // The tail seen here may not be durable yet: sync it before its row is stored.
+            self.sync_log(&mut slot)?;
+            built.push(id.clone());
             self.insert_slot(slot);
         }
-        // Write all rows with their published cardSeq.
-        let slots = self.slots.read().unwrap_or_else(|p| p.into_inner());
-        let mut writes: Vec<(ThreadCard, bool, bool, String)> = Vec::new();
-        for (card, dirty, active, _) in rows {
-            if let Some(slot) = slots.get(&card.id) {
-                let slot = lock(slot);
-                writes.push((
-                    slot.card.clone(),
-                    dirty,
-                    active,
-                    card_doc(&slot.card, &slot.fold)?,
-                ));
+        let mut writes: Vec<(ThreadCard, bool, String)> = Vec::new();
+        {
+            let entries: Vec<Arc<Mutex<Slot>>> = {
+                let slots = self.slots.read().unwrap_or_else(|p| p.into_inner());
+                built
+                    .iter()
+                    .filter_map(|id| slots.get(id).cloned())
+                    .collect()
+            };
+            for slot in &entries {
+                {
+                    let slot = lock(slot);
+                    let active = slot.fold.active_run_id.is_some();
+                    writes.push((slot.card.clone(), active, card_doc(&slot.card, &slot.fold)?));
+                }
             }
         }
-        drop(slots);
+        if self.faults().stop_rebuild_before_rows {
+            return Err(StoreError::Io(injected("rebuild stopped before rows")));
+        }
         let refs: Vec<(&ThreadCard, bool, bool, String)> = writes
             .iter()
-            .map(|(c, d, a, doc)| (c, *d, *a, doc.clone()))
+            .map(|(c, active, doc)| (c, *active, *active, doc.clone()))
             .collect();
-        lock(&self.shared).index.upsert(&refs)?;
-        Ok(())
+        lock(&self.shared).index.finish_rebuild(&refs, complete)?;
+        self.index_complete
+            .store(complete, std::sync::atomic::Ordering::Relaxed);
+        Ok(complete)
     }
 
     /// Startup recovery for a row marked dirty / creating / active.
@@ -786,21 +1069,20 @@ impl Store {
             return Ok(());
         };
         let mut slot = lock(&slot);
-        if !slot.dir.exists() {
+        if self.probe(&slot.dir)?.is_none() {
             // Deleted (row marked dirty before the folder moved to trash) or never created.
             drop(slot);
             self.slots
                 .write()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(id);
-            let mut shared = lock(&self.shared);
-            shared.cards.remove(id);
-            shared.index.delete(id.as_str())?;
+            lock(&self.shared).cards.remove(id);
+            self.finish_missing_folder_delete(id)?;
             report.removed_deleted.push(id.to_string());
             return Ok(());
         }
         // Prefer card.json when it is newer than the index row.
-        if let Some(file) = read_card_file(&slot.dir)
+        if let Some(file) = read_card_file(&slot.dir)?
             && file.card.id == *id
             && file.card.epoch == slot.card.epoch
             && file.card.applied_seq > slot.card.applied_seq
@@ -845,6 +1127,9 @@ impl Store {
     fn verify_and_refold(&self, slot: &mut Slot, report: &mut StartupReport) -> Result<()> {
         self.logs_opened
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.faults().fail_log_reads {
+            return Err(StoreError::Io(injected("log read")));
+        }
         let tail = match log::verify_tail(&slot.log_path(), self.opts.fsync) {
             Ok(tail) => tail,
             Err(e) => {
@@ -867,7 +1152,8 @@ impl Store {
     fn apply_tail(&self, slot: &mut Slot, tail: &Tail) -> Result<()> {
         slot.header_end = tail.header_end;
         slot.len = tail.len;
-        slot.synced_len = tail.len;
+        // What was read may not be durable yet (written by a process that crashed before syncing).
+        slot.synced_len = if self.opts.fsync { 0 } else { tail.len };
         let last_seq = tail.last_seq();
         if tail.epoch != slot.card.epoch || last_seq < slot.card.applied_seq {
             // The cache does not belong to this log: replay the whole log.
@@ -898,7 +1184,7 @@ impl Store {
 
     /// Fold the lines after `appliedSeq` (read backwards from the end, applied in order).
     fn fold_after(&self, slot: &mut Slot) -> Result<()> {
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let after = slot.card.applied_seq;
         let mut lines: Vec<Parsed> = Vec::new();
         let id = slot.id.to_string();
@@ -961,6 +1247,7 @@ impl Store {
                 removed_deleted: Vec::new(),
                 corrupt: Vec::new(),
                 unsupported: Vec::new(),
+                unindexed: Vec::new(),
                 timings: StartupTimings::default(),
             };
             let before = slot.card.applied_seq;
@@ -981,14 +1268,42 @@ impl Store {
     /// The row stays dirty while a run is active. card.json is replaced atomically but not synced:
     /// startup trusts the index row, and a card.json lost to power failure is refolded on rebuild.
     fn persist(&self, slot: &mut Slot) -> Result<()> {
-        if self.opts.fsync && slot.synced_len < slot.len {
+        self.sync_log(slot)?;
+        self.write_cache(slot)
+    }
+
+    /// Sync the log up to its current length. A failure poisons the thread: the outcome of the
+    /// last write is uncertain until a reopen checks the actual tail.
+    fn sync_log(&self, slot: &mut Slot) -> Result<()> {
+        if !self.opts.fsync || slot.synced_len >= slot.len {
+            slot.synced_len = slot.len;
+            return Ok(());
+        }
+        let result = (|| -> std::io::Result<()> {
             let file = match slot.writer.as_ref() {
                 Some(w) => w.try_clone()?,
-                None => log::open_read(&slot.log_path())?,
+                None => log::open_append(&slot.log_path())?,
             };
-            file.sync_data()?;
+            self.sync_file(&file)
+        })();
+        match result {
+            Ok(()) => {
+                slot.synced_len = slot.len;
+                Ok(())
+            }
+            Err(e) => {
+                slot.health = Health::Poisoned(e.to_string());
+                slot.writer = None;
+                Err(e.into())
+            }
         }
-        slot.synced_len = slot.len;
+    }
+
+    /// Write card.json and the index row (the log must already be synced through appliedSeq).
+    fn write_cache(&self, slot: &mut Slot) -> Result<()> {
+        if self.faults().fail_cache_writes {
+            return Err(StoreError::Io(injected("card.json write")));
+        }
         let doc = card_doc(&slot.card, &slot.fold)?;
         atomic_write(&slot.dir.join(CARD_FILE), doc.as_bytes(), false)?;
         let active = slot.fold.active_run_id.is_some();
@@ -1022,22 +1337,48 @@ impl Store {
     ) -> Result<ThreadCard> {
         let id = id.unwrap_or_else(|| ThreadId::new(new_uuid()));
         validate_thread_id(id.as_str())?;
+        if !lock(&self.creating).insert(id.clone()) {
+            return Err(StoreError::ThreadExists(id.to_string()));
+        }
+        let result = self.create_reserved(id.clone(), created, stop_after);
+        lock(&self.creating).remove(&id);
+        result
+    }
+
+    fn create_reserved(
+        &self,
+        id: ThreadId,
+        created: ThreadCreated,
+        stop_after: u8,
+    ) -> Result<ThreadCard> {
         if self.slot(&id).is_some() {
             return Err(StoreError::ThreadExists(id.to_string()));
         }
         let dir = self.thread_dir(&id);
-        if dir.exists() {
+        if self.probe(&dir)?.is_some() {
             return Err(StoreError::ThreadExists(id.to_string()));
         }
         let mut created = created;
         created.title = clamp_chars(&created.title, CARD_TITLE_MAX_CHARS);
+        let size = serde_json::to_vec(&created)?.len();
+        if size > BLOB_THRESHOLD_BYTES {
+            return Err(StoreError::PayloadTooLarge(format!(
+                "thread.created event is {size} bytes"
+            )));
+        }
         // 1. creation intent
         lock(&self.shared).index.mark(id.as_str(), true, true)?;
         if stop_after == 1 {
             return Err(StoreError::InvalidEvent("test stop after step 1".into()));
         }
         // 2. folder
-        fs::create_dir(&dir)?;
+        match fs::create_dir(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StoreError::ThreadExists(id.to_string()));
+            }
+            Err(e) => return Err(e.into()),
+        }
         if stop_after == 2 {
             return Err(StoreError::InvalidEvent("test stop after step 2".into()));
         }
@@ -1066,17 +1407,24 @@ impl Store {
         slot.header_end = header_end;
         slot.len = len;
         slot.synced_len = len;
-        {
-            let mut shared = lock(&self.shared);
-            shared.publish(&mut slot.card);
-        }
+        // Nothing is visible until the cache is written; a failure here leaves the committed log for
+        // the next start to finish (creating row). The thread is installed with its lock held, so an
+        // append or delete on it waits until the card is announced, and the cardSeq is assigned in
+        // the same step as the announcement, so no card cursor can pass over it.
         self.persist(&mut slot)?;
-        let card = slot.card.clone();
+        let entry = Arc::new(Mutex::new(slot));
+        let mut installed = lock(&entry);
         self.slots
             .write()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(id, Arc::new(Mutex::new(slot)));
-        Ok(card)
+            .insert(id, entry.clone());
+        let pause = lock(&self.create_pause).clone();
+        if let Some((reached, release)) = pause {
+            reached.wait();
+            release.wait();
+        }
+        lock(&self.shared).publish(&mut installed.card);
+        Ok(installed.card.clone())
     }
 
     /// Append events to a thread. Assigns seq and time, validates, moves large item fields to
@@ -1197,21 +1545,10 @@ impl Store {
         let old_status = card.status;
         let mut lines: Vec<LogLine> = Vec::new();
         let mut pending_blobs: Vec<(usize, String, String)> = Vec::new();
-        let mut needs_sync = false;
         let mut finished = false;
         let at = now_rfc3339();
         for mut event in events {
             let blob_text = self.validate(slot, &card, &fold_state, &mut event)?;
-            needs_sync |= matches!(
-                event,
-                LogEvent::InputAccepted(_)
-                    | LogEvent::InputChanged(_)
-                    | LogEvent::InputDelivered(_)
-                    | LogEvent::RunStarted(_)
-                    | LogEvent::RunAccepted(_)
-                    | LogEvent::RequestResolved(_)
-                    | LogEvent::RunFinished(_)
-            );
             if !matches!(event, LogEvent::ItemCompleted(_)) {
                 let size = serde_json::to_vec(&event)?.len();
                 if size > BLOB_THRESHOLD_BYTES {
@@ -1250,6 +1587,7 @@ impl Store {
             return Ok(Appended {
                 lines,
                 card: slot.card.clone(),
+                fold: slot.fold.clone(),
             });
         }
         // Dirty mark before the log changes.
@@ -1270,11 +1608,19 @@ impl Store {
         for line in &lines {
             bytes.extend_from_slice(&line::encode(line)?);
         }
-        if let Err(e) = self.write_log(slot, &bytes, needs_sync) {
+        // Every batch is synced before it is published or returned. A reader's cursor must never
+        // pass lines a power loss could drop: startup settlement would reuse those seqs under the
+        // same epoch, and the reader would resume with no reset. A failure poisons the thread and
+        // nothing is published.
+        if let Err(e) = self.write_log(slot, &bytes, true) {
             slot.health = Health::Poisoned(e.to_string());
             slot.writer = None;
             return Err(e);
         }
+        // Card writes go through outside a run, on a status change and at run end; in a run they
+        // are batched until `flush`.
+        let write_through =
+            fold_state.active_run_id.is_none() || old_status != card.status || finished;
         let card_changed = {
             let mut a = card.clone();
             a.card_seq = slot.card.card_seq;
@@ -1292,10 +1638,9 @@ impl Store {
                 .cards
                 .insert(slot.id.clone(), slot.card.clone());
         }
-        let active = slot.fold.active_run_id.is_some();
-        if !active || old_status != slot.card.status || finished {
+        if write_through {
             // The log is the source; a failed cache write keeps the row dirty and is retried.
-            if let Err(e) = self.persist(slot) {
+            if let Err(e) = self.write_cache(slot) {
                 slot.stale = true;
                 slot.cache_error = Some(e.to_string());
             }
@@ -1309,6 +1654,7 @@ impl Store {
         Ok(Appended {
             lines,
             card: slot.card.clone(),
+            fold: slot.fold.clone(),
         })
     }
 
@@ -1320,6 +1666,9 @@ impl Store {
         writer.write_all(bytes)?;
         slot.len += bytes.len() as u64;
         if sync && self.opts.fsync {
+            if self.faults().fail_log_syncs {
+                return Err(StoreError::Io(injected("log sync")));
+            }
             writer.sync_data()?;
             slot.synced_len = slot.len;
         } else if !self.opts.fsync {
@@ -1337,13 +1686,29 @@ impl Store {
             .values()
             .cloned()
             .collect();
+        let mut first_error = None;
         for slot in slots {
             let mut slot = lock(&slot);
-            if slot.stale && matches!(slot.health, Health::Ready) {
-                self.persist(&mut slot)?;
+            let result = match &slot.health {
+                Health::Ready if slot.stale => self.persist(&mut slot),
+                // A thread whose last write failed has an uncertain outcome: keep reporting it until
+                // the store is reopened and the tail is checked.
+                Health::Poisoned(detail) => Err(StoreError::Poisoned {
+                    thread: slot.id.to_string(),
+                    detail: detail.clone(),
+                }),
+                _ => Ok(()),
+            };
+            if let Err(e) = result
+                && first_error.is_none()
+            {
+                first_error = Some(e);
             }
         }
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Flush and release the store.
@@ -1357,8 +1722,25 @@ impl Store {
             return Ok(None);
         };
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Ok(None);
+        }
         self.ensure_ready(&mut slot)?;
         Ok(Some(slot.card.clone()))
+    }
+
+    /// The fold of one thread (queued / held inputs, active run, open requests), caught up like
+    /// `card`.
+    pub fn fold(&self, id: &ThreadId) -> Result<Option<Fold>> {
+        let Some(slot) = self.slot(id) else {
+            return Ok(None);
+        };
+        let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Ok(None);
+        }
+        self.ensure_ready(&mut slot)?;
+        Ok(Some(slot.fold.clone()))
     }
 
     /// Cards matching the filter, from memory (the card index), newest update first.
@@ -1434,6 +1816,14 @@ impl Store {
             });
         };
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Ok(ThreadRead {
+                reset: Some(ResetReason::ThreadMissing),
+                snapshot: None,
+                lines: Vec::new(),
+                cursor: None,
+            });
+        }
         self.ensure_ready(&mut slot)?;
         self.read_locked(&mut slot, after)
     }
@@ -1468,7 +1858,7 @@ impl Store {
 
     /// Lines with seq > `after` while within the replay limits. `None` when over the limits.
     fn lines_after(&self, slot: &mut Slot, after: u64) -> Result<Option<Vec<LogLine>>> {
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let mut out: Vec<LogLine> = Vec::new();
         let mut count = 0usize;
         let mut bytes = 0usize;
@@ -1513,7 +1903,7 @@ impl Store {
 
     /// The view for a reader with no usable cursor.
     fn initial_view(&self, slot: &mut Slot) -> Result<(Option<Snapshot>, Vec<LogLine>)> {
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let mut collected: Vec<LogLine> = Vec::new();
         let mut count = 0usize;
         let mut bytes = 0usize;
@@ -1619,7 +2009,7 @@ impl Store {
             .next()
             .map(|(_, offset)| *offset)
             .unwrap_or(slot.len);
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let mut out: Vec<LogLine> = Vec::new();
         let mut first_seq = None;
         let mut page_bytes = 0usize;
@@ -1666,7 +2056,10 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
-        let file = log::open_read(&slot.log_path())?;
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
+        let file = self.open_log_read(&slot.log_path())?;
         let len = file.metadata()?.len();
         let (_, header_end) = log::read_header(&file, len).map_err(|e| StoreError::CorruptLog {
             thread: slot.id.to_string(),
@@ -1690,6 +2083,9 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
         blob::write_blob(&slot.dir, name_hint, bytes, self.opts.fsync)
     }
 
@@ -1699,6 +2095,9 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
         blob::read_blob(&slot.dir, &blob.path)
     }
 
@@ -1712,6 +2111,14 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
+        let pause = lock(&self.delete_pause).clone();
+        if let Some(b) = &pause {
+            b[0].wait();
+            b[1].wait();
+        }
         lock(&self.shared).index.mark(id.as_str(), true, false)?;
         slot.durable_dirty = true;
         slot.writer = None;
@@ -1719,15 +2126,42 @@ impl Store {
             .threads_dir()
             .join(format!(".trash-{}-{}", id.as_str(), random_hex(8)));
         fs::rename(&slot.dir, &trash)?;
-        if self.opts.fsync {
-            sync_dir(&self.threads_dir())?;
+        // From here on, anyone who was waiting for this lock must not touch the path again, and the
+        // delete is a fact: the in-memory removal always completes. Durability errors after this
+        // point are reported at the end; the row is already marked dirty, so a start that finds it
+        // without a folder finishes the delete.
+        slot.health = Health::Deleted;
+        let mut first_error: Option<StoreError> = None;
+        let dir_sync = if self.faults().fail_delete_dir_sync {
+            Err(injected("delete dir sync"))
+        } else if self.opts.fsync {
+            sync_dir(&self.threads_dir())
+        } else {
+            Ok(())
+        };
+        if let Err(e) = dir_sync {
+            first_error = Some(e.into());
         }
         if stop_after_rename {
-            return Ok(());
+            return first_error.map_or(Ok(()), Err);
         }
         {
             let mut shared = lock(&self.shared);
-            shared.index.delete(id.as_str())?;
+            // Remove the row only once the rename is durable. If the directory sync failed, a power
+            // loss could undo the rename; the dirty row then lets the next start find the folder
+            // again instead of hiding it behind a complete index.
+            let removed = if first_error.is_some() {
+                Ok(())
+            } else if self.faults().fail_delete_index {
+                Err(StoreError::Io(injected("delete index row")))
+            } else {
+                shared.index.delete(id.as_str())
+            };
+            if let Err(e) = removed
+                && first_error.is_none()
+            {
+                first_error = Some(e);
+            }
             shared.cards.remove(id);
             let seq = shared.next_card_seq;
             shared.next_card_seq += 1;
@@ -1738,13 +2172,21 @@ impl Store {
             };
             shared.subs.retain(|tx| tx.try_send(update.clone()).is_ok());
         }
-        drop(slot);
         self.slots
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .remove(id);
-        let _ = fs::remove_dir_all(&trash);
-        Ok(())
+        if let Some(b) = &pause {
+            b[2].wait();
+            b[3].wait();
+        }
+        drop(slot);
+        // Remove the contents only once the rename is durable; a power loss that undid an
+        // unsynced rename must find the folder whole.
+        if first_error.is_none() {
+            let _ = fs::remove_dir_all(&trash);
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// The card index epoch (new for every `open`).
@@ -1774,6 +2216,26 @@ impl Drop for Store {
 /// Fault hooks for crash tests and benchmarks. Not part of the API.
 pub mod testing {
     use super::*;
+
+    /// Make every `create_thread` wait on `reached` and then `release` right before it announces
+    /// the new card (`None` turns the pause off).
+    pub fn pause_creates_before_announce(
+        store: &Store,
+        barriers: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    ) {
+        *lock(&store.create_pause) = barriers;
+    }
+
+    /// Make `delete_thread` wait on the four barriers (see `Store::delete_pause`); `None` turns
+    /// the pause off.
+    pub fn pause_deletes(store: &Store, barriers: Option<[Arc<std::sync::Barrier>; 4]>) {
+        *lock(&store.delete_pause) = barriers;
+    }
+
+    /// Change the injected faults of a running store.
+    pub fn set_faults(store: &Store, faults: Faults) {
+        *lock(&store.faults) = faults;
+    }
 
     /// Drop the store without flushing batched card writes, as a crash would.
     pub fn crash(store: Store) {

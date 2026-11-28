@@ -20,8 +20,9 @@ mod store;
 
 pub use error::{Result, StoreError};
 pub use store::{
-    Appended, CardFilter, CardUpdate, CardsRead, IndexOutcome, Page, Problem, Repaired, Settled,
-    Snapshot, StartupReport, StartupTimings, Store, StoreOptions, ThreadRead, ThreadUpdate,
+    Appended, CardFilter, CardUpdate, CardsRead, Faults, IndexOutcome, Page, Problem, Repaired,
+    Settled, Snapshot, StartupReport, StartupTimings, Store, StoreOptions, ThreadRead,
+    ThreadUpdate,
 };
 
 #[doc(hidden)]
