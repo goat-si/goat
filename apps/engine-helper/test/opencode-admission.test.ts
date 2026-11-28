@@ -138,6 +138,34 @@ test("a steer observed before its reply remains unknown after an early turn fail
   } finally { await session.shutdown(); }
 });
 
+test("a late steer success during descendant cleanup remains unknown after failure", async () => {
+  fake.reset(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); fake.setChildren(session.engineRef, ["child-1"]);
+  const child = fake.holdAbort("child-1");
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const gate = fake.holdPrompt(true);
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "late-steer", text: "unread-steer", attachments: [] }]); await gate.reached;
+      const stopping = session.interrupt(turn.turnId); await child.reached;
+      await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      gate.release(); assert.equal((await steering).status, "unknown");
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      child.release(); await stopping;
+      await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "idle" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(events.filter((event) => event.type === "steer_updated").length, 0);
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
+      const count = events.length; await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(events.length, count);
+    } finally { gate.release(); }
+  } finally { child.release(); await session.shutdown(); }
+});
+
 test("a terminal provider failure invalidates a stalled steer submission", async () => {
   fake.reset(); const events: EngineEvent[] = [];
   const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

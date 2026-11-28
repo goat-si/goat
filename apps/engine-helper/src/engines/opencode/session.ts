@@ -476,7 +476,7 @@ export class OpenCodeSession implements EngineSession {
     turn.steers.set(id, receipt); this.ownedMessages.add(id);
     try {
       await this.submit(turn, inputs, false);
-      if (this.closed || this.active !== turn) return { status: "unknown" as const, reason: "OpenCode session ended during steering" };
+      if (this.closed || this.active !== turn || turn.steers.get(id) !== receipt) return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" };
       receipt.accepted = true;
       setImmediate(() => { void (async () => {
         if (this.active === turn && turn.admission.id === id && turn.admission.idle) await this.admission(turn, "idle");
