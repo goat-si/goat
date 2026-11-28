@@ -350,3 +350,13 @@ fn group_alive(pgid: i32) -> bool {
         })
         .unwrap_or(false)
 }
+
+#[tokio::test]
+async fn probe_answers_from_a_short_lived_helper() {
+    let factory = HelperFactory::fake(EngineDriver::Cursor, launch());
+    let probe = factory.probe().await.expect("probe");
+    assert!(probe.installed);
+    assert_eq!(probe.version.as_deref(), Some("0.0.0-fake"));
+    assert_eq!(probe.models.len(), 1);
+    assert!(factory.capabilities().turns.supports_active_steering);
+}

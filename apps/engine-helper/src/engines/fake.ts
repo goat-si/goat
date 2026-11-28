@@ -167,6 +167,16 @@ class FakeSession implements EngineSession {
 }
 
 export const fakeEngine: EngineModule = {
+  async probe(_params, host) {
+    return {
+      installed: true,
+      version: "0.0.0-fake",
+      status: "ready",
+      auth: { status: "authenticated" },
+      models: [{ slug: "fake-model", name: "Fake", isCustom: false, capabilities: null }],
+      checkedAt: host.now(),
+    };
+  },
   async start(params: InitializeParams, host: EngineHost): Promise<EngineSession> {
     if (params.launch?.env?.["GOAT2_FAKE_START_FAIL"] === "1") {
       throw new HelperError("start_failed", "fake start failure");
