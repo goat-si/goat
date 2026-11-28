@@ -1,0 +1,47 @@
+// Fake goat2-host for hostSupervisor tests. Behaviour comes from env:
+//   GOAT2_HOST_PORT   port for GET /health (and the start line)
+//   FAKE_HOST_PIDS    file the host appends "<role> <pid>" lines to
+//   FAKE_HOST_MODE    comma list: crash-after-ready, exit-clean-after-ready, exit-now, exit-clean,
+//                     ignore-term, grandchild
+//   FAKE_HOST_ANNOUNCE_DELAY_MS  print the start line this late (slow host start)
+//   FAKE_HOST_HEALTH_STATUS      status /health answers with (default 200)
+//   FAKE_HOST_HEALTH_DELAY_MS    /health answers 503 until this long after start
+//   FAKE_HOST_HEALTH_UNTIL_MS    /health answers 200 only until this long after start, then 503
+//   mode health-redirect         /health answers 302 to /ok, which answers 200
+//   mode no-announce             never print the start line
+import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+import { createServer } from "node:http";
+
+const modes = new Set((process.env.FAKE_HOST_MODE ?? "").split(",").filter(Boolean));
+const port = Number(process.env.GOAT2_HOST_PORT);
+const record = (role, pid) => {
+  if (process.env.FAKE_HOST_PIDS) appendFileSync(process.env.FAKE_HOST_PIDS, `${role} ${pid}\n`);
+};
+record("host", process.pid);
+if (modes.has("exit-now")) process.exit(3);
+if (modes.has("exit-clean")) process.exit(0);
+if (modes.has("ignore-term")) process.on("SIGTERM", () => {});
+if (modes.has("grandchild")) {
+  // Stands in for a codex app-server the host started: same group, ignores SIGTERM.
+  const agent = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  record("agent", agent.pid);
+}
+const startedAt = Date.now();
+const healthStatus = Number(process.env.FAKE_HOST_HEALTH_STATUS ?? 200);
+const healthDelay = Number(process.env.FAKE_HOST_HEALTH_DELAY_MS ?? 0);
+const healthUntil = Number(process.env.FAKE_HOST_HEALTH_UNTIL_MS ?? Infinity);
+const server = createServer((req, res) => {
+  if (req.url === "/ok") return void res.writeHead(200).end();
+  if (req.url !== "/health") return void res.writeHead(404).end();
+  if (modes.has("health-redirect")) return void res.writeHead(302, { location: "/ok" }).end();
+  const age = Date.now() - startedAt;
+  res.writeHead(age < healthDelay || age >= healthUntil ? 503 : healthStatus).end();
+});
+server.listen(port, "127.0.0.1", () => {
+  console.log("booting");
+  const announce = () => console.log(JSON.stringify({ wsUrl: `ws://127.0.0.1:${port}/ws`, mcpUrl: null, port, generation: 1 }));
+  if (!modes.has("no-announce")) setTimeout(announce, Number(process.env.FAKE_HOST_ANNOUNCE_DELAY_MS ?? 0));
+  if (modes.has("crash-after-ready")) setTimeout(() => process.exit(1), 300);
+  if (modes.has("exit-clean-after-ready")) setTimeout(() => process.exit(0), 300);
+});

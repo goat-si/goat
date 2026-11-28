@@ -218,25 +218,6 @@ importers:
         specifier: 'catalog:'
         version: 5.9.3
 
-  apps/server:
-    dependencies:
-      '@goat2/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@goat2/runtime-stamp':
-        specifier: workspace:*
-        version: link:../../packages/runtime-stamp
-      effect:
-        specifier: 'catalog:'
-        version: 4.1.3
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 24.12.4
-      typescript:
-        specifier: 'catalog:'
-        version: 5.9.3
-
   apps/web:
     dependencies:
       '@goat2/contracts':

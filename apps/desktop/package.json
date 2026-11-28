@@ -3,7 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "src/main.ts",
-  "scripts": { "dev": "electron .", "typecheck": "tsc -p tsconfig.json" },
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json && electron .",
+    "test": "node --test src/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
   "devDependencies": { "@types/node": "catalog:", "electron": "catalog:", "typescript": "catalog:" }
 }
