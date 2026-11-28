@@ -13,8 +13,6 @@ use goat2_engine_api::{
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
-const TASK: &str = "11111111-2222-3333-4444-555555555555";
-
 struct Session {
     handle: EngineHandle,
     settings: TurnSettings,
@@ -759,7 +757,6 @@ async fn skill_mentions_become_slash_commands() {
         .map(|m| m["params"]["prompt"][0]["text"].as_str().unwrap())
         .collect();
     assert_eq!(sent, ["/deploy ship it", "$hidden now", "$25 please"]);
-    let _ = TASK;
 }
 /// v1 xAI cancel (xaiAcpExtension.ts:1553-1560, abortPendingPromptCompletions :1323-1357): Stop
 /// settles a prompt Grok never answers as cancelled at once, instead of waiting out the 15 s
@@ -859,5 +856,30 @@ async fn effort_change_on_the_same_model_is_written() {
     assert_eq!(
         writes[1]["params"]["_meta"],
         json!({"reasoningEffort": "low"})
+    );
+}
+
+/// Round 7 part 4.2 (v1 xaiAcpExtension.ts:1381-1390): a prompt completion settles only a prompt
+/// of its own session. A completion for another session is ignored; the turn ends with its own.
+#[tokio::test]
+async fn a_prompt_completion_for_another_session_does_not_settle_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("script.jsonl");
+    let steps = [
+        json!({"notify": "_x.ai/session/prompt_complete",
+            "params": {"sessionId": "another-session", "stopReason": "end_turn"}}),
+        json!({"notify": "_x.ai/session/prompt_complete",
+            "params": {"sessionId": "$SESSION", "stopReason": "rate_limit"}}),
+        json!({"hang": true}),
+    ];
+    let lines: Vec<String> = steps.iter().map(Value::to_string).collect();
+    std::fs::write(&script, lines.join("\n")).unwrap();
+    let (_, outcome) =
+        grok_turn_events(&[("GOAT_ACP_SCRIPT", script.to_str().unwrap())], |_| None).await;
+    assert_eq!(
+        outcome,
+        TurnOutcome::Failed {
+            reason: "Grok usage limit reached. Try again later.".into()
+        }
     );
 }

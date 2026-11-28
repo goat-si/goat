@@ -267,7 +267,8 @@ pub enum BackgroundStatus {
 pub struct BackgroundMutation {
     pub task_id: String,
     pub status: BackgroundStatus,
-    pub append_output: String,
+    /// Shared: one injected message can end several tasks with the same text (round 7 part 4.1).
+    pub append_output: std::sync::Arc<str>,
 }
 
 /// What the driver knows about the session when a flavor rewrites a prompt (v1 `rewriteUserText`
@@ -293,8 +294,10 @@ pub enum FlavorEvent {
     AuthUrl(String),
     /// The agent finished the prompt by extension (xAI `_x.ai/session/prompt_complete`): settle the
     /// turn as if `session/prompt` answered with `stop_reason`. A `prompt_id` that is not the
-    /// turn's latest prompt is stale and ignored.
+    /// turn's latest prompt is stale and ignored, as is one for another session (v1
+    /// xaiAcpExtension.ts:1381-1390 matches `entry.sessionId === notification.sessionId`).
     PromptComplete {
+        session_id: String,
         prompt_id: Option<String>,
         stop_reason: String,
     },
@@ -302,6 +305,7 @@ pub enum FlavorEvent {
     /// `error`, v1 `xaiAcpExtension.ts:1283-1301`): fail the turn with `message`. Stale prompt ids
     /// are ignored as for [Self::PromptComplete].
     PromptFailed {
+        session_id: String,
         prompt_id: Option<String>,
         message: String,
     },

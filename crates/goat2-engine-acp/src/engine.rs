@@ -405,9 +405,16 @@ impl Shared {
             }
             FlavorEvent::AuthUrl(url) => self.auth_required(Some(url), None),
             FlavorEvent::PromptComplete {
+                session_id,
                 prompt_id,
                 stop_reason,
             } => {
+                // v1 xaiAcpExtension.ts:1381-1390: only a pending prompt of this session settles
+                // (round 7 part 4.2). One session has at most one prompt pending here, which is
+                // v1's "exactly one pending" rule for a notification without a prompt id.
+                if self.session_id.get() != Some(&session_id) {
+                    return;
+                }
                 let current = self
                     .state
                     .lock()
@@ -421,7 +428,14 @@ impl Shared {
                     self.settle(&turn_id, seq, Ok(json!({ "stopReason": stop_reason })));
                 }
             }
-            FlavorEvent::PromptFailed { prompt_id, message } => {
+            FlavorEvent::PromptFailed {
+                session_id,
+                prompt_id,
+                message,
+            } => {
+                if self.session_id.get() != Some(&session_id) {
+                    return;
+                }
                 let current = self
                     .state
                     .lock()

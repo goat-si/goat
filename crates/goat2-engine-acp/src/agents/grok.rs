@@ -135,21 +135,26 @@ fn normalize_stop_reason(reason: Option<&str>) -> &'static str {
 /// v1 `resolveXAiPromptCompletionFallback` with `xAiPromptFailure` (xaiAcpExtension.ts:1281-1301)
 /// and the adapter's `promptFailure` message choice (adapter.ts:433-446).
 fn prompt_completion(
+    session_id: &str,
     prompt_id: Option<String>,
     stop_reason: Option<&str>,
     agent_result: Option<&Value>,
 ) -> FlavorEvent {
+    let session_id = session_id.to_owned();
     match stop_reason {
         Some("rate_limit") => FlavorEvent::PromptFailed {
+            session_id,
             prompt_id,
             message: "Grok usage limit reached. Try again later.".into(),
         },
         Some("error") => FlavorEvent::PromptFailed {
+            session_id,
             prompt_id,
             message: grok_tools::non_empty(agent_result)
                 .unwrap_or_else(|| "Grok ended the turn with an error.".into()),
         },
         other => FlavorEvent::PromptComplete {
+            session_id,
             prompt_id,
             stop_reason: normalize_stop_reason(other).into(),
         },
@@ -199,9 +204,17 @@ impl AcpFlavor for Grok {
     }
     /// v1 `applyStoredGrokApiKey(sessionEnvironment, stored)` (adapter.ts:400-416, auth.ts:57-64)
     /// on the merged environment: a launch override that leaves `XAI_API_KEY` blank is filled
-    /// from the stored key (final review 6 finding B2).
+    /// from the stored key (final review 6 finding B2). The OAuth referrer is written last, as v1
+    /// writes it after spreading the environment (acpSupport.ts:155-159, round 7 part 4.4).
     fn finish_launch(&self, command: &mut LaunchCommand) {
         grok_auth::apply_to_merged(command, self.stored_api_key.as_ref());
+        command
+            .env
+            .retain(|(name, _)| name != GROK_OAUTH2_REFERRER_ENV);
+        command.env.push((
+            GROK_OAUTH2_REFERRER_ENV.to_owned(),
+            GOAT_OAUTH_REFERRER.to_owned(),
+        ));
     }
     fn auth_policy(&self) -> AuthPolicy {
         AuthPolicy::OnRequired {
@@ -370,8 +383,10 @@ impl AcpFlavor for Grok {
             let mut events = Vec::new();
             if let Some((prompt_id, stop_reason, agent_result)) =
                 grok_notifications::prompt_complete_from_session_update(p)
+                && let Some(session_id) = p.get("sessionId").and_then(Value::as_str)
             {
                 events.push(prompt_completion(
+                    session_id,
                     Some(prompt_id),
                     stop_reason.as_deref(),
                     agent_result.as_ref(),
@@ -381,12 +396,18 @@ impl AcpFlavor for Grok {
             return events;
         }
         if method == "x.ai/session/prompt_complete" || method == "_x.ai/session/prompt_complete" {
-            // v1 `XAiPromptCompleteNotification` requires `sessionId`.
-            if p.get("sessionId").and_then(Value::as_str).is_none() {
+            // v1 `XAiPromptCompleteNotification` (xaiAcpExtension.ts:19-24) requires a string
+            // `sessionId`, and a `promptId` that is present must be a string: anything else fails
+            // the decode and the notification is dropped (round 7 part 4.2).
+            let Some(session_id) = p.get("sessionId").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            if p.get("promptId").is_some_and(|id| !id.is_string()) {
                 return Vec::new();
             }
             let prompt_id = p.get("promptId").and_then(Value::as_str).map(str::to_owned);
             return vec![prompt_completion(
+                session_id,
                 prompt_id,
                 p.get("stopReason").and_then(Value::as_str),
                 p.get("agentResult"),
@@ -424,12 +445,52 @@ mod tests {
         );
         assert_eq!(
             g.ext_notification(method, &json!({"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"cancelled"}})),
-            vec![FlavorEvent::PromptComplete { prompt_id: Some("p1".into()), stop_reason: "cancelled".into() }]
+            vec![FlavorEvent::PromptComplete { session_id: "s".into(), prompt_id: Some("p1".into()), stop_reason: "cancelled".into() }]
         );
         assert_eq!(
             g.ext_notification(method, &json!({"sessionId":"s","update":{"sessionUpdate":"turn_completed","promptId":"p2","stopReason":"error","agent_result":"oops"}})),
-            vec![FlavorEvent::PromptFailed { prompt_id: Some("p2".into()), message: "oops".into() }]
+            vec![FlavorEvent::PromptFailed { session_id: "s".into(), prompt_id: Some("p2".into()), message: "oops".into() }]
         );
+    }
+
+    /// v1 xaiAcpExtension.ts:19-24, 1381-1390: a prompt completion names its session, and one
+    /// whose promptId is not a string fails the decode (round 7 part 4.2).
+    #[test]
+    fn prompt_completions_carry_their_session_and_need_a_string_prompt_id() {
+        let g = Grok::default();
+        let method = "_x.ai/session/prompt_complete";
+        assert!(
+            g.ext_notification(method, &json!({"sessionId": "s", "promptId": 7}))
+                .is_empty()
+        );
+        assert!(
+            g.ext_notification(method, &json!({"sessionId": "s", "promptId": null}))
+                .is_empty()
+        );
+        assert_eq!(
+            g.ext_notification(method, &json!({"sessionId": "other"})),
+            vec![FlavorEvent::PromptComplete {
+                session_id: "other".into(),
+                prompt_id: None,
+                stop_reason: "end_turn".into()
+            }]
+        );
+    }
+
+    /// v1 acpSupport.ts:155-159 writes the referrer after spreading the session environment, so a
+    /// launch override cannot replace it (round 7 part 4.4).
+    #[test]
+    fn the_oauth_referrer_survives_a_launch_override() {
+        let mut command = LaunchCommand::new("grok", Vec::<String>::new())
+            .env(GROK_OAUTH2_REFERRER_ENV, "https://elsewhere.example");
+        Grok::default().finish_launch(&mut command);
+        let referrers: Vec<&String> = command
+            .env
+            .iter()
+            .filter(|(name, _)| name == GROK_OAUTH2_REFERRER_ENV)
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(referrers, vec![GOAT_OAUTH_REFERRER]);
     }
 
     #[test]
@@ -476,31 +537,36 @@ mod tests {
             stored_api_key: Some(std::sync::Arc::new(|| Some(" stored ".into()))),
             ..Default::default()
         };
-        if std::env::var(grok_auth::GROK_API_KEY_ENV).is_err() {
-            let command = g.launch(&spec).unwrap();
-            assert_eq!(command.program, PathBuf::from("/opt/grok"));
-            assert_eq!(
-                command.args,
-                ["--permission-mode", "default", "agent", "stdio"]
-            );
-            assert!(
-                command
-                    .env
-                    .contains(&("XAI_API_KEY".into(), "stored".into()))
-            );
-            assert_eq!(
-                g.auth_policy_for(&spec),
-                AuthPolicy::OnRequired {
-                    method_id: Some("xai.api_key".into())
-                }
-            );
-            assert_eq!(
-                Grok::default().auth_policy_for(&spec),
-                AuthPolicy::OnRequired {
-                    method_id: Some("cached_token".into())
-                }
-            );
-        }
+        // A blank launch override is empty whatever the host's own XAI_API_KEY holds (round 7
+        // part 4.5: the test no longer depends on the host environment).
+        spec.launch = Some(LaunchSpec {
+            binary: None,
+            args: vec![],
+            env: [("XAI_API_KEY".to_string(), String::new())].into(),
+        });
+        let command = g.launch(&spec).unwrap();
+        assert_eq!(command.program, PathBuf::from("/opt/grok"));
+        assert_eq!(
+            command.args,
+            ["--permission-mode", "default", "agent", "stdio"]
+        );
+        assert!(
+            command
+                .env
+                .contains(&("XAI_API_KEY".into(), "stored".into()))
+        );
+        assert_eq!(
+            g.auth_policy_for(&spec),
+            AuthPolicy::OnRequired {
+                method_id: Some("xai.api_key".into())
+            }
+        );
+        assert_eq!(
+            Grok::default().auth_policy_for(&spec),
+            AuthPolicy::OnRequired {
+                method_id: Some("cached_token".into())
+            }
+        );
         spec.launch = Some(LaunchSpec {
             binary: None,
             args: vec![],

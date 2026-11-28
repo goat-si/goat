@@ -223,11 +223,16 @@ pub fn xai_request_action(method: &str, params: &Value) -> Option<ExtRequest> {
         return None;
     }
     let inner = unwrap(params);
-    let tool_call_id = inner
-        .get("toolCallId")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_owned();
+    // v1's schema (xaiAcpExtension.ts:875-880) requires `sessionId` and `toolCallId`; a request
+    // without them is answered as cancelled, and the native id names the session too (v1
+    // grok adapter.ts:214 `${sessionId}:xai-question:${toolCallId}`, round 7 part 4.3).
+    let (Some(session_id), Some(tool_call_id)) = (
+        inner.get("sessionId").and_then(Value::as_str),
+        inner.get("toolCallId").and_then(Value::as_str),
+    ) else {
+        return Some(ExtRequest::Respond(ask_user_cancelled()));
+    };
+    let native_id = format!("{session_id}:xai-question:{tool_call_id}");
     let questions = ask_user_questions(params);
     let summary = questions
         .first()
@@ -236,7 +241,7 @@ pub fn xai_request_action(method: &str, params: &Value) -> Option<ExtRequest> {
         .unwrap_or_else(|| "Grok has a question".into());
     let params = params.clone();
     Some(ExtRequest::AskUser {
-        native_id: tool_call_id,
+        native_id,
         summary,
         questions,
         answer: Box::new(move |answers| match answers {
@@ -299,5 +304,23 @@ mod tests {
         assert_eq!(exit_plan_markdown(&json!({"planContent": null})), None);
         assert_eq!(exit_plan_markdown(&json!({"planContent": "  "})), None);
         assert_eq!(exit_plan_captured_response()["outcome"], "abandoned");
+    }
+
+    /// v1 xaiAcpExtension.ts:875-880 and grok adapter.ts:214: a question without its tool call id
+    /// is cancelled, and the native id names the session (round 7 part 4.3).
+    #[test]
+    fn questions_need_their_identity() {
+        let mut missing = ask();
+        missing.as_object_mut().unwrap().remove("toolCallId");
+        match xai_request_action("x.ai/ask_user_question", &missing) {
+            Some(ExtRequest::Respond(response)) => assert_eq!(response, ask_user_cancelled()),
+            _ => panic!("a question without toolCallId is answered as cancelled"),
+        }
+        match xai_request_action("x.ai/ask_user_question", &ask()) {
+            Some(ExtRequest::AskUser { native_id, .. }) => {
+                assert_eq!(native_id, "s:xai-question:tc1")
+            }
+            _ => panic!("a question is asked"),
+        }
     }
 }

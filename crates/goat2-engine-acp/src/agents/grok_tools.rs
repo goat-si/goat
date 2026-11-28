@@ -10,7 +10,7 @@
 //! `data.rawOutput`, `data.content`, `data.meta`); GOAT 2 reads the same fields from
 //! [ToolState]. v1 spells the running status `inProgress`; GOAT 2 keeps ACP's `in_progress`.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -498,7 +498,9 @@ pub fn background_task_completion(tool: &ToolState) -> Vec<BackgroundMutation> {
     }
     let text = tool_output_text(tool);
     let status = status_from_get_output(tool, text.as_deref());
-    let append_output = result_from_get_output(tool, text.as_deref()).unwrap_or_default();
+    let append_output: Arc<str> = result_from_get_output(tool, text.as_deref())
+        .unwrap_or_default()
+        .into();
     // Prefer the completed identity from the result/header over the request list.
     if let Some(task_id) =
         structured_task_id(tool).or_else(|| result_task_id(tool, text.as_deref()))
@@ -572,7 +574,7 @@ pub fn killed_background_tasks(tool: &ToolState) -> Vec<BackgroundMutation> {
         .map(|task_id| BackgroundMutation {
             task_id,
             status: BackgroundStatus::Completed,
-            append_output: String::new(),
+            append_output: "".into(),
         })
         .collect()
 }
@@ -733,37 +735,71 @@ pub fn normalize_tool_call_state(tool: &mut ToolState) {
     }
 }
 
+/// Ended monitors one injected message may report (round 7 part 4.1; v1 has no bound).
+const MAX_ENDED_PER_MESSAGE: usize = 64;
+
 /// v1 `extractXAiAcpBackgroundToolMutation` (xaiAcpExtension.ts:602-657): monitor output Grok
-/// injects as user text.
+/// injects as user text. Unlike v1 (:635-655, which copies the message per match), the cleaned
+/// message is built once and shared, a task gets one running mutation with all its lines in
+/// order and at most one ended mutation, and at most [MAX_ENDED_PER_MESSAGE] tasks end per
+/// message, so the work stays linear in the message (round 7 part 4.1).
 pub fn background_tool_mutations(text: &str) -> Vec<BackgroundMutation> {
-    let mut mutations = Vec::new();
+    let mut running: Vec<(String, String)> = Vec::new();
+    let mut running_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for pattern in [&*MONITOR_EVENT, &*MONITOR_BATCH] {
         for captures in pattern.captures_iter(text) {
             let Some(task_id) = captures.get(1) else {
                 continue;
             };
             let lines = captures.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-            mutations.push(BackgroundMutation {
-                task_id: task_id.as_str().to_owned(),
-                status: BackgroundStatus::Running,
-                append_output: if lines.is_empty() {
-                    String::new()
-                } else {
-                    format!("{lines}\n")
-                },
-            });
+            let index = *running_index
+                .entry(task_id.as_str().to_owned())
+                .or_insert_with(|| {
+                    running.push((task_id.as_str().to_owned(), String::new()));
+                    running.len() - 1
+                });
+            if !lines.is_empty() {
+                running[index].1.push_str(lines);
+                running[index].1.push('\n');
+            }
         }
     }
+    let mut mutations: Vec<BackgroundMutation> = running
+        .into_iter()
+        .map(|(task_id, output)| BackgroundMutation {
+            task_id,
+            status: BackgroundStatus::Running,
+            append_output: output.into(),
+        })
+        .collect();
+    let mut ended = std::collections::HashSet::new();
+    let mut summary: Option<Arc<str>> = None;
     for captures in MONITOR_ENDED.captures_iter(text) {
+        if ended.len() >= MAX_ENDED_PER_MESSAGE {
+            break;
+        }
         let whole = captures.get(0).expect("match");
         let Some(task_id) = captures.get(1) else {
             continue;
         };
+        if !ended.insert(task_id.as_str()) {
+            continue;
+        }
         // Only the monitor header describes the outcome.
         let tail = text[whole.end()..].split('\n').next().unwrap_or("");
         let outcome = format!("{}{tail}", whole.as_str().trim());
-        let summary = SYSTEM_REMINDER.replace_all(text, "");
-        let summary = summary.trim();
+        let summary = summary
+            .get_or_insert_with(|| {
+                let cleaned = SYSTEM_REMINDER.replace_all(text, "");
+                let cleaned = cleaned.trim();
+                if cleaned.is_empty() {
+                    "Monitor ended.\n".into()
+                } else {
+                    format!("{cleaned}\n").into()
+                }
+            })
+            .clone();
         let status = if EXITED_CODE_ZERO.is_match(&outcome) || ENDED_CLEANLY.is_match(&outcome) {
             BackgroundStatus::Completed
         } else if FAILURE_WORDS.is_match(&outcome) {
@@ -774,11 +810,7 @@ pub fn background_tool_mutations(text: &str) -> Vec<BackgroundMutation> {
         mutations.push(BackgroundMutation {
             task_id: task_id.as_str().to_owned(),
             status,
-            append_output: if summary.is_empty() {
-                "Monitor ended.\n".into()
-            } else {
-                format!("{summary}\n")
-            },
+            append_output: summary,
         });
     }
     mutations
@@ -1020,6 +1052,33 @@ mod tests {
         );
         assert!(killed_background_tasks(&kill("completed", "not_found")).is_empty());
         assert!(killed_background_tasks(&kill("failed", "killed")).is_empty());
+    }
+
+    /// Round 7 part 4.1: v1 xaiAcpExtension.ts:635-655 copies the whole message into every ended
+    /// match (V8 ropes hide it); here k repeated end lines in an n-byte message gave k*n bytes.
+    /// One ended mutation per task, at most [MAX_ENDED_PER_MESSAGE], all sharing one summary.
+    /// 2,000 lines keep the unfixed run small (~180 MB); 16,000 lines asked 13 GB.
+    #[test]
+    fn repeated_monitor_ends_stay_bounded() {
+        let text = format!("Monitor {B} ended (exited (code 0))\n").repeat(2_000);
+        let mutations = background_tool_mutations(&text);
+        let ended: Vec<_> = mutations
+            .iter()
+            .filter(|m| m.status != BackgroundStatus::Running)
+            .collect();
+        assert_eq!(ended.len(), 1, "one ended mutation per task");
+        assert!(ended[0].append_output.len() <= text.len() + 1);
+        let distinct: String = (0..200)
+            .map(|i| format!("Monitor {i:08x}-0000-4000-8000-{i:012x} ended (exited (code 0))\n"))
+            .collect();
+        let ended = background_tool_mutations(&distinct);
+        assert_eq!(ended.len(), 64, "ended mutations per message are capped");
+        assert!(
+            ended
+                .windows(2)
+                .all(|w| Arc::ptr_eq(&w[0].append_output, &w[1].append_output)),
+            "the ended mutations share one summary"
+        );
     }
 
     #[test]

@@ -80,6 +80,7 @@ mod tests {
                 &json!({"sessionId":"s","promptId":"p1","stopReason":"cancelled"})
             ),
             vec![FlavorEvent::PromptComplete {
+                session_id: "s".into(),
                 prompt_id: Some("p1".into()),
                 stop_reason: "cancelled".into()
             }]
