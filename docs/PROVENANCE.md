@@ -146,3 +146,10 @@ attachments, virtualized lists, thread menus, pinning, PR/machine metadata (mach
 
 Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.ts is plain LF JSONL request/response plus events over stdio; a Node hop would add a process and a failure point with no SDK to host.
 
+## P2-S cursor
+
+| GOAT 2 path | v1 path at 916b5ccc1b2 | How |
+|---|---|---|
+| apps/engine-helper/src/engines/cursor/rejections.ts | packages/provider-cursor/src/server/CursorSdk.ts:15-44 | adapted: exported the same narrow SDK unhandled-rejection classifier; registration remains for the Cursor engine to do when it loads |
+| apps/engine-helper/test/cursor.test.ts | packages/provider-cursor/src/server/CursorSdk.ts:15-44 | new: exercise the classifier and helper registry without a Cursor SDK or network |
+
