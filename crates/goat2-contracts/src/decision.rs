@@ -163,7 +163,9 @@ pub struct DecisionAnswerInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub decision: Option<DecisionApprovalAnswer>,
-    /// v1 `UserInputResponseReason`: 1 to 2000 characters, not blank.
+    /// v1 `UserInputResponseReason`: 1 to 2000 UTF-16 code units (JavaScript `length`), not
+    /// blank. Serde enforces the UTF-16 limit; the schema's `maxLength` counts code points, the
+    /// closest bound JSON Schema can express, so it also passes up to 2000 characters outside the BMP.
     #[serde(deserialize_with = "decision_reason")]
     #[schemars(length(min = 1, max = 2000), regex(pattern = r"\S"))]
     pub reason: String,
@@ -174,14 +176,15 @@ pub struct DecisionAnswerInput {
 #[serde(rename_all = "camelCase")]
 pub struct DecisionEscalateInput {
     pub id: String,
-    /// 1 to 2000 characters, not blank.
+    /// 1 to 2000 UTF-16 code units, not blank (as `DecisionAnswerInput.reason`).
     #[serde(deserialize_with = "decision_reason")]
     #[schemars(length(min = 1, max = 2000), regex(pattern = r"\S"))]
     pub reason: String,
 }
 
 const DECISION_OPTIONS_MAX: usize = 20;
-const DECISION_REASON_MAX_CHARS: usize = 2000;
+/// v1 `maxLength(2000)` on a JavaScript string: UTF-16 code units.
+pub const DECISION_REASON_MAX_UTF16: usize = 2000;
 
 fn decision_options<'de, D>(deserializer: D) -> Result<Vec<DecisionOption>, D::Error>
 where
@@ -202,16 +205,15 @@ where
     D: serde::Deserializer<'de>,
 {
     let reason = String::deserialize(deserializer)?;
-    // Length in code points, as JSON Schema `maxLength` counts (v1 counted UTF-16 units, which differs
-    // only for characters outside the BMP). Blank means only ECMAScript whitespace, the set the schema's
-    // `\S` pattern uses.
-    let chars = reason.chars().count();
-    if chars == 0
-        || chars > DECISION_REASON_MAX_CHARS
+    // Length in UTF-16 code units, as v1 counts it (JavaScript `length`). Blank means only
+    // ECMAScript whitespace, the set the schema's `\S` pattern uses.
+    let units = reason.encode_utf16().count();
+    if units == 0
+        || units > DECISION_REASON_MAX_UTF16
         || reason.chars().all(is_ecmascript_whitespace)
     {
         return Err(serde::de::Error::custom(format!(
-            "reason must be 1 to {DECISION_REASON_MAX_CHARS} characters and not blank"
+            "reason must be 1 to {DECISION_REASON_MAX_UTF16} UTF-16 code units and not blank"
         )));
     }
     Ok(reason)

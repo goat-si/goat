@@ -8,6 +8,8 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  */
 export type DecisionAnswerInput = { id: string, optionId?: string, answers?: { [key in string]: JsonValue }, decision?: DecisionApprovalAnswer, 
 /**
- * v1 `UserInputResponseReason`: 1 to 2000 characters, not blank.
+ * v1 `UserInputResponseReason`: 1 to 2000 UTF-16 code units (JavaScript `length`), not
+ * blank. Serde enforces the UTF-16 limit; the schema's `maxLength` counts code points, the
+ * closest bound JSON Schema can express, so it also passes up to 2000 characters outside the BMP.
  */
 reason: string, };

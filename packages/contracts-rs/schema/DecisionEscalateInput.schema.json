@@ -6,7 +6,7 @@
       "type": "string"
     },
     "reason": {
-      "description": "1 to 2000 characters, not blank.",
+      "description": "1 to 2000 UTF-16 code units, not blank (as `DecisionAnswerInput.reason`).",
       "maxLength": 2000,
       "minLength": 1,
       "pattern": "\\S",

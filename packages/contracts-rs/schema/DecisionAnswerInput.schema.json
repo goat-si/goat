@@ -39,7 +39,7 @@
       ]
     },
     "reason": {
-      "description": "v1 `UserInputResponseReason`: 1 to 2000 characters, not blank.",
+      "description": "v1 `UserInputResponseReason`: 1 to 2000 UTF-16 code units (JavaScript `length`), not\nblank. Serde enforces the UTF-16 limit; the schema's `maxLength` counts code points, the\nclosest bound JSON Schema can express, so it also passes up to 2000 characters outside the BMP.",
       "maxLength": 2000,
       "minLength": 1,
       "pattern": "\\S",

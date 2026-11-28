@@ -5,6 +5,6 @@
  */
 export type DecisionEscalateInput = { id: string, 
 /**
- * 1 to 2000 characters, not blank.
+ * 1 to 2000 UTF-16 code units, not blank (as `DecisionAnswerInput.reason`).
  */
 reason: string, };
