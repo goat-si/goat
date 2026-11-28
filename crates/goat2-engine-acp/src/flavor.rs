@@ -319,6 +319,11 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn client_capabilities(&self) -> ClientCaps {
         ClientCaps::default()
     }
+    /// v1 `checksVersionAtHandshake` (adapterFlavor.ts:159): refuse the runtime `initialize`
+    /// reported, with the message to show. None accepts it.
+    fn initialize_refusal(&self, _init: &InitializeInfo) -> Option<String> {
+        None
+    }
     fn auth_policy(&self) -> AuthPolicy {
         AuthPolicy::OnRequired { method_id: None }
     }

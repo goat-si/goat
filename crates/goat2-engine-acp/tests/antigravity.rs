@@ -615,6 +615,7 @@ async fn agy_cli_maps_permission_modes_onto_its_own() {
                 executable_path: "agy".into(),
                 harness_path: None,
                 version: Some("1.5.1".into()),
+                managed: false,
             },
             profile: AntigravityProfile::new(profile_dir.path(), "true".into()),
             runtime_temp_directory: None,
@@ -655,6 +656,49 @@ async fn agy_cli_maps_permission_modes_onto_its_own() {
         harness.err().unwrap(),
         goat2_engine_api::EngineError::StartFailed(
             "Invalid value \"auto\" for session config option \"mode\": expected one of default, auto_edit, yolo".into()
+        )
+    );
+}
+
+/// v1 runtimeIncompatibility (AntigravityDriver.ts:346-371): a resolved runtime that reports a
+/// version before 1.5.1 serves only allowlisted editors and is refused at the handshake.
+#[tokio::test]
+async fn runtime_before_open_model_access_is_refused() {
+    use goat2_engine_acp::agents::antigravity::{AntigravityInstallation, AntigravityLaunch};
+    use goat2_engine_acp::agents::antigravity_auth::AntigravityProfile;
+    let profile_dir = tempfile::tempdir().unwrap();
+    let flavor = Antigravity {
+        launch: Some(AntigravityLaunch {
+            installation: AntigravityInstallation {
+                executable_path: "/opt/agy/bin/agy".into(),
+                harness_path: None,
+                version: None,
+                managed: false,
+            },
+            profile: AntigravityProfile::new(profile_dir.path(), "true".into()),
+            runtime_temp_directory: None,
+            base_env: Some(Default::default()),
+        }),
+        ..Default::default()
+    };
+    let error = start_with(
+        Arc::new(flavor),
+        RuntimeMode::ApprovalRequired,
+        &low(),
+        &[
+            ("GOAT_ACP_ANTIGRAVITY", "1"),
+            ("GOAT_ACP_AGENT_VERSION", "1.5.0"),
+        ],
+        None,
+        None,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+        error,
+        goat2_engine_api::EngineError::StartFailed(
+            "Antigravity 1.5.0 only serves allowlisted editors, not GOAT. Update the Antigravity executable at /opt/agy/bin/agy to 1.5.1 or newer, then retry.".into()
         )
     );
 }

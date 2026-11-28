@@ -1857,6 +1857,9 @@ impl AcpEngineFactory {
         };
         let init = InitializeInfo::from_value(&init_value);
         let _ = shared.init.set(init.clone());
+        if let Some(message) = flavor.initialize_refusal(&init) {
+            return Err(EngineError::StartFailed(message));
+        }
 
         if let AuthPolicy::Eager { method_id } = flavor.auth_policy() {
             let request = AuthenticateRequest::new(method_id.clone());

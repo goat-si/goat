@@ -125,6 +125,8 @@ pub struct AntigravityInstallation {
     pub harness_path: Option<PathBuf>,
     /// Known before `initialize`; it picks the file reader.
     pub version: Option<String>,
+    /// Installed and updated by GOAT (v1 `source: "managed"`), or the person's own executable.
+    pub managed: bool,
 }
 
 /// How GOAT starts the runtime for one instance.
@@ -309,6 +311,28 @@ impl AcpFlavor for Antigravity {
             write_text_file: false,
             terminal: false,
         }
+    }
+    /// v1 `runtimeIncompatibility` (AntigravityDriver.ts:346-371, 408-427): a resolved runtime
+    /// older than 1.5.1 only serves allowlisted editors. The compatibility advisory of the
+    /// installer is not carried.
+    fn initialize_refusal(&self, init: &InitializeInfo) -> Option<String> {
+        let installation = &self.launch.as_ref()?.installation;
+        let version = init.agent_version.as_deref()?;
+        if serves_goat(version) {
+            return None;
+        }
+        let action = if installation.managed {
+            "Update it in Antigravity setup".to_owned()
+        } else {
+            format!(
+                "Update the Antigravity executable at {}",
+                installation.executable_path.display()
+            )
+        };
+        let (major, minor, patch) = OPEN_MODEL_ACCESS_RELEASE;
+        Some(format!(
+            "Antigravity {version} only serves allowlisted editors, not GOAT. {action} to {major}.{minor}.{patch} or newer, then retry."
+        ))
     }
     fn auth_policy(&self) -> AuthPolicy {
         AuthPolicy::Eager {
@@ -607,6 +631,7 @@ mod tests {
                     executable_path: "agy".into(),
                     harness_path: None,
                     version: Some("1.5.1".into()),
+                    managed: false,
                 },
                 profile: AntigravityProfile::new(std::path::Path::new("/p"), String::new()),
                 runtime_temp_directory: None,
