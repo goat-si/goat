@@ -57,6 +57,25 @@ const MAIN_WINDOW_BOUNDS_PERSIST_DEBOUNCE_MS = 500;
 const RENDERER_RECOVERY_RELOAD_DELAY_MS = 500;
 const RENDERER_RECOVERY_MAX_ATTEMPTS = 3;
 const RENDERER_RECOVERY_WINDOW_MS = 60_000;
+const DEVELOPMENT_LOAD_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([-2, -7, -9, -102, -105, -106, -118]);
+
+// v1 DesktopWindow.ts: an unpackaged dev load can fail while Vite is still starting.
+function isRetryableDevelopmentRendererLoadFailure(input: {
+  readonly applicationUrl: string;
+  readonly errorCode: number;
+  readonly isMainFrame: boolean;
+  readonly validatedUrl: string;
+}): boolean {
+  return (
+    input.isMainFrame &&
+    DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES.has(input.errorCode) &&
+    isSameOriginRendererNavigation({
+      applicationUrl: input.applicationUrl,
+      navigationUrl: input.validatedUrl,
+    })
+  );
+}
 
 interface BuildInfo {
   readonly commit: string;
@@ -177,7 +196,8 @@ function loadWindows(): void {
     loadedWith.set(win, supervisor.state.announce?.wsUrl ?? null);
     const target = pendingAppUrl ?? applicationUrl;
     pendingAppUrl = null;
-    void win.loadURL(target);
+    // v1: load failures surface through did-fail-load; the promise rejection carries nothing more.
+    void win.loadURL(target).catch(() => undefined);
   }
 }
 
@@ -274,9 +294,59 @@ function createWindow(): BrowserWindow {
   win.webContents.on("zoom-changed", (_event, direction) => {
     if (!win.isDestroyed()) zoomMain(direction);
   });
+  // v1 DesktopWindow.ts development load retry (unpackaged only: the packaged app loads from disk).
+  const isDevelopment = !app.isPackaged;
+  let developmentLoadRetryIndex = 0;
+  let developmentLoadRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  // GOAT 2 fix over v1: after a failed main-frame load Chromium commits its error page and fires
+  // did-finish-load for the same URL right away (seen: did-fail-load -102, then did-finish-load
+  // 5 ms later), which would cancel the retry just scheduled. Skip that one did-finish-load.
+  let errorPagePending = false;
+  const clearDevelopmentLoadRetry = () => {
+    if (developmentLoadRetryTimer === undefined) return;
+    clearTimeout(developmentLoadRetryTimer);
+    developmentLoadRetryTimer = undefined;
+  };
+  const loadApplication = () => {
+    if (win.isDestroyed()) return;
+    void win.loadURL(applicationUrl).catch(() => undefined);
+  };
+  const scheduleDevelopmentLoadRetry = () => {
+    if (developmentLoadRetryTimer !== undefined || win.isDestroyed()) return undefined;
+    const retryIndex = Math.min(developmentLoadRetryIndex, DEVELOPMENT_LOAD_RETRY_DELAYS_MS.length - 1);
+    const retryInMs = DEVELOPMENT_LOAD_RETRY_DELAYS_MS[retryIndex] ?? 2_000;
+    developmentLoadRetryIndex += 1;
+    developmentLoadRetryTimer = setTimeout(() => {
+      developmentLoadRetryTimer = undefined;
+      if (!win.isDestroyed()) loadApplication();
+    }, retryInMs);
+    return retryInMs;
+  };
   win.webContents.on("did-finish-load", () => {
+    if (errorPagePending) {
+      errorPagePending = false;
+      return;
+    }
+    if (isDevelopment && !isAppUrl(win.webContents.getURL())) return;
+    clearDevelopmentLoadRetry();
+    developmentLoadRetryIndex = 0;
     if (process.platform === "darwin") syncMacosWindowButtons(win);
   });
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    // -3 ERR_ABORTED: a newer navigation replaced this one; no error page follows.
+    if (errorCode !== -3) errorPagePending = true;
+    const retryInMs =
+      isDevelopment &&
+      isRetryableDevelopmentRendererLoadFailure({ applicationUrl, errorCode, isMainFrame, validatedUrl: validatedURL })
+        ? scheduleDevelopmentLoadRetry()
+        : undefined;
+    log(
+      `main window failed to load: ${errorCode} ${errorDescription} ${validatedURL}` +
+        (retryInMs === undefined ? "" : `, retry in ${retryInMs} ms`),
+    );
+  });
+  win.on("closed", clearDevelopmentLoadRetry);
 
   if (process.platform === "darwin") {
     // Mouse drivers can deliver Back/Forward as macOS swipe gestures instead of buttons.
@@ -383,7 +453,7 @@ function openAppLink(url: string | undefined): boolean {
     if (win === undefined && app.isReady()) createWindow();
     return true;
   }
-  void win.loadURL(url);
+  void win.loadURL(url).catch(() => undefined);
   reveal(win);
   return true;
 }
