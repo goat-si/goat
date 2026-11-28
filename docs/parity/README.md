@@ -93,6 +93,14 @@ process target runs.
 | queue reorder | S | reviewed in wp1 |
 | Claude stream-json subtypes | claude-stream-json.md (S, Part 2) | reviewed in wp1 |
 
+GOAT 2 target (`cargo run -p goat2-parity -- run --target goat2`, real `goat2-host` with lane B's Codex driver
+replaying the same v1 recordings through `goat2-parity-fake-codex`): simple_turn, followup_queued_in_order,
+interrupt_ack_then_terminal, live_steer_applied, steer_missed_becomes_followup, queue_edit_then_start,
+queue_cancel_while_active and queue_promote_to_steer pass. The four queue scenarios compare against the v1
+expectation without `queue.changed enqueued`, which the GOAT 2 log does not record. steer_refused_at_admission
+differs (GOAT 2 has no run-targeted steer; a late steer starts a turn) and is open with the owner; restart, MCP
+and multi-thread scenarios are not driven by the GOAT 2 runner yet.
+
 ## Topic index
 
 Each lane topic and each requested Claude subtype, with the section that specifies it. wp1 C checks that

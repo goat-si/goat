@@ -429,6 +429,7 @@ pub mod drive {
             .env("GOAT2_CODEX_BIN", &fake)
             .env("GOAT2_PARITY_FAKE_TRANSCRIPT", transcript)
             .env("GOAT2_PARITY_FAKE_DIR", base.join("fake"))
+            .env("GOAT2_PARITY_FAKE_HOLD", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(stderr)
@@ -612,14 +613,46 @@ pub mod drive {
             thread: None,
             latest: 0,
         };
+        let mut released: u64 = 0;
+        let release = |n: u64| {
+            let tmp = base.join("fake/.release.tmp");
+            let _ = std::fs::write(&tmp, n.to_string());
+            let _ = std::fs::rename(&tmp, base.join("fake/release"));
+        };
         for step in &scenario.scenario.steps {
             if let Step::Await { id, until, .. } = step {
                 let cond = until.clone();
+                // A wait for a run to end lets the fake finish one more turn.
+                let ends = match &cond {
+                    AwaitCond::Idle => true,
+                    AwaitCond::RunStatus { status, .. } => status != "running",
+                    AwaitCond::Steerable { .. } => false,
+                };
+                if ends {
+                    released += 1;
+                    release(released);
+                }
                 if !session.pump(Instant::now() + STEP_TIMEOUT, |s| s.fold.holds(&cond)) {
                     failure = Some(format!("timed out at {id}"));
                     break;
                 }
                 continue;
+            }
+            // A queue command names an input the host may not have logged yet.
+            let named: Vec<String> = match step {
+                Step::QueueEdit { input, .. }
+                | Step::QueueCancel { input, .. }
+                | Step::QueuePromote { input, .. } => vec![input.clone()],
+                Step::QueueReorder { order, .. } => order.clone(),
+                _ => Vec::new(),
+            };
+            if !named.is_empty()
+                && !session.pump(Instant::now() + STEP_TIMEOUT, |s| {
+                    named.iter().all(|a| s.fold.inputs.contains_key(a))
+                })
+            {
+                failure = Some(format!("inputs {named:?} were never accepted"));
+                break;
             }
             let frame = match command_for_step(
                 step,
@@ -690,6 +723,7 @@ pub mod drive {
                 })?;
             }
         }
+        release(u64::MAX);
         // Let the host finish: idle and quiet for a moment, or give up after the step timeout.
         let quiet = Duration::from_millis(800);
         session.pump(Instant::now() + STEP_TIMEOUT, |s| {
