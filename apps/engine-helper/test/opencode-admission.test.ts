@@ -329,6 +329,16 @@ test("resume does not rewrite an unchanged root or child permission policy", asy
   try { assert.ok(!fake.calls.some((call) => call.method === "update")); } finally { await session.shutdown(); }
 });
 
+test("resume leaves matching policies without GOAT metadata untouched", async () => {
+  fake.reset();
+  const base = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "external_directory", pattern: "*", action: "allow" as const }];
+  for (const id of ["session-fake", "child-1"]) fake.setNativePermission(id, base);
+  fake.setChildren("session-fake", ["child-1"]);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  try { assert.ok(!fake.calls.some((call) => call.method === "update")); } finally { await session.shutdown(); }
+});
+
 test("resume checks idle before applying changed root and child policies", async () => {
   fake.reset(); fake.setChildren("session-fake", ["child-1"]);
   const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
@@ -505,4 +515,26 @@ test("a descendant abort failure fails the session rather than claiming interrup
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0]?.type === "turn_finished" && outcomes[0].outcome.type, "failed");
   } finally { await session.shutdown(); }
+});
+
+test("failed history reconciliation waits for descendant interruption cleanup", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); fake.setChildren(session.engineRef, ["child-1"]);
+  const prompt = fake.holdPrompt(); const history = fake.holdHistory(); const child = fake.holdAbort("child-1");
+  try {
+    const starting = session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings); await prompt.reached;
+    await fake.sendEvent("message.part.delta", { sessionID: session.engineRef, messageID: "assistant-early", partID: "part-early", field: "text", delta: "cat" });
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, time: 1, part: { id: "part-early", sessionID: session.engineRef, messageID: "assistant-early", type: "text", text: "cat dog " } });
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant-early", sessionID: session.engineRef, role: "assistant", time: { created: 1 }, parentID: "input", providerID: "test", modelID: "model", mode: "build", agent: "build", path: { cwd: "/tmp", root: "/tmp" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } });
+    prompt.release(); const turn = await starting; assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await history.reached;
+    const stopping = session.interrupt(turn.turnId); await child.reached;
+    history.fail(); await history.finished; await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+    child.release(); await stopping; await finished.promise;
+    const terminal = events.find((event) => event.type === "turn_finished");
+    assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+  } finally { prompt.release(); child.release(); await session.shutdown(); }
 });

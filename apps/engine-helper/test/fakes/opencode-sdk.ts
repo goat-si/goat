@@ -6,6 +6,9 @@ let statusGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let statusReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let historyGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let historyReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let historyFinished: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let abortGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let abortReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let abortTarget: string | undefined;
@@ -18,7 +21,7 @@ const nativePermissions = new Map<string, Array<{ permission: string; pattern: s
 const nativeMetadata = new Map<string, Record<string, unknown>>();
 const nativeStatuses = new Map<string, "idle" | "busy">();
 let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
-export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
 export function setHistory(value: typeof history) { history = value; }
 export function setHealth(value: typeof health) { health = value; }
 export function setChildren(parent: string, ids: string[]) { children.set(parent, ids); }
@@ -38,6 +41,10 @@ export function holdStatus() {
 export function holdPrompt() {
   promptGate = Promise.withResolvers<void>(); promptReached = Promise.withResolvers<void>();
   return { reached: promptReached.promise, release: () => promptGate?.resolve() };
+}
+export function holdHistory() {
+  historyGate = Promise.withResolvers<void>(); historyReached = Promise.withResolvers<void>(); historyFinished = Promise.withResolvers<void>();
+  return { reached: historyReached.promise, finished: historyFinished.promise, fail: () => historyGate?.reject(new Error("synthetic history failure")) };
 }
 export function crashServer(index: number) { servers[index]?.exit?.(); }
 export async function startFakeServer() {
@@ -74,7 +81,7 @@ export function createOpencodeClient() {
     session: {
       async create(args: unknown) { calls.push({ method: "create", args }); return data({ id: "session-fake" }); },
       async get(args: { sessionID: string }) { calls.push({ method: "get", args }); return data({ id: args.sessionID, permission: nativePermissions.get(args.sessionID) ?? [], metadata: nativeMetadata.get(args.sessionID) }); },
-      async messages() { calls.push({ method: "messages", args: {} }); return data(history.map((entry) => ({ ...entry, parts: entry.parts ?? [] }))); },
+      async messages() { calls.push({ method: "messages", args: {} }); historyReached?.resolve(); if (historyGate) { try { await historyGate.promise; } finally { historyFinished?.resolve(); } } return data(history.map((entry) => ({ ...entry, parts: entry.parts ?? [] }))); },
       async children(args: { sessionID: string }) { calls.push({ method: "children", args }); return data((children.get(args.sessionID) ?? []).map((id) => ({ id, permission: nativePermissions.get(id) ?? [], metadata: nativeMetadata.get(id) }))); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
       async status() { calls.push({ method: "status", args: {} }); statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); },

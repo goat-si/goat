@@ -13,7 +13,7 @@ import { promptParts } from "./attachments.ts";
 type Client = ReturnType<typeof client>;
 type ChildSnapshot = { id: string; permission: PermissionRuleset; metadata: Record<string, unknown> | undefined; parentBases: PermissionRuleset[] };
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
-type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
+type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
 let lastTime = 0, counter = 0;
 // Adapted from promptAdmission.ts:9-27.
@@ -188,6 +188,10 @@ export class OpenCodeSession implements EngineSession {
     } catch {
       if (this.active !== turn) return;
       turn.reconciling = false;
+      if (turn.interrupted && (turn.stopPending || !turn.stopIdle)) {
+        turn.reconciliationFailure = "OpenCode message role could not be determined";
+        return;
+      }
       this.finish(turn, { type: "failed", reason: "OpenCode message role could not be determined" });
     }
   }
@@ -316,11 +320,11 @@ export class OpenCodeSession implements EngineSession {
         return;
       }
       case "session.status":
-        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
+        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
         else await this.admission(turn, "observed");
         return;
       case "session.idle":
-        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
+        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
       case "session.compacted": turn.overflow = false; return;
       case "session.error": {
@@ -453,7 +457,7 @@ export class OpenCodeSession implements EngineSession {
     } catch { failed = true; }
     turn.stopPending = false;
     if (failed) { this.broken("OpenCode interrupt could not be confirmed"); throw new HelperError("transport", "OpenCode interrupt failed"); }
-    if (this.active === turn && turn.stopIdle) this.finish(turn, { type: "interrupted" });
+    if (this.active === turn && turn.stopIdle) this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" });
   }
   async answerRequest(key: string, answer: RequestAnswer) {
     const request = this.requests.get(key); if (!request) throw new HelperError("bad_request", "No open OpenCode request");
