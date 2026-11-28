@@ -181,6 +181,49 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("preserves the project-scoped error when listing fails", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.listThreads(scope, { projectId }).pipe(Effect.flip);
+      assert.equal(error.code, "orchestration_error");
+      assert.equal(
+        error.message,
+        `Unable to list threads: Unable to list threads in project ${projectId}.`,
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([]),
+          listMcpThreadPage: () =>
+            Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: parentId })),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    ),
+  );
+  it.effect("preserves the lineage-read error when listing fails", () => {
+    const child = finished(ThreadId.make("thread:error-child"), {
+      launchedBy: launchedBy(parentId),
+    });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.listThreads(scope, { launchedBy: "self" }).pipe(Effect.flip);
+      assert.equal(error.code, "orchestration_error");
+      assert.equal(
+        error.message,
+        `Failed to load orchestration projection for thread ${parentId}.`,
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([child]),
+          listMcpThreadPage: () =>
+            Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: parentId })),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   it.effect("title filters keep Unicode case folding when scanning candidate pages", () => {
     const matching = finished(ThreadId.make("thread:title-a"), { title: "Kelvin" });
     const other = finished(ThreadId.make("thread:title-b"), { title: "Other" });

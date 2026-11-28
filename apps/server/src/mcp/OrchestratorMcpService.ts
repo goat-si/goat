@@ -3176,7 +3176,18 @@ const make = Effect.gen(function* () {
           limit,
         },
         nowMs,
-      ).pipe(Effect.mapError(listFailure));
+      ).pipe(
+        Effect.mapError((cause) =>
+          lineageIds === undefined
+            ? listFailure(
+                new ThreadManagementService.ThreadManagementProjectThreadsListError({
+                  ...(projectId === undefined ? {} : { projectId }),
+                  cause,
+                }),
+              )
+            : threadManagementFailure(cause),
+        ),
+      );
       const nextCursor = cursor + page.length < total ? cursor + page.length : null;
       // Fold states need only the shells of what is folded under this page.
       const graph = launchGraph(edges);
