@@ -363,6 +363,9 @@ export class OpenCode2Session implements EngineSession {
       }
       return;
     }
+    if (event.type === "session.inbox.enqueued" && event.data.item.type === "user" && event.data.inboxID !== turn.promptId && !turn.steers.has(event.data.inboxID) && !turn.settled.has(event.data.inboxID)) {
+      this.broken("OpenCode 2 started unowned work outside a GOAT turn"); return;
+    }
     if (event.type === "session.inbox.delivered" || event.type === "session.inbox.cancelled") {
       const steer = turn.steers.get(event.data.inboxID); if (!steer || steer.outcome) return;
       steer.outcome = event.type === "session.inbox.delivered" ? "completed" : "cancelled";

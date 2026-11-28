@@ -904,3 +904,13 @@ test("a child that starts after interrupt confirmation prevents a false interrup
     assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
   } finally { await session.shutdown(); }
 });
+
+test("an external native prompt queued during an owned turn fails visibly", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures));
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    fake.emit("session.inbox.enqueued", { sessionID: session.engineRef, inboxID: "foreign", item: { type: "user", payload: { text: "external" }, delivery: "queue" } }); await tick();
+    assert.deepEqual(failures, ["OpenCode 2 started unowned work outside a GOAT turn"]);
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
+  } finally { await session.shutdown(); }
+});
