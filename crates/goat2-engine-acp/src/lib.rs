@@ -9,6 +9,7 @@ pub mod items;
 pub mod normalize;
 pub mod policy;
 pub mod process;
+pub mod registry;
 pub mod wire;
 
 pub use engine::{
