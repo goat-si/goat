@@ -196,7 +196,7 @@ pub struct ThreadCard {
     pub unread: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub context_usage: Option<crate::ThreadTokenUsageSnapshot>,
+    pub context_usage: Option<Box<crate::ThreadTokenUsageSnapshot>>,
 }
 
 /// `threads/<threadId>/card.json`: `{"v":1,"card":ThreadCard,"fold":Fold}`, replaced atomically.

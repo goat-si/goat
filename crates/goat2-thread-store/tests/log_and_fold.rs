@@ -491,8 +491,8 @@ fn usage_fold_agrees_with_replay_and_checkpoint_restart() {
     store
         .create_thread(Some(id.clone()), created("usage", "/w"))
         .unwrap();
-    let usage: ThreadTokenUsageSnapshot =
-        serde_json::from_value(serde_json::json!({"usedTokens": 23})).unwrap();
+    let usage: Box<ThreadTokenUsageSnapshot> =
+        Box::new(serde_json::from_value(serde_json::json!({"usedTokens": 23})).unwrap());
     let mut run = full_run("r1", "i1", "one");
     if let LogEvent::RunFinished(end) = run.last_mut().unwrap() {
         end.token_usage = Some(usage.clone());

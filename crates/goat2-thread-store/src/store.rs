@@ -1646,10 +1646,10 @@ impl Store {
                 let line = LogLine::new(
                     seq,
                     at.clone(),
-                    LogEvent::Checkpoint(Box::new(Checkpoint {
+                    LogEvent::Checkpoint(Checkpoint {
                         card: snapshot,
                         fold: fold_state.clone(),
-                    })),
+                    }),
                 );
                 fold::apply(&mut card, &mut fold_state, &line);
                 lines.push(line);
@@ -1990,7 +1990,7 @@ impl Store {
                 && WRITE_CHECKPOINTS
                 && line::checkpoint_is_complete(raw)
             {
-                checkpoint = Some((line.seq, (**cp).clone()));
+                checkpoint = Some((line.seq, cp.clone()));
                 return Ok(false);
             }
             count += 1;
