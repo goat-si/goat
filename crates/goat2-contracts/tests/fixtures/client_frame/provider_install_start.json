@@ -1,0 +1,6 @@
+{
+  "type": "provider_install_start",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex"
+}

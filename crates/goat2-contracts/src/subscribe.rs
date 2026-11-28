@@ -14,7 +14,11 @@ use crate::card::{FollowUpMode, ThreadCard, ThreadKind};
 use crate::ids::{BotId, Epoch, InputId, ItemId, RequestId, RunId, ThreadId};
 use crate::log::{InputMode, LogLine, RequestOutcome};
 use crate::model::{ModelSelection, RuntimeMode};
-use crate::turn_item::ChatAttachment;
+use crate::turn_item::{ChatAttachment, TurnItem};
+use crate::{
+    AcpRegistryPrepareResult, AcpRegistrySearchResult, ChannelListBotNotesResult,
+    ProviderAuthState, ProviderInstallState, ProviderInstanceId, ServerProviderEntry,
+};
 
 /// Position in one thread's `goat.jsonl`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
@@ -64,6 +68,133 @@ pub enum ResetReason {
     rename_all_fields = "camelCase"
 )]
 pub enum ClientFrame {
+    SubscribeProviders {
+        sub_id: String,
+    },
+    UpdateBot {
+        req_id: String,
+        client_request_id: String,
+        bot_id: BotId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        purpose: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        face: Option<BotFace>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        default_model_selection: Option<ModelSelection>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        #[serde(deserialize_with = "crate::serde_util::instructions::deserialize")]
+        #[schemars(length(max = 16384))]
+        instructions: Option<String>,
+    },
+    ListBotNotes {
+        req_id: String,
+        client_request_id: String,
+        bot_id: BotId,
+    },
+    WriteBotNotes {
+        req_id: String,
+        client_request_id: String,
+        bot_id: BotId,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        expected_revision: Option<String>,
+    },
+    MarkRead {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        #[serde(with = "crate::serde_util::safe_u64")]
+        #[ts(as = "u64")]
+        #[schemars(with = "u64")]
+        seq: u64,
+    },
+    GetTurnItem {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        item_id: ItemId,
+    },
+    RefreshProviders {
+        req_id: String,
+        client_request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        instance_id: Option<ProviderInstanceId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        refresh_models: Option<bool>,
+    },
+    ProviderInstallStart {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+    },
+    ProviderInstallCancel {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+        operation_id: String,
+    },
+    ProviderAuthStart {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        method_id: Option<String>,
+    },
+    ProviderAuthCancel {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+        flow_id: String,
+    },
+    ProviderAuthLogout {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+    },
+    AcceptAcpRegistryUrlAuth {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+        elicitation_id: String,
+    },
+    SearchAcpRegistry {
+        req_id: String,
+        client_request_id: String,
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        limit: Option<u32>,
+    },
+    PrepareAcpRegistryAgent {
+        req_id: String,
+        client_request_id: String,
+        agent_id: String,
+    },
+    SetProviderInstance {
+        req_id: String,
+        client_request_id: String,
+        instance_id: ProviderInstanceId,
+        driver: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        acp_agent_id: Option<String>,
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        display_name: Option<String>,
+    },
+
     /// Start `subscribeCards`. No cursor means "from the start".
     SubscribeCards {
         sub_id: String,
@@ -276,6 +407,51 @@ impl ClientFrame {
             }
             | Self::CreateBot {
                 client_request_id, ..
+            }
+            | Self::UpdateBot {
+                client_request_id, ..
+            }
+            | Self::ListBotNotes {
+                client_request_id, ..
+            }
+            | Self::WriteBotNotes {
+                client_request_id, ..
+            }
+            | Self::MarkRead {
+                client_request_id, ..
+            }
+            | Self::GetTurnItem {
+                client_request_id, ..
+            }
+            | Self::RefreshProviders {
+                client_request_id, ..
+            }
+            | Self::ProviderInstallStart {
+                client_request_id, ..
+            }
+            | Self::ProviderInstallCancel {
+                client_request_id, ..
+            }
+            | Self::ProviderAuthStart {
+                client_request_id, ..
+            }
+            | Self::ProviderAuthCancel {
+                client_request_id, ..
+            }
+            | Self::ProviderAuthLogout {
+                client_request_id, ..
+            }
+            | Self::AcceptAcpRegistryUrlAuth {
+                client_request_id, ..
+            }
+            | Self::SearchAcpRegistry {
+                client_request_id, ..
+            }
+            | Self::PrepareAcpRegistryAgent {
+                client_request_id, ..
+            }
+            | Self::SetProviderInstance {
+                client_request_id, ..
             } => Some(client_request_id),
             _ => None,
         }
@@ -291,9 +467,34 @@ pub enum StartMode {
 }
 
 /// `command_result.value`: ids the command created or touched.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandValue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub install_state: Option<ProviderInstallState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auth_state: Option<ProviderAuthState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub accepted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub registry_search: Option<AcpRegistrySearchResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub registry_prepare: Option<AcpRegistryPrepareResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notes: Option<ChannelListBotNotesResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_item: Option<TurnItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bot: Option<BotProfile>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread_id: Option<ThreadId>,
@@ -340,7 +541,7 @@ pub enum AgentSurfaceErrorCode {
 /// Reasons the host uses (code / reason): `not_found` / `thread_not_found`, `request_not_found`,
 /// `bot_not_found`; `permission_denied` / `not_allowed`; `conflict` / `steer_refused` (a steer
 /// refused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different
-/// arguments); `failed_precondition` / `not_queued` (the input left the queue, or
+/// arguments), `notes_changed` (stale notes revision); `failed_precondition` / `not_queued` (the input left the queue, or
 /// `reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,
 /// `payload_too_large`; `invalid_request` / `invalid_request`; `internal` / `internal`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -364,7 +565,12 @@ pub struct CommandError {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[allow(clippy::large_enum_variant)] // Keep the established command_result Rust API.
 pub enum HostFrame {
+    Providers {
+        sub_id: String,
+        providers: Vec<ServerProviderEntry>,
+    },
     /// Drop every card held for this subscription; fresh cards follow.
     CardsReset {
         sub_id: String,
