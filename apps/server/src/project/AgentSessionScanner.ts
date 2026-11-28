@@ -153,6 +153,7 @@ export const make = Effect.gen(function* () {
   const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
   const baseDir = path.resolve(serverConfig.baseDir);
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
+  const realBaseDir = yield* fileSystem.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir));
   const realWorktreesDir = yield* fileSystem
     .realPath(worktreesDir)
     .pipe(Effect.orElseSucceed(() => worktreesDir));
@@ -181,6 +182,9 @@ export const make = Effect.gen(function* () {
     ) ||
     normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
       normalizeForWorktreeMatch(baseDir, foldWorktreeCase),
+    ) ||
+    normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
+      normalizeForWorktreeMatch(realBaseDir, foldWorktreeCase),
     ) ||
     isGoatManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase) ||
     isGoatManagedWorktree(candidatePath, realWorktreesDir, foldWorktreeCase);
@@ -517,7 +521,16 @@ export const make = Effect.gen(function* () {
         threadId === undefined
           ? undefined
           : codexCwdByThread?.get(`${transcript.providerInstanceId}\0${threadId}`);
-      const cwd = overriddenCwd ?? metadataCwd;
+      const resolvedCwd = path.resolve(expandHomePath(metadataCwd.trim(), homeDir));
+      const realCwd = yield* fileSystem
+        .realPath(resolvedCwd)
+        .pipe(Effect.orElseSucceed(() => resolvedCwd));
+      const cwd =
+        isExcludedProjectPath(realCwd) &&
+        (realCwd.startsWith(realBaseDir + path.sep) ||
+          isGoatManagedWorktree(realCwd, realWorktreesDir, foldWorktreeCase))
+          ? metadataCwd
+          : (overriddenCwd ?? metadataCwd);
       const key = `${transcript.providerInstanceId}\0${cwd}`;
       const existing = byOwnerAndCwd.get(key);
       if (existing) {
@@ -1122,6 +1135,16 @@ export const make = Effect.gen(function* () {
             rolloutThreadId === undefined
               ? undefined
               : cachedCodexCwdByThread?.get(`${candidate.providerInstanceId}\0${rolloutThreadId}`);
+          const originalCwd = path.resolve(expandHomePath(snapshot.cwd.value.trim(), homeDir));
+          const realCwd = yield* fileSystem
+            .realPath(originalCwd)
+            .pipe(Effect.orElseSucceed(() => originalCwd));
+          if (
+            realCwd === realBaseDir ||
+            realCwd.startsWith(realBaseDir + path.sep) ||
+            isGoatManagedWorktree(realCwd, realWorktreesDir, foldWorktreeCase)
+          )
+            return skipped("Transcript belongs to GOAT storage.");
           const expandedCwd = expandHomePath((mappedCwd ?? snapshot.cwd.value).trim(), homeDir);
           if (!path.isAbsolute(expandedCwd) || !(yield* belongsToRoot(path.resolve(expandedCwd)))) {
             return skipped("Transcript working directory is outside this project.");
