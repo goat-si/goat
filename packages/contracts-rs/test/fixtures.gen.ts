@@ -86,6 +86,66 @@ export const card_file__example = {
   "v": 1
 } satisfies CardFile;
 
+export const card_file__steered_inputs = {
+  "card": {
+    "appliedSeq": 1,
+    "archivedAt": null,
+    "botId": null,
+    "cardSeq": 1,
+    "children": {
+      "running": 1,
+      "total": 1
+    },
+    "engine": {
+      "cwd": "example",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "providerInstanceId": "codex",
+      "runtimeMode": "auto"
+    },
+    "engineRef": null,
+    "epoch": "example",
+    "followUpMode": "steer",
+    "id": "example",
+    "kind": "bot",
+    "latestAnswerExcerpt": "example",
+    "needsYou": null,
+    "parent": null,
+    "projectId": null,
+    "status": "idle",
+    "title": "example",
+    "updatedAt": "2026-11-28T10:00:00Z"
+  },
+  "fold": {
+    "activeRunId": null,
+    "activeRunInputIds": [],
+    "activeRunReachedEngine": true,
+    "counters": {
+      "inputs": 1,
+      "items": 1,
+      "runs": 1
+    },
+    "heldInputs": [],
+    "lastRunOutcome": null,
+    "openRequests": [],
+    "queuedInputs": [],
+    "runningChildIds": [],
+    "steeredInputs": [
+      {
+        "inputId": "input-steer-1",
+        "mode": "steer",
+        "source": {
+          "kind": "user"
+        },
+        "text": "also check the tests"
+      }
+    ]
+  },
+  "v": 1
+} satisfies CardFile;
+
 export const channel_attention_event__finished = {
   "botId": "bot-goat",
   "botName": "GOAT",
