@@ -1,24 +1,12 @@
-use goat2_parity::fake_codex::Replay;
+use goat2_parity::fake_codex::{Replay, take_completion};
 use serde_json::Value;
 use std::{
     collections::VecDeque,
     io::{self, BufRead, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::mpsc,
     time::Duration,
 };
-
-/// How many turn/completed frames the runner allows so far (GOAT2_PARITY_FAKE_HOLD=1): the
-/// number in GOAT2_PARITY_FAKE_DIR/release, 0 when absent. Without the hold, unlimited.
-fn allowed(dir: &Path, hold: bool) -> u64 {
-    if !hold {
-        return u64::MAX;
-    }
-    std::fs::read_to_string(dir.join("release"))
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
-}
 
 fn is_turn_completed(frame: &Value) -> bool {
     frame.get("method").and_then(Value::as_str) == Some("turn/completed")
@@ -47,15 +35,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut stdout = io::stdout().lock();
     let mut pending: VecDeque<Value> = VecDeque::new();
-    let mut completed: u64 = 0;
     loop {
         // Emit what the hold allows, in recorded order.
         while let Some(front) = pending.front() {
-            if is_turn_completed(front) {
-                if completed >= allowed(&dir, hold) {
-                    break;
-                }
-                completed += 1;
+            if is_turn_completed(front) && !take_completion(&dir, hold) {
+                break;
             }
             serde_json::to_writer(&mut stdout, front)?;
             writeln!(stdout)?;

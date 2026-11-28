@@ -72,6 +72,42 @@ fn text_input(frame: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// How many turn/completed frames the runner allows so far: the number in the release file of
+/// the fake dir, 0 when absent. Without the hold, unlimited.
+pub fn allowed_completions(dir: &Path, hold: bool) -> u64 {
+    if !hold {
+        return u64::MAX;
+    }
+    fs::read_to_string(dir.join("release"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Take one turn completion from the runner's budget. The count is shared by every fake process
+/// of the run (a restarted host or another thread starts a new process), under a directory lock,
+/// so a release spent by an earlier process is not spent again (review r14).
+pub fn take_completion(dir: &Path, hold: bool) -> bool {
+    if !hold {
+        return true;
+    }
+    let lock = dir.join("completed.lock");
+    while fs::create_dir(&lock).is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let path = dir.join("completed");
+    let done: u64 = fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let ok = done < allowed_completions(dir, hold);
+    if ok {
+        let _ = fs::write(&path, (done + 1).to_string());
+    }
+    let _ = fs::remove_dir(&lock);
+    ok
+}
+
 type Frames = Vec<(bool, Value)>;
 type Sessions = (Vec<Frames>, Vec<(usize, String)>);
 
@@ -107,10 +143,15 @@ fn sessions(transcript: &Path) -> Result<Sessions, String> {
     let mut units = Vec::new();
     for (index, frames) in segments.iter().enumerate() {
         for (i, (outbound, frame)) in frames.iter().enumerate() {
-            if *outbound
-                && matches!(method(frame), "thread/start" | "thread/resume")
-                && let Some(thread) = opened(frames, i)
-            {
+            if *outbound && matches!(method(frame), "thread/start" | "thread/resume") {
+                // A session the recording opens without a thread id in the response cannot be
+                // claimed or checked, so the recording is refused (review r14).
+                let thread = opened(frames, i).ok_or_else(|| {
+                    format!(
+                        "unsupported recording: {} in session {index} has no response naming its thread",
+                        method(frame)
+                    )
+                })?;
                 units.push((index, thread));
             }
         }
@@ -129,17 +170,29 @@ pub fn claim_count(transcript: &Path) -> Result<usize, String> {
 /// recordings say "never"), cwd, config overrides, client ids and collaboration settings, which
 /// are GOAT 2's own.
 fn param_mismatch(m: &str, recorded: &Value, live: &Value) -> Option<String> {
-    if !matches!(m, "thread/start" | "thread/resume" | "turn/start") {
-        return None;
+    let differs = |pointer: &str, what: &str| -> Option<String> {
+        let want = recorded.pointer(pointer)?;
+        let sent = live.pointer(pointer);
+        (sent != Some(want)).then(|| {
+            format!(
+                "{m} {what} differs: recorded {want}, sent {}",
+                sent.unwrap_or(&Value::Null)
+            )
+        })
+    };
+    // The thread a request names (resume after restart, turns, steers, interrupts) must be the
+    // recorded native thread (review r14).
+    if matches!(
+        m,
+        "thread/resume" | "turn/start" | "turn/steer" | "turn/interrupt"
+    ) && let Some(mismatch) = differs("/params/threadId", "threadId")
+    {
+        return Some(mismatch);
     }
-    let model = recorded.pointer("/params/model")?;
-    let sent = live.pointer("/params/model");
-    (sent != Some(model)).then(|| {
-        format!(
-            "{m} model differs: recorded {model}, sent {}",
-            sent.unwrap_or(&Value::Null)
-        )
-    })
+    if matches!(m, "thread/start" | "thread/resume" | "turn/start") {
+        return differs("/params/model", "model");
+    }
+    None
 }
 
 impl Replay {
@@ -389,7 +442,8 @@ mod tests {
         );
         r.handle(&json!({"id":44,"method":"config/read","params":{}}))
             .unwrap();
-        let events = r.handle(&json!({"id":45,"method":"turn/start","params":{"model":"gpt-6-luna","input":[{"type":"text","text":"Respond with the following text: fixture simple ok"}]}})).unwrap();
+        let thread = r.thread().to_owned();
+        let events = r.handle(&json!({"id":45,"method":"turn/start","params":{"threadId":thread,"model":"gpt-6-luna","input":[{"type":"text","text":"Respond with the following text: fixture simple ok"}]}})).unwrap();
         assert!(events.iter().any(|f| method(f) == "turn/completed"));
         assert_eq!(r.report.significant_total, r.report.significant_consumed);
         assert!(r.report.mismatches.is_empty());
@@ -552,5 +606,64 @@ mod tests {
             .unwrap(),
             2
         );
+    }
+
+    /// r14: a resume naming another thread than the recorded one is a mismatch.
+    #[test]
+    fn a_resume_of_another_thread_is_a_mismatch() {
+        let (first, dir) = setup("restart_idle_resume");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("scenarios/restart_idle_resume/transcripts/codex.ndjson");
+        let mut second = Replay::open(&path, &dir).unwrap();
+        second
+            .handle(&json!({"id": 1, "method": "initialize", "params": {}}))
+            .unwrap();
+        second.handle(&json!({"method": "initialized"})).unwrap();
+        second
+            .handle(&json!({"id": 2, "method": "thread/resume", "params": {"model": "gpt-6-luna", "threadId": "not-the-recorded-thread"}}))
+            .unwrap();
+        assert!(
+            second
+                .report
+                .mismatches
+                .iter()
+                .any(|m| m.contains("threadId differs")),
+            "{:?}",
+            second.report.mismatches
+        );
+        drop(first);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    /// r14: a recorded thread/start without a response naming its thread is refused.
+    #[test]
+    fn an_unanswered_thread_start_is_refused() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("scenarios/simple_turn/transcripts/codex.ndjson");
+        let mut text = fs::read_to_string(src).unwrap();
+        text.push_str(&json!({"type": "runtime_exit", "status": "success"}).to_string());
+        text.push('\n');
+        text.push_str(&json!({"type": "expect_outbound", "frame": {"id": 99, "method": "thread/start", "params": {}}}).to_string());
+        text.push('\n');
+        let path = std::env::temp_dir().join(format!(
+            "goat2-parity-unanswered-{}.ndjson",
+            std::process::id()
+        ));
+        fs::write(&path, text).unwrap();
+        let err = claim_count(&path).unwrap_err();
+        let _ = fs::remove_file(&path);
+        assert!(err.contains("no response naming its thread"), "{err}");
+    }
+    /// r14: completions are one budget for all fake processes of a run.
+    #[test]
+    fn the_completion_budget_is_shared_across_processes() {
+        let (_r, dir) = setup("simple_turn");
+        fs::write(dir.join("release"), "1").unwrap();
+        assert!(take_completion(&dir, true));
+        // A later process (restarted host) does not get the spent release again.
+        assert!(!take_completion(&dir, true));
+        fs::write(dir.join("release"), "2").unwrap();
+        assert!(take_completion(&dir, true));
+        assert!(take_completion(&dir, false));
+        fs::remove_dir_all(dir).unwrap();
     }
 }
