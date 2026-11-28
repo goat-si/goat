@@ -1,7 +1,7 @@
 // One provider, as plain sections (boards 1PBB-2 list+detail, 1Q0P-2 sign-in, 2LET-2 cloud opt-in, 2LEU-2 repair /
 // install / another account). Every action is a provider command on the approved wire (docs/part2/provider-wire.md);
 // what the wire cannot do yet is not offered.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ServerProviderEntry } from "./wire.ts";
 import { useAction, useProviderCall, useProviderEntries } from "./context.tsx";
 import { CLOUD, CLOUD_LATER, DRIVERS } from "./catalogMeta.ts";
@@ -184,6 +184,7 @@ function AccountSection({ e, onAddAccount }: { e: ServerProviderEntry; onAddAcco
   const a = e.probe.auth;
   const flow = e.authFlow;
   const [other, setOther] = useState(false);
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
   const start = (methodId?: string) => act.run("start", async () => {
     const r = await call<{ authorizationUrl?: string | null }>("providerAuth.start", { instanceId: e.instanceId, ...(methodId ? { methodId } : {}) });
     if (r?.authorizationUrl) openUrl(r.authorizationUrl);
@@ -199,15 +200,51 @@ function AccountSection({ e, onAddAccount }: { e: ServerProviderEntry; onAddAcco
   let body;
   if (waiting) {
     const methods = flow.methods ?? [];
+    const step = flow.interaction ?? null;
+    const cancel = <Button onClick={() => void act.run("cancel", () => call("providerAuth.cancel", { instanceId: e.instanceId, flowId: flow.flowId ?? "" }))}>Cancel</Button>;
+    let heading = flow.phase === "verifying" ? "Checking your sign-in\u2026" : "Finish signing in in your browser.";
+    let detail: ReactNode = <div style={text(13, MUTED)}>{flow.message ?? "We opened the sign-in page. When you approve there, this updates by itself."}</div>;
+    let actions: ReactNode = (
+      <>
+        {flow.authorizationUrl ? <Button primary onClick={() => openUrl(flow.authorizationUrl!)}>Open browser again</Button> : null}
+        {flow.authorizationUrl ? <Button onClick={() => void navigator.clipboard?.writeText(flow.authorizationUrl!)}>Copy sign-in link</Button> : null}
+        {cancel}
+      </>
+    );
+    if (step?.type === "credentials" && flow.phase !== "verifying") {
+      heading = "Enter your credentials.";
+      detail = <Credentials fields={step.fields} values={secrets} onChange={setSecrets} />;
+      actions = (
+        <>
+          <Button primary disabled={act.busy !== null || step.fields.some((f) => !(secrets[f.name] ?? "").trim())}
+            onClick={() => void act.run("respond", async () => {
+              const values = Object.fromEntries(step.fields.map((f) => [f.name, secrets[f.name] ?? ""]));
+              setSecrets({});
+              await call("providerAuth.respond", { instanceId: e.instanceId, flowId: flow.flowId ?? "", interactionId: step.id, response: { type: "credentials", values } });
+            })}>Sign in</Button>
+          {cancel}
+        </>
+      );
+    } else if (step?.type === "deviceCode") {
+      heading = "Enter this code on the sign-in page.";
+      detail = <div style={{ ...text(18, INK, 600), letterSpacing: "0.08em", fontFamily: "ui-monospace, Menlo, monospace" }}>{step.userCode}</div>;
+      actions = (
+        <>
+          <Button primary onClick={() => openUrl(step.url)}>Open sign-in page</Button>
+          <Button onClick={() => void navigator.clipboard?.writeText(step.userCode)}>Copy code</Button>
+          {cancel}
+        </>
+      );
+    } else if (step?.type === "terminal") {
+      heading = "Finish signing in in the provider\u2019s terminal.";
+      detail = <pre style={{ margin: 0, maxHeight: 160, overflow: "auto", whiteSpace: "pre-wrap", ...text(12, MUTED), fontFamily: "ui-monospace, Menlo, monospace" }}>{step.output}</pre>;
+      actions = cancel;
+    }
     body = (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={text(15, INK, 600)}>{flow.phase === "verifying" ? "Checking your sign-in\u2026" : "Finish signing in in your browser."}</div>
-        <div style={text(13, MUTED)}>{flow.message ?? "We opened the sign-in page. When you approve there, this updates by itself."}</div>
-        <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
-          {flow.authorizationUrl ? <Button primary onClick={() => openUrl(flow.authorizationUrl!)}>Open browser again</Button> : null}
-          {flow.authorizationUrl ? <Button onClick={() => void navigator.clipboard?.writeText(flow.authorizationUrl!)}>Copy sign-in link</Button> : null}
-          <Button onClick={() => void act.run("cancel", () => call("providerAuth.cancel", { instanceId: e.instanceId, flowId: flow.flowId ?? "" }))}>Cancel</Button>
-        </div>
+        <div style={text(15, INK, 600)}>{heading}</div>
+        {detail}
+        <div style={{ alignItems: "center", display: "flex", gap: 8 }}>{actions}</div>
         {flow.expiresAt ? <div style={text(12, FAINT)}>The link stops working at {clockTime(flow.expiresAt)}. If it does, start again here.</div> : null}
         {methods.length > 0 ? (
           <>
@@ -256,6 +293,24 @@ function AccountSection({ e, onAddAccount }: { e: ServerProviderEntry; onAddAcco
         </div>
       ) : null}
     </Section>
+  );
+}
+
+/** A credentials step (v1 ProviderAuthInteraction credentials): secret fields are password inputs; values live only in
+ * this component until they are sent once with provider_auth_respond. */
+function Credentials({ fields, values, onChange }: {
+  fields: ReadonlyArray<{ name: string; label: string; secret: boolean }>; values: Record<string, string>; onChange: (v: Record<string, string>) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {fields.map((f) => (
+        <Row key={f.name} label={f.label}>
+          <input aria-label={f.label} type={f.secret ? "password" : "text"} autoComplete="off" value={values[f.name] ?? ""}
+            onChange={(ev) => onChange({ ...values, [f.name]: ev.target.value })}
+            style={{ all: "unset", boxSizing: "border-box", width: "100%", height: 28, paddingInline: 8, borderRadius: 8, boxShadow: "#DFDFDF 0px 0px 0px 1px inset", ...text(13) }} />
+        </Row>
+      ))}
+    </div>
   );
 }
 

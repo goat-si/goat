@@ -11,7 +11,7 @@ import { favoriteKey, toggleFavorite, useFavorites } from "./favorites.ts";
 import { openProviders } from "./navigation.ts";
 import { addedProviders, providerState, title, iconOf } from "./view.ts";
 import type { ServerProviderEntry, ServerProviderModel } from "./wire.ts";
-import { DotMark, FAINT, INK, LINE, Logo, MUTED, text } from "./ui.tsx";
+import { DotMark, FAINT, INK, LINE, Logo, MUTED, Toggle, text } from "./ui.tsx";
 
 export interface Selection { instanceId: string; model: string; options?: Array<{ id: string; value: string | boolean }> }
 
@@ -34,15 +34,29 @@ export function useThreadModelChange(threadId: string | null) {
 }
 
 const REASONING = "reasoningEffort";
-const reasoningOf = (m: ServerProviderModel | undefined) => {
-  const d = m?.capabilities?.optionDescriptors?.find((o) => o.id === REASONING);
-  return d && d.type === "select" ? d : null;
-};
-const effortOf = (selection: Selection, m: ServerProviderModel | undefined) => {
-  const r = reasoningOf(m);
-  const v = selection.options?.find((o) => o.id === REASONING)?.value;
-  return { r, id: typeof v === "string" ? v : r?.currentValue ?? r?.options.find((o) => o.isDefault)?.id };
-};
+type Descriptor = NonNullable<NonNullable<ServerProviderModel["capabilities"]>["optionDescriptors"]>[number];
+const optionLabel = (d: Descriptor) => (d.id === REASONING ? "Reasoning" : d.label);
+/** The chosen value of an option: the selection's, else the model's current value, else its default choice. */
+function optionValue(selection: Selection, d: Descriptor): string | boolean | undefined {
+  const v = selection.options?.find((o) => o.id === d.id)?.value;
+  if (d.type === "boolean") return typeof v === "boolean" ? v : d.currentValue;
+  return typeof v === "string" ? v : d.currentValue ?? d.options.find((o) => o.isDefault)?.id;
+}
+const withOption = (selection: Selection, id: string, value: string | boolean): Selection =>
+  ({ ...selection, options: [...(selection.options ?? []).filter((x) => x.id !== id), { id, value }] });
+/** Trigger suffix: the reasoning level, and a non-default service tier (board 1QM8-2 shows "High"). */
+function triggerOptions(selection: Selection, m: ServerProviderModel | undefined): string | null {
+  const out: string[] = [];
+  for (const d of m?.capabilities?.optionDescriptors ?? []) {
+    if (d.type !== "select") continue;
+    const id = optionValue(selection, d);
+    const choice = d.options.find((o) => o.id === id);
+    if (!choice) continue;
+    if (d.id === REASONING) out.unshift(choice.label);
+    else if (d.id === "serviceTier" && !choice.isDefault) out.push(choice.label);
+  }
+  return out.length ? out.join(" \u00b7 ") : null;
+}
 
 export function ModelChip({ selection, onChange, label, disabled, error, variant = "composer" }: {
   selection: Selection;
@@ -68,8 +82,7 @@ export function ModelChip({ selection, onChange, label, disabled, error, variant
   const entry = entries.find((e) => e.instanceId === selection.instanceId);
   const model = entry?.probe.models.find((m) => m.slug === selection.model);
   const short = model ? resolveModelShortName(model, entry?.driver) ?? model.name : selection.model;
-  const { r: reasoning, id: effortId } = effortOf(selection, model);
-  const effort = reasoning?.options.find((o) => o.id === effortId)?.label ?? null;
+  const effort = triggerOptions(selection, model);
   const off = disabled === true || onChange === null;
   const driver = entry?.driver ?? (selection.instanceId.split("-")[0] ?? "codex");
   const trigger = variant === "composer" ? (
@@ -116,7 +129,9 @@ export function ModelPicker({ entries, selection, width, onPick, onClose }: {
     }
   }
   const current = providers.find((p) => p.instanceId === selection.instanceId);
-  const { r: reasoning, id: effortId } = effortOf(selection, current?.probe.models.find((m) => m.slug === selection.model));
+  // Every option the model declares (v1 ProviderOptionDescriptor): reasoning first, then service tier and the rest.
+  const descriptors = [...(current?.probe.models.find((m) => m.slug === selection.model)?.capabilities?.optionDescriptors ?? [])]
+    .sort((a, b) => Number(b.id === REASONING) - Number(a.id === REASONING));
   const needing = providers.filter((p) => providerState(p).need === "sign-in");
   const tabEntry = providers.find((p) => p.instanceId === tab);
   const header = q ? "Results" : tab === "favorites" || !tabEntry ? "Favorites" : title(tabEntry);
@@ -176,22 +191,22 @@ export function ModelPicker({ entries, selection, width, onPick, onClose }: {
           })}
           {rows.length === 0 ? <div style={{ ...text(12, FAINT), padding: "8px 10px" }}>{tab === "favorites" && !q ? "Star a model to keep it here." : q ? "No model matches." : "This provider has not reported its models yet."}</div> : null}
         </div>
-        {reasoning ? (
-          <div role="group" aria-label={reasoning.label} style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: 8, marginTop: 6, paddingBottom: 6, paddingInline: 10, paddingTop: 10 }}>
-            <div style={{ ...text(12, MUTED), flex: "1 1 0%" }}>Reasoning</div>
-            {reasoning.options.map((o) => {
-              const on = o.id === effortId;
+        {descriptors.map((d, n) => (
+          <div key={d.id} role="group" aria-label={optionLabel(d)} style={{ alignItems: "center", display: "flex", gap: 8, paddingInline: 10,
+            ...(n === 0 ? { borderTop: `1px solid ${LINE}`, marginTop: 6, paddingTop: 10 } : { paddingTop: 4 }), paddingBottom: 6 }}>
+            <div style={{ ...text(12, MUTED), flex: "1 1 0%" }}>{optionLabel(d)}</div>
+            {d.type === "select" ? d.options.map((o) => {
+              const on = o.id === optionValue(selection, d);
               return (
-                <button key={o.id} type="button" aria-pressed={on}
-                  onClick={() => onPick({ ...selection, options: [...(selection.options ?? []).filter((x) => x.id !== REASONING), { id: REASONING, value: o.id }] })}
+                <button key={o.id} type="button" aria-pressed={on} title={o.description} onClick={() => onPick(withOption(selection, d.id, o.id))}
                   style={{ all: "unset", boxSizing: "border-box", alignItems: "center", borderRadius: 6, display: "flex", height: 24, paddingInline: 9, cursor: "pointer",
                     ...(on ? { backgroundColor: INK } : { boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }) }}>
                   <span style={text(12, on ? "#FFFFFF" : INK, 500)}>{o.label}</span>
                 </button>
               );
-            })}
+            }) : <Toggle on={optionValue(selection, d) === true} label={optionLabel(d)} onChange={(on) => onPick(withOption(selection, d.id, on))} />}
           </div>
-        ) : null}
+        ))}
         {needing.length > 0 ? (
           <div style={{ alignItems: "center", backgroundColor: "#F4F7FE", borderRadius: 8, display: "flex", gap: 8, marginTop: 4, paddingBlock: 8, paddingInline: 10 }}>
             <DotMark dot="blue" />

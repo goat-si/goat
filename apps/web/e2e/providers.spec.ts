@@ -50,6 +50,28 @@ test("sign-in: Sign in starts the browser flow; when it finishes the account sho
   await expect(row(page, "claudeAgent")).toHaveText(/^ClaudeReady/);
 });
 
+test("credentials sign-in: another way -> API key; the key goes out once in provider_auth_respond and is never stored", async ({ page }) => {
+  await page.goto("/?fake=2LET-2");
+  await page.evaluate(() => { window.open = () => null; });
+  await main(page).getByRole("button", { name: "Sign in", exact: true }).click();
+  await main(page).getByRole("button", { name: "Use another way to sign in" }).click();
+  await main(page).getByRole("button", { name: "API key", exact: true }).click();
+  await expect(main(page).getByText("Enter your credentials.")).toBeVisible();
+  const key = main(page).getByLabel("API key");
+  await expect(key).toHaveAttribute("type", "password");
+  await key.fill("sk-demo-123");
+  await main(page).getByRole("button", { name: "Sign in", exact: true }).click();
+  // The demo host never takes secrets (it refuses auth responses and redacts them in its log); the real host hands
+  // them to the driver. The refusal shows as a sentence.
+  await expect(main(page).getByRole("alert")).toContainText("not available in the demo host");
+  const responds = await sent(page, "provider_auth_respond");
+  expect(responds).toEqual([expect.objectContaining({ instanceId: "claudeAgent", response: expect.objectContaining({ type: "credentials" }) })]);
+  expect(JSON.stringify(responds)).toContain("apiKey");
+  expect(JSON.stringify(responds)).not.toContain("sk-demo-123");
+  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("sk-demo-123");
+  await expect(key).toHaveValue("");
+});
+
 test("ACP URL auth: Continue authentication accepts the engine's sign-in link", async ({ page }) => {
   await page.goto("/?fake=1Q0P-2");
   await page.evaluate(() => { window.open = () => null; });
@@ -167,6 +189,10 @@ test("composer picker: picking a model and a reasoning level changes the bot thr
   await picker.getByRole("button", { name: "Medium", exact: true }).click();
   await expect.poll(async () => (await sent(page, "change_thread")).at(-1)).toEqual(expect.objectContaining({
     modelSelection: { instanceId: "codex", model: "gpt-6.1-terra", options: [{ id: "reasoningEffort", value: "medium" }] } }));
+  await picker.getByRole("button", { name: "Fast", exact: true }).click();
+  await expect.poll(async () => (await sent(page, "change_thread")).at(-1)).toEqual(expect.objectContaining({
+    modelSelection: { instanceId: "codex", model: "gpt-6.1-terra", options: [{ id: "reasoningEffort", value: "medium" }, { id: "serviceTier", value: "fast" }] } }));
+  await expect(page.getByRole("button", { name: "Reviewer model: gpt-6.1-terra" })).toContainText("Medium · Fast");
   await picker.getByRole("button", { name: "Add GPT-6 Luna to favorites" }).click();
   await picker.getByRole("button", { name: "Favorites", exact: true }).click();
   await expect(picker.getByRole("listitem")).toHaveCount(1);

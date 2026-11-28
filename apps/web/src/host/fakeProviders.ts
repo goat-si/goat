@@ -21,11 +21,13 @@ export type ProviderCommandOutcome =
 const model = (slug: string, name: string, isDefault = false): ServerProviderModel =>
   ({ slug, name, isCustom: false, ...(isDefault ? { isDefault: true } : {}), capabilities: null });
 
-/** Codex models offer reasoning effort (v1 codex option descriptors). */
+/** Codex models offer reasoning effort and service tier (v1 codex option descriptors; goat2-engine-codex probe.rs). */
 const codexModel = (slug: string, name: string, isDefault = false): ServerProviderModel => ({
   ...model(slug, name, isDefault),
   capabilities: { optionDescriptors: [{ type: "select", id: "reasoningEffort", label: "Reasoning", currentValue: "high",
-    options: [{ id: "low", label: "Low" }, { id: "medium", label: "Medium" }, { id: "high", label: "High", isDefault: true }] }] },
+    options: [{ id: "low", label: "Low" }, { id: "medium", label: "Medium" }, { id: "high", label: "High", isDefault: true }] },
+    { type: "select", id: "serviceTier", label: "Service Tier", currentValue: "default",
+      options: [{ id: "default", label: "Standard", isDefault: true }, { id: "fast", label: "Fast" }] }] },
 });
 
 const probe = (at: string, p: Partial<ProviderProbeResult> & Pick<ProviderProbeResult, "installed" | "status">): ProviderProbeResult =>
@@ -172,9 +174,19 @@ export class FakeProviders {
       case "provider_auth_start": {
         const e = this.entry(f.instanceId);
         if (!e) return this.missing(f.instanceId);
-        const url = e.probe.auth.action?.url ?? `https://example.com/${e.driver}/sign-in?demo=1`;
-        const state: ProviderAuthState = { instanceId: e.instanceId, phase: "waiting", flowId: `auth-${++this.seq}`, authorizationUrl: url, expiresAt: null, message: e.probe.auth.action?.message ?? null,
-          interaction: { type: "browser", id: `interaction-${this.seq}`, url, requiresConsent: false } };
+        const methods = [
+          { id: "browser", name: "Browser", description: null, type: "agent" as const },
+          { id: "api-key", name: "API key", description: null, type: "credentials" as const },
+        ];
+        const flowId = `auth-${++this.seq}`;
+        const state: ProviderAuthState = f.methodId === "api-key"
+          ? { instanceId: e.instanceId, phase: "waiting", flowId, authorizationUrl: null, expiresAt: null, message: null, methods,
+              interaction: { type: "credentials", id: `interaction-${this.seq}`, fields: [{ name: "apiKey", label: "API key", secret: true }] } }
+          : (() => {
+              const url = e.probe.auth.action?.url ?? `https://example.com/${e.driver}/sign-in?demo=1`;
+              return { instanceId: e.instanceId, phase: "waiting" as const, flowId, authorizationUrl: url, expiresAt: null, message: e.probe.auth.action?.message ?? null, methods,
+                interaction: { type: "browser" as const, id: `interaction-${this.seq}`, url, requiresConsent: false } };
+            })();
         this.replace({ ...e, authFlow: state });
         return { ok: true, value: { authState: state } };
       }

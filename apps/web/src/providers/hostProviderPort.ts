@@ -10,7 +10,6 @@ export const UNSERVED: Partial<Record<ProviderPortMethod, string>> = {
   "server.updateProvider": "Updating a provider's CLI from GOAT is not available yet.",
   "server.uninstallAcpRegistryManagedBinary": "Removing an installed registry agent from GOAT is not available yet.",
   "providerInstall.remove": "Removing an installed provider from GOAT is not available yet.",
-  "providerAuth.respond": "This sign-in step is not available in GOAT yet; sign in from the provider's own CLI.",
   "providerAuth.complete": "This sign-in step is not available in GOAT yet; sign in from the provider's own CLI.",
 };
 
@@ -40,6 +39,10 @@ export function toCommand(method: ProviderPortMethod, payload: unknown): Provide
     case "providerAuth.start": return { type: "provider_auth_start", instanceId, ...(str(p, "methodId") ? { methodId: str(p, "methodId")! } : {}) };
     case "providerAuth.cancel": return { type: "provider_auth_cancel", instanceId, flowId: str(p, "flowId") ?? "" };
     case "providerAuth.logout": return { type: "provider_auth_logout", instanceId };
+    // A response can carry credentials: it is sent once and never stored (HostClient.command sends directly, no outbox).
+    case "providerAuth.respond":
+      return { type: "provider_auth_respond", instanceId, flowId: str(p, "flowId") ?? "", interactionId: str(p, "interactionId") ?? "",
+        response: p.response as Extract<ProviderCommandBody, { type: "provider_auth_respond" }>["response"] };
     default: return null;
   }
 }
@@ -51,7 +54,7 @@ function toResult(method: ProviderPortMethod, value: ProviderCommandValue): unkn
     case "server.prepareAcpRegistryAgent": return value.registryPrepare;
     case "server.acceptAcpRegistryUrlAuth": return { accepted: value.accepted === true };
     case "providerInstall.start": case "providerInstall.cancel": return value.installState;
-    case "providerAuth.start": case "providerAuth.cancel": case "providerAuth.logout": return value.authState;
+    case "providerAuth.start": case "providerAuth.cancel": case "providerAuth.logout": case "providerAuth.respond": return value.authState;
     default: return undefined;
   }
 }

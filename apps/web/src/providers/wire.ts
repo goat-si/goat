@@ -9,7 +9,7 @@ import type { ClientFrame, CommandValue, HostFrame } from "@goat2/contracts-rs";
 
 type ProviderCommandType =
   | "refresh_providers" | "provider_install_start" | "provider_install_cancel" | "provider_auth_start" | "provider_auth_cancel"
-  | "provider_auth_logout" | "accept_acp_registry_url_auth" | "search_acp_registry" | "prepare_acp_registry_agent" | "set_provider_instance";
+  | "provider_auth_logout" | "provider_auth_respond" | "accept_acp_registry_url_auth" | "search_acp_registry" | "prepare_acp_registry_agent" | "set_provider_instance";
 /** The provider commands (ClientFrame variants) without reqId / clientRequestId. */
 export type ProviderCommandBody = ClientFrame extends infer F
   ? F extends { type: ProviderCommandType } ? Omit<F, "reqId" | "clientRequestId"> : never

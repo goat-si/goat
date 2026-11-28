@@ -88,7 +88,7 @@ describe("hostProviderPort + fake host", () => {
   it("refuses what GOAT 2 does not serve, and host refusals, with a sentence", async () => {
     const { port } = setup();
     await tick(5);
-    await expect(port.call("providerAuth.respond", {})).rejects.toThrow(/not available in GOAT yet/);
+    await expect(port.call("providerAuth.complete", {})).rejects.toThrow(/not available in GOAT yet/);
     await expect(port.call("providerAuth.start", { instanceId: "nope" })).rejects.toThrow("No provider instance nope.");
   });
 
