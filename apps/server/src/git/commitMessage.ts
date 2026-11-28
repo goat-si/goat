@@ -23,7 +23,11 @@ export function sanitizeCommitMessage(
           (_, prefix: string, word: string) => prefix + word.toLowerCase(),
         )
       : trimmedSubject;
-  const safeSubject = subject.length > 0 ? subject.slice(0, 72).trimEnd() : "Update project files";
+  const safeSubject =
+    subject
+      .slice(0, 72)
+      .replace(/[\uD800-\uDBFF]$/u, "")
+      .trimEnd() || "Update project files";
   return {
     subject: safeSubject,
     body: generated.body.trim(),
@@ -39,7 +43,10 @@ export function sanitizeProgressText(value: string): string | null {
   if (trimmed.length <= MAX_PROGRESS_TEXT_LENGTH) {
     return trimmed;
   }
-  return trimmed.slice(0, MAX_PROGRESS_TEXT_LENGTH).trimEnd();
+  return trimmed
+    .slice(0, MAX_PROGRESS_TEXT_LENGTH)
+    .replace(/[\uD800-\uDBFF]$/u, "")
+    .trimEnd();
 }
 
 export interface CommitAndBranchSuggestion {
