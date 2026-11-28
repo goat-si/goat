@@ -223,7 +223,8 @@ struct Shared {
     init: OnceLock<InitializeInfo>,
     conn: OnceLock<Conn>,
     child: tokio::sync::Mutex<Option<ChildProcess>>,
-    pgid: Option<i32>,
+    /// The agent's process group, set once it is spawned.
+    pgid: OnceLock<i32>,
     exited: AtomicBool,
     timeouts: AcpTimeouts,
     resolver: Option<AttachmentResolver>,
@@ -805,7 +806,15 @@ impl Shared {
             let mut state = self.state.lock().expect("state");
             let Some(turn_id) = state.turn.as_ref().map(|t| t.turn_id.clone()) else {
                 drop(state);
-                respond(responder, json!({"action": "cancel"}));
+                if mode == "url" {
+                    // Setup or a probe: nobody can consent now. Show the link (the host keeps a
+                    // session sign-in; a probe records it) and decline, as v1 does without a
+                    // coordinator that admits it (probe.ts:440-466, adapter.ts:5329-5362).
+                    self.auth_required(text_field(&params, "url"), Some(message));
+                    respond(responder, json!({"action": "decline"}));
+                } else {
+                    respond(responder, json!({"action": "cancel"}));
+                }
                 return;
             };
             if let Some(turn) = state.turn.as_mut() {
@@ -817,22 +826,39 @@ impl Shared {
                 None => format!("elicitation:{}", state.request_counter),
             };
             if mode == "url" {
-                let url = text_field(&params, "url");
-                drop(state);
-                for event in out {
-                    emit(self, event);
-                }
-                // v1 `onUrlElicitation`: a sign-in or consent page; the person opens it.
-                self.auth_required(url, Some(message));
-                let mut state = self.state.lock().expect("state");
+                // v1 registry onUrlElicitation (adapter.ts:5329-5362, AcpRegistryRuntimeCoordinator
+                // requestUrlAuthentication): the person consents to open the page; their answer
+                // accepts or declines. The request carries the link in its summary.
+                let Some(url) = text_field(&params, "url") else {
+                    drop(state);
+                    respond(responder, json!({"action": "decline"}));
+                    return;
+                };
+                let summary = if message.is_empty() {
+                    format!("Sign in: {url}")
+                } else {
+                    format!("{message} {url}")
+                };
                 state.pending.insert(
-                    key,
+                    key.clone(),
                     Pending::Elicitation {
                         responder,
                         form: None,
                         nested,
                     },
                 );
+                out.push(EngineEvent::RequestOpened {
+                    turn_id,
+                    key,
+                    item_id: None,
+                    kind: RequestKind::Signin,
+                    summary,
+                    item: None,
+                });
+                drop(state);
+                for event in out {
+                    emit(self, event);
+                }
                 return;
             }
             let schema = params
@@ -1678,12 +1704,12 @@ impl EngineSession for AcpSession {
     }
 
     fn group_rss_bytes(&self) -> Option<u64> {
-        let pgid = self.shared.pgid?;
+        let pgid = self.shared.pgid.get().copied()?;
         crate::process::group_rss_bytes_of(pgid as u32).ok()
     }
 
     fn process_group_id(&self) -> Option<i32> {
-        self.shared.pgid
+        self.shared.pgid.get().copied()
     }
 
     async fn shutdown(&self) {
@@ -1850,7 +1876,7 @@ impl AcpEngineFactory {
             init: OnceLock::new(),
             conn: OnceLock::new(),
             child: tokio::sync::Mutex::new(None),
-            pgid: None,
+            pgid: OnceLock::new(),
             exited: AtomicBool::new(false),
             timeouts: self.timeouts.clone(),
             resolver: self.resolver.clone(),
@@ -1880,13 +1906,10 @@ impl AcpEngineFactory {
         let stdout = child
             .take_stdout()
             .ok_or_else(|| EngineError::StartFailed("no stdout".into()))?;
-        // Safe: nothing else holds `shared` yet except the stderr hook's weak pointer.
-        let shared = {
-            let mut owned = Arc::try_unwrap(shared)
-                .map_err(|_| EngineError::StartFailed("shared state in use".into()))?;
-            owned.pgid = pgid;
-            Arc::new(owned)
-        };
+        // The same Arc stays live: the stderr hook's weak pointer must keep reaching it.
+        if let Some(pgid) = pgid {
+            let _ = shared.pgid.set(pgid);
+        }
         *shared.child.lock().await = Some(child);
 
         // Transport: newline-delimited JSON with the flavor looking at every stdout line first.
@@ -2085,7 +2108,8 @@ impl AcpEngineFactory {
         let init = InitializeInfo::from_value(&init_value);
         let _ = shared.init.set(init.clone());
 
-        if let AuthPolicy::Eager { method_id } = flavor.auth_policy() {
+        // A probe never signs in, eagerly or on demand (v1 probe.ts:418-432; review 1 finding 3).
+        if let (false, AuthPolicy::Eager { method_id }) = (self.probe, flavor.auth_policy()) {
             let request = AuthenticateRequest::new(method_id.clone());
             if let Err(error) = shared
                 .request(

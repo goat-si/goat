@@ -21,6 +21,8 @@ struct MockFlavor {
     steers: bool,
     restart_after_interrupt: bool,
     prefers_http_mcp: bool,
+    /// Treat stderr lines starting "LOGIN " as sign-in URLs.
+    stderr_url: bool,
 }
 
 impl MockFlavor {
@@ -33,6 +35,7 @@ impl MockFlavor {
             steers: false,
             restart_after_interrupt: false,
             prefers_http_mcp: false,
+            stderr_url: false,
         }
     }
 }
@@ -62,6 +65,11 @@ impl AcpFlavor for MockFlavor {
     }
     fn prefers_http_mcp(&self) -> bool {
         self.prefers_http_mcp
+    }
+    fn stderr_auth_url(&self, line: &str) -> Option<String> {
+        self.stderr_url
+            .then(|| line.strip_prefix("LOGIN ").map(str::to_owned))
+            .flatten()
     }
     fn session_mode_for(
         &self,
@@ -893,4 +901,79 @@ async fn missing_bridge_fails_closed() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("MCP bridge"), "{error}");
+}
+
+/// v1 registry onUrlElicitation: a sign-in page during a turn is a request the person answers;
+/// accepting answers the agent with accept, anything else declines (review 1 finding 1).
+#[tokio::test]
+async fn url_elicitation_is_an_answerable_signin() {
+    for (outcome, expected) in [
+        (RequestOutcome::Accept, r#"{"action":"accept"}"#),
+        (RequestOutcome::Decline, r#"{"action":"decline"}"#),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let flavor = MockFlavor::new(&[("GOAT_ACP_EMIT_URL_ELICITATION", "1")]);
+        let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+        handle
+            .session
+            .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+            .await;
+        let mut events = Vec::new();
+        let finished = loop {
+            let event = next(&mut handle).await;
+            if let EngineEvent::RequestOpened {
+                key, kind, summary, ..
+            } = &event
+            {
+                assert_eq!(*kind, RequestKind::Signin);
+                assert!(
+                    summary.contains("https://example.invalid/sign-in"),
+                    "{summary}"
+                );
+                handle
+                    .session
+                    .answer_request(
+                        key,
+                        RequestAnswer {
+                            outcome,
+                            text: None,
+                            answers: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            if let EngineEvent::TurnFinished { outcome, .. } = &event {
+                break outcome.clone();
+            }
+            events.push(event);
+        };
+        assert_eq!(finished, TurnOutcome::Done);
+        assert!(
+            answer_text(&events).contains(&format!("url elicitation: {expected}")),
+            "{}",
+            answer_text(&events)
+        );
+        handle.session.shutdown().await;
+    }
+}
+
+/// A sign-in URL the agent prints on stderr reaches the host after startup (the stderr hook keeps
+/// pointing at the live session state; review 1 finding 4).
+#[tokio::test]
+async fn stderr_signin_url_reaches_the_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut flavor = MockFlavor::new(&[(
+        "GOAT_ACP_STDERR_LINE",
+        "LOGIN https://example.invalid/device",
+    )]);
+    flavor.stderr_url = true;
+    let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    loop {
+        if let EngineEvent::AuthRequired { url, .. } = next(&mut handle).await {
+            assert_eq!(url.as_deref(), Some("https://example.invalid/device"));
+            break;
+        }
+    }
+    handle.session.shutdown().await;
 }

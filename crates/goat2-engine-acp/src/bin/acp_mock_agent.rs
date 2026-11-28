@@ -30,6 +30,8 @@
 //! - `GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE=1` (GOAT 2): `_x.ai/exit_plan_mode` with `# Plan`, the reply printed as
 //!   `xai plan: <json>`.
 //! - `GOAT_ACP_EMIT_URL_ELICITATION=1`: a url-mode elicitation.
+//! - `GOAT_ACP_URL_ELICITATION_ON_NEW=1` (GOAT 2): `session/new` first sends a url-mode sign-in elicitation and
+//!   records the answer in `GOAT_ACP_ELICITATION_RESPONSE_LOG_PATH`, then answers -32000.
 //! - `GOAT_ACP_EMIT_NOTICE=1`: the v1 notice list (valid, malformed and blank).
 //! - `GOAT_ACP_HANG_PROMPT_FOREVER=1`: `partial before stall`, then wait for `session/cancel`.
 //! - `GOAT_ACP_EXIT_ON_CANCEL=1`: exit on `session/cancel` instead of answering.
@@ -196,6 +198,16 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                 agent.authenticated.store(true, Ordering::SeqCst);
                 agent.respond(&id, json!({}));
             }
+        }
+        "session/new" if flag("GOAT_ACP_URL_ELICITATION_ON_NEW") => {
+            let agent2 = Arc::clone(&agent);
+            std::thread::spawn(move || {
+                let answer = agent2.request("elicitation/create", json!({"mode": "url", "elicitationId": "login-1", "message": "Sign in", "url": "https://example.invalid/login"}));
+                if let Some(path) = env("GOAT_ACP_ELICITATION_RESPONSE_LOG_PATH") {
+                    let _ = std::fs::write(path, answer.to_string());
+                }
+                agent2.error(&id, -32000, "Authentication required");
+            });
         }
         "session/new" => {
             if env("GOAT_ACP_AUTH_METHOD_ID").is_some()

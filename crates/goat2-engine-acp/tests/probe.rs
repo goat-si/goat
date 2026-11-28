@@ -10,7 +10,7 @@ use goat2_engine_acp::{AcpEngineFactory, AcpFlavor, LaunchCommand, McpBridgeComm
 use goat2_engine_api::{EngineError, McpEndpoint, SessionSpec};
 use serde_json::Value;
 
-struct Mock(Vec<(String, String)>);
+struct Mock(Vec<(String, String)>, bool);
 
 impl AcpFlavor for Mock {
     fn driver(&self) -> &str {
@@ -19,6 +19,15 @@ impl AcpFlavor for Mock {
     fn engine_driver(&self) -> EngineDriver {
         EngineDriver::AcpRegistry {
             agent_id: "mock".into(),
+        }
+    }
+    fn auth_policy(&self) -> goat2_engine_acp::AuthPolicy {
+        if self.1 {
+            goat2_engine_acp::AuthPolicy::Eager {
+                method_id: "mock-login".into(),
+            }
+        } else {
+            goat2_engine_acp::AuthPolicy::OnRequired { method_id: None }
         }
     }
     fn launch(&self, _spec: &SessionSpec) -> Result<LaunchCommand, EngineError> {
@@ -32,10 +41,15 @@ impl AcpFlavor for Mock {
 }
 
 fn factory(env: &[(&str, &str)]) -> AcpEngineFactory {
+    factory_with(env, false)
+}
+
+fn factory_with(env: &[(&str, &str)], eager: bool) -> AcpEngineFactory {
     AcpEngineFactory::new(Arc::new(Mock(
         env.iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
+        eager,
     )))
     .with_mcp_bridge(McpBridgeCommand::new(
         "/goat2-test/bin/goat2-acp-mcp-bridge",
@@ -134,4 +148,50 @@ async fn probe_skips_delete_when_not_advertised() {
     assert!(probe.session.available_commands().is_none());
     probe.close().await;
     assert!(!methods(&log).contains(&"session/delete".to_owned()));
+}
+
+/// A sign-in URL sent during setup reaches the probe result and is declined (nobody can consent
+/// during a probe; v1 probe.ts:440-466 without a coordinator).
+#[tokio::test]
+async fn probe_records_a_setup_signin_url_and_declines_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let answer = dir.path().join("answer.json");
+    let failure = match factory(&[
+        ("GOAT_ACP_URL_ELICITATION_ON_NEW", "1"),
+        (
+            "GOAT_ACP_ELICITATION_RESPONSE_LOG_PATH",
+            answer.to_str().unwrap(),
+        ),
+    ])
+    .open_probe(spec(dir.path()))
+    .await
+    {
+        Ok(_) => panic!("probe opened a session that needs a sign-in"),
+        Err(failure) => failure,
+    };
+    assert!(failure.auth_required, "{failure:?}");
+    assert_eq!(
+        failure.auth_url.as_deref(),
+        Some("https://example.invalid/login")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&answer).unwrap(),
+        r#"{"action":"decline"}"#
+    );
+}
+
+/// Eager sign-in flavors (Antigravity) do not sign in during a probe either (review 1 finding 3).
+#[tokio::test]
+async fn probe_skips_eager_signin() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let probe = factory_with(
+        &[("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap())],
+        true,
+    )
+    .open_probe(spec(dir.path()))
+    .await
+    .expect("probe");
+    probe.close().await;
+    assert!(!methods(&log).contains(&"authenticate".to_owned()));
 }
