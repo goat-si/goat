@@ -84,7 +84,14 @@ pub struct ClaudeEngineOptions {
     /// v1 `CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS` (65 minutes): GOAT's wait tools block up to an hour.
     pub mcp_tool_timeout_ms: u64,
     pub attachments: Option<AttachmentResolver>,
+    /// Test seam: called with the process generation and the raw line after a stdout line is
+    /// received and before it is applied, so tests can hold a frame across a generation change.
+    #[doc(hidden)]
+    pub frame_hook: Option<FrameHook>,
 }
+
+/// See [ClaudeEngineOptions::frame_hook].
+pub type FrameHook = Arc<dyn Fn(u64, &str) + Send + Sync>;
 
 impl Default for ClaudeEngineOptions {
     fn default() -> Self {
@@ -97,6 +104,7 @@ impl Default for ClaudeEngineOptions {
             steer_ack_timeout: Duration::from_secs(10),
             mcp_tool_timeout_ms: 65 * 60 * 1000,
             attachments: None,
+            frame_hook: None,
         }
     }
 }
@@ -618,6 +626,9 @@ impl Inner {
     fn on_line(&self, generation: u64, line: &str) {
         if generation != self.generation.load(Ordering::SeqCst) {
             return;
+        }
+        if let Some(hook) = &self.options.frame_hook {
+            hook(generation, line);
         }
         let Ok(frame) = protocol::parse_line(line) else {
             return;

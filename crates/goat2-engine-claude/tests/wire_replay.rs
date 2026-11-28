@@ -998,3 +998,82 @@ async fn a_queued_steer_left_unstarted_by_a_successful_turn_is_cancelled() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// Review round 7 finding 1: the steer's write is still blocked when the CLI's first frame shows
+/// it has no `command_lifecycle`; the steer is accepted only once its write lands, so a write that
+/// never lands is neither reported nor accepted.
+#[tokio::test]
+async fn a_steer_blocked_before_lifecycle_is_known_is_not_accepted_unwritten() {
+    let run = Run::new("wire/steer_blocked_before_first_frame.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let big = "x".repeat(512 * 1024);
+    let EngineHandle {
+        session, events, ..
+    } = &mut handle;
+    let steer = session.steer(&turn_id, input_as("steer-big", &big));
+    let collect = async {
+        let mut seen = Vec::new();
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+                .await
+                .expect("event within 10 s")
+                .expect("events open");
+            let exited = matches!(event, EngineEvent::Exited { .. });
+            seen.push(event);
+            if exited {
+                return seen;
+            }
+        }
+    };
+    let (steered, seen) = tokio::join!(steer, collect);
+    assert!(!matches!(steered, SteerResult::Accepted), "{steered:?}");
+    assert!(
+        steer_updates(&seen).is_empty(),
+        "an unwritten steer was reported: {:?}",
+        steer_updates(&seen)
+    );
+    handle.session.shutdown().await;
+}
+
+/// Review round 7 finding 2: a frame the old process sent is received, then held (frame hook)
+/// while a runtime-mode reopen replaces the process; it must not land in the new session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_old_frame_held_across_a_reopen_is_dropped() {
+    let run = Run::new("wire/stale_frame_across_reopen.ndjson");
+    let mut factory = run.factory();
+    factory.options.frame_hook = Some(std::sync::Arc::new(|generation, line: &str| {
+        if generation == 1 && line.contains("stale-marker") {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+        }
+    }));
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::ApprovalRequired, None),
+    )
+    .await
+    .unwrap();
+    turn(&handle, "one", MODEL, RuntimeMode::ApprovalRequired).await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    turn(&handle, "two", MODEL, RuntimeMode::FullAccess).await;
+    let events = until_finished(&mut handle).await;
+    let texts: Vec<String> = [
+        AssistantMessagePhase::Commentary,
+        AssistantMessagePhase::FinalAnswer,
+    ]
+    .into_iter()
+    .flat_map(|phase| answers(&events, phase))
+    .collect();
+    assert!(
+        !texts.iter().any(|t| t.contains("stale-marker")),
+        "an old process frame landed in the reopened session: {texts:?}"
+    );
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["two"]
+    );
+    handle.session.shutdown().await;
+}
