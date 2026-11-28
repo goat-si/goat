@@ -79,6 +79,8 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    same message). A declined steer that is still queued stays where it is; one that is neither queued
    nor in `steeredInputs` is refused. The checkpoint after `run.finished` can carry `steeredInputs`;
    it is not one of the fold keys a checkpoint must have, so older checkpoints stay usable.
+   `run.finished.tokenUsage` of the active run sets the card's `contextUsage`; a run that finishes
+   without it (including runs settled at a restart) keeps the last value.
 3. Not in a run, or when the status changes, or when a run ends, the card is published, card.json and
    the index row are written through, and then thread subscribers are notified. A failed log sync returns the
    error and poisons the thread: nothing is published, and the outcome stays uncertain until a reopen
@@ -89,6 +91,11 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    `cache_error`.
 4. `run.finished` is followed by `checkpoint {card, fold}` in the same write; the checkpoint card has
    `appliedSeq` equal to its own seq.
+4a. Caller events are limited to 64 KiB (`PayloadTooLarge`); the store's own `checkpoint` line is not,
+   because it copies the fold: open requests (a runless one can embed its waiting `item`), queued and
+   held inputs. Tail checks, reverse reads and snapshots find line starts by scanning back in 64 KiB
+   chunks and hold one line in memory at a time, so a checkpoint of a few MiB costs only its size
+   (`tests/large_checkpoint.rs`).
 5. Create: row {dirty=1, creating=1} (FULL) -> mkdir -> goat.jsonl header + `thread.created` (sync) ->
    directory syncs -> card.json + row (creating cleared); the card is announced, with its cardSeq, only
    after that and with the thread lock held. Delete: row dirty=1 -> rename the folder to
