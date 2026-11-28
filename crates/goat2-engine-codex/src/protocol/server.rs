@@ -44,6 +44,12 @@ pub enum Notification {
         usage: Value,
     },
     McpStartupStatus(Value),
+    /// Codex finished a login it started (pinned AccountLoginCompletedNotification).
+    AccountLoginCompleted {
+        login_id: Option<String>,
+        success: bool,
+        error: Option<String>,
+    },
     /// A method this build does not read.
     Unknown {
         method: String,
@@ -216,6 +222,22 @@ pub fn parse_notification(method: &str, params: Value) -> Notification {
             })
         }
         methods::MCP_STARTUP_STATUS => Ok(Notification::McpStartupStatus(params)),
+        methods::ACCOUNT_LOGIN_COMPLETED => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Completed {
+                #[serde(default)]
+                login_id: Option<String>,
+                success: bool,
+                #[serde(default)]
+                error: Option<String>,
+            }
+            decode::<Completed>(params).map(|c| Notification::AccountLoginCompleted {
+                login_id: c.login_id,
+                success: c.success,
+                error: c.error,
+            })
+        }
         other => {
             return Notification::Unknown {
                 method: other.to_string(),

@@ -170,6 +170,10 @@ pub mod methods {
     pub const TURN_START: &str = "turn/start";
     pub const TURN_STEER: &str = "turn/steer";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
+    pub const ACCOUNT_READ: &str = "account/read";
+    pub const ACCOUNT_LOGIN_START: &str = "account/login/start";
+    pub const ACCOUNT_LOGIN_CANCEL: &str = "account/login/cancel";
+    pub const ACCOUNT_LOGOUT: &str = "account/logout";
 
     pub const ERROR: &str = "error";
     pub const THREAD_STARTED: &str = "thread/started";
@@ -189,6 +193,7 @@ pub mod methods {
     pub const SERVER_REQUEST_RESOLVED: &str = "serverRequest/resolved";
     pub const TOKEN_USAGE_UPDATED: &str = "thread/tokenUsage/updated";
     pub const MCP_STARTUP_STATUS: &str = "mcpServer/startupStatus/updated";
+    pub const ACCOUNT_LOGIN_COMPLETED: &str = "account/login/completed";
 
     pub const COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
     pub const FILE_CHANGE_APPROVAL: &str = "item/fileChange/requestApproval";

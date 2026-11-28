@@ -95,11 +95,16 @@ impl Default for CodexEngineOptions {
 #[derive(Clone, Default)]
 pub struct CodexEngineFactory {
     pub options: CodexEngineOptions,
+    /// Sign-in flows by provider instance (src/auth.rs).
+    auth: std::sync::Arc<crate::auth::AuthFlows>,
 }
 
 impl CodexEngineFactory {
     pub fn new(options: CodexEngineOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            auth: Default::default(),
+        }
     }
 }
 
@@ -127,6 +132,46 @@ impl EngineFactory for CodexEngineFactory {
         target: &goat2_engine_api::ProviderTarget,
     ) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
         Ok(crate::probe::probe_instance(&self.options, target).await)
+    }
+
+    /// GOAT signs in to Codex through Codex's own login (src/auth.rs); install comes later.
+    fn setup(&self) -> goat2_contracts::ProviderSetup {
+        goat2_contracts::ProviderSetup {
+            can_authenticate: true,
+            can_install: false,
+            documentation_url: None,
+        }
+    }
+
+    async fn auth_methods(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<Vec<goat2_contracts::ProviderAuthMethod>, EngineError> {
+        Ok(self.auth.methods(&self.options, target).await)
+    }
+
+    async fn auth_start(
+        &self,
+        target: &ProviderTarget,
+        method_id: Option<String>,
+        updates: mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        self.auth.start(&self.options, target, method_id, updates)
+    }
+
+    async fn auth_cancel(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        self.auth.cancel(target, flow_id)
+    }
+
+    async fn auth_logout(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        self.auth.logout(&self.options, target).await
     }
 }
 

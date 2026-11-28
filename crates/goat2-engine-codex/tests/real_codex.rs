@@ -339,3 +339,71 @@ async fn real_codex_instance_probe_in_an_empty_overlay() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Codex's own login, started and cancelled for real in a temporary overlay home (the person's
+/// ~/.codex is not touched and nothing signs in): the browser and device-code answers are what
+/// the driver reads, and cancel ends the flow.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "runs the real installed codex"]
+async fn real_codex_sign_in_starts_and_cancels() {
+    use goat2_contracts::{ProviderAuthInteraction, ProviderAuthPhase};
+    let root = std::env::temp_dir().join(format!("goat2-real-auth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    std::fs::create_dir_all(root.join("instance")).unwrap();
+    let target = goat2_engine_api::ProviderTarget {
+        instance_id: goat2_contracts::ProviderInstanceId::new("codex_2"),
+        launch: None,
+        home: Some(root.join("instance")),
+        shared_home: Some(root.join("shared")),
+    };
+    let factory = CodexEngineFactory::new(CodexEngineOptions::default());
+    for method in ["chatgpt", "chatgpt-device-code"] {
+        let (tx, mut updates) = tokio::sync::mpsc::unbounded_channel();
+        let started = factory
+            .auth_start(&target, Some(method.into()), tx)
+            .await
+            .expect("start");
+        let flow = started.flow_id.clone().unwrap();
+        let waiting = tokio::time::timeout(Duration::from_secs(30), updates.recv())
+            .await
+            .expect("waiting in time")
+            .expect("a waiting state");
+        eprintln!(
+            "{method}: phase {:?}, interaction {}",
+            waiting.phase,
+            match &waiting.interaction {
+                Some(Some(ProviderAuthInteraction::Browser { .. })) => "browser",
+                Some(Some(ProviderAuthInteraction::DeviceCode { .. })) => "deviceCode",
+                _ => "none",
+            }
+        );
+        assert_eq!(
+            waiting.phase,
+            ProviderAuthPhase::Waiting,
+            "{:?}",
+            waiting.message
+        );
+        assert!(
+            waiting
+                .authorization_url
+                .as_deref()
+                .is_some_and(|u| u.starts_with("https://")),
+            "an https sign-in URL"
+        );
+        let cancelled = factory.auth_cancel(&target, &flow).await.expect("cancel");
+        assert_eq!(cancelled.phase, ProviderAuthPhase::Cancelled);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(40), updates.recv())
+                .await
+                .expect("the flow ends")
+                .is_none()
+        );
+    }
+    assert!(
+        !root.join("instance/auth.json").exists(),
+        "nothing signed in"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

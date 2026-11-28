@@ -6,6 +6,7 @@
 
 pub mod approvals;
 pub mod attachments;
+pub mod auth;
 pub mod capabilities;
 pub mod contract;
 pub mod engine;
