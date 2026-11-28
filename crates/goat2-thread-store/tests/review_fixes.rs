@@ -369,3 +369,86 @@ fn an_unterminated_line_of_a_newer_version_is_completed_and_stops_the_thread() {
     );
     assert!(after.ends_with(b"}\n"));
 }
+
+// Review round 2: a committed create whose first line is longer than any fixed probe window.
+#[test]
+fn a_committed_create_with_a_huge_first_line_is_kept_after_a_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        let _ = testing::create_thread_stopping_after(&store, tid("c"), created("c", "/w"), 4);
+        testing::crash(store);
+    }
+    // Rewrite the first event with a 2 MiB title, as an older or other writer could have.
+    let text = log_text(dir.path(), "c");
+    let mut lines = text.lines();
+    let header = lines.next().unwrap();
+    let mut first: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    first["title"] = "t".repeat(2 * 1024 * 1024).into();
+    std::fs::write(
+        log_path(dir.path(), "c"),
+        format!("{header}\n{}\n", serde_json::to_string(&first).unwrap()),
+    )
+    .unwrap();
+    let (store, report) = open(dir.path());
+    assert!(
+        report.abandoned_creates.is_empty(),
+        "{:?}",
+        report.abandoned_creates
+    );
+    assert!(dir.path().join("threads/c/goat.jsonl").exists());
+    assert!(store.card(&tid("c")).unwrap().is_some());
+}
+
+#[test]
+fn an_oversized_thread_created_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let big = created("x", &"/w".repeat(40_000));
+    assert!(matches!(
+        store.create_thread(Some(tid("big")), big),
+        Err(StoreError::PayloadTooLarge(_))
+    ));
+    assert!(!dir.path().join("threads/big").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_card_json_fails_the_rebuild_instead_of_being_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(tid("a")), created("a", "/w"))
+            .unwrap();
+    }
+    let card = dir.path().join("threads/a/card.json");
+    std::fs::set_permissions(&card, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::remove_file(dir.path().join("cards.sqlite")).unwrap();
+    let result = Store::open(dir.path(), StoreOptions::default());
+    std::fs::set_permissions(&card, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        matches!(result, Err(StoreError::Io(_))),
+        "{:?}",
+        result.as_ref().err()
+    );
+}
+
+#[test]
+fn fold_returns_the_current_fold_and_append_returns_it_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("f", "/w"))
+        .unwrap();
+    let out = store
+        .append(&t, vec![input("i1", "x"), started("r1", &["i1"])])
+        .unwrap();
+    let fold = store.fold(&t).unwrap().unwrap();
+    assert_eq!(fold, out.fold);
+    assert_eq!(fold, replay(dir.path(), "t").1);
+    assert_eq!(fold.active_run_id.as_ref().map(|r| r.as_str()), Some("r1"));
+    assert!(store.fold(&tid("missing")).unwrap().is_none());
+}

@@ -369,9 +369,15 @@ fn card_doc(card: &ThreadCard, fold: &Fold) -> Result<String> {
     ))?)
 }
 
-fn read_card_file(dir: &Path) -> Option<CardFile> {
-    let bytes = fs::read(dir.join(CARD_FILE)).ok()?;
-    index::decode_doc(std::str::from_utf8(&bytes).ok()?)
+/// card.json of a folder: `Ok(None)` when it is missing or not a valid v1 card file (a cache miss);
+/// other I/O errors propagate.
+fn read_card_file(dir: &Path) -> Result<Option<CardFile>> {
+    let bytes = match fs::read(dir.join(CARD_FILE)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    Ok(std::str::from_utf8(&bytes).ok().and_then(index::decode_doc))
 }
 
 impl Store {
@@ -718,12 +724,20 @@ impl Store {
     /// True when the log holds a newline-terminated first event line: `create_thread` writes the
     /// header and `thread.created` in one write, so anything less never committed.
     fn create_committed(&self, path: &Path) -> Result<bool> {
-        let file = self.open_log_read(path)?;
-        let len = file.metadata()?.len();
-        let n = len.min(1024 * 1024) as usize;
-        let mut buf = vec![0u8; n];
-        log::read_at(&file, &mut buf, 0)?;
-        Ok(buf.iter().filter(|&&b| b == b'\n').count() >= 2)
+        use std::io::Read;
+        let mut file = self.open_log_read(path)?;
+        let mut buf = [0u8; 64 * 1024];
+        let mut newlines = 0;
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                return Ok(false);
+            }
+            newlines += buf[..n].iter().filter(|&&b| b == b'\n').count();
+            if newlines >= 2 {
+                return Ok(true);
+            }
+        }
     }
 
     fn abandon_create(&self, id: &ThreadId) -> Result<()> {
@@ -852,7 +866,7 @@ impl Store {
                     repair: repair_text(repair),
                 });
             }
-            let cached = read_card_file(&entry.path()).filter(|f| {
+            let cached = read_card_file(&entry.path())?.filter(|f| {
                 f.card.id == id
                     && f.card.epoch == tail.epoch
                     && f.card.applied_seq <= tail.last_seq()
@@ -939,7 +953,7 @@ impl Store {
             return Ok(());
         }
         // Prefer card.json when it is newer than the index row.
-        if let Some(file) = read_card_file(&slot.dir)
+        if let Some(file) = read_card_file(&slot.dir)?
             && file.card.id == *id
             && file.card.epoch == slot.card.epoch
             && file.card.applied_seq > slot.card.applied_seq
@@ -1200,6 +1214,12 @@ impl Store {
         }
         let mut created = created;
         created.title = clamp_chars(&created.title, CARD_TITLE_MAX_CHARS);
+        let size = serde_json::to_vec(&created)?.len();
+        if size > BLOB_THRESHOLD_BYTES {
+            return Err(StoreError::PayloadTooLarge(format!(
+                "thread.created event is {size} bytes"
+            )));
+        }
         // 1. creation intent
         lock(&self.shared).index.mark(id.as_str(), true, true)?;
         if stop_after == 1 {

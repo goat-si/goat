@@ -49,8 +49,8 @@ from the index. `append` refuses `thread.created` and `checkpoint` (the store wr
 Validation on append: one active run at a time; `run.accepted` / `run.finished` only for the active
 run; `input.changed` only for a queued input; `child.started` only for an existing child whose card
 names this thread as parent and that is not already running. Text bounds: titles 200 chars, request
-summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text and any non-item event over
-64 KB are refused (`PayloadTooLarge`; the host stores large input as an attachment first).
+summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text, `thread.created` and any
+non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large input as an attachment first).
 
 ## Write protocol
 
@@ -89,7 +89,8 @@ summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text and an
    `creating` row is abandoned (folder to trash) only when the create provably never committed: no
    folder, no goat.jsonl, or no newline-terminated first event line. Anything else (an invalid but
    complete header or first line, a newer version) is kept and reported corrupt. I/O errors while probing
-   fail `open`. A dirty row without a folder is a finished delete.
+   fail `open`, and so does any card.json read error other than a missing file (an invalid card.json
+   is a cache miss). A dirty row without a folder is a finished delete.
 4. Settle every active run: its open requests resolve `cancelled`, then `run.finished` is
    `interrupted` when the run reached the engine (`run.accepted`, an item or request for it, or an
    accepted turn delivery) and `unknown` otherwise. An unknown run opens request `resend:<runId>`
