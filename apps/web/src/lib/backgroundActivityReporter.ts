@@ -15,8 +15,10 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
@@ -24,8 +26,8 @@ import { randomUUID } from "./utils";
 
 const CLIENT_ID_STORAGE_KEY = "goat.backgroundActivity.clientId";
 const REPORT_INTERVAL_MS = 25_000;
-// Shorter than the interval, so a report that never settles cannot hold up the next one.
-const REPORT_TIMEOUT_MS = 15_000;
+// Keep per-attempt timeout short so stalled peers clear their in-flight slot quickly.
+const REPORT_TIMEOUT_MS = 5_000;
 const LEASE_TTL_MS = 45_000;
 const RECENT_INTERACTION_WINDOW_MS = LEASE_TTL_MS;
 const BASELINE_SCOPES: ReadonlyArray<BackgroundScope> = [{ type: "provider-status" }];
@@ -183,6 +185,7 @@ export const layer = Layer.effectDiscard(
 
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const clock = yield* Clock.Clock;
+    const scope = yield* Scope.Scope;
     const reportRequests = yield* Queue.sliding<void>(1);
     const requestReport = () => Queue.offerUnsafe(reportRequests, undefined);
     let lastInteractionAtMs = clock.currentTimeMillisUnsafe();
@@ -195,27 +198,40 @@ export const layer = Layer.effectDiscard(
       }
     };
     const passiveListenerOptions = { passive: true } as const;
+    const inFlight = new Set<EnvironmentId>();
 
     const report = Effect.gen(function* () {
       const observedAtMs = yield* Clock.currentTimeMillis;
       const entries = yield* SubscriptionRef.get(registry.entries);
-      yield* Effect.forEach(
-        entries.keys(),
-        (environmentId) =>
-          registry
-            .run(
-              environmentId,
-              request(
-                WS_METHODS.serverReportClientActivity,
-                createActivityReport(environmentId, lastInteractionAtMs, observedAtMs),
-              ),
-            )
-            // Not `ignore`: tearing down an environment mid-request interrupts its report,
-            // and an interrupt leaking out here would end the reporting loop for good.
-            // The timeout covers a live connection that never answers, which would stall it.
-            .pipe(Effect.timeout(`${REPORT_TIMEOUT_MS} millis`), Effect.ignoreCause),
-        { concurrency: "unbounded", discard: true },
-      );
+      for (const [environmentId, entry] of entries) {
+        if (entry.enabled === false || inFlight.has(environmentId)) continue;
+        const state = yield* registry.state(environmentId).pipe(Effect.option);
+        if (Option.isNone(state) || state.value.phase !== "connected") continue;
+        // Mark in-flight synchronously before forking so overlapping passes never issue duplicate RPCs
+        // and stalled peers cannot delay healthy environment lease renewals.
+        inFlight.add(environmentId);
+        yield* registry
+          .run(
+            environmentId,
+            request(
+              WS_METHODS.serverReportClientActivity,
+              createActivityReport(environmentId, lastInteractionAtMs, observedAtMs),
+            ),
+          )
+          // Not `ignore`: tearing down an environment mid-request interrupts its report,
+          // and an interrupt leaking out here would end the reporting loop for good.
+          // The timeout covers a live connection that never answers, which would stall it.
+          .pipe(
+            Effect.timeout(`${REPORT_TIMEOUT_MS} millis`),
+            Effect.ignoreCause,
+            Effect.ensuring(
+              Effect.sync(() => {
+                inFlight.delete(environmentId);
+              }),
+            ),
+            Effect.forkIn(scope),
+          );
+      }
     }).pipe(Effect.withSpan("web.backgroundActivity.report"));
 
     yield* Effect.acquireRelease(
