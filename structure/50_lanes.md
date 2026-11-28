@@ -25,4 +25,11 @@ Separate: GOAT v1 startup-stall root fix + Nightly release, on mac-studio, threa
 | P2-S SDK helper (Cursor, OpenCode, Muse, Pi/OmO) | `goat2_engine_sdk` · `~/Developer/goat2_engine_sdk` | `mcp:c5d1ee21-481b-490f-8e7c-20a831758e76` |
 | C contracts (continues: trait additions first) | `goat2_contracts` | `mcp:628b0dd7-0b60-4332-9be9-0078ee058667` |
 
-Wave 2 after the Part 1 host (E) merges: P2-E bot runtime, P2-F bot UI (lane F), P2-M providers UI, P2-D parity.
+Wave 2 (launched 2026-11-28 ~23:40 KST after host merge 635e915):
+
+| Lane | Branch / worktree | GOAT thread |
+|---|---|---|
+| P2-E bot runtime (in goat2-host) | `goat2_bot_runtime` · `~/Developer/goat2_bot_runtime` | `mcp:6ea90504-b8ce-4448-9a30-82d756b5e19f` |
+| P2-M providers UI | `goat2_providers_ui` · `~/Developer/goat2_providers_ui` | `mcp:28f74b44-8da9-4850-904d-47f6dd9311e0` |
+| P2-F bot UI = lane F continues | `goat2_ui` | `mcp:8c388538-1483-4d66-bcc7-d1851d79fbb0` |
+| P2-D parity = lane D continues | `goat2_parity` | `mcp:6bee8c38-9aa4-4405-9f97-61e074c2998c` |
