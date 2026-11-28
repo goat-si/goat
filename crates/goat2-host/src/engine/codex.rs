@@ -1,14 +1,19 @@
 //! Codex driver wiring.
 //!
-//! `goat2-engine-codex` (lane B) owns the Codex app-server driver. The host supplies the one
-//! thing the driver cannot see: an attachment's saved file in the thread folder.
+//! `goat2-engine-codex` (lane B) owns the Codex app-server driver. The host supplies what the
+//! driver cannot see: an attachment's saved file in the thread folder, and the local log where
+//! Codex's stderr goes instead of a reason.
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use goat2_contracts::{ChatAttachment, ProviderCapabilities, ThreadId};
 use goat2_engine_codex::attachments::ResolvedAttachment;
-use goat2_engine_codex::engine::{CodexEngineFactory, CodexEngineOptions};
+use goat2_engine_codex::engine::{
+    CodexDiagnostic, CodexEngineFactory, CodexEngineOptions, DiagnosticsSink,
+};
 
 /// Lane B's Codex driver with the host's attachment lookup. `codex_bin` is the Codex program
 /// (`GOAT2_CODEX_BIN`); without it `codex` is looked up on the host's PATH, which the desktop
@@ -21,8 +26,54 @@ pub fn codex_factory(data_dir: &Path, codex_bin: Option<&Path>) -> CodexEngineFa
         attachment_resolver: Some(Arc::new(move |thread_id, attachment, want_bytes| {
             resolve_attachment(&threads, thread_id, attachment, want_bytes)
         })),
+        diagnostics: Some(diagnostics_sink(data_dir)),
         ..defaults
     })
+}
+
+/// The Codex diagnostics log: `<dataDir>/logs/codex-diagnostics.ndjson`.
+const DIAGNOSTICS_FILE: &str = "codex-diagnostics.ndjson";
+/// The log is rotated to `.1` (one older file kept) past this size.
+const DIAGNOSTICS_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Owner decision: Codex's raw stderr never goes into goat.jsonl (append-only, so anything that
+/// slips in stays) or the UI. The driver hands it here scrubbed of credentials and the private
+/// home, and the reason names its id ("details: diag <id>"). This is a local file, owner-only
+/// (0600), rotated, and never synced.
+fn diagnostics_sink(data_dir: &Path) -> DiagnosticsSink {
+    let path = data_dir.join("logs").join(DIAGNOSTICS_FILE);
+    let lock = Arc::new(Mutex::new(()));
+    Arc::new(move |diagnostic: CodexDiagnostic| {
+        let _one_writer = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(error) = append_diagnostic(&path, &diagnostic) {
+            tracing::warn!(diag = %diagnostic.id, %error, "codex diagnostics log not written");
+        }
+    })
+}
+
+fn append_diagnostic(path: &Path, diagnostic: &CodexDiagnostic) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    if fs::metadata(path).is_ok_and(|m| m.len() > DIAGNOSTICS_MAX_BYTES) {
+        fs::rename(path, path.with_extension("ndjson.1"))?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    let line = serde_json::json!({
+        "at": crate::util::now_rfc3339(),
+        "diag": diagnostic.id,
+        "thread": diagnostic.thread_id,
+        "what": diagnostic.what,
+        "stderr": diagnostic.text,
+    });
+    writeln!(file, "{line}")
 }
 
 /// The store's blob name rule (goat2-thread-store `valid_blob_name`).
@@ -178,6 +229,47 @@ mod tests {
     use goat2_contracts::{BlobRef, ChatAttachment, ChatAttachmentType, ThreadId};
 
     use super::attachment_path;
+
+    /// Owner decision: Codex's stderr lands in the local diagnostics log under the id the
+    /// reason names, owner-only, and the log rotates.
+    #[test]
+    fn codex_diagnostics_go_to_a_private_rotating_local_log() {
+        use goat2_engine_codex::engine::CodexDiagnostic;
+        let dir = std::env::temp_dir().join(format!("goat2-codex-diag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sink = super::diagnostics_sink(&dir);
+        let diagnostic = |id: &str, text: String| CodexDiagnostic {
+            id: id.into(),
+            thread_id: "t1".into(),
+            what: "exit",
+            text,
+        };
+        sink(diagnostic("0000abcd", "codex: boom".into()));
+        let path = dir.join("logs").join(super::DIAGNOSTICS_FILE);
+        let line: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
+        assert_eq!(line["diag"], "0000abcd");
+        assert_eq!(line["thread"], "t1");
+        assert_eq!(line["what"], "exit");
+        assert_eq!(line["stderr"], "codex: boom");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        // Past the size bound the log moves to .1 and a new one starts.
+        let big = "x".repeat(super::DIAGNOSTICS_MAX_BYTES as usize + 1);
+        sink(diagnostic("00000002", big));
+        sink(diagnostic("00000003", "after".into()));
+        assert!(dir.join("logs").join("codex-diagnostics.ndjson.1").exists());
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            now.contains("00000003") && !now.contains("0000abcd"),
+            "{now}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn image(path: &str) -> ChatAttachment {
         ChatAttachment {

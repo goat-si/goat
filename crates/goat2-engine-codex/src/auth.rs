@@ -95,14 +95,13 @@ pub struct AuthFlows {
 /// completes, the instance signs out, or a newer turn completes. Kept in memory: after a host
 /// restart the next refused turn marks it again.
 ///
-/// Results are ordered by ticket: a turn takes one just before turn/start is written, and a
-/// credential change takes a fence ticket just before Codex can write the new credentials
-/// (before `account/login/start {apiKey}` and `account/logout` are sent, and when
-/// `account/login/completed` arrives for a ChatGPT login). A result or a reset is applied only
-/// when its ticket is newer than the last one applied. So a turn on the old credentials cannot
-/// mark the instance after a new sign-in, an older turn finishing late cannot undo what a newer
-/// one reported, and a turn already refused on the new key is not cleared when the sign-in
-/// finishes afterwards.
+/// GOAT cannot see which credentials a Codex turn used, so a turn counts only when it lies
+/// wholly outside every credential change. A sign-in or sign-out opens a change window just
+/// before its Codex can write credentials (before `account/login/start` or
+/// `account/logout`) and closes it once that Codex has ended. A turn takes a ticket just
+/// before turn/start is written; its result is ignored when a window is open as it ends, or
+/// closed after it started. Among turns that count, the one that started last wins, so an
+/// older turn finishing late cannot undo what a newer one reported.
 #[derive(Default)]
 pub struct Rejections {
     next: std::sync::atomic::AtomicU64,
@@ -112,8 +111,12 @@ pub struct Rejections {
 #[derive(Default, Clone, Copy)]
 struct RejectionState {
     rejected: bool,
-    /// Ticket of the last result or credential change applied.
+    /// Ticket of the last turn result applied.
     last: u64,
+    /// Credential changes open now.
+    changing: u32,
+    /// Ticket taken when the last credential change closed.
+    changed_at: u64,
 }
 
 impl Rejections {
@@ -125,26 +128,32 @@ impl Rejections {
     }
 
     /// A turn holding `ticket` ended: Codex refused the credentials, or the turn ran.
-    /// Ignored (returns false) when a newer turn or a credential change has been applied since.
+    /// Ignored (returns false) when the turn overlapped a credential change or a newer turn's
+    /// result is already applied.
     pub fn report(&self, instance: &str, ticket: u64, rejected: bool) -> bool {
         let mut state = lock(&self.state);
         let entry = state.entry(instance.to_string()).or_default();
-        if ticket > entry.last {
-            *entry = RejectionState {
-                rejected,
-                last: ticket,
-            };
-            true
-        } else {
-            false
+        if entry.changing > 0 || ticket < entry.changed_at || ticket <= entry.last {
+            return false;
         }
+        entry.rejected = rejected;
+        entry.last = ticket;
+        true
     }
 
-    /// The instance's credentials changed (a sign-in succeeded or it signed out) at `fence`,
-    /// a ticket taken just before Codex could write them: clear it and ignore every turn that
-    /// started before. A turn started after the fence and already reported stays applied.
-    pub fn reset_from(&self, instance: &str, fence: u64) -> bool {
-        self.report(instance, fence, false)
+    /// Open a credential change on `instance`: call it just before Codex may write the
+    /// instance's credentials. Dropping the change without [CredentialChange::finish] closes it
+    /// as "credentials may have changed, sign-in not confirmed" (the mark is kept).
+    pub fn begin_change(self: &Arc<Self>, instance: &str) -> CredentialChange {
+        lock(&self.state)
+            .entry(instance.to_string())
+            .or_default()
+            .changing += 1;
+        CredentialChange {
+            rejections: Arc::clone(self),
+            instance: instance.to_string(),
+            open: true,
+        }
     }
 
     pub fn contains(&self, instance: &str) -> bool {
@@ -152,46 +161,104 @@ impl Rejections {
     }
 }
 
+/// An open credential change (see [Rejections]); close it once the Codex that may write the
+/// credentials has ended.
+pub struct CredentialChange {
+    rejections: Arc<Rejections>,
+    instance: String,
+    open: bool,
+}
+
+impl CredentialChange {
+    /// Close the change; `confirmed` = the sign-in succeeded or the instance signed out, so an
+    /// earlier refusal no longer applies.
+    pub fn finish(mut self, confirmed: bool) {
+        self.close(confirmed);
+    }
+
+    fn close(&mut self, confirmed: bool) {
+        if !std::mem::take(&mut self.open) {
+            return;
+        }
+        let mut state = lock(&self.rejections.state);
+        let entry = state.entry(self.instance.clone()).or_default();
+        entry.changing = entry.changing.saturating_sub(1);
+        entry.changed_at = self.rejections.ticket();
+        if confirmed {
+            entry.rejected = false;
+        }
+    }
+}
+
+impl Drop for CredentialChange {
+    fn drop(&mut self) {
+        self.close(false);
+    }
+}
+
 #[cfg(test)]
 mod rejection_tests {
+    use std::sync::Arc;
+
     use super::Rejections;
 
-    /// Review r1 P1: results apply in ticket order, and a credential change outranks every
-    /// turn that started before it.
+    /// Results apply in ticket order (review r1 P1) and a turn overlapping a credential change
+    /// counts for nothing on either side of the write (review r2 and r3 P1).
     #[test]
-    fn results_apply_in_ticket_order_and_a_credential_change_outranks_older_turns() {
-        let r = Rejections::default();
+    fn only_turns_wholly_outside_a_credential_change_count_and_the_newest_wins() {
+        let r = Arc::new(Rejections::default());
         let older = r.ticket();
         let newer = r.ticket();
         // The newer turn is refused; the older one finishing later cannot clear it.
         assert!(r.report("codex", newer, true));
         assert!(!r.report("codex", older, false));
         assert!(r.contains("codex"));
-        // Another instance is separate.
         assert!(!r.contains("codex_2"));
         // A turn started after the refusal and completing clears it.
         let later = r.ticket();
         assert!(r.report("codex", later, false));
         assert!(!r.contains("codex"));
-        // A turn on the old credentials refused after a sign-in does not mark it.
-        let before_sign_in = r.ticket();
-        let fence = r.ticket();
-        assert!(r.reset_from("codex", fence));
-        assert!(!r.report("codex", before_sign_in, true));
+        let refused = r.ticket();
+        assert!(r.report("codex", refused, true));
+
+        // A sign-in: a turn from before it, one ending while it runs, one starting while it
+        // runs and ending after it. None of them counts, whichever key it used.
+        let before = r.ticket();
+        let change = r.begin_change("codex");
+        let during = r.ticket();
+        assert!(
+            !r.report("codex", before, true),
+            "ends while the change is open"
+        );
+        change.finish(true);
+        assert!(!r.contains("codex"), "a confirmed sign-in clears the mark");
+        assert!(
+            !r.report("codex", during, true),
+            "started before the change closed"
+        );
+        assert!(!r.report("codex", before, false));
         assert!(!r.contains("codex"));
-        // ...and one refused before the sign-in finishes is cleared by it.
-        let old = r.ticket();
-        let fence = r.ticket();
-        assert!(r.report("codex", old, true));
-        assert!(r.reset_from("codex", fence));
-        assert!(!r.contains("codex"));
-        // Review r2 P1: a turn on the new key (after the fence) refused before the sign-in
-        // finishes stays marked.
-        let fence = r.ticket();
-        let new_key_turn = r.ticket();
-        assert!(r.report("codex", new_key_turn, true));
-        assert!(!r.reset_from("codex", fence));
+        // A turn after the sign-in counts.
+        let after = r.ticket();
+        assert!(r.report("codex", after, true));
         assert!(r.contains("codex"));
+
+        // A change that ends unconfirmed (failed, cancelled, dropped) keeps the mark but still
+        // fences off the turns that overlapped it.
+        let overlapping = r.ticket();
+        drop(r.begin_change("codex"));
+        assert!(r.contains("codex"));
+        assert!(!r.report("codex", overlapping, false));
+        assert!(r.contains("codex"));
+        // Two changes at once: closed only when both are.
+        let a = r.begin_change("codex");
+        let b = r.begin_change("codex");
+        a.finish(true);
+        let t = r.ticket();
+        assert!(!r.report("codex", t, true), "one change still open");
+        b.finish(false);
+        let t = r.ticket();
+        assert!(r.report("codex", t, true));
     }
 }
 
@@ -713,26 +780,28 @@ impl AuthFlows {
                         return slot.finish(&id, failed(&message));
                     }
                 }
-                // Set by the flow just before Codex can write the new credentials.
-                let mut fence = 0u64;
+                // From here Codex may write the instance's credentials: turns overlapping this
+                // count for nothing (Rejections). Closed once this Codex has ended.
+                let change = rejected.begin_change(instance.as_str());
                 let end = tokio::select! {
                     biased;
                     _ = &mut stopped => None,
                     _ = tokio::time::sleep_until(deadline) => Some(expired()),
                     end = async {
                         match key {
-                            Some(key) => run_api_key(&mut codex, &target, &id, key, &rejected, &mut fence).await,
-                            None => run(&mut codex, &target, &id, &method, &expires_at, &slot, &rejected, &mut fence).await,
+                            Some(key) => run_api_key(&mut codex, &target, &id, key).await,
+                            None => run(&mut codex, &target, &id, &method, &expires_at, &slot).await,
                         }
                     } => Some(end),
                 };
                 // The process group has ended before the flow is released, so no old login can
                 // still write credentials once a new flow or a logout may run.
                 codex.close().await;
+                change.finish(
+                    end.as_ref()
+                        .is_some_and(|e| e.phase == ProviderAuthPhase::Succeeded),
+                );
                 if let Some(end) = end {
-                    if end.phase == ProviderAuthPhase::Succeeded {
-                        let _ = rejected.reset_from(instance.as_str(), fence);
-                    }
                     slot.finish(&id, end);
                 }
             })
@@ -860,11 +929,10 @@ impl AuthFlows {
                 .end(Some(&id), Some(last), options.kill_grace + STOP_MARGIN)
                 .await;
         }
-        let mut fence = 0u64;
+        // Codex may remove the credentials: turns overlapping this count for nothing.
+        let change = self.rejected.begin_change(instance.as_str());
         let signed_out = tokio::time::timeout(LOGOUT_TIMEOUT, async {
             let codex = Codex::open(options, target).await.ok()?;
-            // Codex may remove the credentials from here on.
-            fence = self.rejected.ticket();
             let done = codex
                 .call(methods::ACCOUNT_LOGOUT, json!({}))
                 .await
@@ -876,9 +944,7 @@ impl AuthFlows {
         .ok()
         .flatten()
         .unwrap_or(false);
-        if signed_out {
-            let _ = self.rejected.reset_from(instance.as_str(), fence);
-        }
+        change.finish(signed_out);
         let (phase, message) = if signed_out {
             (ProviderAuthPhase::Idle, SIGNED_OUT)
         } else {
@@ -893,9 +959,7 @@ fn redactor(options: &CodexEngineOptions, target: &ProviderTarget) -> Redactor {
 }
 
 /// One flow in an open Codex: its login, the person's sign-in, Codex's confirmation; returns
-/// the end state and sets `fence` (auth::Rejections) once Codex has the new credentials. The
-/// caller ends the process.
-#[allow(clippy::too_many_arguments)]
+/// the end state. The caller ends the process.
 async fn run(
     codex: &mut Codex,
     target: &ProviderTarget,
@@ -903,8 +967,6 @@ async fn run(
     method: &str,
     expires_at: &str,
     slot: &Slot,
-    rejected: &Rejections,
-    fence: &mut u64,
 ) -> ProviderAuthState {
     let instance = &target.instance_id;
     let end = |phase, message: &str| state(instance, phase, Some(flow_id), None, message, None);
@@ -947,9 +1009,6 @@ async fn run(
     if !completed {
         return end(ProviderAuthPhase::Failed, NOT_COMPLETED);
     }
-    // Codex writes the new credentials just before it reports the login complete: turns from
-    // here on use them.
-    *fence = rejected.ticket();
     slot.publish(
         flow_id,
         state(
@@ -976,13 +1035,9 @@ async fn run_api_key(
     target: &ProviderTarget,
     flow_id: &str,
     key: String,
-    rejected: &Rejections,
-    fence: &mut u64,
 ) -> ProviderAuthState {
     let instance = &target.instance_id;
     let end = |phase, message: &str| state(instance, phase, Some(flow_id), None, message, None);
-    // Codex saves the key while it answers this call: turns from here on may use it.
-    *fence = rejected.ticket();
     let answer = codex
         .call(
             methods::ACCOUNT_LOGIN_START,

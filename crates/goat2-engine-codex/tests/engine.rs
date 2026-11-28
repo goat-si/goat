@@ -1256,16 +1256,23 @@ async fn a_failed_config_read_still_starts_with_the_default_summary() {
     finish(h).await;
 }
 
-#[tokio::test]
-async fn an_unexpected_exit_reports_codex_last_stderr_lines() {
-    // The fake names a mismatching frame on stderr and exits; the Exited reason carries it.
+/// The fake exits with status 3 after printing on stderr the frame it expected (here
+/// thread/read, with `params`), when GOAT sends turn/start instead.
+async fn exit_with_stderr(
+    scenario: &str,
+    params: Value,
+    diagnostics: Option<goat2_engine_codex::engine::DiagnosticsSink>,
+) -> String {
     let t = load("codex-0.167.0/basic.json");
     let mut entries = entries_until(&t, |e| method_of(e) == Some("thread/started"));
     entries.push(expect(
-        json!({"id": 9, "method": "thread/read", "params": {}}),
+        json!({"id": 9, "method": "thread/read", "params": params}),
     ));
-    let t = synthetic("exit-stderr", entries);
-    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    let t = synthetic(scenario, entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |o| {
+        o.diagnostics = diagnostics
+    })
+    .await;
     let _ = h
         .session
         .start_turn(
@@ -1277,10 +1284,63 @@ async fn an_unexpected_exit_reports_codex_last_stderr_lines() {
     let Some(EngineEvent::Exited { reason }) = events.last() else {
         unreachable!()
     };
-    assert!(
-        reason.contains("stderr: goat2-fake-codex") && reason.contains("mismatch at /method"),
-        "{reason}"
+    reason.clone()
+}
+
+/// A sink that keeps every diagnostic it is given.
+fn collecting() -> (
+    goat2_engine_codex::engine::DiagnosticsSink,
+    Arc<std::sync::Mutex<Vec<goat2_engine_codex::engine::CodexDiagnostic>>>,
+) {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = Arc::clone(&seen);
+    (Arc::new(move |d| keep.lock().unwrap().push(d)), seen)
+}
+
+/// Owner decision: an unexpected exit has a fixed reason; Codex's stderr goes only to the
+/// host's diagnostics log, which the reason names.
+#[tokio::test]
+async fn an_unexpected_exit_keeps_codex_stderr_out_of_the_reason() {
+    let (sink, seen) = collecting();
+    let reason = exit_with_stderr("exit-stderr", json!({}), Some(sink)).await;
+    let diagnostics = seen.lock().unwrap().clone();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let d = &diagnostics[0];
+    assert_eq!(
+        reason,
+        format!(
+            "Codex exited unexpectedly (status 3); details: diag {}",
+            d.id
+        )
     );
+    assert_eq!(d.what, "exit");
+    assert_eq!(d.thread_id, "goat-thread-1");
+    assert!(
+        d.text.contains("goat2-fake-codex") && d.text.contains("mismatch at /method"),
+        "{}",
+        d.text
+    );
+    // Without a diagnostics log the stderr is dropped and nothing is named.
+    let reason = exit_with_stderr("exit-stderr-nosink", json!({}), None).await;
+    assert_eq!(reason, "Codex exited unexpectedly (status 3)");
+}
+
+/// API-key review r2 P1: a key Codex prints on stderr is in no reason, and is scrubbed from the
+/// diagnostic too.
+#[tokio::test]
+async fn an_exit_reason_never_carries_a_key_from_stderr() {
+    let key = "sk-test-StderrSecret0123456789";
+    let (sink, seen) = collecting();
+    let reason = exit_with_stderr(
+        "exit-stderr-key",
+        json!({"note": format!("Incorrect API key provided: {key}"), "azure": HEX_KEY}),
+        Some(sink),
+    )
+    .await;
+    assert!(reason.starts_with("Codex exited unexpectedly (status 3); details: diag "));
+    let text = seen.lock().unwrap()[0].text.clone();
+    assert!(text.contains("<redacted credential>"), "{text}");
+    assert!(!text.contains(key) && !text.contains(HEX_KEY), "{text}");
 }
 
 #[tokio::test]
@@ -1624,10 +1684,11 @@ async fn a_session_whose_home_cannot_be_laid_out_does_not_start() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// Review r1: Codex's stderr naming the private home is redacted in the start error.
+/// Review r1 and the owner's stderr decision: a failed start has a fixed reason; Codex's stderr
+/// (naming the private home) goes only to the diagnostics log, with the home redacted.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_failed_instance_start_redacts_its_home_from_stderr() {
+async fn a_failed_instance_start_keeps_stderr_out_and_redacts_its_home() {
     use std::os::unix::fs::PermissionsExt;
     let root = instance_root("stderr");
     let wrapper = root.join("codex");
@@ -1640,6 +1701,8 @@ async fn a_failed_instance_start_redacts_its_home_from_stderr() {
     let t = load("codex-0.167.0/basic.json");
     let mut o = options(&t);
     o.program = wrapper;
+    let (sink, seen) = collecting();
+    o.diagnostics = Some(sink);
     let mut s = spec(RuntimeMode::ApprovalRequired, None);
     s.instance = Some(instance_target(
         &root.join("instance"),
@@ -1649,10 +1712,27 @@ async fn a_failed_instance_start_redacts_its_home_from_stderr() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("started"),
     };
-    assert!(error.contains("<instance home>/auth.json"), "{error}");
+    let diagnostics = seen.lock().unwrap().clone();
+    assert_eq!(diagnostics.len(), 1, "{error}");
+    let d = &diagnostics[0];
     assert!(
-        !error.contains(root.join("instance").to_str().unwrap()),
+        error.contains("Codex could not start (status 1): "),
         "{error}"
+    );
+    assert!(
+        error.ends_with(&format!("; details: diag {}", d.id)),
+        "{error}"
+    );
+    assert!(
+        !error.contains("auth.json"),
+        "no stderr in the reason: {error}"
+    );
+    assert_eq!(d.what, "start");
+    assert!(d.text.contains("<instance home>/auth.json"), "{}", d.text);
+    assert!(
+        !d.text.contains(root.join("instance").to_str().unwrap()),
+        "{}",
+        d.text
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -1745,7 +1825,7 @@ async fn a_failed_turn_reason_never_carries_a_quoted_key() {
     };
     done["params"]["turn"]["status"] = json!("failed");
     done["params"]["turn"]["error"] = json!({
-        "message": format!("stream error: Incorrect API key provided: {key}"),
+        "message": format!("stream error: Incorrect API key provided: {key}; api-key {HEX_KEY}"),
         "codexErrorInfo": null});
     entries.push(Entry::EmitInbound {
         label: None,
@@ -1772,9 +1852,10 @@ async fn a_failed_turn_reason_never_carries_a_quoted_key() {
     };
     assert_eq!(
         reason,
-        "stream error: Incorrect API key provided: <redacted credential>"
+        "stream error: Incorrect API key provided: <redacted credential>; api-key <redacted credential>"
     );
     assert!(!format!("{events:?}").contains(key));
+    assert!(!format!("{events:?}").contains(HEX_KEY));
     // Not an unauthorized code: nothing asks for sign-in.
     assert!(
         !events
@@ -1784,30 +1865,53 @@ async fn a_failed_turn_reason_never_carries_a_quoted_key() {
     finish(h).await;
 }
 
-/// API-key review r2 P1: Codex's stderr that quotes a key never leaves in the exit reason.
+/// A bare Azure-style key (32 hex characters), which has no `sk-` prefix (API-key review r3).
+const HEX_KEY: &str = "0123456789abcdef0123456789abcdef";
+
+/// API-key review r3 P1: a key in Codex's RPC error text never leaves in a steer reason.
 #[tokio::test]
-async fn an_exit_reason_never_carries_a_key_from_stderr() {
-    let key = "sk-test-StderrSecret0123456789";
-    let t = load("codex-0.167.0/basic.json");
-    let mut entries = entries_until(&t, |e| method_of(e) == Some("thread/started"));
-    // The fake prints the frame it expected on stderr when GOAT sends another one.
-    entries.push(expect(
-        json!({"id": 9, "method": "thread/read", "params": {"note": format!("Incorrect API key provided: {key}")}}),
+async fn a_declined_steer_reason_never_carries_a_key() {
+    let t = load("codex-0.167.0/steer.json");
+    let thread = recorded_thread(&t);
+    let turn = recorded_turn(&t);
+    let mut entries = entries_until(&t, |e| method_of(e) == Some("turn/steer"));
+    let steer_id = match entries.last() {
+        Some(Entry::ExpectOutbound { frame, .. }) => frame["id"].clone(),
+        _ => unreachable!(),
+    };
+    entries.push(emit(
+        json!({"id": steer_id, "error": {"code": -32600, "message": format!("upstream refused api-key {HEX_KEY}")}}),
     ));
-    let t = synthetic("exit-stderr-key", entries);
-    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
-    let _ = h
+    entries.push(turn_completed(&thread, &turn, "completed"));
+    let t = synthetic("steer-declined-key", entries);
+    let mut h = start(&t, RuntimeMode::AutoAcceptEdits, None, |_| {}).await;
+    let turn = accepted(
+        h.session
+            .start_turn(
+                input(
+                    "goat-input-1",
+                    "Run the shell command `sleep 6` exactly once, then reply with exactly: DONE",
+                ),
+                &settings(RuntimeMode::AutoAcceptEdits),
+            )
+            .await,
+    );
+    let steered = h
         .session
-        .start_turn(
-            input("goat-input-1", "hi"),
-            &settings(RuntimeMode::ApprovalRequired),
+        .steer(
+            &turn,
+            input(
+                "goat-input-2",
+                "After that, reply with exactly: DONE STEERED",
+            ),
         )
         .await;
-    let events = until(&mut h, |e| matches!(e, EngineEvent::Exited { .. })).await;
-    let Some(EngineEvent::Exited { reason }) = events.last() else {
-        unreachable!()
-    };
-    assert!(reason.contains("stderr: goat2-fake-codex"), "{reason}");
-    assert!(reason.contains("<redacted credential>"), "{reason}");
-    assert!(!format!("{events:?}").contains(key), "{reason}");
+    assert_eq!(
+        steered,
+        SteerResult::Declined {
+            reason: "upstream refused api-key <redacted credential>".into()
+        }
+    );
+    until(&mut h, is_finished).await;
+    finish(h).await;
 }

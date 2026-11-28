@@ -50,6 +50,23 @@ const CREDENTIALS_REJECTED: &str = "Codex rejected this provider's credentials. 
 const CREDENTIALS_REJECTED_REASON: &str =
     "Codex rejected this provider's credentials (unauthorized).";
 
+/// A Codex diagnostic kept out of every reason (owner decision): Codex's raw stderr, with the
+/// instance's private home and credentials scrubbed. goat.jsonl is append-only, so raw stderr
+/// never goes there or to the UI; the host writes this to its local diagnostics log (never
+/// synced) and the reason names it as "details: diag <id>".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexDiagnostic {
+    /// Short id the reason names.
+    pub id: String,
+    pub thread_id: String,
+    /// "start" or "exit".
+    pub what: &'static str,
+    pub text: String,
+}
+
+/// Where [CodexDiagnostic]s go (the host's diagnostics log).
+pub type DiagnosticsSink = Arc<dyn Fn(CodexDiagnostic) + Send + Sync>;
+
 /// Settings for every session a [CodexEngineFactory] starts.
 #[derive(Clone)]
 pub struct CodexEngineOptions {
@@ -81,6 +98,9 @@ pub struct CodexEngineOptions {
     pub attachment_resolver: Option<AttachmentResolver>,
     /// How long a sign-in flow may take from start to end (v1 providerAuthFlow: 300 s).
     pub auth_timeout: Duration,
+    /// Takes Codex's scrubbed stderr on an unexpected exit or a failed start. Without it the
+    /// stderr is dropped (it never goes into a reason).
+    pub diagnostics: Option<DiagnosticsSink>,
 }
 
 impl Default for CodexEngineOptions {
@@ -99,6 +119,7 @@ impl Default for CodexEngineOptions {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             attachment_resolver: None,
             auth_timeout: Duration::from_secs(300),
+            diagnostics: None,
         }
     }
 }
@@ -518,10 +539,17 @@ async fn start_launched(
         Ok(opened) => opened,
         Err((stage, error)) => {
             conn.close_input();
-            child.terminate_group().await;
+            let summary = child.terminate_group().await;
+            let details = diagnostic_ref(
+                &options,
+                &redact,
+                spec.thread_id.as_str(),
+                "start",
+                &child.stderr_tail(),
+            );
             return Err(EngineError::StartFailed(format!(
-                "{stage}: {error}; stderr: {}",
-                tail(&child.stderr_tail(), 2000)
+                "Codex could not start ({}): {stage}: {error}{details}",
+                status_text(&summary)
             )));
         }
     };
@@ -643,6 +671,65 @@ fn tail(text: &str, max: usize) -> &str {
         .find(|i| text.is_char_boundary(*i))
         .unwrap_or(text.len());
     &text[start..]
+}
+
+/// How the process ended, for a fixed reason: "status 1", "signal 9" or "status unknown".
+fn status_text(summary: &crate::process::ExitSummary) -> String {
+    let Some(status) = summary.status else {
+        return "status unknown".into();
+    };
+    if let Some(code) = status.code() {
+        return format!("status {code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("signal {signal}");
+        }
+    }
+    "status unknown".into()
+}
+
+/// Most of Codex's stderr a diagnostic keeps (its last lines).
+const DIAGNOSTIC_BYTES: usize = 8000;
+
+/// Hand Codex's stderr (scrubbed) to the diagnostics sink; returns the "; details: diag <id>"
+/// suffix for the reason, or nothing when there is no sink or no stderr.
+fn diagnostic_ref(
+    options: &CodexEngineOptions,
+    redact: &Redactor,
+    thread_id: &str,
+    what: &'static str,
+    stderr: &str,
+) -> String {
+    let Some(sink) = &options.diagnostics else {
+        return String::new();
+    };
+    let stderr = tail(stderr, DIAGNOSTIC_BYTES);
+    if stderr.trim().is_empty() {
+        return String::new();
+    }
+    let id = diagnostic_id();
+    sink(CodexDiagnostic {
+        id: id.clone(),
+        thread_id: thread_id.to_string(),
+        what,
+        text: redact.diagnostic(stderr),
+    });
+    format!("; details: diag {id}")
+}
+
+/// A short id for finding a diagnostic in the host log: 8 hex characters from the time and a
+/// process counter.
+fn diagnostic_id() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mixed = (now ^ n.rotate_left(40)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    format!("{:08x}", (mixed >> 32) as u32)
 }
 
 enum Command {
@@ -973,17 +1060,25 @@ impl Actor {
         }
     }
 
-    /// Codex closed its output: end the group and read stderr to its end first, so the exit
-    /// reason carries Codex's last lines.
+    /// Codex closed its output: end the group and read stderr to its end first, so the
+    /// diagnostic the reason names has Codex's last lines (owner decision: the reason itself is
+    /// fixed text).
     async fn exit_after_close(&mut self) {
-        let mut reason = "codex app-server exited".to_string();
+        let mut reason = "Codex exited unexpectedly (status unknown)".to_string();
         if let Some(mut child) = self.child.take() {
             self.conn.close_input();
-            child.terminate_group().await;
-            let stderr = tail(&child.stderr_tail(), 2000).to_string();
-            if !stderr.trim().is_empty() {
-                reason = format!("codex app-server exited; stderr: {stderr}");
-            }
+            let summary = child.terminate_group().await;
+            let details = diagnostic_ref(
+                &self.options,
+                &self.redact,
+                self.spec_thread.as_str(),
+                "exit",
+                &child.stderr_tail(),
+            );
+            reason = format!(
+                "Codex exited unexpectedly ({}){details}",
+                status_text(&summary)
+            );
         }
         self.exit(&reason, false).await;
     }
