@@ -202,3 +202,9 @@ it("projects carriage-return soft line breaks to a space outside code blocks", (
 it("does not index a CR-only alert marker", () => {
   expect(assistantSegments("> [!NOTE]\r> hi")).toEqual(["hi"]);
 });
+
+it.each(["\n", "\r\n", "\r"])("does not search across an image with %j line endings", (ending) => {
+  expect(
+    assistantSegments(["Caption", "![pic](https://x.test/pic.png)", "After"].join(ending)),
+  ).toEqual(["Caption", "After"]);
+});

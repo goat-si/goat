@@ -398,11 +398,11 @@ const isImageNode = (node: PhrasingContent | undefined): boolean =>
 const endsLine = (node: PhrasingContent | undefined) =>
   node === undefined ||
   node.type === "break" ||
-  (node.type === "text" && /\n[ \t]*$/.test(node.value));
+  (node.type === "text" && /(?:\r\n|\r|\n)[ \t]*$/.test(node.value));
 const startsLine = (node: PhrasingContent | undefined) =>
   node === undefined ||
   node.type === "break" ||
-  (node.type === "text" && /^[ \t]*\n/.test(node.value));
+  (node.type === "text" && /^[ \t]*(?:\r\n|\r|\n)/.test(node.value));
 
 function breakLinesAroundImages(paragraph: Paragraph) {
   const children = paragraph.children;
@@ -419,11 +419,11 @@ function breakLinesAroundImages(paragraph: Paragraph) {
     const parts: PhrasingContent[] = [];
     let value = child.value;
     if (afterImage) {
-      value = value.replace(/^[ \t]*\n/, "");
+      value = value.replace(/^[ \t]*(?:\r\n|\r|\n)/, "");
       parts.push({ type: "break" });
     }
-    const breakAfter = beforeImage && /\n[ \t]*$/.test(value);
-    if (breakAfter) value = value.replace(/[ \t]*\n[ \t]*$/, "");
+    const breakAfter = beforeImage && /(?:\r\n|\r|\n)[ \t]*$/.test(value);
+    if (breakAfter) value = value.replace(/[ \t]*(?:\r\n|\r|\n)[ \t]*$/, "");
     if (value) parts.push({ type: "text", value });
     if (breakAfter) parts.push({ type: "break" });
     return parts;
