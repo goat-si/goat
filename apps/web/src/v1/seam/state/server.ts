@@ -31,6 +31,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
 
 import type { AtomCommandResult, EnvironmentAtomCommand } from "@goat/client-runtime/state/runtime";
 import { GOAT2_ENVIRONMENT_ID, GOAT2_ENVIRONMENT_LABEL } from "../goat2/environment";
@@ -39,6 +40,8 @@ import {
   goat2ProvidersAtom,
   goat2SettingsAtom,
   onProviderPortChange,
+  toServerProvider,
+  type Goat2ProviderEntry,
   type Goat2ProviderMethod,
   type Goat2ProviderStream,
 } from "../goat2/providerPort";
@@ -93,6 +96,59 @@ function command<I, A>(
 }
 
 const decoder = <S extends Schema.Top>(schema: S) => Schema.decodeUnknownSync(schema as never) as (u: unknown) => S["Type"];
+
+/** The port answers a refresh with the host's entries ({providers: ServerProviderEntry[]}); v1 wants ServerProviders. */
+const decodeProvidersPayload = (value: unknown): ServerProviderUpdatedPayload =>
+  decoder(ServerProviderUpdatedPayload)({
+    providers: ((value as { providers?: ReadonlyArray<Goat2ProviderEntry> }).providers ?? []).map(toServerProvider),
+  });
+
+type SettingsUpdateInput = typeof ServerSettingsUpdateInput.Type;
+
+/**
+ * v1 server.updateSettings, applied here the way v1's server does (apps/server/src/serverSettings.ts:902,218-231): the
+ * patch through the lifted applyServerSettingsPatch, then the provider-instance mutation. GOAT 2 keeps server settings
+ * in this window (goat2SettingsAtom); a provider instance whose driver, enablement, name or ACP agent changed is sent
+ * to the host with set_provider_instance (a removed one as disabled: the wire has no delete).
+ */
+const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>, ServerSettings, Error> = {
+  label: "environment-data:server:update-settings",
+  permissionAtom: (environmentId) => allowed(environmentId),
+  run: async (registry, { environmentId, input }): Promise<AtomCommandResult<ServerSettings, Error>> => {
+    if (environmentId !== GOAT2_ENVIRONMENT_ID) {
+      return AsyncResult.failure(Cause.fail(new Error("Unknown environment " + environmentId)));
+    }
+    try {
+      const current = registry.get(goat2SettingsAtom);
+      let next = applyServerSettingsPatch(current, input.patch);
+      const mutation = input.providerInstanceMutation;
+      if (mutation) {
+        const providerInstances = { ...next.providerInstances };
+        if (mutation.operation === "remove") delete providerInstances[mutation.instanceId];
+        else providerInstances[mutation.instanceId] = mutation.instance;
+        next = { ...next, providerInstances };
+      }
+      const ids = new Set([...Object.keys(current.providerInstances), ...Object.keys(next.providerInstances)]);
+      for (const instanceId of ids) {
+        const before = current.providerInstances[instanceId as ProviderInstanceId];
+        const after = next.providerInstances[instanceId as ProviderInstanceId];
+        const wire = (inst: typeof after, enabled: boolean) => inst && {
+          instanceId, driver: inst.driver, enabled,
+          ...(inst.displayName ? { displayName: inst.displayName } : {}),
+          ...(inst.driver === "acpRegistry" && typeof (inst.config as { agentId?: unknown } | undefined)?.agentId === "string"
+            ? { acpAgentId: (inst.config as { agentId: string }).agentId } : {}),
+        };
+        const was = wire(before, before?.enabled !== false);
+        const now = after ? wire(after, after.enabled !== false) : wire(before, false);
+        if (now && JSON.stringify(now) !== JSON.stringify(was)) await currentProviderPort().call("goat2.setProviderInstance", now);
+      }
+      registry.set(goat2SettingsAtom, next);
+      return AsyncResult.success(next);
+    } catch (error) {
+      return AsyncResult.failure(Cause.fail(error instanceof Error ? error : new Error(String(error))));
+    }
+  },
+};
 
 /** v1 createEnvironmentRpcSubscriptionAtomFamily: follows a port stream, keyed by the JSON of its target. */
 function subscription<I, A>(label: string, method: Goat2ProviderStream, decode: (value: unknown) => A) {
@@ -203,18 +259,14 @@ export const serverEnvironment = {
   refreshProviders: command<RefreshProvidersInput, ServerProviderUpdatedPayload>(
     "environment-data:server:refresh-providers",
     "server.refreshProviders",
-    decoder(ServerProviderUpdatedPayload),
+    decodeProvidersPayload,
   ),
   updateProvider: command<ServerProviderUpdateInput, ServerProviderUpdatedPayload>(
     "environment-data:server:update-provider",
     "server.updateProvider",
-    decoder(ServerProviderUpdatedPayload),
+    decodeProvidersPayload,
   ),
-  updateSettings: command<typeof ServerSettingsUpdateInput.Type, ServerSettings>(
-    "environment-data:server:update-settings",
-    "server.updateSettings",
-    decoder(ServerSettings),
-  ),
+  updateSettings: updateSettingsCommand,
   providerAuthState: subscription<ProviderSetupInput, ProviderAuthState>(
     "environment-data:provider:auth-state",
     "providerAuth.subscribe",

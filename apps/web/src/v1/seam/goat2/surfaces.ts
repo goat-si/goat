@@ -12,4 +12,8 @@ export { ProviderModelPicker } from "../../components/chat/ProviderModelPicker";
 export { ProviderSettingsPanel } from "../../components/settings/ProviderSettingsPanel";
 export { AddProviderInstanceDialog } from "../../components/settings/AddProviderInstanceDialog";
 export { providerClients } from "../../components/settings/providerDriverMeta";
-export { installProviderPort, type ProviderPort, type Goat2ProviderEntry } from "./providerPort";
+import { installProviderPort as installPort, type ProviderPort } from "./providerPort";
+export type { Goat2ProviderEntry } from "./providerPort";
+// The host's entries are validated where they enter v1 (toServerProvider decodes with v1's ServerProvider schema),
+// so the boundary accepts the plain GOAT 2 shape.
+export const installProviderPort: typeof Api.installProviderPort = (port) => installPort(port as ProviderPort | null);

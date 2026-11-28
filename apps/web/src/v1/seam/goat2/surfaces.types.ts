@@ -8,3 +8,48 @@ import type { ComponentType, HTMLAttributes } from "react";
 export declare const V1Boundary: ComponentType<HTMLAttributes<HTMLDivElement>>;
 /** ?v1fixture: CSS scoping and portal-root check (e2e/v1fixture.spec.ts). */
 export declare const V1Fixture: ComponentType;
+
+/** v1 method names the lifted provider screens call; GOAT 2's adapter (apps/web/src/providers/hostProviderPort.ts)
+ * answers each with a provider frame (docs/part2/provider-wire.md) or refuses it. */
+export type ProviderPortMethod =
+  | "server.refreshProviders"
+  | "server.updateProvider"
+  | "server.searchAcpRegistry"
+  | "server.prepareAcpRegistryAgent"
+  | "server.uninstallAcpRegistryManagedBinary"
+  | "server.acceptAcpRegistryUrlAuth"
+  | "goat2.setProviderInstance"
+  | "providerInstall.start"
+  | "providerInstall.cancel"
+  | "providerInstall.remove"
+  | "providerAuth.start"
+  | "providerAuth.respond"
+  | "providerAuth.complete"
+  | "providerAuth.cancel"
+  | "providerAuth.logout";
+export type ProviderPortStream = "providerAuth.subscribe" | "providerInstall.subscribe";
+
+/** One providers-frame entry as the port hands it to the v1 screens (wire ServerProviderEntry). */
+export interface ProviderPortEntry {
+  readonly instanceId: string;
+  readonly driver: string;
+  readonly displayName?: string;
+  readonly enabled: boolean;
+  readonly acpAgentId?: string;
+  readonly setup?: { readonly canAuthenticate: boolean; readonly canInstall: boolean; readonly documentationUrl?: string };
+  readonly probe: unknown;
+  readonly authFlow?: unknown;
+  readonly install?: unknown;
+}
+
+export interface ProviderPortShape {
+  /** Full provider list now (if known) and on every change. */
+  readonly subscribe: (listener: (entries: ReadonlyArray<ProviderPortEntry>) => void) => () => void;
+  /** Answers a v1 method; rejects with an Error whose message is shown to the person. */
+  readonly call: (method: ProviderPortMethod, payload: unknown) => Promise<unknown>;
+  /** A v1 subscription's values (sign-in flow, install progress). */
+  readonly watch: (method: ProviderPortStream, payload: unknown, listener: (value: unknown) => void) => () => void;
+}
+
+/** Installs (or with null removes) the port the lifted provider screens read through. */
+export declare const installProviderPort: (port: ProviderPortShape | null) => void;

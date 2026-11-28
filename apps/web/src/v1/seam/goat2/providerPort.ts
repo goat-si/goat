@@ -12,6 +12,7 @@ import {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
+import type { ProviderPortMethod, ProviderPortStream } from "./surfaces.types.ts";
 
 /** GOAT 2 ProviderProbeResult (crates/goat2-contracts/src/probe.rs on goat2_contracts); v1 ServerProvider subset. */
 export interface Goat2ProviderProbe {
@@ -58,27 +59,15 @@ export interface Goat2ProviderEntry {
   readonly badgeLabel?: string;
   readonly setup?: { readonly canAuthenticate: boolean; readonly canInstall: boolean; readonly documentationUrl?: string };
   readonly probe: Goat2ProviderProbe;
+  /** Running sign-in / install flow (wire ServerProviderEntry.authFlow / .install); read by the port's watch streams. */
+  readonly authFlow?: unknown;
+  readonly install?: unknown;
 }
 
-/** v1 WS method names the lifted provider screens call (packages/contracts/src/rpc.ts WS_METHODS). */
-export type Goat2ProviderMethod =
-  | "server.refreshProviders"
-  | "server.updateProvider"
-  | "server.searchAcpRegistry"
-  | "server.prepareAcpRegistryAgent"
-  | "server.uninstallAcpRegistryManagedBinary"
-  | "server.acceptAcpRegistryUrlAuth"
-  | "server.updateSettings"
-  | "providerInstall.start"
-  | "providerInstall.cancel"
-  | "providerInstall.remove"
-  | "providerAuth.start"
-  | "providerAuth.respond"
-  | "providerAuth.complete"
-  | "providerAuth.cancel"
-  | "providerAuth.logout";
-
-export type Goat2ProviderStream = "providerAuth.subscribe" | "providerInstall.subscribe";
+/** v1 WS method names the lifted provider screens call (packages/contracts/src/rpc.ts WS_METHODS) plus
+ * goat2.setProviderInstance; one definition, shared with GOAT 2 code through surfaces.types.ts. */
+export type Goat2ProviderMethod = ProviderPortMethod;
+export type Goat2ProviderStream = ProviderPortStream;
 
 export interface ProviderPort {
   /** Calls listener with the full provider list now (if known) and on every change. */
