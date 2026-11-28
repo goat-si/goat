@@ -137,6 +137,20 @@ impl Run {
             .collect()
     }
 
+    /// For a run the driver stopped (interrupt closes the CLI as v1 does): the fake saw no
+    /// mismatch up to the stop and received the `interrupt` control.
+    pub fn assert_stopped_after_interrupt(&self) {
+        let lines = self.log_lines();
+        let errors: Vec<&Value> = lines.iter().filter(|l| l["kind"] == "error").collect();
+        assert!(errors.is_empty(), "fake-claude errors: {errors:?}");
+        assert!(
+            self.stdin_frames()
+                .iter()
+                .any(|f| f["request"]["subtype"] == "interrupt"),
+            "no interrupt control reached the CLI"
+        );
+    }
+
     pub fn starts(&self) -> Vec<Value> {
         self.log_lines()
             .into_iter()
@@ -146,9 +160,12 @@ impl Run {
 }
 
 fn uuid_like() -> String {
+    // Two runs of the same fixture can start within one clock tick (macOS reports microseconds).
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

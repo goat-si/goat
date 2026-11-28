@@ -290,7 +290,6 @@ async fn model_change_uses_set_model_and_mode_change_reopens() {
 async fn interrupt_withdraws_a_pending_approval() {
     let run = Run::new("wire/interrupt_pending_approval.ndjson");
     let mut factory = run.factory();
-    // The CLI's own aborted result settles the turn; the fallback deadline is not needed.
     factory.options.interrupt_settle_timeout = std::time::Duration::from_secs(30);
     let mut handle = goat2_engine_api::EngineFactory::start(
         &factory,
@@ -329,7 +328,7 @@ async fn interrupt_withdraws_a_pending_approval() {
     );
     assert_eq!(finished(&events), TurnOutcome::Interrupted);
     handle.session.shutdown().await;
-    run.assert_replayed(1);
+    run.assert_stopped_after_interrupt();
 }
 
 #[tokio::test]
@@ -429,11 +428,18 @@ async fn interrupt_closes_claude_so_a_later_turn_never_sees_the_stopped_turn() {
 #[tokio::test]
 async fn shutdown_settles_the_turn_and_its_requests_before_exited() {
     let run = Run::new("wire/interrupt_pending_approval.ndjson");
-    let mut handle = run
-        .start(MODEL, RuntimeMode::ApprovalRequired, None)
-        .await;
-    let turn_id = turn(&handle, "Run the tests.", MODEL, RuntimeMode::ApprovalRequired).await;
-    let opened = until(&mut handle, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let turn_id = turn(
+        &handle,
+        "Run the tests.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    let opened = until(&mut handle, |e| {
+        matches!(e, EngineEvent::RequestOpened { .. })
+    })
+    .await;
     let Some(EngineEvent::RequestOpened { key, .. }) = opened.last().cloned() else {
         unreachable!()
     };
@@ -450,14 +456,17 @@ async fn shutdown_settles_the_turn_and_its_requests_before_exited() {
     let closed = rest
         .iter()
         .position(|e| matches!(e, EngineEvent::RequestClosed { key: k } if *k == key));
-    let finished_at = rest.iter().position(
-        |e| matches!(e, EngineEvent::TurnFinished { turn_id: t, .. } if *t == turn_id),
-    );
+    let finished_at = rest
+        .iter()
+        .position(|e| matches!(e, EngineEvent::TurnFinished { turn_id: t, .. } if *t == turn_id));
     assert!(closed.is_some(), "approval not closed: {rest:?}");
     assert!(finished_at.is_some(), "turn not settled: {rest:?}");
     assert!(matches!(
         &rest[finished_at.unwrap()],
-        EngineEvent::TurnFinished { outcome: TurnOutcome::Interrupted, .. }
+        EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Interrupted,
+            ..
+        }
     ));
     assert!(
         matches!(rest.last(), Some(EngineEvent::Exited { reason }) if reason == "shutdown"),
@@ -524,7 +533,10 @@ async fn an_idle_background_subagent_completes_on_its_own_turn() {
     .await;
     let events = until_finished(&mut handle).await;
     assert_eq!(finished(&events), TurnOutcome::Done);
-    let later = until(&mut handle, |e| matches!(e, EngineEvent::ItemCompleted { .. })).await;
+    let later = until(&mut handle, |e| {
+        matches!(e, EngineEvent::ItemCompleted { .. })
+    })
+    .await;
     let Some(EngineEvent::ItemCompleted {
         turn_id: item_turn,
         item,

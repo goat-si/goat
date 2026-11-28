@@ -479,7 +479,7 @@ async fn interrupt_settles_the_turn_as_interrupted() {
     // Interrupting a turn that already ended is a no-op.
     handle.session.interrupt(&turn).await.unwrap();
     handle.session.shutdown().await;
-    run.assert_replayed(1);
+    run.assert_stopped_after_interrupt();
 }
 
 #[tokio::test]

@@ -12,9 +12,13 @@
 //!   `command_lifecycle` / echo is the acceptance evidence, and a result that arrives while a
 //!   steer is still queued is held until the steer's own result (`ClaudeAdapterV2.ts:9899-10061`,
 //!   `ClaudeSteerLifecycle.ts`, `ClaudePromptFrames.ts:41-84`).
-//! - interrupt: only the active turn, then the result settles it; a turn the CLI does not settle
-//!   within the stop deadline is settled as interrupted (`ClaudeAdapterV2.ts:9755-9815`,
-//!   `CLAUDE_STOP_CONFIRM_TIMEOUT_MS`).
+//! - interrupt: only the active turn; the `interrupt` control (10 s), then the CLI is closed and
+//!   the turn settles as interrupted when it exits. A CLI that does not confirm within the stop
+//!   deadline leaves the turn open and the interrupt fails (`ClaudeAdapterV2.ts:9755-9818`,
+//!   `ClaudeStopTeardown.ts`, `CLAUDE_STOP_CONFIRM_TIMEOUT_MS`).
+//! - exit: one idempotent settlement closes open requests, settles the active turn, ends retained
+//!   background subagents (interrupted when stopping, failed otherwise; v1
+//!   `endSubagentCallsOfClosedQuery`), reaps the process group, then reports `Exited`.
 //! - `can_use_tool`: AskUserQuestion becomes a `user_input_request`, ExitPlanMode a proposed plan
 //!   plus a denial, the removal check under bypass a denial, everything else an approval
 //!   (`ClaudeAdapterV2.ts:8241-8520`, `ClaudeApproval.ts`).
@@ -27,7 +31,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -43,13 +47,13 @@ use goat2_engine_api::{
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::items;
 use crate::launch::{
     CompiledModel, LaunchOptions, LaunchRequest, PermissionMode, SessionIdentity, build_launch,
 };
-use crate::process::{ChildProcess, group_rss_bytes_of};
+use crate::process::{ChildProcess, StderrTail, group_rss_bytes_of};
 use crate::protocol::{self, Inbound};
 use crate::util;
 
@@ -71,8 +75,8 @@ pub struct ClaudeEngineOptions {
     /// Deadline for `set_model`, `set_permission_mode` and `interrupt` answers (the Python SDK's
     /// 60 second default; the TS SDK has none).
     pub control_timeout: Duration,
-    /// v1 `CLAUDE_STOP_CONFIRM_TIMEOUT_MS` (10 seconds): how long an interrupted turn waits for the
-    /// CLI's result before it is settled as interrupted.
+    /// v1 `CLAUDE_STOP_CONFIRM_TIMEOUT_MS` (10 seconds): the deadline for the `interrupt` answer
+    /// and, after the CLI is closed, for the stop to be confirmed.
     pub interrupt_settle_timeout: Duration,
     /// How long a steer waits for Claude's `command_lifecycle` acknowledgement.
     pub steer_ack_timeout: Duration,
@@ -162,6 +166,8 @@ struct ToolCall {
 #[derive(Debug)]
 struct Turn {
     id: String,
+    /// The root prompt reached Claude's stdin; only then does an exit settle the turn.
+    confirmed: bool,
     interrupted: bool,
     steers: HashMap<String, SteerPhase>,
     tools: HashMap<String, ToolCall>,
@@ -179,6 +185,22 @@ struct Turn {
     absorbed_result: bool,
 }
 
+/// Whether this CLI reports `command_lifecycle` for prompts (2.1.332 does, right after reading
+/// the root prompt and before `system:init`; 2.1.111 never does).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lifecycle {
+    Unknown,
+    Reported,
+    Absent,
+}
+
+/// A background subagent whose launch Claude acknowledged, with the turn that started it.
+#[derive(Debug, Clone)]
+struct BackgroundSubagent {
+    call: ToolCall,
+    turn_id: String,
+}
+
 #[derive(Debug)]
 struct State {
     session_id: String,
@@ -190,19 +212,35 @@ struct State {
     pending: HashMap<String, Pending>,
     /// Steer acknowledgements waiting for `command_lifecycle`.
     steer_waiters: HashMap<String, oneshot::Sender<Result<(), String>>>,
-    /// Claude sends `command_lifecycle` (newer CLIs); without it steers are accepted on write.
-    lifecycle_seen: bool,
+    /// Without `command_lifecycle` steers are accepted on write.
+    lifecycle: Lifecycle,
     /// Subagent tool_use id per Claude task id.
     tasks: HashMap<String, String>,
-    /// Background subagents whose launch was acknowledged; finished by `task_notification`.
-    async_subagents: HashMap<String, ToolCall>,
+    /// Background subagents, kept past their turn until `task_notification` or exit
+    /// (v1 `sessionSubagentsByTaskId`, `ClaudeAdapterV2.ts:2572-2574`).
+    async_subagents: HashMap<String, BackgroundSubagent>,
     ordinal: u32,
     exited: bool,
     shutting_down: bool,
+    /// The process is being stopped on purpose (interrupt or shutdown).
+    stopping: bool,
+    /// Why the process is going away when it is not the CLI's own doing.
+    exit_hint: Option<String>,
 }
 
 struct Process {
     child: ChildProcess,
+    generation: u64,
+}
+
+/// A stdin line and, for frames whose delivery matters, who to tell once it was written.
+type Outgoing = (String, Option<oneshot::Sender<Result<(), String>>>);
+
+/// How a frame that needs delivery fared.
+enum Delivery {
+    Written,
+    NotRunning,
+    Failed(String),
 }
 
 struct Inner {
@@ -217,8 +255,11 @@ struct Inner {
     state: Mutex<State>,
     events: mpsc::UnboundedSender<EngineEvent>,
     controls: Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
-    writer: Mutex<Option<mpsc::UnboundedSender<String>>>,
+    writer: Mutex<Option<mpsc::UnboundedSender<Outgoing>>>,
     process: tokio::sync::Mutex<Option<Process>>,
+    stderr: Mutex<Option<(u64, Arc<Mutex<StderrTail>>)>>,
+    /// Woken whenever the active turn settles.
+    settled: Notify,
     generation: AtomicU64,
     next_request: AtomicU64,
     pgid: AtomicU32,
@@ -279,17 +320,21 @@ async fn start_session(
             turn: None,
             pending: HashMap::new(),
             steer_waiters: HashMap::new(),
-            lifecycle_seen: false,
+            lifecycle: Lifecycle::Unknown,
             tasks: HashMap::new(),
             async_subagents: HashMap::new(),
             ordinal: 0,
             exited: false,
             shutting_down: false,
+            stopping: false,
+            exit_hint: None,
         }),
         events,
         controls: Mutex::new(HashMap::new()),
         writer: Mutex::new(None),
         process: tokio::sync::Mutex::new(None),
+        stderr: Mutex::new(None),
+        settled: Notify::new(),
         generation: AtomicU64::new(0),
         next_request: AtomicU64::new(0),
         pgid: AtomicU32::new(0),
@@ -318,8 +363,25 @@ impl Inner {
     fn write(&self, frame: &Value) -> bool {
         let writer = self.writer.lock().map(|w| w.clone()).ok().flatten();
         match writer {
-            Some(tx) => tx.send(frame.to_string()).is_ok(),
+            Some(tx) => tx.send((frame.to_string(), None)).is_ok(),
             None => false,
+        }
+    }
+
+    /// Write a frame and wait until it is on Claude's stdin (or the write failed).
+    async fn deliver(&self, frame: &Value) -> Delivery {
+        let writer = self.writer.lock().map(|w| w.clone()).ok().flatten();
+        let Some(tx) = writer else {
+            return Delivery::NotRunning;
+        };
+        let (ack, written) = oneshot::channel();
+        if tx.send((frame.to_string(), Some(ack))).is_err() {
+            return Delivery::NotRunning;
+        }
+        match written.await {
+            Ok(Ok(())) => Delivery::Written,
+            Ok(Err(error)) => Delivery::Failed(error),
+            Err(_) => Delivery::Failed("Claude's input closed before the write".into()),
         }
     }
 
@@ -385,21 +447,49 @@ impl Inner {
         let stdout = child.take_stdout().ok_or("claude stdout unavailable")?;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.pgid.store(child.pid(), Ordering::SeqCst);
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        if let Ok(mut stderr) = self.stderr.lock() {
+            *stderr = Some((generation, child.stderr_handle()));
+        }
+        let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
         if let Ok(mut writer) = self.writer.lock() {
             *writer = Some(tx);
         }
+        let owner: Weak<Self> = Arc::downgrade(self);
         tokio::spawn(async move {
             let mut stdin = stdin;
-            while let Some(line) = rx.recv().await {
-                if stdin.write_all(line.as_bytes()).await.is_err()
-                    || stdin.write_all(b"\n").await.is_err()
-                    || stdin.flush().await.is_err()
-                {
-                    break;
+            while let Some((line, ack)) = rx.recv().await {
+                let written = async {
+                    stdin.write_all(line.as_bytes()).await?;
+                    stdin.write_all(b"\n").await?;
+                    stdin.flush().await
+                }
+                .await;
+                match written {
+                    Ok(()) => {
+                        if let Some(ack) = ack {
+                            let _ = ack.send(Ok(()));
+                        }
+                    }
+                    Err(error) => {
+                        let reason = format!("Claude stopped reading its input: {error}");
+                        if let Some(ack) = ack {
+                            let _ = ack.send(Err(reason.clone()));
+                        }
+                        rx.close();
+                        while let Some((_, ack)) = rx.recv().await {
+                            if let Some(ack) = ack {
+                                let _ = ack.send(Err(reason.clone()));
+                            }
+                        }
+                        if let Some(inner) = owner.upgrade() {
+                            inner.close_process(generation, reason).await;
+                        }
+                        return;
+                    }
                 }
             }
         });
+        *self.process.lock().await = Some(Process { child, generation });
         let reader = Arc::clone(self);
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -411,12 +501,13 @@ impl Inner {
             }
             reader.on_eof(generation).await;
         });
-        *self.process.lock().await = Some(Process { child });
         if let Ok(mut state) = self.state.lock() {
             state.permission_mode = effective_mode;
             state.pinned_mode = folds.permission_mode;
             state.model = model.clone();
             state.exited = false;
+            state.stopping = false;
+            state.exit_hint = None;
         }
 
         let mut append: Vec<String> = Vec::new();
@@ -508,16 +599,17 @@ impl Inner {
         if generation != self.generation.load(Ordering::SeqCst) {
             return;
         }
-        if let Ok(mut writer) = self.writer.lock() {
-            writer.take();
-        }
-        if let Ok(mut controls) = self.controls.lock() {
-            controls.clear();
-        }
-        let stderr = match self.process.lock().await.as_ref() {
-            Some(process) => process.child.stderr_tail(),
-            None => String::new(),
-        };
+        let stderr = self
+            .stderr
+            .lock()
+            .ok()
+            .and_then(|s| {
+                s.as_ref()
+                    .filter(|(g, _)| *g == generation)
+                    .map(|(_, t)| Arc::clone(t))
+            })
+            .and_then(|tail| tail.lock().ok().map(|t| t.text()))
+            .unwrap_or_default();
         let last = stderr
             .lines()
             .rev()
@@ -530,13 +622,38 @@ impl Inner {
         } else {
             format!("Claude exited: {}", items::truncate(&last, 500))
         };
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
+        let exited = self.settle_exit(&reason);
+        // Reap the leader and end its group before saying nothing more follows. A shutdown or
+        // close holding the process finishes its own stop first.
+        self.reap(generation).await;
+        if let Some(reason) = exited {
+            self.emit(EngineEvent::Exited { reason });
+        }
+    }
+
+    /// The one exit settlement (idempotent): stop writing, fail waiting controls and steers,
+    /// close open requests, settle the active turn and end retained background subagents.
+    /// Returns the `Exited` reason when this call settled, None when the session had already.
+    fn settle_exit(&self, observed: &str) -> Option<String> {
+        if let Ok(mut writer) = self.writer.lock() {
+            writer.take();
+        }
+        if let Ok(mut controls) = self.controls.lock() {
+            controls.clear();
+        }
+        let mut state = self.state.lock().ok()?;
         if state.exited {
-            return;
+            return None;
         }
         state.exited = true;
+        let reason = if state.shutting_down {
+            "shutdown".to_string()
+        } else {
+            state
+                .exit_hint
+                .clone()
+                .unwrap_or_else(|| observed.to_string())
+        };
         for (key, _) in state.pending.drain() {
             self.emit(EngineEvent::RequestClosed { key });
         }
@@ -544,8 +661,11 @@ impl Inner {
             let _ = waiter.send(Err(reason.clone()));
         }
         self.flush_text(&mut state, AssistantMessagePhase::Commentary);
-        if let Some(turn) = state.turn.take() {
-            let outcome = if turn.interrupted {
+        let stopping = state.stopping || state.shutting_down;
+        if let Some(turn) = state.turn.take()
+            && turn.confirmed
+        {
+            let outcome = if turn.interrupted || stopping {
                 TurnOutcome::Interrupted
             } else {
                 TurnOutcome::Failed {
@@ -557,12 +677,69 @@ impl Inner {
                 outcome,
             });
         }
-        let reason = if state.shutting_down {
-            "shutdown".to_string()
+        let status = if stopping {
+            TurnItemStatus::Interrupted
         } else {
-            reason
+            TurnItemStatus::Failed
         };
-        self.emit(EngineEvent::Exited { reason });
+        let mut background: Vec<(String, BackgroundSubagent)> =
+            state.async_subagents.drain().collect();
+        background.sort_by(|a, b| a.0.cmp(&b.0));
+        for (tool_use_id, subagent) in background {
+            self.emit(EngineEvent::SubagentUpdate {
+                turn_id: Some(subagent.turn_id.clone()),
+                subagent_id: tool_use_id.clone(),
+                status,
+                title: None,
+                progress: None,
+            });
+            let body = self.subagent_body(&tool_use_id, &subagent.call, None);
+            let item = self.item(
+                &mut state,
+                &subagent.turn_id,
+                &tool_use_id,
+                Some(&tool_use_id),
+                status,
+                body,
+            );
+            self.complete(&mut state, &subagent.turn_id, item, Some(&tool_use_id));
+        }
+        drop(state);
+        self.settled.notify_waiters();
+        Some(reason)
+    }
+
+    /// Wait for and end the process of `generation` (leader and group), if it is still held.
+    async fn reap(&self, generation: u64) {
+        let mut process = self.process.lock().await;
+        if process.as_ref().is_some_and(|p| p.generation == generation)
+            && let Some(mut process) = process.take()
+        {
+            process.child.shutdown().await;
+        }
+    }
+
+    /// Stop the process of `generation` now (TERM, then KILL after the grace): a broken stdin, or
+    /// the close after an interrupt (v1 `interruptUnlessClosed` closes the query). The reader's
+    /// EOF then settles the session.
+    async fn close_process(&self, generation: u64, reason: String) {
+        if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Ok(mut state) = self.state.lock()
+            && state.exit_hint.is_none()
+        {
+            state.exit_hint = Some(reason);
+        }
+        if let Ok(mut writer) = self.writer.lock() {
+            writer.take();
+        }
+        let mut process = self.process.lock().await;
+        if process.as_ref().is_some_and(|p| p.generation == generation)
+            && let Some(mut process) = process.take()
+        {
+            process.child.terminate_group().await;
+        }
     }
 
     fn item(
@@ -642,6 +819,19 @@ impl Inner {
 
     fn on_message(&self, state: &mut State, message: &Value) {
         let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
+        // A lifecycle-capable CLI answers the root prompt with `command_lifecycle` before anything
+        // else (2.1.332 capture: queued, started, then system:init). Any other first frame after a
+        // prompt means this CLI never reports it, so steers waiting on it are accepted on write.
+        if state.lifecycle == Lifecycle::Unknown && state.turn.is_some() {
+            if kind == "command_lifecycle" {
+                state.lifecycle = Lifecycle::Reported;
+            } else {
+                state.lifecycle = Lifecycle::Absent;
+                for (_, waiter) in state.steer_waiters.drain() {
+                    let _ = waiter.send(Ok(()));
+                }
+            }
+        }
         if let Some(session_id) = message.get("session_id").and_then(Value::as_str)
             && !session_id.is_empty()
             && kind == "system"
@@ -695,7 +885,7 @@ impl Inner {
     }
 
     fn on_lifecycle(&self, state: &mut State, message: &Value) {
-        state.lifecycle_seen = true;
+        state.lifecycle = Lifecycle::Reported;
         let (Some(uuid), Some(phase)) = (
             message.get("command_uuid").and_then(Value::as_str),
             message.get("state").and_then(Value::as_str),
@@ -809,7 +999,13 @@ impl Inner {
             return;
         }
         state.tasks.insert(task_id.clone(), tool_use_id.clone());
-        let turn_id = state.turn.as_ref().map(|turn| turn.id.clone());
+        // A background subagent belongs to the turn that started it, even when another turn (or
+        // none) is active now.
+        let turn_id = state
+            .async_subagents
+            .get(&tool_use_id)
+            .map(|subagent| subagent.turn_id.clone())
+            .or_else(|| state.turn.as_ref().map(|turn| turn.id.clone()));
         let description = protocol::str_field(message, "description");
         let status = match subtype {
             "task_notification" => match message.get("status").and_then(Value::as_str) {
@@ -847,10 +1043,10 @@ impl Inner {
             progress: progress.clone(),
         });
         if subtype == "task_notification"
-            && let Some(call) = state.async_subagents.remove(&tool_use_id)
-            && let Some(turn_id) = turn_id
+            && let Some(subagent) = state.async_subagents.remove(&tool_use_id)
         {
-            let body = self.subagent_body(&call, progress);
+            let turn_id = subagent.turn_id;
+            let body = self.subagent_body(&tool_use_id, &subagent.call, progress);
             let item = self.item(
                 state,
                 &turn_id,
@@ -863,7 +1059,12 @@ impl Inner {
         }
     }
 
-    fn subagent_body(&self, call: &ToolCall, result: Option<String>) -> TurnItemBody {
+    fn subagent_body(
+        &self,
+        tool_use_id: &str,
+        call: &ToolCall,
+        result: Option<String>,
+    ) -> TurnItemBody {
         let prompt = call
             .input
             .get("prompt")
@@ -872,7 +1073,7 @@ impl Inner {
             .unwrap_or_default()
             .to_string();
         TurnItemBody::Subagent {
-            subagent_id: String::new(),
+            subagent_id: tool_use_id.to_string(),
             origin: SubagentOrigin::ProviderNative,
             driver: DRIVER.to_string(),
             provider_instance_id: self.provider_instance_id.clone(),
@@ -1108,13 +1309,16 @@ impl Inner {
         if items::is_subagent_tool(&call.name) {
             let text = content.map(items::tool_result_text).unwrap_or_default();
             if !is_error && items::is_async_launch_ack(structured, &text) {
-                state.async_subagents.insert(tool_id.to_string(), call);
+                state.async_subagents.insert(
+                    tool_id.to_string(),
+                    BackgroundSubagent {
+                        call,
+                        turn_id: turn_id.clone(),
+                    },
+                );
                 return;
             }
-            let mut body = self.subagent_body(&call, Some(items::subagent_result_text(&text)));
-            if let TurnItemBody::Subagent { subagent_id, .. } = &mut body {
-                *subagent_id = tool_id.to_string();
-            }
+            let body = self.subagent_body(tool_id, &call, Some(items::subagent_result_text(&text)));
             self.emit(EngineEvent::SubagentUpdate {
                 turn_id: Some(turn_id.clone()),
                 subagent_id: tool_id.to_string(),
@@ -1217,6 +1421,7 @@ impl Inner {
         }
         state.turn = None;
         self.emit(EngineEvent::TurnFinished { turn_id, outcome });
+        self.settled.notify_waiters();
     }
 
     fn on_control_request(&self, request_id: &str, request: &Value) {
@@ -1556,35 +1761,18 @@ impl Inner {
         Ok(())
     }
 
+    /// Settle the session after its process is gone for a reason Claude did not report.
     fn mark_exited(&self, reason: &str) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
-        if state.exited {
-            return;
+        if let Some(reason) = self.settle_exit(reason) {
+            self.emit(EngineEvent::Exited { reason });
         }
-        state.exited = true;
-        self.emit(EngineEvent::Exited {
-            reason: reason.to_string(),
-        });
     }
 
-    fn settle_interrupted(&self, turn_id: &str) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
-        if state.turn.as_ref().map(|t| t.id.as_str()) != Some(turn_id) {
-            return;
-        }
-        self.flush_text(&mut state, AssistantMessagePhase::Commentary);
-        for (key, _) in state.pending.drain() {
-            self.emit(EngineEvent::RequestClosed { key });
-        }
-        state.turn = None;
-        self.emit(EngineEvent::TurnFinished {
-            turn_id: turn_id.to_string(),
-            outcome: TurnOutcome::Interrupted,
-        });
+    fn turn_active(&self, turn_id: &str) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.turn.as_ref().is_some_and(|t| t.id == turn_id))
+            .unwrap_or(false)
     }
 }
 
@@ -1822,6 +2010,7 @@ impl EngineSession for ClaudeSession {
             }
             state.turn = Some(Turn {
                 id: turn_id.clone(),
+                confirmed: false,
                 interrupted: false,
                 steers: HashMap::new(),
                 tools: HashMap::new(),
@@ -1835,15 +2024,41 @@ impl EngineSession for ClaudeSession {
                 absorbed_result: false,
             });
         }
-        if !inner.write(&protocol::user_message(content, Some(&prompt_uuid), None)) {
-            if let Ok(mut state) = inner.state.lock() {
-                state.turn = None;
-            }
-            return TurnStartResult::Declined {
-                reason: "Claude is not running".into(),
+        let delivery = inner
+            .deliver(&protocol::user_message(content, Some(&prompt_uuid), None))
+            .await;
+        let Ok(mut state) = inner.state.lock() else {
+            return TurnStartResult::Unknown {
+                reason: "Claude session state is unavailable".into(),
             };
+        };
+        let ours = state.turn.as_ref().is_some_and(|t| t.id == turn_id);
+        match delivery {
+            Delivery::Written if ours => {
+                if let Some(turn) = state.turn.as_mut() {
+                    turn.confirmed = true;
+                }
+                TurnStartResult::Accepted { turn_id }
+            }
+            // Written, but Claude exited before the turn could be confirmed.
+            Delivery::Written => TurnStartResult::Unknown {
+                reason: "Claude exited right after the message was sent".into(),
+            },
+            Delivery::NotRunning => {
+                if ours {
+                    state.turn = None;
+                }
+                TurnStartResult::Declined {
+                    reason: "Claude is not running".into(),
+                }
+            }
+            Delivery::Failed(reason) => {
+                if ours {
+                    state.turn = None;
+                }
+                TurnStartResult::Unknown { reason }
+            }
         }
-        TurnStartResult::Accepted { turn_id }
     }
 
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
@@ -1860,7 +2075,7 @@ impl EngineSession for ClaudeSession {
                     reason: "Claude session state is unavailable".into(),
                 };
             };
-            let lifecycle = state.lifecycle_seen;
+            let lifecycle = state.lifecycle;
             let Some(turn) = state.turn.as_mut() else {
                 return SteerResult::Declined {
                     reason: "The Claude turn already ended".into(),
@@ -1877,21 +2092,31 @@ impl EngineSession for ClaudeSession {
                 };
             }
             turn.steers.insert(uuid.clone(), SteerPhase::Sent);
-            if lifecycle {
+            // Until this CLI is known to lack `command_lifecycle`, wait for Claude's verdict.
+            let wait = lifecycle != Lifecycle::Absent;
+            if wait {
                 state.steer_waiters.insert(uuid.clone(), tx);
             }
-            lifecycle
+            wait
         };
-        if !inner.write(&protocol::user_message(content, Some(&uuid), Some("next"))) {
+        let delivery = inner
+            .deliver(&protocol::user_message(content, Some(&uuid), Some("next")))
+            .await;
+        let undelivered = match delivery {
+            Delivery::Written => None,
+            Delivery::NotRunning => Some(SteerResult::Declined {
+                reason: "Claude is not running".into(),
+            }),
+            Delivery::Failed(reason) => Some(SteerResult::Unknown { reason }),
+        };
+        if let Some(result) = undelivered {
             if let Ok(mut state) = inner.state.lock() {
                 state.steer_waiters.remove(&uuid);
                 if let Some(turn) = state.turn.as_mut() {
                     turn.steers.remove(&uuid);
                 }
             }
-            return SteerResult::Declined {
-                reason: "Claude is not running".into(),
-            };
+            return result;
         }
         if !wait {
             return SteerResult::Accepted;
@@ -1919,26 +2144,55 @@ impl EngineSession for ClaudeSession {
             let Ok(mut state) = inner.state.lock() else {
                 return Err(EngineError::Transport("state poisoned".into()));
             };
+            if state.exited {
+                return Ok(());
+            }
             match state.turn.as_mut() {
                 Some(turn) if turn.id == turn_id => turn.interrupted = true,
                 // No such active turn: nothing to stop.
                 _ => return Ok(()),
             }
         }
-        let result = inner
-            .control(
-                json!({"subtype": "interrupt"}),
-                inner.options.control_timeout,
-            )
-            .await;
-        let settle = Arc::clone(&inner);
-        let turn = turn_id.to_string();
         let deadline = inner.options.interrupt_settle_timeout;
-        tokio::spawn(async move {
-            tokio::time::sleep(deadline).await;
-            settle.settle_interrupted(&turn);
-        });
-        result.map(|_| ()).map_err(EngineError::Transport)
+        let generation = inner.generation.load(Ordering::SeqCst);
+        // v1 `interruptUnlessClosed`: the interrupt control (10 s; a timeout still closes), then
+        // close. A refused interrupt while Claude is still running fails and keeps the turn.
+        if let Err(error) = inner
+            .control(json!({"subtype": "interrupt"}), deadline)
+            .await
+        {
+            let exited = inner.state.lock().map(|s| s.exited).unwrap_or(true);
+            if !exited && !error.starts_with("Control request timeout") {
+                return Err(EngineError::Transport(error));
+            }
+        }
+        if let Ok(mut state) = inner.state.lock() {
+            state.stopping = true;
+        }
+        inner
+            .close_process(generation, "Claude was stopped".into())
+            .await;
+        // v1 awaits the closed query for CLAUDE_STOP_CONFIRM_TIMEOUT_MS; unconfirmed, the turn
+        // stays open (the CLI may still be working) and the interrupt reports the timeout.
+        let confirmed = tokio::time::timeout(deadline, async {
+            loop {
+                let settled = inner.settled.notified();
+                tokio::pin!(settled);
+                settled.as_mut().enable();
+                if !inner.turn_active(turn_id) {
+                    return;
+                }
+                settled.await;
+            }
+        })
+        .await;
+        match confirmed {
+            Ok(()) => Ok(()),
+            Err(_) => Err(EngineError::Transport(format!(
+                "Claude did not confirm the stop within {} ms",
+                deadline.as_millis()
+            ))),
+        }
     }
 
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
@@ -1982,10 +2236,13 @@ impl EngineSession for ClaudeSession {
                 }),
             },
         };
-        if inner.write(&protocol::control_success(key, response)) {
-            Ok(())
-        } else {
-            Err(EngineError::Transport("Claude is not running".into()))
+        match inner
+            .deliver(&protocol::control_success(key, response))
+            .await
+        {
+            Delivery::Written => Ok(()),
+            Delivery::NotRunning => Err(EngineError::Transport("Claude is not running".into())),
+            Delivery::Failed(reason) => Err(EngineError::Transport(reason)),
         }
     }
 
@@ -2059,12 +2316,14 @@ impl EngineSession for ClaudeSession {
         if let Ok(mut writer) = inner.writer.lock() {
             writer.take();
         }
-        let summary = match inner.process.lock().await.as_mut() {
-            Some(process) => Some(process.child.shutdown().await),
-            None => None,
-        };
-        let _ = summary;
-        // The reader's EOF reports Exited; make sure it is reported once even if it raced.
+        // Hold the process while it stops: the reader's EOF settles the session meanwhile and
+        // reports Exited once this returns. Settle here too in case no reader is left.
+        {
+            let mut process = inner.process.lock().await;
+            if let Some(mut process) = process.take() {
+                process.child.shutdown().await;
+            }
+        }
         inner.mark_exited("shutdown");
     }
 }

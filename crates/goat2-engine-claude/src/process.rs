@@ -220,6 +220,11 @@ impl ChildProcess {
             .unwrap_or_default()
     }
 
+    /// A handle to the stderr tail that outlives a borrow of the child.
+    pub fn stderr_handle(&self) -> Arc<Mutex<StderrTail>> {
+        Arc::clone(&self.stderr_tail)
+    }
+
     /// Ordinary stop: close stdin, then always signal the group (the leader exiting does not
     /// prove its descendants did), TERM then KILL. One `kill_grace` deadline covers the whole
     /// stop, as v1 forces a kill 5 s after asking the process to stop; TERM always gets at least

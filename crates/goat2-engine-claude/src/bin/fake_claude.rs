@@ -397,7 +397,10 @@ impl Fake {
                 }
                 "expect_outbound" => self.expect(&label, &entry["frame"]),
                 "close_stdin" => {
-                    let before = entry["before"].as_str().unwrap_or("mcp_set_servers").to_string();
+                    let before = entry["before"]
+                        .as_str()
+                        .unwrap_or("mcp_set_servers")
+                        .to_string();
                     if let Some(frame) = self.next_frame_closing(Some(&before)) {
                         self.fail(format!("{label}: unexpected frame {frame}"));
                     }
