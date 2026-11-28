@@ -6,7 +6,7 @@ import type { RunId } from "./RunId.ts";
 /**
  * `run.started`: written to disk before anything is sent to the engine (send boundary).
  */
-export type RunStarted = { runId: RunId, inputIds: Array<InputId>, 
+export type RunStarted = { runId: RunId, inputIds: Array<InputId>,
 /**
  * Host generation; outputs from older generations are dropped.
  */

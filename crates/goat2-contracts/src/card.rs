@@ -30,11 +30,45 @@ pub struct ParentRef {
     pub by_item_id: ItemId,
 }
 
-/// Engine drivers. Part 1 ships Codex only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+/// The provider behind an engine, as v1 `ProviderDriverKind` values (goat
+/// `apps/web/src/components/settings/providerDriverMeta.ts`). It names the provider, not the
+/// transport, so moving a provider between driver crates never changes persisted lines. Registry
+/// agents are `acpRegistry` plus the agent id. Cloud kinds are Part 3.
+///
+/// Wire: `"codex"`, `"claudeAgent"`, `"grok"`, ..., `{"acpRegistry": {"agentId": "kimi"}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EngineDriver {
     Codex,
+    ClaudeAgent,
+    Grok,
+    Fx,
+    Antigravity,
+    Opencode,
+    Cursor,
+    Muse,
+    Pi,
+    Omo,
+    AcpRegistry { agent_id: String },
+}
+
+impl EngineDriver {
+    /// The v1 `ProviderDriverKind` slug (`acpRegistry` for every registry agent).
+    pub fn driver_kind(&self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeAgent => "claudeAgent",
+            Self::Grok => "grok",
+            Self::Fx => "fx",
+            Self::Antigravity => "antigravity",
+            Self::Opencode => "opencode",
+            Self::Cursor => "cursor",
+            Self::Muse => "muse",
+            Self::Pi => "pi",
+            Self::Omo => "omo",
+            Self::AcpRegistry { .. } => "acpRegistry",
+        }
+    }
 }
 
 /// Engine settings for a thread, with v1 `OrchestrationV2AppThread` field names.
@@ -147,6 +181,19 @@ pub struct ThreadCard {
     #[ts(as = "u64")]
     #[schemars(with = "u64")]
     pub card_seq: u64,
+    /// Open requests that need a person (`fold.openRequests` except kind `resend`), folded by the
+    /// store. Omitted when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<u32>", optional)]
+    pub open_asks: u32,
+    /// Derived by the host when it serves a card: the thread's last item not from the person is
+    /// newer than the `lastReadSeq` that `mark_read` keeps in `~/.goat2/ui-state.json`. Read state
+    /// is UI state, not thread history (PRD model.md, storage.md): the store never sets it, so it
+    /// is never written to `card.json` or `goat.jsonl` and is not part of the frozen format.
+    /// Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(as = "Option<bool>", optional)]
+    pub unread: bool,
 }
 
 /// `threads/<threadId>/card.json`: `{"v":1,"card":ThreadCard,"fold":Fold}`, replaced atomically.
@@ -215,4 +262,11 @@ impl ThreadCard {
         }
         Ok(())
     }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }

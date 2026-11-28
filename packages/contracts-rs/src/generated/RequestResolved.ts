@@ -6,15 +6,15 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
 /**
  * `request.resolved`: the person's answer.
  */
-export type RequestResolved = { requestId: RequestId, outcome: RequestOutcome, 
+export type RequestResolved = { requestId: RequestId, outcome: RequestOutcome,
 /**
  * `decision` request: the chosen option id.
  */
-optionId?: string, 
+optionId?: string,
 /**
  * Free-text answer or note.
  */
-text?: string, 
+text?: string,
 /**
  * Structured answers by question id, for question requests.
  */

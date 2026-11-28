@@ -154,6 +154,9 @@ struct ActiveRun {
     permit: RunPermit,
     /// Set when an engine request id must map back (key -> request).
     engine_requests: Vec<(String, RequestId)>,
+    /// `signin` requests opened for this run's turn, closed when the run ends. Answered by the
+    /// person, never through the engine, so they are kept apart from `engine_requests`.
+    signins: Vec<RequestId>,
 }
 
 struct Session {
@@ -171,6 +174,8 @@ struct Actor {
     held: bool,
     not_before: Option<Instant>,
     idle_gen: u64,
+    /// `signin` requests the engine raised outside any turn, closed when the session ends.
+    session_signins: Vec<RequestId>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -192,6 +197,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         held: false,
         not_before: None,
         idle_gen: 0,
+        session_signins: Vec::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
@@ -484,6 +490,7 @@ impl Actor {
                         kind: RequestKind::Resend,
                         summary: "Not sure a message reached the agent. Resend or drop it?"
                             .to_owned(),
+                        context: None,
                         options: None,
                         recommended: None,
                     }));
@@ -581,6 +588,9 @@ impl Actor {
             },
             host_generation: self.host.inner.opts.host_generation,
             process_generation: pgen,
+            // Driver defaults: bot instructions and launch overrides come with Part 2 bots.
+            instructions: None,
+            launch: None,
         };
         self.phase = Phase::Starting(permit);
         let host = self.host.clone();
@@ -743,6 +753,7 @@ impl Actor {
                     turn_id,
                     permit,
                     engine_requests: Vec::new(),
+                    signins: Vec::new(),
                 });
             }
             TurnStartResult::RefusedUnowned { reason } => {
@@ -785,6 +796,7 @@ impl Actor {
                     turn_id: String::new(),
                     permit,
                     engine_requests: Vec::new(),
+                    signins: Vec::new(),
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
             }
@@ -865,6 +877,7 @@ impl Actor {
                         &summary,
                         goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS,
                     ),
+                    context: None,
                     options: None,
                     recommended: None,
                 }));
@@ -902,6 +915,26 @@ impl Actor {
                     self.finish_run(outcome, reason).await;
                 }
             }
+            EngineEvent::AuthRequired {
+                turn_id,
+                url,
+                message,
+            } => self.on_auth_required(turn_id, url, message),
+            EngineEvent::SubagentUpdate { subagent_id, .. } => {
+                // Progress of an unfinished native subagent: not stored (PRD storage.md: no
+                // progress updates in the log). The finished subagent arrives as an item. There
+                // is no live wire frame for it yet (structure/30_wire.md).
+                tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
+            }
+            EngineEvent::SteerUpdated {
+                turn_id, status, ..
+            } => {
+                // Owner decision: a cancelled steer is requeued as a followup with the same
+                // inputId (a second input.delivered {as: steer, outcome: declined}, which the
+                // store folds back into the queue). The host side of that lands in a later merge
+                // (lane E); until then the accepted delivery stands and this is only logged.
+                tracing::debug!(thread = %self.id, %turn_id, ?status, "steer settled (not acted on yet)");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
@@ -918,6 +951,74 @@ impl Actor {
             .store
             .fold(&self.id)
             .is_some_and(|f| f.open_requests.iter().any(|r| &r.request_id == request_id))
+    }
+
+    /// The engine needs the person to sign in: a `signin` request, answered by the person. A
+    /// sign-in naming a turn belongs to that run and only while it runs; one naming a turn that
+    /// is no longer running is dropped (the next turn asks again). One without a turn belongs to
+    /// the engine session. Each scope keeps at most one open sign-in; a repeat refreshes its link.
+    fn on_auth_required(&mut self, turn_id: Option<String>, url: Option<String>, message: String) {
+        let run_id = match (&turn_id, &self.phase) {
+            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => Some(run.run_id.clone()),
+            (Some(_), _) => {
+                tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
+                return;
+            }
+            (None, _) => None,
+        };
+        let scope: &[RequestId] = match (&run_id, &self.phase) {
+            (Some(_), Phase::Running(run)) => &run.signins,
+            _ => &self.session_signins,
+        };
+        let open = scope.iter().find(|id| self.is_open(id)).cloned();
+        let request_id = match open {
+            Some(request_id) => request_id,
+            None => {
+                let request_id = RequestId::new(new_id("req"));
+                self.append(vec![LogEvent::RequestOpened(RequestOpened {
+                    request_id: request_id.clone(),
+                    run_id: run_id.clone(),
+                    item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
+                    kind: RequestKind::Signin,
+                    summary: SIGNIN_SUMMARY.to_owned(),
+                    context: None,
+                    options: None,
+                    recommended: None,
+                })]);
+                match (&run_id, &mut self.phase) {
+                    (Some(_), Phase::Running(run)) => run.signins.push(request_id.clone()),
+                    _ => self.session_signins.push(request_id.clone()),
+                }
+                request_id
+            }
+        };
+        match url.filter(|u| !u.trim().is_empty()) {
+            Some(url) => self.host.set_signin_link(crate::core::SigninLink {
+                thread_id: self.id.clone(),
+                request_id,
+                url,
+                message,
+            }),
+            None => self.host.forget_signin_link(&request_id),
+        }
+    }
+
+    /// Close the still open sign-ins among `ids` with `why`; their links are dropped.
+    fn close_signins(&self, ids: &[RequestId], why: &str) -> Vec<LogEvent> {
+        let mut events = Vec::new();
+        for request_id in ids {
+            self.host.forget_signin_link(request_id);
+            if self.is_open(request_id) {
+                events.push(LogEvent::RequestResolved(RequestResolved {
+                    request_id: request_id.clone(),
+                    outcome: RequestOutcome::Cancel,
+                    option_id: None,
+                    text: Some(why.to_owned()),
+                    answers: None,
+                }));
+            }
+        }
+        events
     }
 
     /// End the active run: `run.finished`, engine requests closed, checkpoint, child report.
@@ -944,6 +1045,7 @@ impl Actor {
                 }));
             }
         }
+        events.extend(self.close_signins(&run.signins, "the run ended"));
         events.push(LogEvent::RunFinished(RunFinished {
             run_id: run.run_id.clone(),
             outcome,
@@ -957,6 +1059,7 @@ impl Actor {
                 kind: RequestKind::Resend,
                 summary: "Not sure the last message reached the agent. Resend or drop it?"
                     .to_owned(),
+                context: None,
                 options: None,
                 recommended: None,
             }));
@@ -1198,7 +1301,7 @@ impl Actor {
                 run.engine_requests.retain(|(k, _)| k != key);
             }
         } else if request.item_id.is_some()
-            && request.kind != RequestKind::Resend
+            && !matches!(request.kind, RequestKind::Resend | RequestKind::Signin)
             && r.outcome != RequestOutcome::Cancel
         {
             return Err(Refusal::new(
@@ -1218,6 +1321,9 @@ impl Actor {
                 })],
             )
             .map_err(|e| self.store_err(e))?;
+        if request.kind == RequestKind::Signin {
+            self.host.forget_signin_link(&r.request_id);
+        }
         // An agent's own question (MCP request.ask): the answer comes back as an input.
         if request.item_id.is_none()
             && request.kind != RequestKind::Resend
@@ -1335,6 +1441,11 @@ impl Actor {
     }
 
     fn drop_session(&mut self) {
+        let signins = std::mem::take(&mut self.session_signins);
+        let closed = self.close_signins(&signins, "the engine stopped");
+        if !closed.is_empty() {
+            self.append(closed);
+        }
         if let Some(s) = self.session.take() {
             let mut sessions = self.host.inner.sessions.lock().expect("sessions");
             if sessions.get(&self.id).is_some_and(|(p, _)| *p == s.pgen) {
@@ -1356,6 +1467,12 @@ impl Actor {
         self.pgen += 1;
     }
 }
+
+/// The persisted `request.opened` summary of a sign-in. It is constant: an engine message can
+/// carry codes or tokens in forms no redaction reliably finds (URL paths, `mailto:`, brackets in
+/// a path, bare codes), so none of it goes to `goat.jsonl`. The message and link stay in memory
+/// only ([crate::core::SigninLink]).
+const SIGNIN_SUMMARY: &str = "Sign in to continue";
 
 /// The parent's wake input for a child result. The clientRequestId names (child, child run).
 pub(crate) fn wake_input(outcome: &ChildOutcome, child_title: &str) -> NewInput {

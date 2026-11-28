@@ -6,15 +6,15 @@ import type { InputMode } from "./InputMode.ts";
  * `input.changed`: a person edited an input that is still queued (`edit_queued`,
  * `cancel_queued`, `reorder_queued`, `promote_to_steer`). Only the changed fields are present.
  */
-export type InputChanged = { inputId: InputId, text?: string, 
+export type InputChanged = { inputId: InputId, text?: string,
 /**
  * `promote_to_steer` writes `mode: steer`.
  */
-mode?: InputMode, 
+mode?: InputMode,
 /**
  * `cancel_queued`: the input leaves the queue and is never delivered.
  */
-cancelled?: boolean, 
+cancelled?: boolean,
 /**
  * `reorder_queued`: 0-based index in the queue after the change.
  */

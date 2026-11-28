@@ -1,0 +1,16 @@
+{
+  "botId": "bot-goat",
+  "threadId": "thr-bot-1",
+  "requestId": "handoff-3",
+  "request": {
+    "requestId": "handoff-3",
+    "threadId": "thr-worker-1",
+    "kind": "handoff"
+  },
+  "eventId": "att-3",
+  "sequence": 14,
+  "kind": "approval",
+  "generation": -1,
+  "occurredAt": "2026-11-28T13:06:00Z",
+  "botName": "GOAT"
+}

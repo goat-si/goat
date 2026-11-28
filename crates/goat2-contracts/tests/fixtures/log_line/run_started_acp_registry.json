@@ -1,0 +1,17 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "engineRef": {
+    "driver": {
+      "acpRegistry": {
+        "agentId": "kimi"
+      }
+    },
+    "id": "acp-session-1"
+  },
+  "generation": 1,
+  "inputIds": [],
+  "runId": "example",
+  "seq": 1,
+  "type": "run.started",
+  "v": 1
+}

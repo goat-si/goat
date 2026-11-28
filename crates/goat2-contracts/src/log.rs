@@ -363,6 +363,16 @@ pub struct RequestOpened {
     pub kind: RequestKind,
     /// At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.
     pub summary: String,
+    /// What the person needs to know to decide (v1 `DecisionItem.context`), at most
+    /// [crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::serde_util::request_context"
+    )]
+    #[ts(optional, as = "Option<String>")]
+    #[schemars(with = "Option<String>", length(max = 4000))]
+    pub context: Option<String>,
     /// Kind `decision`: the choices offered (v1 `goat_decision_request`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -496,6 +506,9 @@ pub struct UserNotified {
     pub run_id: Option<RunId>,
     pub kind: NotifyKind,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<NotificationSource>,
 }
 
 /// Fold state beyond the card: what a reader (or the store after a crash) needs to continue
@@ -506,6 +519,14 @@ pub struct UserNotified {
 /// run's hold. At `run.finished`, run inputs still queued are delivered if
 /// `activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`
 /// outcome opens request `resend:<runId>` (kind `resend`) holding them.
+///
+/// Steers: `input.delivered {as: steer, outcome: accepted}` moves the input from
+/// `queuedInputs` to `steeredInputs`. A later `{as: steer, outcome: declined}` for an input in
+/// `steeredInputs` (the engine dropped an accepted steer, `EngineEvent::SteerUpdated` Cancelled)
+/// moves it back to the END of `queuedInputs` with mode `followup`, same inputId, text, source
+/// and attachments (v1 re-dispatches through the normal queue). A declined steer still queued is
+/// unchanged. `steeredInputs` is cleared at the next `run.started`, so a cancel that arrives as
+/// the turn ends still requeues.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Fold {
@@ -522,6 +543,11 @@ pub struct Fold {
     pub queued_inputs: Vec<QueuedInput>,
     /// Inputs whose delivery is ambiguous, held by a resend request (one hold per run).
     pub held_inputs: Vec<HeldInputs>,
+    /// Steers the engine accepted that are not settled yet (see the steer rules above). Omitted
+    /// when empty; checkpoints written before this field read as empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<QueuedInput>>")]
+    pub steered_inputs: Vec<QueuedInput>,
     /// Requests still open (including `resend`), so the inbox renders without earlier lines.
     pub open_requests: Vec<RequestOpened>,
     /// Children started and not yet reported; `card.children.running` is its length.
@@ -615,4 +641,12 @@ pub fn parse_log_line(text: &str) -> Result<ParsedLine, serde_json::Error> {
         seq: envelope.seq,
         type_tag: envelope.type_tag,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NotificationSource {
+    Session,
+    Fallback,
+    Fixed,
 }

@@ -107,6 +107,14 @@
     "face": {
       "$ref": "#/$defs/BotFace"
     },
+    "instructions": {
+      "description": "v1 `BotInstructions`: at most 16384 characters, checked by serde and schema alike. v1's\n16384 UTF-8 byte cap is enforced by the host's bot store, not by this contract.",
+      "maxLength": 16384,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "name": {
       "type": "string"
     },

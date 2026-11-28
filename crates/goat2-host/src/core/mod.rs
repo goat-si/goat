@@ -22,8 +22,8 @@ use goat2_contracts::limits::{
     MAX_CHILDREN_PER_BOT, MAX_CONCURRENT_RUNS, MAX_CONCURRENT_STARTS,
 };
 use goat2_contracts::{
-    BotId, BotProfile, ChildResultStatus, ItemId, LogEvent, NotifyKind, RunId, ThreadCursor,
-    ThreadId, ThreadKind, text::utf16_len,
+    BotId, BotProfile, ChildResultStatus, ItemId, LogEvent, NotifyKind, RequestId, RunId,
+    ThreadCursor, ThreadId, ThreadKind, text::utf16_len,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -100,6 +100,30 @@ pub struct Runtime {
     pub run_slot: Option<Arc<sched::RunSlot>>,
 }
 
+/// The link an engine asked the person to open to sign in (`EngineEvent::AuthRequired.url`), kept
+/// for as long as its `signin` request is open. Memory only: such links often carry one-time
+/// codes in their query, so they never go into the thread log, whose `request.opened` keeps a
+/// bounded summary without them. The providers module hands the link to the UI as
+/// `ServerProviderAuth.action` (`goat2_contracts::AcpRegistryUrlAuthAction`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct SigninLink {
+    pub thread_id: ThreadId,
+    pub request_id: RequestId,
+    pub url: String,
+    pub message: String,
+}
+
+impl std::fmt::Debug for SigninLink {
+    // The URL stays out of logs and panic messages.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigninLink")
+            .field("thread_id", &self.thread_id)
+            .field("request_id", &self.request_id)
+            .field("url", &"<redacted>")
+            .finish_non_exhaustive()
+    }
+}
+
 /// A finished child run, as delivered to waiters and the parent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildOutcome {
@@ -150,6 +174,8 @@ pub(crate) struct Inner {
     pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
+    /// Sign-in links of open `signin` requests, by request. Memory only (see [SigninLink]).
+    signin_links: Mutex<HashMap<RequestId, SigninLink>>,
     engine_groups_hook: Mutex<EngineGroupsNotifier>,
     /// Actor and background tasks, aborted on shutdown so the host (and the store lock) drops.
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
@@ -202,6 +228,7 @@ impl Host {
                 dedupe: Mutex::new(HashMap::new()),
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
+                signin_links: Mutex::new(HashMap::new()),
                 engine_groups_hook: Mutex::new(EngineGroupsNotifier { hook: None, seq: 0 }),
                 tasks: Mutex::new(Vec::new()),
             }),
@@ -423,6 +450,30 @@ impl Host {
 
     pub(crate) fn runtime_of(&self, id: &ThreadId) -> Option<Runtime> {
         self.inner.runtime.lock().expect("runtime").get(id).cloned()
+    }
+
+    /// Sign-in links of the open `signin` requests, oldest request id first.
+    pub fn signin_links(&self) -> Vec<SigninLink> {
+        let links = self.inner.signin_links.lock().expect("signin links");
+        let mut out: Vec<SigninLink> = links.values().cloned().collect();
+        out.sort_by(|a, b| a.request_id.as_str().cmp(b.request_id.as_str()));
+        out
+    }
+
+    pub(crate) fn set_signin_link(&self, link: SigninLink) {
+        self.inner
+            .signin_links
+            .lock()
+            .expect("signin links")
+            .insert(link.request_id.clone(), link);
+    }
+
+    pub(crate) fn forget_signin_link(&self, request_id: &RequestId) {
+        self.inner
+            .signin_links
+            .lock()
+            .expect("signin links")
+            .remove(request_id);
     }
 
     /// Busy children of a parent (the per-bot child cap counts these).

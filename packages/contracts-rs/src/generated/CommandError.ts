@@ -8,15 +8,16 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  * Reasons the host uses (code / reason): `not_found` / `thread_not_found`, `request_not_found`,
  * `bot_not_found`; `permission_denied` / `not_allowed`; `conflict` / `steer_refused` (a steer
  * refused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different
- * arguments); `failed_precondition` / `not_queued` (the input left the queue, or
+ * arguments), `notes_changed` (stale notes revision); `failed_precondition` / `not_queued` (the input left the queue, or
  * `reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,
- * `payload_too_large`; `invalid_request` / `invalid_request`; `internal` / `internal`.
+ * `payload_too_large`; `unavailable` / `not_available` (the command's host module has not
+ * landed yet); `invalid_request` / `invalid_request`; `internal` / `internal`.
  */
-export type CommandError = { code: AgentSurfaceErrorCode, 
+export type CommandError = { code: AgentSurfaceErrorCode,
 /**
  * The domain's own code, unchanged.
  */
-reason: string, message: string, 
+reason: string, message: string,
 /**
  * True only when repeating the command cannot duplicate an effect.
  */

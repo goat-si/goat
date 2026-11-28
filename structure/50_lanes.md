@@ -48,3 +48,15 @@ Each machine merges in its own `~/Developer/goat2`; the non-force push of `goat2
 Cross-machine messages: `mac-studio` and `macbookpro2` have the SSH alias `juns-macbook-pro-origin` for the origin Mac,
 so a remote lane calls `goat thread.send {host: "juns-macbook-pro-origin", threadId}` to reach a lane still there; the
 origin reaches remote lanes with `host: "mac-studio"` / `"macbookpro2"`.
+
+### Remote thread ids after handoff (2026-11-28 ~23:46 KST; the old local threads stay but are idle)
+
+| Lane | Host | Thread id there |
+|---|---|---|
+| E host | mac-studio | `mcp:8940ee3e-09a7-4da7-9ce1-9d103e794ff0` |
+| F ui | mac-studio | `mcp:52414b93-5600-47e5-b235-c3c2f6cc79ce` |
+| P2-E bot runtime | mac-studio | `mcp:b9201259-20ae-419f-a056-b7d282998052` |
+| P2-M providers UI | mac-studio | `mcp:77dce1e5-4b6a-4b79-82fb-5f4ccbacd573` |
+| P2-A claude | macbookpro2 | `mcp:bec49cbe-29a2-426a-b558-a1657206253b` |
+| P2-B acp | macbookpro2 | `mcp:5d3069d9-f333-401e-b574-2f7769420f44` |
+| P2-S sdk | macbookpro2 | `mcp:4c976b5d-0958-4759-bb4b-6550df12a103` |

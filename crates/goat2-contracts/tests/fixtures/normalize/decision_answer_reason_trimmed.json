@@ -1,0 +1,13 @@
+{
+  "root": "decision_answer_input",
+  "input": {
+    "id": "decision:1",
+    "optionId": "a",
+    "reason": "﻿ go with A \t"
+  },
+  "output": {
+    "id": "decision:1",
+    "optionId": "a",
+    "reason": "go with A"
+  }
+}

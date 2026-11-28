@@ -8,9 +8,12 @@
 //! `Accepted | Declined | RefusedUnowned | Unknown`, which the host records as `input.delivered`.
 
 use async_trait::async_trait;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use goat2_contracts::{
-    ChatAttachment, EngineConfig, EngineItemLocator, EngineRef, InputId, ItemId, RequestKind,
-    ThreadId, TurnItem,
+    ChatAttachment, EngineConfig, EngineItemLocator, EngineRef, InputId, ItemId,
+    ProviderCapabilities, ProviderProbeResult, RequestKind, ThreadId, TurnItem, TurnItemStatus,
 };
 use tokio::sync::mpsc;
 
@@ -35,6 +38,31 @@ pub struct SessionSpec {
     pub host_generation: u64,
     /// Process generation for this thread (bumped on every engine start or resume).
     pub process_generation: u64,
+    /// Text GOAT adds to the engine's own instructions (bot brief, GOAT rules). None = nothing.
+    pub instructions: Option<Instructions>,
+    /// How to launch the engine binary. None = the driver's default (its CLI on PATH).
+    pub launch: Option<LaunchSpec>,
+}
+
+/// Instructions GOAT injects. Each driver maps them to its engine's mechanism (Claude
+/// `--append-system-prompt`, ACP `session/new` `systemPrompt {mode: append}`, Codex
+/// developer instructions).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Instructions {
+    /// Appended to the engine's system prompt.
+    pub append_system_prompt: Option<String>,
+    /// Put before the first user message of a new session, for engines without a system slot.
+    pub first_message_preamble: Option<String>,
+}
+
+/// Executable, arguments and environment for one engine process (v1 provider settings
+/// `binaryPath`, `launchArgs`, instance env; ACP registry commands per runtime mode).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaunchSpec {
+    /// None = the driver's default binary name, looked up on PATH.
+    pub binary: Option<PathBuf>,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
 }
 
 /// One input handed to the engine.
@@ -85,6 +113,16 @@ pub enum SteerResult {
     },
 }
 
+/// How an accepted steer settled (v1 `steer.updated` status `completed | cancelled`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteerStatus {
+    /// The engine read the steer into the turn.
+    Completed,
+    /// Accepted earlier but never ran: cancelled, discarded or refused by the engine, or left
+    /// unread when the turn ended.
+    Cancelled { reason: String },
+}
+
 /// How a turn ended, as the engine reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
@@ -131,6 +169,33 @@ pub enum EngineEvent {
     },
     /// The engine resolved or withdrew a request by itself.
     RequestClosed { key: String },
+    /// The engine needs the person to sign in (Antigravity authorization URL, ACP authenticate,
+    /// Claude "not logged in"). The host records it as `request.opened` kind `signin` on the run
+    /// named by `turn_id` when there is one.
+    AuthRequired {
+        turn_id: Option<String>,
+        url: Option<String>,
+        message: String,
+    },
+    /// Progress of an engine-native subagent (Claude `task_*`, ACP `subagent_update`). Not stored;
+    /// the finished subagent arrives as `ItemCompleted` with `TurnItemBody::Subagent`.
+    SubagentUpdate {
+        turn_id: Option<String>,
+        subagent_id: String,
+        /// v1 subagent status values.
+        status: TurnItemStatus,
+        title: Option<String>,
+        progress: Option<String>,
+    },
+    /// A steer the driver already answered `Accepted` settled later (v1 provider event
+    /// `steer.updated`, `ProviderAdapter.ts:149-157`; Claude `command_lifecycle`, Pi). An
+    /// accepted steer is v1 `pending` until the engine reads it. Not stored as such; the host
+    /// decides what a cancelled steer means for its inputs.
+    SteerUpdated {
+        turn_id: String,
+        input_ids: Vec<InputId>,
+        status: SteerStatus,
+    },
     TurnFinished {
         turn_id: String,
         outcome: TurnOutcome,
@@ -148,6 +213,9 @@ pub enum EngineError {
     StartFailed(String),
     #[error("engine transport failed: {0}")]
     Transport(String),
+    /// The driver does not support this operation (see its capabilities).
+    #[error("not supported by this engine: {0}")]
+    Unsupported(String),
 }
 
 /// A started engine process for one thread.
@@ -170,6 +238,14 @@ impl std::fmt::Debug for EngineHandle {
 #[async_trait]
 pub trait EngineFactory: Send + Sync + 'static {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError>;
+    /// v1 capability flags for this driver kind; the host chooses steer vs interrupt-restart and
+    /// whether to call [EngineSession::set_config] from them.
+    fn capabilities(&self) -> ProviderCapabilities;
+    /// Install, version, sign-in state and models, without starting a session. The host probes
+    /// every registered provider through this, without knowing the driver crate.
+    async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
+        Err(EngineError::Unsupported("probe".into()))
+    }
 }
 
 /// Controls one engine process.
@@ -185,6 +261,20 @@ pub trait EngineSession: Send + Sync {
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult;
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError>;
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError>;
+    /// Change model or runtime mode inside the running session (Claude `set_model` /
+    /// `set_permission_mode`, ACP `session/set_mode` / `set_model`). The host calls it only when
+    /// the capabilities allow a switch in session; otherwise settings apply from the next turn.
+    async fn set_config(&self, settings: &TurnSettings) -> Result<(), EngineError> {
+        let _ = settings;
+        Err(EngineError::Unsupported("set_config".into()))
+    }
+    /// Read one finished item back from the engine's own record (lazy details: tool output,
+    /// diffs). The host calls it through a live or resumed session, with the locator recorded on
+    /// `item.completed`.
+    async fn read_item(&self, locator: &EngineItemLocator) -> Result<TurnItem, EngineError> {
+        let _ = locator;
+        Err(EngineError::Unsupported("read_item".into()))
+    }
     /// Resident memory of the engine's whole process group, when the driver can measure it
     /// (lane B `ChildProcess::group_rss_bytes()`). Sampled by the host's memory policy.
     fn group_rss_bytes(&self) -> Option<u64> {

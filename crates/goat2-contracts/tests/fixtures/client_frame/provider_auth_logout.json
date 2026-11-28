@@ -1,0 +1,6 @@
+{
+  "type": "provider_auth_logout",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex"
+}

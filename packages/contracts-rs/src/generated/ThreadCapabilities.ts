@@ -3,7 +3,7 @@
 /**
  * v1 `OrchestrationV2ThreadCapabilities`.
  */
-export type ThreadCapabilities = { canCreateEmptyThread: boolean, canReadThreadSnapshot: boolean, canRollbackThread: boolean, canForkThread: boolean, canForkFromTurn: boolean, canForkWhileSourceRunning?: boolean, canForkFromSubagentThread: boolean, exposesNativeThreadId: boolean, 
+export type ThreadCapabilities = { canCreateEmptyThread: boolean, canReadThreadSnapshot: boolean, canRollbackThread: boolean, canForkThread: boolean, canForkFromTurn: boolean, canForkWhileSourceRunning?: boolean, canForkFromSubagentThread: boolean, exposesNativeThreadId: boolean,
 /**
  * Native fork starts the new provider thread in the target thread's cwd.
  */

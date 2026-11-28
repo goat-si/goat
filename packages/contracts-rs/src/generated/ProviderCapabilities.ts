@@ -16,7 +16,7 @@ import type { TurnCapabilities } from "./TurnCapabilities.ts";
 /**
  * All capability groups for one engine driver.
  */
-export type ProviderCapabilities = { memory?: MemoryCapabilities, sessions: SessionCapabilities, threads: ThreadCapabilities, turns: TurnCapabilities, streaming: StreamingCapabilities, tools: ToolCapabilities, approvals: ApprovalCapabilities, planning: PlanningCapabilities, subagents: SubagentCapabilities, context: ContextCapabilities, checkpointing: CheckpointCapabilities, identity: IdentityCapabilities, 
+export type ProviderCapabilities = { memory?: MemoryCapabilities, sessions: SessionCapabilities, threads: ThreadCapabilities, turns: TurnCapabilities, streaming: StreamingCapabilities, tools: ToolCapabilities, approvals: ApprovalCapabilities, planning: PlanningCapabilities, subagents: SubagentCapabilities, context: ContextCapabilities, checkpointing: CheckpointCapabilities, identity: IdentityCapabilities,
 /**
  * v1 decodes a missing value as `{enforcement: "client-boundary"}`.
  */

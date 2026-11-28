@@ -1,0 +1,7 @@
+{
+  "type": "accept_acp_registry_url_auth",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "elicitationId": "e"
+}

@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
-# Builds GOAT 2 (Dev) from this checkout and installs it to /Applications.
+# Builds GOAT 2 (Dev) and installs it to /Applications on this Mac.
 #   goat2-host (cargo --release, kache via ~/.cargo/config.toml) + apps/web (vite) + apps/desktop (tsc)
 #   -> Electron.app renamed to "GOAT 2 (Dev).app", bundle id si.goat.goat2.dev, ad-hoc signed.
 # Identity (structure/10_processes.md): data ~/.goat2-dev, host port 3873, nothing shared with GOAT v1.
 #
 # Usage: scripts/build-dev-app.sh [--no-install] [--no-open]
-#   --no-install  build into build/goat2-dev/ only
+#   (default)     build origin/goat2 and install it here
+#   --no-install  build the checkout this script lives in, into build/goat2-dev/ (lane testing)
 #   --no-open     do not relaunch the app after installing (it is relaunched only if it was running)
-# Installs only from goat2: run it in ~/Developer/goat2 after each merge (docs/lanes/PART1.md).
-# Lane branches can build with --no-install.
-# Refuses to build when `pnpm -r typecheck` or `cargo test --workspace --locked` fails, so a broken
-# goat2 is never installed (owner 2026-11-28). --locked also refuses a Cargo.lock that is out of date.
+#   --build-sha <sha> --out-tag <tag>  internal, the remote half: build <sha> in ~/Developer/goat2_devbuild
+#                 and hand the app over in ~/Developer/goat2_devbuild_out/<tag>/
+#
+# Installing (owner 2026-11-28, docs/lanes/PART1.md):
+# - takes /tmp/goat2-merge.lock (owner file; refuses while a lane holds it) only for the instant of
+#   git fetch + reading origin/goat2's SHA, then releases it;
+# - builds that SHA in a detached worktree ~/Developer/goat2_devbuild (cleaned, node_modules and target
+#   kept), never in ~/Developer/goat2, at nice 10, on GOAT2_DEVBUILD_HOST (default mac-studio, so this Mac
+#   keeps its CPU; GOAT2_DEVBUILD_HOST=local builds here);
+# - a remote build is copied back with rsync, quarantine is stripped (xattr -cr), the signature and the
+#   stamp (that SHA, clean) are verified, then it is installed;
+# - the build refuses when pnpm -r typecheck or cargo test --workspace --locked fails, so a broken goat2
+#   is never installed. --locked also refuses a Cargo.lock that is out of date.
 set -euo pipefail
 
 APP_NAME="GOAT 2 (Dev)"
@@ -18,26 +28,298 @@ BUNDLE_ID="si.goat.goat2.dev"
 INSTALL_DIR="/Applications"
 INSTALL=1
 OPEN=1
-for arg in "$@"; do
-  case "$arg" in
+BUILD_SHA=""
+OUT_TAG_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-install) INSTALL=0 ;;
     --no-open) OPEN=0 ;;
-    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    --build-sha)
+      BUILD_SHA="${2:-}"
+      [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "--build-sha needs a full commit SHA" >&2; exit 2; }
+      INSTALL=0
+      shift
+      ;;
+    --out-tag)
+      OUT_TAG_ARG="${2:-}"
+      [[ "$OUT_TAG_ARG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "--out-tag needs a plain name" >&2; exit 2; }
+      shift
+      ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "GOAT 2 (Dev) packaging is macOS only" >&2; exit 1; }
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO"
+MERGE_LOCK="/tmp/goat2-merge.lock"
+# One Dev build at a time per machine: the build worktree and its output are shared (review devbuild-2).
+BUILD_LOCK="/tmp/goat2-devbuild.lock"
+# Fixed: install and remote builds always use this folder (review devbuild4-1). There is no override;
+# GOAT2_DEVBUILD_CHECK_ONLY=<path> only runs the folder check on <path> and exits (refusal tests).
+DEVBUILD="$HOME/Developer/goat2_devbuild"
+DEVBUILD_MARKER="goat2-devbuild-worktree"   # file in the build worktree's own git dir
+# The merge checkout on every machine (docs/lanes/PART1.md); the build worktree hangs off it.
+SOURCE_REPO="$HOME/Developer/goat2"
+BUILD_HOST="${GOAT2_DEVBUILD_HOST:-mac-studio}"
+OUT_ROOT="Developer/goat2_devbuild_out"   # per-build hand-over folders, relative to the build host's home
+OUT_TAG="$OUT_TAG_ARG"
+# docs/lanes/PART1.md (goat2 1f8912e): a lock is a directory with an owner file; only its owner
+# releases it, and a failed mkdir means someone else holds it.
+LOCK_OWNER="goat2_desktop build-dev-app $(hostname -s) $$"
+OWN_MERGE_LOCK=0
+OWN_BUILD_LOCK=0
+STAGE=""            # local copy of a remote build
+REMOTE_LEFTOVERS=0  # 1 while a remote script copy / hand-over folder may exist on $BUILD_HOST
+# take_lock <dir> <flag variable>: the flag is set right after our mkdir, so cleanup knows the
+# directory is ours even if we stop before the owner line is written.
+take_lock() {
+  mkdir "$1" 2>/dev/null || return 1
+  printf -v "$2" 1
+  if ! echo "$LOCK_OWNER" > "$1/owner"; then
+    rmdir "$1" 2>/dev/null || true
+    printf -v "$2" 0
+    echo "could not write the owner of $1: not building" >&2
+    exit 1
+  fi
+}
+# Only for a lock our own mkdir created (flag set). Our owner line: remove it. No owner line yet: we
+# stopped between mkdir and the write, so the directory is still empty and rmdir removes only that;
+# a directory with anyone else's owner file is never touched (review devbuild2-3).
+drop_lock() {
+  local owner
+  owner="$(cat "$1/owner" 2>/dev/null || true)"
+  if [[ "$owner" == "$LOCK_OWNER" ]]; then
+    rm -rf "$1"
+  elif [[ -z "$owner" ]]; then
+    rmdir "$1" 2>/dev/null || true
+  fi
+}
+release_merge_lock() {
+  if [[ $OWN_MERGE_LOCK == 1 ]]; then drop_lock "$MERGE_LOCK"; OWN_MERGE_LOCK=0; fi
+}
+cleanup() {
+  release_merge_lock
+  if [[ $OWN_BUILD_LOCK == 1 ]]; then drop_lock "$BUILD_LOCK"; OWN_BUILD_LOCK=0; fi
+  if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf "$STAGE"; fi
+  if [[ $REMOTE_LEFTOVERS == 1 ]]; then
+    ssh -o BatchMode=yes "$BUILD_HOST" "rm -rf \$HOME/$OUT_ROOT/$OUT_TAG; rm -f \$HOME/$REMOTE_SCRIPT" || true
+  fi
+}
+# Installed before any mkdir so no exit path after taking a lock can leave it behind (SIGKILL aside).
+trap cleanup EXIT
 
-# 12 characters: v1 DesktopAppIdentity COMMIT_HASH_DISPLAY_LENGTH.
-COMMIT="$(git rev-parse --short=12 HEAD)"
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$BRANCH" != "goat2" && $INSTALL == 1 ]]; then
-  echo "the installed Dev app is built from goat2 (this checkout is on $BRANCH)." >&2
-  echo "run it in ~/Developer/goat2, or pass --no-install" >&2
-  exit 1
+# On-disk form of a path that may not exist yet: realpath of the existing parent + the last name.
+# On a case-insensitive disk git can record ~/Developer while the folder is ~/developer, and bash's
+# pwd -P keeps the case it was given (seen on mac-studio), so every comparison uses this form.
+ondisk_path() {
+  if [[ -e "$1" ]]; then
+    realpath "$1"
+  else
+    local parent
+    parent="$(dirname "$1")"
+    [[ -d "$parent" ]] || { echo "$parent does not exist" >&2; return 1; }
+    echo "$(realpath "$parent")/$(basename "$1")"
+  fi
+}
+
+# $DEVBUILD must be the dedicated worktree: never the merge checkout, the checkout this script runs
+# from, the repository's main worktree, any other worktree, or a folder inside one of them, whether or
+# not it exists yet (reviews devbuild-1, devbuild2-1). An existing one must be a registered worktree root.
+check_devbuild_path() {
+  local repo="$1" real path p
+  real="$(ondisk_path "$DEVBUILD")" || { echo "bad build folder $DEVBUILD: not building" >&2; exit 1; }
+  local protected=("$SOURCE_REPO" "$repo" "${INVOKED_REPO:-}")
+  while IFS= read -r path; do protected+=("$path"); done \
+    < <(git -C "$repo" worktree list --porcelain | sed -n 's/^worktree //p')
+  local registered=0
+  for path in "${protected[@]}"; do
+    [[ -n "$path" && -d "$path" ]] || continue
+    p="$(realpath "$path")"
+    if [[ "$real" == "$p" ]]; then
+      # Only the dedicated worktree itself may match a registered path, and never a protected checkout.
+      if [[ "$p" == "$(realpath "$SOURCE_REPO" 2>/dev/null)" || "$p" == "$(realpath "$repo")" ||
+        ( -n "${INVOKED_REPO:-}" && "$p" == "$(realpath "${INVOKED_REPO}")" ) ||
+        "$p" == "$(realpath "$(git -C "$repo" worktree list --porcelain | sed -n '1s/^worktree //p')")" ]]; then
+        echo "$DEVBUILD is $path, not the dedicated build worktree: not building" >&2
+        exit 1
+      fi
+      registered=1
+    elif [[ "$real" == "$p"/* ]]; then
+      echo "$DEVBUILD is inside $path: not building" >&2
+      exit 1
+    fi
+  done
+  if [[ -e "$DEVBUILD" ]]; then
+    local top
+    top="$(git -C "$DEVBUILD" rev-parse --show-toplevel 2>/dev/null || true)"
+    [[ -n "$top" ]] && top="$(realpath "$top")"
+    if [[ "$top" != "$real" || $registered != 1 ]]; then
+      echo "$DEVBUILD exists but is not a registered worktree root of $repo: not building" >&2
+      exit 1
+    fi
+    # Identity (review devbuild3-1): only a worktree this script made carries the marker in its own git
+    # dir. Any other registered worktree (another lane's, whatever its path) is refused before
+    # checkout --force / clean -fdx can touch it. A build worktree made before markers existed is adopted
+    # only at the default path and only with a detached HEAD; lane worktrees are on goat2_<lane> branches.
+    local marker
+    marker="$(git -C "$DEVBUILD" rev-parse --absolute-git-dir)/$DEVBUILD_MARKER"
+    if [[ ! -f "$marker" ]]; then
+      if [[ "$real" == "$(ondisk_path "$HOME/Developer/goat2_devbuild")" ]] &&
+        ! git -C "$DEVBUILD" symbolic-ref -q HEAD >/dev/null; then
+        echo "goat2 Dev build worktree (scripts/build-dev-app.sh)" > "$marker"
+        echo "==> adopted $DEVBUILD as the build worktree"
+      else
+        echo "$DEVBUILD is a worktree this script did not create (no $DEVBUILD_MARKER marker): not building" >&2
+        exit 1
+      fi
+    fi
+  fi
+}
+
+# Checks <sha> out detached in $DEVBUILD (a worktree of $1), cleaned except dependency/Rust caches.
+# Never updates origin/goat2 here (that ref is read under the merge lock): a missing commit is fetched
+# by SHA, which only writes FETCH_HEAD (review devbuild2-2).
+prepare_devbuild() {
+  local repo="$1" sha="$2"
+  git -C "$repo" cat-file -e "$sha^{commit}" 2>/dev/null || git -C "$repo" fetch -q origin "$sha"
+  git -C "$repo" cat-file -e "$sha^{commit}"
+  check_devbuild_path "$repo"
+  if [[ -e "$DEVBUILD" ]]; then
+    git -C "$DEVBUILD" checkout -q --detach --force "$sha"
+  else
+    echo "==> creating the build worktree $DEVBUILD"
+    git -C "$repo" worktree add -q --detach "$DEVBUILD" "$sha"
+    echo "goat2 Dev build worktree (scripts/build-dev-app.sh)" > "$(git -C "$DEVBUILD" rev-parse --absolute-git-dir)/$DEVBUILD_MARKER"
+    check_devbuild_path "$repo"
+  fi
+  git -C "$DEVBUILD" clean -q -fdx -e node_modules -e target
+  if [[ "$(git -C "$DEVBUILD" rev-parse HEAD)" != "$sha" || -n "$(git -C "$DEVBUILD" status --porcelain)" ]]; then
+    echo "$DEVBUILD is not a clean checkout of $sha: not building" >&2
+    git -C "$DEVBUILD" status --short >&2
+    exit 1
+  fi
+}
+
+
+# Installs the .app at $1 (stamp already checked) to /Applications, quitting and relaunching a running one.
+install_app() {
+  local src="$1" stamp="$2"
+  local target="$INSTALL_DIR/$APP_NAME.app"
+  # pgrep -f takes a regex; escape the parentheses and dots in the app path.
+  local target_re
+  target_re="$(printf '%s' "$target/Contents/MacOS/" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
+  local was_running=0
+  if pgrep -f "$target_re" >/dev/null; then
+    was_running=1
+    echo "==> quitting the running $APP_NAME (quitting ends its work)"
+    osascript -e "tell application id \"$BUNDLE_ID\" to quit" || true
+    for _ in $(seq 1 100); do pgrep -f "$target_re" >/dev/null || break; sleep 0.2; done
+    if pgrep -f "$target_re" >/dev/null; then
+      echo "$APP_NAME did not quit within 20 s; quit it and run again" >&2
+      exit 1
+    fi
+  fi
+  if [[ -e "$target" ]]; then
+    local existing
+    existing="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$target/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ "$existing" != "$BUNDLE_ID" ]]; then
+      echo "$target exists with bundle id '$existing'; not replacing it" >&2
+      exit 1
+    fi
+    rm -rf "$target"
+  fi
+  ditto "$src" "$target"
+  echo "installed: $target ($stamp)"
+  if [[ $was_running == 1 && $OPEN == 1 ]]; then
+    # open hands the caller's environment to the app. Started from a GOAT thread that would leak its
+    # variables (ELECTRON_RUN_AS_NODE, CODEX_HOME, GOAT v1 MCP credentials, ...) into the host and every
+    # agent; relaunch with the minimal environment the app gets from Finder instead.
+    env -i HOME="$HOME" USER="${USER:-$(id -un)}" LOGNAME="${LOGNAME:-$(id -un)}" SHELL="${SHELL:-/bin/zsh}" \
+      TMPDIR="${TMPDIR:-/tmp/}" PATH="/usr/bin:/bin:/usr/sbin:/sbin" open "$target"
+    echo "relaunched $APP_NAME"
+  fi
+}
+
+if [[ -n "${GOAT2_DEVBUILD_CHECK_ONLY:-}" ]]; then
+  # Test hook for the build-folder guard: no lock, fetch, checkout, clean, build or install.
+  INVOKED_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  DEVBUILD="$GOAT2_DEVBUILD_CHECK_ONLY"
+  check_devbuild_path "$INVOKED_REPO"
+  echo "check only: $DEVBUILD would be accepted as the build worktree"
+  exit 0
 fi
+
+if [[ $INSTALL == 1 ]]; then
+  INVOKED_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  # Held for the whole run (build, copy, install): one Dev build at a time on this Mac.
+  if ! take_lock "$BUILD_LOCK" OWN_BUILD_LOCK; then
+    echo "another Dev build is running ($BUILD_LOCK: $(cat "$BUILD_LOCK/owner" 2>/dev/null)): not building" >&2
+    exit 1
+  fi
+  # The merge procedure holds this lock while a lane merges into ~/Developer/goat2 and tests the result,
+  # so origin/goat2 is read under it; the build itself runs without it.
+  if ! take_lock "$MERGE_LOCK" OWN_MERGE_LOCK; then
+    echo "a merge into goat2 is in progress ($MERGE_LOCK exists): not building. Run again when it is gone." >&2
+    exit 1
+  fi
+  git -C "$INVOKED_REPO" fetch -q origin goat2
+  SHA="$(git -C "$INVOKED_REPO" rev-parse --verify 'origin/goat2^{commit}')"
+  release_merge_lock
+  COMMIT="${SHA:0:12}"
+
+  if [[ "$BUILD_HOST" != "local" ]]; then
+    OUT_TAG="$COMMIT-$(hostname -s)-$$-$(date +%s)"
+    REMOTE_SCRIPT="Developer/.goat2-build-dev-app.$OUT_TAG.sh"
+    echo "==> building goat2 $COMMIT on $BUILD_HOST"
+    REMOTE_LEFTOVERS=1
+    ssh -o BatchMode=yes "$BUILD_HOST" "cat > $REMOTE_SCRIPT" < "${BASH_SOURCE[0]}"
+    # Login shell for the build host's PATH (node, pnpm, cargo, kache); stdin closed so no build step
+    # can read from this ssh session. The build host serialises its own builds with its build lock and
+    # hands the app over in a folder only this run uses.
+    ssh -o BatchMode=yes "$BUILD_HOST" \
+      "zsh -l -c 'bash \$HOME/$REMOTE_SCRIPT --build-sha $SHA --out-tag $OUT_TAG' < /dev/null; rc=\$?; rm -f \$HOME/$REMOTE_SCRIPT; exit \$rc"
+    STAGE="$(mktemp -d "${TMPDIR:-/tmp}/goat2-devbuild-fetch.XXXXXX")"
+    echo "==> copying the app back from $BUILD_HOST"
+    rsync -a --delete "$BUILD_HOST:$OUT_ROOT/$OUT_TAG/" "$STAGE/"
+    ssh -o BatchMode=yes "$BUILD_HOST" "rm -rf \$HOME/$OUT_ROOT/$OUT_TAG"
+    REMOTE_LEFTOVERS=0
+    FETCHED="$STAGE/$APP_NAME.app"
+    # Files copied off another machine can carry quarantine; macOS would then refuse the ad-hoc app.
+    xattr -cr "$FETCHED"
+    codesign --verify --deep --strict "$FETCHED"
+    STAMP="$(/usr/libexec/PlistBuddy -c 'Print :GOAT2Commit' "$FETCHED/Contents/Info.plist")"
+    STAMP_DIRTY="$(/usr/libexec/PlistBuddy -c 'Print :GOAT2Dirty' "$FETCHED/Contents/Info.plist")"
+    if [[ "$STAMP" != "$SHA" || "$STAMP_DIRTY" != "false" ]]; then
+      echo "the app from $BUILD_HOST is stamped '$STAMP' (dirty $STAMP_DIRTY), expected $SHA (clean): not installing" >&2
+      exit 1
+    fi
+    install_app "$FETCHED" "goat2 $COMMIT, built on $BUILD_HOST"
+    exit 0
+  fi
+  prepare_devbuild "$INVOKED_REPO" "$SHA"
+  REPO="$DEVBUILD"
+  BRANCH="goat2"
+elif [[ -n "$BUILD_SHA" ]]; then
+  # The remote half: serialise builds on this machine; the app is handed over in $OUT_ROOT/$OUT_TAG.
+  if ! take_lock "$BUILD_LOCK" OWN_BUILD_LOCK; then
+    echo "another Dev build is running on $(hostname -s) ($(cat "$BUILD_LOCK/owner" 2>/dev/null)): not building" >&2
+    exit 1
+  fi
+  prepare_devbuild "$SOURCE_REPO" "$BUILD_SHA"
+  SHA="$BUILD_SHA"
+  REPO="$DEVBUILD"
+  BRANCH="goat2"
+else
+  REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
+  SHA="$(git -C "$REPO" rev-parse HEAD)"
+fi
+cd "$REPO"
+# Builds share the machine with interactive work and other lanes.
+renice -n 10 -p $$ >/dev/null
+
+# 12 characters: v1 DesktopAppIdentity COMMIT_HASH_DISPLAY_LENGTH. Derived from the SHA read above.
+COMMIT="${SHA:0:12}"
 DIRTY=false
 # Untracked files count too: cargo uses an untracked Cargo.lock, vite and tsc read untracked sources.
 [[ -n "$(git status --porcelain)" ]] && DIRTY=true
@@ -98,7 +380,9 @@ plist "Set :CFBundleDisplayName $APP_NAME" "$INFO"
 plist "Set :CFBundleShortVersionString 0.0.$BUILD_NUMBER" "$INFO"
 plist "Set :CFBundleVersion $BUILD_NUMBER" "$INFO"
 plist "Delete :ElectronAsarIntegrity" "$INFO" 2>/dev/null || true
-plist "Add :GOAT2Commit string $COMMIT$DIRTY_MARK" "$INFO"
+# Full SHA (review devbuild-3); the 12-character form is for display only.
+plist "Add :GOAT2Commit string $SHA" "$INFO"
+plist "Add :GOAT2Dirty bool $DIRTY" "$INFO"
 plist "Add :GOAT2Branch string $BRANCH" "$INFO"
 # Info.plist keys lifted from v1 scripts/build-desktop-artifact.ts (mac.extendInfo, mac.protocols)
 # and scripts/lib/mac-command-usage-descriptions.ts, with "GOAT" read as this app. Left out: the
@@ -142,7 +426,7 @@ cat > "$RES/app/package.json" <<EOF
 { "name": "goat2-dev", "productName": "$APP_NAME", "version": "0.0.$BUILD_NUMBER", "type": "module", "main": "dist/main.js" }
 EOF
 cat > "$RES/app/build-info.json" <<EOF
-{ "commit": "$COMMIT", "branch": "$BRANCH", "dirty": $DIRTY, "builtAt": "$BUILT_AT" }
+{ "commit": "$COMMIT", "sha": "$SHA", "branch": "$BRANCH", "dirty": $DIRTY, "builtAt": "$BUILT_AT" }
 EOF
 cp "$HOST_BIN" "$RES/bin/goat2-host"
 
@@ -150,37 +434,16 @@ echo "==> ad-hoc signing (@electron/osx-sign, v1 entitlements)"
 node apps/desktop/scripts/sign-macos-ad-hoc.ts "$APP"
 codesign --verify --deep --strict "$APP"
 
+if [[ -n "$BUILD_SHA" && -n "$OUT_TAG" ]]; then
+  HANDOVER="$HOME/$OUT_ROOT/$OUT_TAG"
+  mkdir -p "$HANDOVER"
+  ditto "$APP" "$HANDOVER/$APP_NAME.app"
+  echo "built: $HANDOVER/$APP_NAME.app"
+  exit 0
+fi
 if [[ $INSTALL == 0 ]]; then
   echo "built: $APP"
   exit 0
 fi
 
-TARGET="$INSTALL_DIR/$APP_NAME.app"
-# pgrep -f takes a regex; escape the parentheses and dots in the app path.
-TARGET_RE="$(printf '%s' "$TARGET/Contents/MacOS/" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
-WAS_RUNNING=0
-if pgrep -f "$TARGET_RE" >/dev/null; then
-  WAS_RUNNING=1
-  echo "==> quitting the running $APP_NAME (quitting ends its work)"
-  osascript -e "tell application id \"$BUNDLE_ID\" to quit" || true
-  for _ in $(seq 1 100); do pgrep -f "$TARGET_RE" >/dev/null || break; sleep 0.2; done
-  if pgrep -f "$TARGET_RE" >/dev/null; then
-    echo "$APP_NAME did not quit within 20 s; quit it and run again" >&2
-    exit 1
-  fi
-fi
-if [[ -e "$TARGET" ]]; then
-  existing="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TARGET/Contents/Info.plist" 2>/dev/null || true)"
-  if [[ "$existing" != "$BUNDLE_ID" ]]; then
-    echo "$TARGET exists with bundle id '$existing'; not replacing it" >&2
-    exit 1
-  fi
-  rm -rf "$TARGET"
-fi
-ditto "$APP" "$TARGET"
-echo "installed: $TARGET ($BRANCH $COMMIT$DIRTY_MARK)"
-if [[ $WAS_RUNNING == 1 && $OPEN == 1 ]]; then
-  # GOAT threads export ELECTRON_RUN_AS_NODE=1; open passes it on and Electron would start as plain Node.
-  env -u ELECTRON_RUN_AS_NODE open "$TARGET"
-  echo "relaunched $APP_NAME"
-fi
+install_app "$APP" "$BRANCH $COMMIT$DIRTY_MARK"

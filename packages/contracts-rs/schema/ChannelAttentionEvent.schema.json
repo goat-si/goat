@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "BotId": {
+      "description": "A bot. Each bot owns one `bot` thread.",
+      "type": "string"
+    },
+    "ChannelAttentionKind": {
+      "description": "v1 `ChannelAttentionKind`.",
+      "enum": [
+        "question",
+        "approval",
+        "sign_in",
+        "failed",
+        "finished"
+      ],
+      "type": "string"
+    },
+    "ChannelAttentionRequest": {
+      "description": "v1 `ChannelAttentionRequest` (`ChannelTaskApprovalRef` fields + kind): which request on which thread\nneeds the person. v1 `host` / `environmentId` are not carried (Part 2 is local).",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ChannelAttentionRequestKind"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ChannelAttentionRequestKind": {
+      "description": "v1 `ChannelAttentionRequest.kind`: an engine request, or a durable approval handoff.",
+      "enum": [
+        "runtime",
+        "handoff"
+      ],
+      "type": "string"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "v1 `ChannelAttentionEvent`: one attention event for a bot's thread.",
+  "properties": {
+    "botId": {
+      "$ref": "#/$defs/BotId"
+    },
+    "botName": {
+      "type": "string"
+    },
+    "eventId": {
+      "type": "string"
+    },
+    "generation": {
+      "description": "v1 `Schema.Int`, within the safe wire integer range.",
+      "format": "int64",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "kind": {
+      "$ref": "#/$defs/ChannelAttentionKind"
+    },
+    "occurredAt": {
+      "description": "RFC 3339 UTC timestamp.",
+      "type": "string"
+    },
+    "request": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelAttentionRequest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requestId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RequestId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sequence": {
+      "description": "At most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+      "format": "uint64",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "threadId": {
+      "$ref": "#/$defs/ThreadId",
+      "description": "The thread that needs attention (v1 `taskId`)."
+    }
+  },
+  "required": [
+    "botId",
+    "threadId",
+    "eventId",
+    "sequence",
+    "kind",
+    "generation",
+    "occurredAt",
+    "botName"
+  ],
+  "title": "ChannelAttentionEvent",
+  "type": "object"
+}

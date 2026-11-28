@@ -1,0 +1,8 @@
+{
+  "type": "set_provider_instance",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "driver": "codex",
+  "enabled": true
+}

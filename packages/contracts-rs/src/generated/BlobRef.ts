@@ -3,11 +3,11 @@
 /**
  * Where a large body or attachment lives inside the thread folder.
  */
-export type BlobRef = { 
+export type BlobRef = {
 /**
  * Path relative to the thread folder, e.g. `blobs/<itemId>.txt`.
  */
-path: string, 
+path: string,
 /**
  * Full size in bytes.
  */

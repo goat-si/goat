@@ -7,11 +7,11 @@ import type { InputSource } from "./InputSource.ts";
 /**
  * `input.accepted`: an input entered the thread's mailbox.
  */
-export type InputAccepted = { inputId: InputId, from: InputSource, 
+export type InputAccepted = { inputId: InputId, from: InputSource,
 /**
  * The mode the sender asked for. What reached the engine is in `input.delivered`.
  */
-mode: InputMode, text: string, attachments?: Array<ChatAttachment>, 
+mode: InputMode, text: string, attachments?: Array<ChatAttachment>,
 /**
  * Idempotency key, kept so the host dedupes across restarts. Host-generated for child and
  * system inputs.

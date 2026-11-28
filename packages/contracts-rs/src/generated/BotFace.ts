@@ -3,7 +3,7 @@
 /**
  * A bot's face, drawn by `packages/bot-face`.
  */
-export type BotFace = { shape: string, color: string, 
+export type BotFace = { shape: string, color: string,
 /**
  * The GOAT mark instead of a generated face.
  */

@@ -6,7 +6,7 @@ import type { RuntimeMode } from "./RuntimeMode.ts";
 /**
  * `thread.changed`: only the fields that changed are present.
  */
-export type ThreadChanged = { title?: string, modelSelection?: ModelSelection, runtimeMode?: RuntimeMode, followUpMode?: FollowUpMode, 
+export type ThreadChanged = { title?: string, modelSelection?: ModelSelection, runtimeMode?: RuntimeMode, followUpMode?: FollowUpMode,
 /**
  * v1 `archivedAt`: a timestamp archives the thread, `null` unarchives it.
  */

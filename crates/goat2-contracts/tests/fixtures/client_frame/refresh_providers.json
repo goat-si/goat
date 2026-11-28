@@ -1,0 +1,7 @@
+{
+  "type": "refresh_providers",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "refreshModels": true
+}

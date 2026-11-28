@@ -7,11 +7,11 @@ import type { ThreadId } from "./ThreadId.ts";
 /**
  * `child.reported` (parent log): written before the parent's model is called.
  */
-export type ChildReported = { childThreadId: ThreadId, childRunId: RunId | null, status: ChildResultStatus, 
+export type ChildReported = { childThreadId: ThreadId, childRunId: RunId | null, status: ChildResultStatus,
 /**
  * The child's final answer as is, at most [crate::limits::CHILD_SUMMARY_MAX_BYTES] bytes.
  */
-summary: string, 
+summary: string,
 /**
  * Where the result sits in the child's log.
  */
