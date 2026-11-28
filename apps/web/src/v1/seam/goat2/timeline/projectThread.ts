@@ -5,7 +5,7 @@
 // unknown item types behave exactly as in v1. An item v1 cannot decode is reported in `undecodable`, never dropped
 // silently.
 //
-// Rules: a user input shows once it reached a run (run.started inputIds, or input.delivered accepted into its run); queued inputs stay in the queue banner. An item is grouped under its origin run by item.runId, also when it
+// Rules: a user input shows once it reached a run (a system input as a quiet system_notice line) (run.started inputIds, or input.delivered accepted into its run); queued inputs stay in the queue banner. An item is grouped under its origin run by item.runId, also when it
 // arrives after that run's run.finished (lane E, Part 2 late subagent completions). Streamed text for an unfinished
 // item becomes the in-progress v1 item of its stream kind, at the end, the way v1's server folds deltas into its
 // projection: assistant_text -> assistant_message, reasoning_text / reasoning_summary_text -> reasoning, plan_text ->
@@ -87,10 +87,16 @@ export function projectGoat2Thread(input: Goat2ThreadInput): ProjectedThread {
     const a = accepted.get(inputId);
     if (!a || shown.has(inputId)) return;
     shown.add(inputId);
+    // A system input (engine continuation 'continuation:<key>', a wake after a late child result) is never a
+    // person's message: owner rule, a quiet system line, which in v1 is a system_notice event row.
+    if (a.from === "system") {
+      order.push({ ...base(threadId, `input:${inputId}`, runId, a.at, "completed", ordinal++), type: "system_notice", message: a.text, severity: "info" });
+      return;
+    }
     order.push({
       ...base(threadId, `input:${inputId}`, runId, a.at, "completed", ordinal++),
       type: "user_message",
-      createdBy: a.from === "system" ? "system" : a.from === "child" ? "agent" : "user",
+      createdBy: a.from === "child" ? "agent" : "user",
       creationSource: "web",
       messageId: inputId,
       inputIntent: intent,

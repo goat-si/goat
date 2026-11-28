@@ -22,7 +22,8 @@ export function WorkerPanel({ threadId, onBack, onOpen }: { threadId: string; on
     <P.ThreadPanel title={card?.title ?? ""} meta={meta} openTag={null}
       back={btn("Back to Overview", onBack)} open={btn("Go to thread", onOpen)} close={btn("Close thread", onBack)}
       body={<div data-worker-panel={threadId} style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0, overflow: "auto" }}>
-        {t.entries.map((e) => e.kind === "user" ? <P.PanelUserBubble key={e.key} text={e.text} />
+        {t.entries.map((e) => e.kind === "user" && e.source === "system" ? <P.RoutineLine key={e.key} text={e.text} />
+          : e.kind === "user" ? <P.PanelUserBubble key={e.key} text={e.text} />
           : e.kind === "work" ? <div key={e.key}><WorkFold e={e} nowIso={nowIso} /></div>
           : e.kind === "bot" ? <P.PanelAnswer key={e.key} text={e.text} /> : null)}
       </div>} />

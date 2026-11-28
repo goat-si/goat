@@ -45,6 +45,15 @@ describe("projectGoat2Thread", () => {
     expect(p.activeRunId).toBe("r1");
   });
 
+  it("shows a system input (engine continuation) as a quiet system notice, never as a person's message", () => {
+    const p = project([
+      line(1, at(1), { type: "input.accepted", inputId: "k1", from: { kind: "system" }, mode: "followup", text: "Continue: the background task finished.", clientRequestId: "continuation:k1" }),
+      started(2, "r1", ["k1"]),
+    ]);
+    expect(p.undecodable).toEqual([]);
+    expect(p.visibleTurnItems.map((r) => r.item)).toMatchObject([{ type: "system_notice", message: "Continue: the background task finished.", runId: "r1" }]);
+  });
+
   it("groups a late item under its origin run, after that run's items", () => {
     const p = project([
       accepted(1, "i1", "one"), started(2, "r1", ["i1"]), command(3, "r1", "c1", "ls"), finished(4, "r1"),
