@@ -27,8 +27,8 @@ How the references keep their guidelines, and what we take:
    produced something.
 5. **Tokens, not literals.** No hex, rgb or px in a screen. A new value is a token change.
 6. **Style lives in the primitive.** Call sites pick a variant, not override padding or color.
-7. **Color means one thing.** Controls stay neutral ink. Hue only for state: `decide` (needs you,
-   failed), `done`. Provider marks keep their own brand colors and appear only inside the chip.
+7. **Color means one thing.** Controls stay neutral ink. One blue dot (`needs`, `#0169CC`) for
+   needs-you and unread; failed and done are ink text, not hue (decision 2026-11-28, see DECISIONS.md). Provider marks keep their own brand colors and appear only inside the chip.
 
 ## Foundations
 
@@ -41,8 +41,8 @@ How the references keep their guidelines, and what we take:
 | `--color-faint` | `#8A8A90` | Times, counts, meta |
 | `--color-border` | `#ECECEE` | Every hairline |
 | `--color-selected` | `#E9E9EC` | Selected roster row (neutral, no accent bar) |
-| `--color-decide` | `#E5484D` | Needs-you dot, failed |
-| `--color-done` | `#1A9E5C` | Positive diffs, done counts |
+| `--color-needs` | `#0169CC` | Needs-you / unread dot (replaces `decide`, 2026-11-28) |
+| ~~`--color-decide`~~ ~~`--color-done`~~ | retired | Red / green state colours dropped 2026-11-28 |
 | `--font-sans` | Noto Sans KR (Inter fallback) | UI |
 | `--font-mono` | Geist Mono | Models, versions, counts |
 | Type | 11 / 12 / 13 / 14 / 15 / 16 px | meta / label / row secondary / body / chat / title |
@@ -56,7 +56,7 @@ beside their trigger (menus, popovers); `shadow-2xl` only for dialogs.
 ```
 44 × 44 box
 ├─ body        40 × 40 at (0, 0)   shape + two eyes; the bot's own color
-├─ needs dot   10 × 10 at (32, 2)  decide, 2px ring in the surface color
+├─ needs dot   10 × 10 at (32, 2)  needs blue, 2px ring in the surface color
 ├─ chip        20 × 20 at (24, 24) white disc, 2px ring in the surface color, real provider mark
 │              12px (Codex, Claude), 13px (Antigravity), 10–11px (Pi, OpenCode)
 └─ ring        28 × 28 at (20, 20) only while working; track #DCDCE0, arc ink, 1.2s per turn

@@ -44,5 +44,5 @@ Electron. It is also thread-first, while the product direction is bot-first.
 ## Open
 
 - Storage table for stamps; native session-log readers per driver.
-- Whether to adopt goat's vite-plus / tsc-rs toolchain.
+- ~~Whether to adopt goat's vite-plus / tsc-rs toolchain.~~ Adopted with bottleneck rules (DECISIONS.md, 2026-11-28).
 - Mobile layout (runtime bar collapses to one line).
