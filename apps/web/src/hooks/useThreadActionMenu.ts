@@ -142,48 +142,48 @@ export function useThreadActionMenu(input: {
 
   const readMenu = () => {
     if (threadRef === null) return null;
-      const thread = readThreadShell(threadRef);
-      if (!thread) {
-        failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
-        return null;
-      }
-      const now = new Date();
-      const supports = {
-        settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
-        autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
-        snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
-        pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
-        titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
-      };
-      const isRegeneratingTitle = thread.titleRegeneration != null;
-      const snoozePresets = resolveSnoozePresets(now, threadRef.environmentId);
-      const items = buildThreadActionMenuItems({
-        canOpenSshHandoff: true,
-        canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
-        canFollowWithBot: webThreadFollowAvailable(threadRef),
-        canFind: onFind !== undefined,
-        canRename: onStartRename !== undefined,
-        branch: thread.branch ?? null,
-        projectFilter: null,
-        isPinned: thread.pinnedAt != null,
-        isSettled: supports.settlement && thread.settledOverride === "settled",
-        autoSettleEnabled: thread.autoSettleDisabledAt == null,
-        isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
-        canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
-        isRegeneratingTitle,
-        isRunning: !threadRuntimeCanArchive(thread.runtime),
-        hasCompletedRun: canMarkLatestRunUnread(thread.latestRun),
-        canPromote: canPromoteThread(thread, {
-          threadPromotion: readEnvironmentSupportsPromotion(threadRef.environmentId),
-        }),
-        supports,
-        snoozePresets,
-        snoozeLabels,
-        globalAgent,
-        canShareWithGuest,
-        canTurnIntoProject: canTurnThreadIntoProject(threadRef),
-        fork: globalAgent ? null : readThreadForkMenuState(threadRef),
-      });
+    const thread = readThreadShell(threadRef);
+    if (!thread) {
+      failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
+      return null;
+    }
+    const now = new Date();
+    const supports = {
+      settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
+      autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
+      snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
+      pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
+      titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+    };
+    const isRegeneratingTitle = thread.titleRegeneration != null;
+    const snoozePresets = resolveSnoozePresets(now, threadRef.environmentId);
+    const items = buildThreadActionMenuItems({
+      canOpenSshHandoff: true,
+      canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+      canFollowWithBot: webThreadFollowAvailable(threadRef),
+      canFind: onFind !== undefined,
+      canRename: onStartRename !== undefined,
+      branch: thread.branch ?? null,
+      projectFilter: null,
+      isPinned: thread.pinnedAt != null,
+      isSettled: supports.settlement && thread.settledOverride === "settled",
+      autoSettleEnabled: thread.autoSettleDisabledAt == null,
+      isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
+      canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
+      isRegeneratingTitle,
+      isRunning: !threadRuntimeCanArchive(thread.runtime),
+      hasCompletedRun: canMarkLatestRunUnread(thread.latestRun),
+      canPromote: canPromoteThread(thread, {
+        threadPromotion: readEnvironmentSupportsPromotion(threadRef.environmentId),
+      }),
+      supports,
+      snoozePresets,
+      snoozeLabels,
+      globalAgent,
+      canShareWithGuest,
+      canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+      fork: globalAgent ? null : readThreadForkMenuState(threadRef),
+    });
     const run = async (action: ThreadActionMenuId) => {
       const api = readLocalApi();
       if (!api) return;
@@ -393,10 +393,7 @@ export function useThreadActionMenu(input: {
       if (!api || threadRef === null) return;
       const menu = readMenu();
       if (!menu) {
-        failureToast(
-          "Thread actions unavailable",
-          new Error("This thread has not loaded yet."),
-        );
+        failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
         return;
       }
       const clicked = await settlePromise(() => api.contextMenu.show(menu.items, position));

@@ -116,6 +116,7 @@ function commandPaletteRowsAreEqual(previous: CommandPaletteRow, next: CommandPa
       previous.kind === "label" &&
       next.kind === "label" &&
       previous.label === next.label &&
+      previous.note === next.note &&
       previous.first === next.first
     );
   }

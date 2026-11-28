@@ -15,6 +15,9 @@ const ipcSends = vi.hoisted(() => ({ send: vi.fn(), sendToHost: vi.fn() }));
 const pageElementContext = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 
 vi.mock("electron", () => ({
+  contextBridge: {
+    executeInMainWorld: () => ({ elementContext: pageElementContext }),
+  },
   ipcRenderer: {
     on: (channel: string, listener: (...args: unknown[]) => void) => {
       ipcListeners.set(channel, [...(ipcListeners.get(channel) ?? []), listener]);

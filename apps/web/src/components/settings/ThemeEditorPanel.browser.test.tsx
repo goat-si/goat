@@ -1,4 +1,5 @@
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../../i18n/initializeI18n";
 import zh from "../../i18n/translations/zh.json";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -391,6 +392,11 @@ describe("ThemeEditorPanel", () => {
 });
 
 it("filters advanced color families by their translated names", async () => {
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using screen = await render(
     <GTProvider locale="zh" translations={{ zh }}>
       <ThemeEditorPanel

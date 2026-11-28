@@ -10,6 +10,11 @@ it.each([
   { lineEnd: 9, label: "ターミナル 2 7–9 行目" },
 ])("shows the exact Japanese line label $label", async ({ lineEnd, label }) => {
   initializeI18n(() => {});
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   const translations = await getTranslationsSnapshot("ja");
   await using screen = await render(
     <GTProvider locale="ja" translations={translations}>

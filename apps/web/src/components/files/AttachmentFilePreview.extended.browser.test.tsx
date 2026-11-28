@@ -2,6 +2,10 @@ import JSZip from "jszip";
 import { expect, it, vi } from "vite-plus/test";
 import "~/index.css";
 
+vi.mock("./ReadOnlySourcePreview", () => ({
+  default: (props: { text: string }) => <pre>{props.text}</pre>,
+}));
+
 import { render } from "../../../test/render";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import BinaryViewer from "./BinaryViewer";

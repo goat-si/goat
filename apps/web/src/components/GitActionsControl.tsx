@@ -508,7 +508,7 @@ function CheckoutGitActionsControl({
     }
 
     const actionResult = result.value;
-    if (actionResult.commit.status === "created") {
+    if (actionResult.commit?.status === "created") {
       setExcludedFiles((current) => (current === excludedFiles ? new Set() : current));
     }
     syncThreadBranchAfterGitAction(actionResult);

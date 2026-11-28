@@ -30,7 +30,7 @@ export function reportMarkdownExternalOpenFailure(target: string, cause: unknown
   );
 }
 
-export function markdownLinkNeedsEnvironmentRoute(
+function markdownLinkNeedsEnvironmentRoute(
   environmentId: EnvironmentId | null,
   href: string,
 ): boolean {

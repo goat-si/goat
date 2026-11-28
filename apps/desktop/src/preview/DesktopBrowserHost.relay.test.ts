@@ -787,7 +787,7 @@ describe("DesktopBrowserHost", () => {
       yield* settle;
       expect(debuggee.methods).toEqual(["DOM.getDocument"]);
       annotating = false;
-      yield* command(host, 21, "Input.insertText");
+      yield* command(host, 21, "Input.dispatchMouseEvent");
       yield* settle;
       expect(debuggee.methods).toHaveLength(2);
       expect(refusals).toEqual([10, 11, 12]);

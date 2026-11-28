@@ -1,7 +1,8 @@
 import { mountAnnotationTopLayer } from "./AnnotationTopLayer.ts";
 import { describeRawElement } from "./AnnotationElementLabel.ts";
 import { positionBox } from "./AnnotationPositionBox.ts";
-import { COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS } from "@goat/contracts";
+// Keep in sync with packages/contracts/src/composerContext.ts so the sandboxed preload stays free of Effect/Schema runtime imports.
+const COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS = 8_000;
 import {
   createButton,
   styleControl,

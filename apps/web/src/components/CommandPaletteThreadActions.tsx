@@ -1,5 +1,6 @@
 import type { ContextMenuItem, KeybindingCommand, ScopedThreadRef } from "@goat/contracts";
 import {
+  AlarmClockIcon,
   ArchiveIcon,
   CircleCheckIcon,
   ClockIcon,
@@ -7,17 +8,14 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
-  HashIcon,
-  type LucideIcon,
-  MailOpenIcon,
+  type IconComponent,
+  MailIcon,
   MessageSquareIcon,
-  MessageSquarePlusIcon,
   PinIcon,
   PinOffIcon,
   RefreshCwIcon,
-  TimerIcon,
-  Trash2Icon,
-} from "lucide-react";
+  TrashIcon,
+} from "~/components/solar";
 
 import { useThreadActionMenu } from "../hooks/useThreadActionMenu";
 import {
@@ -28,7 +26,7 @@ import {
 } from "./CommandPalette.logic";
 import type { ThreadActionMenuId } from "./threadActionMenu.logic";
 
-const ICONS: Record<string, LucideIcon> = {
+const ICONS: Record<string, IconComponent> = {
   archive: ArchiveIcon,
   "circle-check": CircleCheckIcon,
   clock: ClockIcon,
@@ -36,15 +34,15 @@ const ICONS: Record<string, LucideIcon> = {
   folder: FolderIcon,
   "folder-plus": FolderPlusIcon,
   "git-branch": GitBranchIcon,
-  hash: HashIcon,
-  "mail-open": MailOpenIcon,
+  hash: CopyIcon,
+  "mail-open": MailIcon,
   "message-square": MessageSquareIcon,
-  "message-square-plus": MessageSquarePlusIcon,
+  "message-square-plus": MessageSquareIcon,
   pin: PinIcon,
   "pin-off": PinOffIcon,
   "refresh-cw": RefreshCwIcon,
-  timer: TimerIcon,
-  trash: Trash2Icon,
+  timer: AlarmClockIcon,
+  trash: TrashIcon,
 };
 
 // The palette has its own rows for these, and no inline title editor for rename.

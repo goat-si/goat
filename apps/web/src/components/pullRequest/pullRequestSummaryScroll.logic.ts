@@ -25,13 +25,11 @@ const DEFAULT_COMMENT_PAGE = 10;
 // Session-only: switching right-panel tabs unmounts the Summary, which comes back as it was left.
 const summaryViewByScopeKey = new Map<string, PullRequestSummaryViewState>();
 
-export function readPullRequestSummaryView(
-  viewKey: string,
-): PullRequestSummaryViewState | undefined {
+function readPullRequestSummaryView(viewKey: string): PullRequestSummaryViewState | undefined {
   return summaryViewByScopeKey.get(viewKey);
 }
 
-export function rememberPullRequestSummaryView(
+function rememberPullRequestSummaryView(
   viewKey: string,
   patch: Partial<PullRequestSummaryViewState>,
 ): void {

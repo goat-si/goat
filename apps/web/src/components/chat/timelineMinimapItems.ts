@@ -160,11 +160,14 @@ function expandUserPreviewTokens(markdown: string) {
       "citation" in token
         ? citationPreviewLabel(token.citation, Math.max(0, MINIMAP_PREFIX_LENGTH - expanded.length))
         : token.label;
-    const literal = label.replace(/\s+/g, " ").replace(/[!-\/:-@[-`{-~]/g, "\\$&");
+    const literal = label.replace(/\s+/g, " ").replace(/[!-/:-@[-`{-~]/g, "\\$&");
     expanded += literal;
     offset = end;
   }
-  return expanded + markdown.slice(offset, MINIMAP_PREFIX_LENGTH);
+  const limit = splitsSurrogatePair(markdown, MINIMAP_PREFIX_LENGTH)
+    ? MINIMAP_PREFIX_LENGTH - 1
+    : MINIMAP_PREFIX_LENGTH;
+  return expanded + markdown.slice(offset, limit);
 }
 
 function userMinimapPreview(markdown: string | null) {

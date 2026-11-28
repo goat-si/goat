@@ -16,7 +16,7 @@ export const WINDOW_OPTIONS = [
   { days: 90, label: "90 days", command: "usage.period.quarter" },
 ] as const;
 
-export function resolveUsageShortcut(
+function resolveUsageShortcut(
   event: ShortcutEventLike & { target: EventTarget | null },
   keybindings: ResolvedKeybindingsConfig,
 ) {

@@ -1444,7 +1444,7 @@ export const make = Effect.gen(function* () {
         .installOrRedownload(
           expectedVersion,
           Ref.get(updateStateRef),
-          () => downloadAvailableUpdate(true),
+          () => downloadAvailableUpdate(false),
           () => installDownloadedUpdate(expectedVersion, options),
         )
         .pipe(Effect.withSpan("desktop.updates.install")),

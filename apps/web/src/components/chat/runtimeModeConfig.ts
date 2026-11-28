@@ -38,7 +38,7 @@ export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[
 
 const options = runtimeModeOptions.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
-export function getCompatibleRuntimeModeOptions(supported: readonly RuntimeMode[] | undefined) {
+function getCompatibleRuntimeModeOptions(supported: readonly RuntimeMode[] | undefined) {
   return supported?.length ? options.filter(({ mode }) => supported.includes(mode)) : options;
 }
 

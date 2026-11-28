@@ -1,4 +1,5 @@
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../../i18n/initializeI18n";
 import zh from "../../i18n/translations/zh.json";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import * as Schema from "effect/Schema";
@@ -45,6 +46,11 @@ describe("TypographySection", () => {
   });
   it("localizes simple and advanced typography controls", async () => {
     using _storage = setup(null);
+    using _locale = {
+      [Symbol.dispose]() {
+        initializeI18n(() => {});
+      },
+    };
     await using screen = await render(
       <GTProvider locale="zh" translations={{ zh }}>
         <TypographySection />

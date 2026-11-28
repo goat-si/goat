@@ -33,6 +33,11 @@ function projectFileKey(environmentId: EnvironmentId, workspaceRoot: string): st
   return JSON.stringify([environmentId, workspaceRoot]);
 }
 
+export function clearGoatProjectFileDefaultsForTests(): void {
+  lastKnownFiles.clear();
+  loadsInFlight.clear();
+}
+
 /** The last known project file, read synchronously so a new-thread request can open at once. */
 export function peekGoatProjectFile(
   environmentId: EnvironmentId,

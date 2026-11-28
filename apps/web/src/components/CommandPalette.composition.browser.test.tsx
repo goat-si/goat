@@ -1,4 +1,5 @@
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../i18n/initializeI18n";
 import chinese from "../i18n/translations/zh.json";
 import spanish from "../i18n/translations/es.json";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -295,6 +296,11 @@ it("tells screen readers whether a new project will be published", async () => {
 
 it("shows settings in the UI language and matches both localized names and English keywords", async () => {
   setup();
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   scopes.showSettings = true;
   try {
     await using _screen = await render(
@@ -317,6 +323,11 @@ it("shows settings in the UI language and matches both localized names and Engli
 
 it("translates the add-project source picker and keeps English search aliases", async () => {
   setup();
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using _screen = await render(
     <GTProvider locale="zh" translations={{ zh: chinese }}>
       <CommandPalette>{null}</CommandPalette>

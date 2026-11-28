@@ -122,6 +122,7 @@ function projectFileAtom(contents: string) {
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { readPendingWorkspaceDefault } from "../../lib/draftWorkspaceDefaults";
+import { clearGoatProjectFileDefaultsForTests } from "../../lib/goatProjectFileDefaults";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
 import { useDraftEnvironmentRouting } from "./useDraftEnvironmentRouting";
 
@@ -158,6 +159,7 @@ const clonedRef = (): ScopedProjectRef =>
   scopeProjectRef(studio, state.addProjectToMachine.mock.calls[0]?.[0].projectId);
 
 async function setup(options: { readonly automaticEnvironment?: boolean } = {}) {
+  clearGoatProjectFileDefaultsForTests();
   state.projects.clear();
   state.listeners.clear();
   state.projectListeners.clear();
@@ -238,6 +240,7 @@ async function setup(options: { readonly automaticEnvironment?: boolean } = {}) 
 describe("useDraftEnvironmentRouting: machines without the project", () => {
   it("clones to the picked machine and moves the draft there once its project arrives, keeping New worktree", async () => {
     await using screen = await setup();
+    useComposerDraftStore.getState().setDraftThreadContext(draftId, { workspaceExplicit: true });
 
     await act(() => screen.routing.current?.onEnvironmentChangeStable(studio));
 

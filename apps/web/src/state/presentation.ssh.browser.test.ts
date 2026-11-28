@@ -26,7 +26,10 @@ vi.mock("./server", async () => {
   const { Atom } = await import("effect/reactivity");
   return { serverEnvironment: { configValueAtom: () => Atom.make(null) } };
 });
-vi.mock("./shell", () => ({ environmentShell: { stateValueAtom: vi.fn() } }));
+vi.mock("./shell", () => ({
+  environmentShell: { stateValueAtom: vi.fn() },
+  requiresPrimaryEnvironment: () => true,
+}));
 vi.mock("./sshRuntime", async () => {
   const { createSshRuntimeState } = await import("@goat/client-runtime/state/sshRuntime");
   const { Atom } = await import("effect/reactivity");

@@ -27,7 +27,14 @@ function registerSettingsEscape(router: AnyRouter): () => void {
     {},
     {
       observe: (event, consumed) => {
-        if (consumed || event.repeat || event.isComposing || event.key !== "Escape") return;
+        if (
+          consumed ||
+          event.repeat ||
+          event.isComposing ||
+          event.keyCode === 229 ||
+          event.key !== "Escape"
+        )
+          return;
         if (event.target instanceof Element && event.target.closest(ESCAPE_OWNERS)) return;
         event.preventDefault();
         const activeElement = document.activeElement;

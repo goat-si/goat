@@ -477,13 +477,17 @@ it("opening Usage without a page event closes the composer model picker and runt
   await expect.element(search).not.toBeInTheDocument();
 
   await act(() => router.navigate({ to: "/draft/$draftId", params: { draftId } }));
-  const modeTrigger = document.querySelector<HTMLElement>(
-    '[data-composer-shortcut="composer.mode"]',
-  );
+  const modeTrigger = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-composer-shortcut~="composer.mode"]'),
+  ).find((element) => !element.closest("[inert]"));
   if (!modeTrigger) throw new Error("composer runtime mode trigger missing");
   await userEvent.click(modeTrigger);
   // The modal Usage dialog aria-hides everything outside it, so match text, not role.
-  const permissions = page.getByText("Allow commands and edits without prompts.").last();
+  const permissions = (
+    modeTrigger.getAttribute("aria-label") === "Runtime mode"
+      ? page.getByText("Allow commands and edits without prompts.")
+      : page.getByText("Access", { exact: true })
+  ).last();
   await expect.element(permissions).toBeVisible();
   await act(() => router.navigate({ to: "/usage" }));
   await expect.element(page.getByRole("dialog", { name: "Usage" })).toBeVisible();

@@ -10,7 +10,14 @@ const navigate = vi.fn();
 const refreshShell = vi.fn();
 let sync: EnvironmentShellSync = "live";
 
-vi.mock("../state/presentation", () => ({ useEnvironmentShellSync: () => sync }));
+vi.mock("../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const unreachable = Atom.make(null);
+  return {
+    useEnvironmentShellSync: () => sync,
+    environmentUnreachableAtom: () => unreachable,
+  };
+});
 vi.mock("../state/threads", async () => {
   const { EMPTY_ENVIRONMENT_THREAD_STATE } = await import("@goat/client-runtime/state/threads");
   return {

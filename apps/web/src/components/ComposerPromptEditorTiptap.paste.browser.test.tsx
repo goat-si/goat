@@ -3,6 +3,7 @@ import { createRef } from "react";
 import { expect, it } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
+import "../index.css";
 import { act, render } from "../../test/render";
 import { serializeEditorDoc } from "~/composer-rich-text-doc";
 import { Composer, editorIn, mountEditor } from "./ComposerPromptEditorTiptap.input.test-support";

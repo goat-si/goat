@@ -1,5 +1,6 @@
 import ko from "../../i18n/translations/ko.json";
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../../i18n/initializeI18n";
 import chinese from "../../i18n/translations/zh.json";
 import { RegistryProvider } from "@effect/atom-react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -227,6 +228,11 @@ it("filters actions and allows additional shortcuts for assigned commands", asyn
 });
 
 it("finds a localized shortcut by its display name, English label, or command ID", async () => {
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using screen = await render(
     <GTProvider locale="zh" translations={{ zh: chinese }}>
       <KeybindingsSettingsPanel />
@@ -252,6 +258,11 @@ it("finds a localized shortcut by its display name, English label, or command ID
 });
 
 it("announces shortcut and condition controls in Korean", async () => {
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using screen = await render(
     <GTProvider locale="ko" translations={{ ko }}>
       <KeybindingsSettingsPanel />
@@ -313,13 +324,9 @@ it.each([
   {
     name: "macOS",
     platform: "MacIntel",
-    terminalPreviousMac: {
-      ariaLabel: "Edit shortcut for Terminal: Previous: ⇧⌘[",
-      keys: ["⇧", "⌘", "["],
-    },
-    terminalPreviousCtrl: {
-      ariaLabel: "Edit shortcut for Terminal: Previous: ⌃⌥[",
-      keys: ["⌃", "⌥", "["],
+    newChat: {
+      ariaLabel: "Edit shortcut for Chat: New: ⇧⌘O",
+      keys: ["⇧", "⌘", "O"],
     },
     editQueued: {
       ariaLabel: "Edit shortcut for Queue: Edit Last Queued Message: ⌥Up",
@@ -330,13 +337,9 @@ it.each([
   {
     name: "Linux",
     platform: "Linux x86_64",
-    terminalPreviousMac: {
-      ariaLabel: "Edit shortcut for Terminal: Previous: Shift+Meta+[",
-      keys: ["Shift", "Meta", "["],
-    },
-    terminalPreviousCtrl: {
-      ariaLabel: "Edit shortcut for Terminal: Previous: Ctrl+Alt+[",
-      keys: ["Ctrl", "Alt", "["],
+    newChat: {
+      ariaLabel: "Edit shortcut for Chat: New: Ctrl+Shift+O",
+      keys: ["Ctrl", "Shift", "O"],
     },
     editQueued: {
       ariaLabel: "Edit shortcut for Queue: Edit Last Queued Message: Alt+Up",
@@ -346,11 +349,11 @@ it.each([
   },
 ])(
   "renders platform modifier symbols and formatted key labels in shortcut pills on $name",
-  async ({ platform, terminalPreviousMac, terminalPreviousCtrl, editQueued, focusNext }) => {
+  async ({ platform, newChat, editQueued, focusNext }) => {
     using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     await using screen = await render(<KeybindingsSettingsPanel />);
 
-    for (const expected of [terminalPreviousMac, terminalPreviousCtrl, editQueued, focusNext]) {
+    for (const expected of [newChat, editQueued, focusNext]) {
       const button = screen.getByRole("button", { name: expected.ariaLabel, exact: true });
       await expect.element(button).toBeVisible();
       const kbdTexts = Array.from(

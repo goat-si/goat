@@ -324,6 +324,9 @@ it("selects the picture source for the current theme", async () => {
 });
 it("fades a streaming reply's blocks in once, not again when it remounts", async () => {
   setup();
+  const noMotion = document.querySelector<HTMLStyleElement>("style[data-test-no-motion]");
+  using _motion = { [Symbol.dispose]: () => noMotion && (noMotion.disabled = false) };
+  if (noMotion) noMotion.disabled = true;
   const isFading = (element: Element) =>
     element.getAnimations().some((animation) => animation instanceof CSSTransition);
   const message = (

@@ -43,6 +43,7 @@ vi.mock("~/state/review", () => ({
   reviewEnvironment: {
     diffPreview: ({ input }: { input: { baseRef?: string } }) =>
       state.previews.get(input.baseRef ?? null)!,
+    diffFilePatch: () => Atom.make(AsyncResult.success({ diff: "" })),
     diffFileContents: {},
   },
 }));
@@ -254,6 +255,7 @@ it("explains a branch diff whose only changes are hidden test files", async () =
   const metadata = preview();
   const source = {
     ...metadata.sources[0]!,
+    patchesDeferred: true,
     files: [{ path, previousPath: null, additions: 1, deletions: 0 }],
   };
   state.previews.set("main", Atom.make(AsyncResult.success({ ...metadata, sources: [source] })));

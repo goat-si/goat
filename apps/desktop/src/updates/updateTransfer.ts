@@ -191,7 +191,7 @@ export const makeDownloadedFileTracker = Effect.fn("desktop.updates.makeDownload
     const installOrRedownload = Effect.fn("desktop.updates.installOrRedownload")(function* (
       expectedVersion: string,
       getState: Effect.Effect<DesktopUpdateState>,
-      redownload: () => Effect.Effect<{
+      redownload: (state: DesktopUpdateState) => Effect.Effect<{
         readonly accepted: boolean;
         readonly completed: boolean;
       }>,
