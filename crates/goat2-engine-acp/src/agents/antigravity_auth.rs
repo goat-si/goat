@@ -404,6 +404,30 @@ impl AntigravityProfile {
         }
     }
 
+    /// v1 `prepareAntigravityProfile` (antigravityAuthSupport.ts:401-420): on Linux the bundled
+    /// Python may look for certificates at paths this distribution lacks, so the first existing
+    /// absolute candidate becomes `SSL_CERT_FILE` (round 7 part 5a.7). A bundle already chosen is
+    /// kept; other platforms get none.
+    pub fn with_linux_ca_bundle(mut self, base_env: &HashMap<String, String>) -> Self {
+        if !self.linux || self.ca_bundle_path.is_some() {
+            return self;
+        }
+        let nix = base_env.get("NIX_SSL_CERT_FILE").map(String::as_str);
+        self.ca_bundle_path = [
+            nix,
+            Some("/etc/ssl/certs/ca-bundle.crt"),
+            Some("/etc/ssl/certs/ca-certificates.crt"),
+            Some("/etc/pki/tls/certs/ca-bundle.crt"),
+            Some("/etc/ssl/cert.pem"),
+        ]
+        .into_iter()
+        .flatten()
+        .map(Path::new)
+        .find(|candidate| candidate.is_absolute() && candidate.exists())
+        .map(Path::to_path_buf);
+        self
+    }
+
     /// v1 `prepareAntigravityProfile` (:471-495): the private directories (0700) and `settings.json`.
     pub fn prepare(&self, auth: &AntigravityAuthConfig) -> Result<(), &'static str> {
         for directory in [&self.gemini_home, &self.acp_directory, &self.temp_directory] {
@@ -627,6 +651,32 @@ mod tests {
         assert_eq!(login_response(&pending, "a\nb"), None);
     }
 
+    /// v1 antigravityAuthSupport.ts:401-420: on Linux the first existing absolute CA candidate is
+    /// the bundle, NIX_SSL_CERT_FILE first; elsewhere none (round 7 part 5a.7).
+    #[test]
+    fn linux_profiles_find_a_ca_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("nix-ca.pem");
+        std::fs::write(&bundle, "cert").unwrap();
+        let env: HashMap<String, String> =
+            [("NIX_SSL_CERT_FILE".to_owned(), bundle.display().to_string())].into();
+        let mut profile = AntigravityProfile::new(Path::new("/p"), String::new());
+        profile.linux = true;
+        let linux = profile.clone().with_linux_ca_bundle(&env);
+        assert_eq!(linux.ca_bundle_path.as_deref(), Some(bundle.as_path()));
+        let relative: HashMap<String, String> =
+            [("NIX_SSL_CERT_FILE".to_owned(), "nix-ca.pem".to_owned())].into();
+        assert_ne!(
+            profile
+                .clone()
+                .with_linux_ca_bundle(&relative)
+                .ca_bundle_path,
+            Some(PathBuf::from("nix-ca.pem"))
+        );
+        profile.linux = false;
+        assert_eq!(profile.with_linux_ca_bundle(&env).ca_bundle_path, None);
+    }
+
     #[test]
     fn sign_in_errors_and_config_issues() {
         assert!(is_sign_in_required(-32000, "Authentication required"));
@@ -643,9 +693,12 @@ mod tests {
             auth.issue(),
             Some("Enter a Gemini API key in the Antigravity provider settings.")
         );
-        auth.api_key = "k".into();
+        // A distinctive key, so the Debug check below proves it is left out (round 7 part 5a.5).
+        auth.api_key = "AIzaSy-distinctive-test-key-4242".into();
         assert_eq!(auth.issue(), None);
-        assert!(!format!("{auth:?}").contains('k') || format!("{auth:?}").contains("<set>"));
+        let debug = format!("{auth:?}");
+        assert!(!debug.contains("distinctive-test-key"), "{debug}");
+        assert!(debug.contains("<set>"), "{debug}");
         let business = AntigravityAuthConfig {
             auth_method: AntigravityAuthMethod::OauthBusiness,
             gcp_project: "p".into(),

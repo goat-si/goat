@@ -24,7 +24,7 @@ use crate::wire::{
 };
 
 /// The command that starts the agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LaunchCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -32,6 +32,22 @@ pub struct LaunchCommand {
     pub env: Vec<(String, String)>,
     /// Removed from the inherited environment.
     pub env_remove: Vec<String>,
+}
+
+/// `env` carries credentials (API keys): Debug names the variables and leaves their values out,
+/// as for AntigravityLaunch (round 7 part 5a.6).
+impl std::fmt::Debug for LaunchCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchCommand")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field(
+                "env_names",
+                &self.env.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            )
+            .field("env_remove", &self.env_remove)
+            .finish()
+    }
 }
 
 impl LaunchCommand {

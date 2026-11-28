@@ -395,3 +395,20 @@ pub const GOAT_MCP_TOOL_NAMES: &[&str] = &[
 pub fn is_goat_mcp_tool(name: &str) -> bool {
     GOAT_MCP_TOOL_NAMES.binary_search(&name).is_ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [is_goat_mcp_tool] binary-searches the list, which needs it sorted and free of duplicates
+    /// (round 7 part 5a.4).
+    #[test]
+    fn the_tool_names_are_sorted() {
+        assert!(GOAT_MCP_TOOL_NAMES.windows(2).all(|w| w[0] < w[1]));
+        assert!(
+            GOAT_MCP_TOOL_NAMES
+                .iter()
+                .all(|name| is_goat_mcp_tool(name))
+        );
+    }
+}

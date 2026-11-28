@@ -116,17 +116,33 @@ pub fn fx_subagent_outcome(text: &str) -> Option<(bool, Option<String>)> {
             break;
         }
     }
+    // v1's `((?:[^"\\]|\\.)*)` (adapter.ts:114) stops before a backslash with nothing after it
+    // (round 7 part 5b.1).
+    if escaped {
+        end = rest.len() - 1;
+    }
     let fragment = &rest[..end];
     let cut = !rest[end..].starts_with('"');
     let decode = |s: &str| serde_json::from_str::<String>(&format!("\"{s}\"")).ok();
-    let prefix = decode(fragment).or_else(|| {
-        // A \uXXXX escape cut short.
-        let trimmed = fragment
-            .rfind("\\u")
-            .filter(|i| fragment.len() - i < 6)
-            .map(|i| &fragment[..i])?;
-        decode(trimmed)
-    });
+    // A \uXXXX escape cut short is dropped, then a trailing escaped high surrogate whose pair was
+    // cut off: v1 keeps it in a JS string, a Rust string cannot hold it (round 7 part 5b.1).
+    let short = fragment
+        .rfind("\\u")
+        .filter(|i| fragment.len() - i < 6)
+        .map_or(fragment, |i| &fragment[..i]);
+    let unpaired = short
+        .len()
+        .checked_sub(6)
+        .filter(|&i| {
+            short.is_char_boundary(i)
+                && short[i..].starts_with("\\u")
+                && u16::from_str_radix(&short[i + 2..], 16)
+                    .is_ok_and(|unit| (0xD800..0xDC00).contains(&unit))
+        })
+        .map_or(short, |i| &short[..i]);
+    let prefix = decode(fragment)
+        .or_else(|| decode(short))
+        .or_else(|| decode(unpaired));
     Some((
         ok,
         prefix.map(|p| format!("{p}{}", if cut { "…" } else { "" })),
@@ -436,6 +452,25 @@ mod tests {
         assert_eq!(
             fx_subagent_outcome(r#"{"ok":true,"result":"caf\u00"#),
             Some((true, Some("caf…".into())))
+        );
+        // Round 7 part 5b.1: v1's regex (adapter.ts:114) stops before a backslash with nothing
+        // after it; a cut right after an escaped high surrogate drops it (Rust strings hold no
+        // lone surrogate; v1 keeps it).
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":true,"result":"line one\"#),
+            Some((true, Some("line one…".into())))
+        );
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":true,"result":"a\nb\"#),
+            Some((true, Some("a\nb…".into())))
+        );
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":true,"result":"smile \ud83d"#),
+            Some((true, Some("smile …".into())))
+        );
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":true,"result":"smile \ud83d\ude00"#),
+            Some((true, Some("smile 😀…".into())))
         );
         assert_eq!(fx_subagent_outcome("plain"), None);
         let tool = ToolState {

@@ -19,7 +19,7 @@ const INTERNAL_ERROR: i32 = -32603;
 
 /// v1 `resolveClientFilePath` (:26-76): the resolved file, or None when it is outside every root.
 fn resolve_client_file_path(allowed_roots: &[PathBuf], request_path: &str) -> Option<PathBuf> {
-    let mut existing = std::path::absolute(request_path).ok()?;
+    let mut existing = lexically_resolved(&std::path::absolute(request_path).ok()?);
     let mut missing: Vec<std::ffi::OsString> = Vec::new();
     let real = loop {
         if let Ok(resolved) = std::fs::canonicalize(&existing) {
@@ -46,6 +46,30 @@ fn resolve_client_file_path(allowed_roots: &[PathBuf], request_path: &str) -> Op
         real.starts_with(&root)
     });
     inside.then_some(real)
+}
+
+/// v1 `path.resolve` (AntigravityClientFiles.ts:45) is lexical: `.` and `..` go before any link
+/// is followed, so `/ws/new/../a.txt` is `/ws/a.txt` even when `new` is missing (round 7 part
+/// 5a.3; `std::path::absolute` keeps `..`).
+fn lexically_resolved(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // The root's parent is the root, as in path.resolve.
+                if !matches!(
+                    out.components().next_back(),
+                    None | Some(Component::RootDir | Component::Prefix(_))
+                ) {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Serve one `fs/read_text_file` request: the ACP response, or an error code and message.
@@ -133,6 +157,17 @@ mod tests {
         assert_eq!(
             read(&file, json!({"line": 2, "limit": 1})).unwrap()["content"],
             "two"
+        );
+        // Round 7 part 5a.3: `..` resolves lexically, past a missing directory.
+        assert_eq!(
+            read(&workspace.path().join("new/../a.txt"), json!({})).unwrap()["content"],
+            "one\ntwo\nthree"
+        );
+        assert_eq!(
+            read(&workspace.path().join("x/../../a.txt"), json!({}))
+                .unwrap_err()
+                .0,
+            INVALID_PARAMS
         );
         assert_eq!(
             read(&outside.path().join("secret.txt"), json!({}))

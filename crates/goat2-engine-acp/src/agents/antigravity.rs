@@ -130,7 +130,7 @@ pub struct AntigravityInstallation {
 }
 
 /// How GOAT starts the runtime for one instance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AntigravityLaunch {
     pub installation: AntigravityInstallation,
     pub profile: AntigravityProfile,
@@ -138,6 +138,24 @@ pub struct AntigravityLaunch {
     pub runtime_temp_directory: Option<PathBuf>,
     /// The inherited environment; None reads the host's.
     pub base_env: Option<HashMap<String, String>>,
+}
+
+/// `base_env` is the whole inherited environment, credentials included: Debug names its
+/// variables and leaves their values out (round 7 part 5a.6).
+impl std::fmt::Debug for AntigravityLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = self.base_env.as_ref().map(|env| {
+            let mut names: Vec<&String> = env.keys().collect();
+            names.sort();
+            names
+        });
+        f.debug_struct("AntigravityLaunch")
+            .field("installation", &self.installation)
+            .field("profile", &self.profile)
+            .field("runtime_temp_directory", &self.runtime_temp_directory)
+            .field("base_env_names", &names)
+            .finish()
+    }
 }
 
 /// Per-session state v1 keeps per runtime (AntigravityAdapterV2.ts:168-172).
@@ -178,9 +196,18 @@ impl Antigravity {
 
     fn with_session<T>(&self, session_id: &str, f: impl FnOnce(&mut SessionRepairs) -> T) -> T {
         let mut sessions = self.sessions.0.lock().expect("antigravity sessions");
+        // Bounded: session ids come from the agent. Past the bound a new session's repairs last
+        // only for this call (round 7 part 5a.2).
+        if !sessions.contains_key(session_id) && sessions.len() >= MAX_TRACKED_SESSIONS {
+            return f(&mut SessionRepairs::default());
+        }
         f(sessions.entry(session_id.to_owned()).or_default())
     }
 }
+
+/// Sessions whose read repair and plans one flavor keeps at once (GOAT 2 bound; v1 keeps them per
+/// runtime, AntigravityAdapterV2.ts:168-172, and drops them with it).
+const MAX_TRACKED_SESSIONS: usize = 64;
 
 fn model_option(config_options: &[Value]) -> Option<&Value> {
     config_options.iter().find(|option| {
@@ -283,8 +310,9 @@ impl AcpFlavor for Antigravity {
             .base_env
             .clone()
             .unwrap_or_else(|| std::env::vars().collect());
+        let profile = launch.profile.clone().with_linux_ca_bundle(&base_env);
         let environment = antigravity_auth::antigravity_environment(
-            &launch.profile,
+            &profile,
             &base_env,
             &self.auth,
             launch.runtime_temp_directory.as_deref(),
@@ -312,11 +340,21 @@ impl AcpFlavor for Antigravity {
             terminal: false,
         }
     }
+    /// v1 drops a runtime's session state with the runtime (AntigravityAdapterV2.ts:168-172): the
+    /// factory-shared flavor forgets the session's repairs when its process ends (round 7 part 5a.2).
+    fn release_runtime(&self, session_id: &str) {
+        self.sessions
+            .0
+            .lock()
+            .expect("antigravity sessions")
+            .remove(session_id);
+    }
     /// v1 `runtimeIncompatibility` (AntigravityDriver.ts:346-371, 408-427): a resolved runtime
     /// older than 1.5.1 only serves allowlisted editors. The compatibility advisory of the
     /// installer is not carried.
     fn initialize_refusal(&self, init: &InitializeInfo) -> Option<String> {
-        let installation = &self.launch.as_ref()?.installation;
+        let launch = self.launch.as_ref()?;
+        let installation = &launch.installation;
         let version = init.agent_version.as_deref()?;
         if serves_goat(version) {
             return None;
@@ -324,9 +362,22 @@ impl AcpFlavor for Antigravity {
         let action = if installation.managed {
             "Update it in Antigravity setup".to_owned()
         } else {
+            // The refusal becomes the run's failure reason in the thread log: a home path is
+            // written as ~ (round 7 part 5a.1; v1 AntigravityDriver.ts:408-427 prints it whole).
+            let mut homes = crate::stderr::home_directories();
+            if let Some(env) = &launch.base_env {
+                homes.extend(
+                    ["HOME", "USERPROFILE"]
+                        .iter()
+                        .filter_map(|name| env.get(*name).cloned()),
+                );
+            }
             format!(
                 "Update the Antigravity executable at {}",
-                installation.executable_path.display()
+                crate::probe::support::redact_home(
+                    &installation.executable_path.display().to_string(),
+                    &homes
+                )
             )
         };
         let (major, minor, patch) = OPEN_MODEL_ACCESS_RELEASE;
@@ -670,6 +721,78 @@ mod tests {
             harness.mode_write(RuntimeMode::ApprovalRequired, &context),
             ModeWrite::Keep
         );
+    }
+
+    /// The refusal reaches the thread log as the run's failure reason: a home path in it is written
+    /// as ~ (round 7 part 5a.1; v1 AntigravityDriver.ts:408-427 prints the whole path).
+    #[test]
+    fn the_runtime_refusal_hides_the_home_directory() {
+        let flavor = Antigravity {
+            launch: Some(AntigravityLaunch {
+                installation: AntigravityInstallation {
+                    executable_path: "/Users/alice/.local/bin/agy".into(),
+                    harness_path: None,
+                    version: None,
+                    managed: false,
+                },
+                profile: AntigravityProfile::new(std::path::Path::new("/p"), String::new()),
+                runtime_temp_directory: None,
+                base_env: Some([("HOME".to_owned(), "/Users/alice".to_owned())].into()),
+            }),
+            ..Default::default()
+        };
+        let init = InitializeInfo {
+            agent_version: Some("1.4.3".into()),
+            ..Default::default()
+        };
+        let refusal = flavor.initialize_refusal(&init).unwrap();
+        assert!(refusal.contains("~/.local/bin/agy"), "{refusal}");
+        assert!(!refusal.contains("/Users/alice"), "{refusal}");
+    }
+
+    /// Round 7 part 5a.2: a released session's repairs are forgotten, and the agent cannot grow
+    /// the map past its bound.
+    #[test]
+    fn session_repairs_are_released_and_bounded() {
+        let flavor = Antigravity::default();
+        flavor.with_session("s1", |_| ());
+        flavor.release_runtime("s1");
+        assert!(flavor.sessions.0.lock().unwrap().is_empty());
+        for i in 0..200 {
+            flavor.with_session(&format!("s{i}"), |_| ());
+        }
+        assert_eq!(
+            flavor.sessions.0.lock().unwrap().len(),
+            MAX_TRACKED_SESSIONS
+        );
+    }
+
+    /// Round 7 part 5a.6: Debug of the flavor leaves the inherited environment's values out.
+    #[test]
+    fn debug_leaves_the_base_environment_values_out() {
+        let flavor = Antigravity {
+            launch: Some(AntigravityLaunch {
+                installation: AntigravityInstallation {
+                    executable_path: "agy".into(),
+                    harness_path: None,
+                    version: None,
+                    managed: false,
+                },
+                profile: AntigravityProfile::new(std::path::Path::new("/p"), String::new()),
+                runtime_temp_directory: None,
+                base_env: Some(
+                    [(
+                        "OPENAI_API_KEY".to_owned(),
+                        "sk-distinctive-value".to_owned(),
+                    )]
+                    .into(),
+                ),
+            }),
+            ..Default::default()
+        };
+        let debug = format!("{flavor:?}");
+        assert!(debug.contains("OPENAI_API_KEY"), "{debug}");
+        assert!(!debug.contains("sk-distinctive-value"), "{debug}");
     }
 
     #[test]
