@@ -8,7 +8,7 @@ use goat2_contracts::{
     AssistantMessagePhase, RequestKind, RequestOutcome, RuntimeMode, TurnItemBody, TurnItemStatus,
 };
 use goat2_engine_api::{
-    EngineEvent, EngineHandle, EngineInput, RequestAnswer, SteerResult, TurnOutcome,
+    EngineEvent, EngineHandle, EngineInput, RequestAnswer, SteerResult, SteerStatus, TurnOutcome,
     TurnStartResult,
 };
 use serde_json::{Map, json};
@@ -202,6 +202,15 @@ async fn steer_acknowledged_by_lifecycle_continues_past_claudes_result() {
         .filter(|e| matches!(e, EngineEvent::TurnFinished { .. }))
         .count();
     assert_eq!(ends, 1, "one GOAT turn across both Claude results");
+    assert_eq!(
+        steer_updates(&events),
+        vec![(
+            turn_id.clone(),
+            vec!["input-1".to_string()],
+            SteerStatus::Completed
+        )],
+        "the steer reports Completed once Claude started it"
+    );
     assert_eq!(
         answers(&events, AssistantMessagePhase::Commentary),
         vec!["1, 2, 3."]
@@ -745,4 +754,85 @@ async fn a_steer_held_result_waits_for_the_interrupt_answer() {
     assert_eq!(finished(&events), TurnOutcome::Done);
     handle.session.shutdown().await;
     run.assert_replayed(1);
+}
+
+fn input_as(id: &str, text: &str) -> Vec<EngineInput> {
+    vec![EngineInput {
+        input_id: goat2_contracts::InputId::from(id),
+        text: text.to_string(),
+        attachments: Vec::new(),
+    }]
+}
+
+fn steer_updates(events: &[EngineEvent]) -> Vec<(String, Vec<String>, SteerStatus)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::SteerUpdated {
+                turn_id,
+                input_ids,
+                status,
+            } => Some((
+                turn_id.clone(),
+                input_ids.iter().map(|i| i.to_string()).collect(),
+                status.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Owner decision 2026-11-29 (v1 `steer.updated`, ClaudeAdapterV2.ts:5223-5266): a steer Claude
+/// queued (answered Accepted) and then discarded reports Cancelled with its own input ids, so the
+/// host can requeue it.
+#[tokio::test]
+async fn a_queued_steer_claude_discards_is_reported_cancelled() {
+    let run = Run::new("wire/steer_queued_then_discarded.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-input", "Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let updates = steer_updates(&events);
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert_eq!(updates[0].0, turn_id);
+    assert_eq!(updates[0].1, vec!["steer-input".to_string()]);
+    assert!(
+        matches!(&updates[0].2, SteerStatus::Cancelled { reason } if reason.contains("discarded")),
+        "{updates:?}"
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// An accepted steer still unread when Claude exits reports Cancelled before the turn settles.
+#[tokio::test]
+async fn an_accepted_steer_unread_at_exit_is_reported_cancelled() {
+    let run = Run::new("wire/steer_unread_at_exit.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-input", "Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until(&mut handle, |e| matches!(e, EngineEvent::Exited { .. })).await;
+    let updates = steer_updates(&events);
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert_eq!(updates[0].1, vec!["steer-input".to_string()]);
+    assert!(matches!(updates[0].2, SteerStatus::Cancelled { .. }));
+    let cancelled_at = events
+        .iter()
+        .position(|e| matches!(e, EngineEvent::SteerUpdated { .. }))
+        .unwrap();
+    let finished_at = events
+        .iter()
+        .position(|e| matches!(e, EngineEvent::TurnFinished { .. }))
+        .expect("turn settled");
+    assert!(cancelled_at < finished_at);
+    handle.session.shutdown().await;
 }
