@@ -37,10 +37,10 @@ export function classifyOpenCodeProbeResponse(path: "/api/info" | "/global/healt
   } catch { return undefined; }
 }
 
-export async function selectOpenCodeRuntime(options: { binary?: string; environment?: NodeJS.ProcessEnv; serverUrl?: string; serverPassword?: string }): Promise<ProbedOpenCode> {
+export async function selectOpenCodeRuntime(options: { binary?: string; args?: ReadonlyArray<string>; cwd?: string; environment?: NodeJS.ProcessEnv; serverUrl?: string; serverPassword?: string }): Promise<ProbedOpenCode> {
   if (!options.serverUrl?.trim()) {
     try {
-      const result = await run(options.binary ?? "opencode", ["--version"], { env: options.environment, timeout: 10_000 });
+      const result = await run(options.binary ?? "opencode", [...(options.args ?? []), "--version"], { cwd: options.cwd, env: options.environment, timeout: 10_000, maxBuffer: 64 * 1024 });
       const found = classifyOpenCodeCliVersion(result.stdout);
       if (found) return found;
     } catch { /* Fixed message avoids leaking launch environment or command output. */ }

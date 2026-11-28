@@ -19,7 +19,8 @@
   "dependencies": {
     "@cursor/sdk": "1.2.0",
     "@muse-code/sdk": "1.4.6",
-    "@opencode-ai/sdk": "1.15.13"
+    "@opencode-ai/sdk": "1.15.13",
+    "@opencode/client": "2.0.28"
   },
   "devDependencies": {
     "@goat2/contracts-rs": "workspace:*",

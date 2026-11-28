@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { classifyOpenCodeCliVersion, classifyOpenCodeProbeResponse, selectOpenCodeRuntime } from "../src/engines/opencode2/select.ts";
+import { capabilitiesForOpenCode2 } from "../src/engines/opencode2/capabilities.ts";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("classifies CLI versions with v1 token boundaries and prereleases", () => {
   assert.deepEqual(classifyOpenCodeCliVersion("opencode v2.0.3-rc.2 (linux)"), { generation: "v2", version: "2.0.3-rc.2" });
@@ -19,4 +23,22 @@ test("requires the expected JSON server shape and recognizes unauthorized", () =
 
 test("unavailable binary fails without exposing its path", async () => {
   await assert.rejects(selectOpenCodeRuntime({ binary: "/not-present/opencode" }), /^Error: Unable to determine OpenCode version/);
+});
+
+test("version selection honors the launch arguments, cwd, and environment", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "goat-opencode-select-"));
+  try {
+    const script = join(dir, "fake.mjs");
+    await writeFile(script, "if (process.argv[2] !== 'sentinel' || process.argv[3] !== '--version' || process.env.GOAT_TEST_VERSION !== '2.0.28' || process.cwd() !== process.env.GOAT_TEST_CWD) process.exit(3); console.log('opencode ' + process.env.GOAT_TEST_VERSION);\n");
+    const found = await selectOpenCodeRuntime({ binary: process.execPath, args: [script, "sentinel"], cwd: dir, environment: { ...process.env, GOAT_TEST_VERSION: "2.0.28", GOAT_TEST_CWD: await realpath(dir) } });
+    assert.deepEqual(found, { generation: "v2", version: "2.0.28" });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("2.x capabilities match v1 and native goals start at 2.2.5 stable", async () => {
+  const native = JSON.parse(await readFile(new URL("../../../crates/goat2-engine-sdk/src/capabilities/opencode2.json", import.meta.url), "utf8"));
+  assert.deepEqual(capabilitiesForOpenCode2("2.0.28"), { ...native, sessions: { sourceRestriction: "published-ref", executionLocation: "local", followUp: { supported: true }, ...native.sessions }, turns: { ...native.turns, supportsNativeGoals: false } });
+  assert.equal(capabilitiesForOpenCode2("2.2.5-rc.1").turns.supportsNativeGoals, false);
+  assert.equal(capabilitiesForOpenCode2("2.2.5").turns.supportsNativeGoals, true);
+  assert.equal(capabilitiesForOpenCode2("2.2.6-rc.1").turns.supportsNativeGoals, true);
 });

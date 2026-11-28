@@ -456,5 +456,17 @@ Not lifted: account usage/limits, account pools, text generation, cloud, checkpo
 | crates/goat2-engine-sdk/src/capabilities/opencode2.json | packages/provider-opencode/src/server/v2/capabilities.ts:3-96 | verbatim values, TS literal converted to JSON |
 | apps/engine-helper/src/engines/opencode2/select.ts | packages/provider-opencode/src/server/versionProbe.ts:24-180; packages/provider-core/src/server/snapshotProbe.ts:222-228; packages/shared/src/semver.ts:10-65 | adapted version and server probes to plain async Node; standalone selector not yet connected to an engine |
 | apps/engine-helper/test/opencode2-selector.test.ts | packages/provider-core/src/server/snapshotProbe.test.ts:311-337 | adapted version parser examples; server and failure tests new |
+| apps/engine-helper/src/engines/opencode2/capabilities.ts | packages/provider-opencode/src/server/v2/capabilities.ts:3-96 | adapted literals, filling GOAT 2's serde defaults explicitly for the helper wire type. |
+| apps/engine-helper/src/engines/opencode2/capabilities.ts | packages/provider-opencode/src/server/driver.ts:176-209 | adapted version-gated native goals for probe-reported capabilities. |
+| apps/engine-helper/src/engines/opencode2/modelRef.ts | packages/provider-opencode/src/server/v2/modelRef.ts:1-29 | adapted model and variant references to the Promise SDK and helper contracts. |
+| apps/engine-helper/src/engines/opencode2/modelRef.ts | packages/provider-opencode/src/server/variant.ts | adapted variant selection to the GOAT 2 model selection type. |
+| apps/engine-helper/src/engines/opencode2/forms.ts | packages/provider-opencode/src/server/v2/adapterUtilities.ts:19-70 | adapted supported form fields and answers; unsupported fields return a visible error. |
+| apps/engine-helper/src/engines/opencode2/permissions.ts | packages/provider-opencode/src/server/v2/sessionRules.ts:1-65 | adapted ordered native permission rules. |
+| apps/engine-helper/src/engines/opencode2/permissions.ts | packages/provider-opencode/src/server/v2/mcpNames.ts:1-40 | adapted per-thread MCP names using Node SHA-256. |
+| apps/engine-helper/src/engines/opencode2/permissions.ts | packages/provider-opencode/src/server/v2/adapter.ts:3990-4040 | adapted native permission replies. |
+| apps/engine-helper/src/engines/opencode2/project.ts | packages/provider-opencode/src/server/v2/adapter.ts:580-850,1680-1770 | adapted terminal tool and subagent projection to GOAT 2 item events. |
+| apps/engine-helper/src/engines/opencode2/project.ts | packages/provider-opencode/src/server/v2/todoProjection.ts:1-35 | adapted todo validation and completed list projection. |
+| apps/engine-helper/src/engines/opencode2/project.ts | packages/provider-opencode/src/server/toolItems.ts | adapted command, edit and dynamic tool items. |
+| apps/engine-helper/src/engines/opencode2/events.ts | packages/provider-opencode/src/server/v2/adapter.ts:458-480,1240-1285,1680-1800 | adapted text/reasoning identities, completed compaction and context token snapshots to the helper protocol. |
 
 Not lifted yet: OpenCode 2 adapter and its services, SDK integration, streaming and item projection, steering, requests, resume, MCP, auth and model probe, Rust integration, and end-to-end tests. This section records incomplete work, not a working engine.
