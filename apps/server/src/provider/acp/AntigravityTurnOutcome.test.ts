@@ -193,7 +193,11 @@ describe("watchAntigravityPromptOutcome", () => {
         [USER_INPUT, input],
         [ERROR_MESSAGE, STATUS_NOT_FOUND_ERROR],
       ]);
-      assert.isFalse(unknownModel !== undefined && "resumeWith" in unknownModel);
+      assert.isFalse(
+        unknownModel !== undefined &&
+          typeof unknownModel === "object" &&
+          "resumeWith" in unknownModel,
+      );
       assert.equal(failureOf(unknownModel)?.retryable, false);
       for (const error of [
         "messages.0.content.1.thinking.signature: Field required",

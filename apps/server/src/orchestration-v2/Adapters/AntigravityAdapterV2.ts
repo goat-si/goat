@@ -34,6 +34,7 @@ import {
   readAntigravityChildrenAtWork,
   readAntigravityPendingReply,
 } from "../../provider/acp/AntigravityChildWork.ts";
+import { readAntigravitySubagentTranscript } from "../../provider/acp/AntigravitySubagentTranscript.ts";
 import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityClientFiles.ts";
 import { readAntigravityExecutedModel } from "../../provider/acp/AntigravityExecutedModel.ts";
 import { watchAntigravityPromptOutcome } from "../../provider/acp/AntigravityTurnOutcome.ts";
@@ -329,6 +330,23 @@ export function makeAntigravityAcpAdapterFlavor(
               profileDirectory,
               rootSessionId: sessionId,
               toolCallIds: nativeTaskIds,
+            }),
+          readSubagentTranscript: ({
+            sessionId,
+            nativeTaskId,
+            childSessionId,
+            launch,
+            siblings,
+            finalize,
+          }) =>
+            readAntigravitySubagentTranscript({
+              profileDirectory,
+              rootSessionId: sessionId,
+              nativeTaskId,
+              childSessionId,
+              launch,
+              siblings,
+              finalize,
             }),
           hasPendingReply: (sessionId: string) =>
             readAntigravityPendingReply({

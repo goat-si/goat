@@ -37,9 +37,9 @@ const MAX_STEP_BYTES = 1024 * 1024;
 const MAX_INVOKE_ROWS = 200;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const MAX_CHILDREN = 16;
-const TRANSCRIPT_BYTE_CAP = 256 * 1024;
-const BATCH_TRANSCRIPT_BYTES = 512 * 1024;
-const STEP_TEXT_CAP = 4_000;
+export const TRANSCRIPT_BYTE_CAP = 256 * 1024;
+export const BATCH_TRANSCRIPT_BYTES = 512 * 1024;
+export const STEP_TEXT_CAP = 4_000;
 const TOOL_INPUT_CAP = 1_000;
 const MAX_MESSAGE_FILES = 256;
 const MAX_DETACHED_CHILDREN = 64;
@@ -124,7 +124,7 @@ const text = (bytes: Uint8Array | undefined, field: number) => {
   return value === undefined ? undefined : textDecoder.decode(value);
 };
 
-interface InvokeRecord {
+export interface InvokeRecord {
   readonly toolCallId: string | undefined;
   readonly launches: ReadonlyArray<AntigravityChildLaunch>;
   readonly children: ReadonlyArray<{
@@ -133,7 +133,7 @@ interface InvokeRecord {
   }>;
 }
 
-const NATIVE_ID = /^[A-Za-z0-9-]{1,64}$/;
+export const NATIVE_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 /** Undefined for steps this reader cannot decode, so they never count as proof. */
 const safely =
@@ -181,7 +181,7 @@ const payloadOf = (row: unknown) =>
     ? row.step_payload
     : undefined;
 
-interface BatchLaunch {
+export interface BatchLaunch {
   readonly title: string | null;
   readonly prompt: string;
 }
@@ -322,7 +322,7 @@ const decodeTranscriptLine = Schema.decodeUnknownOption(Schema.fromJsonString(Tr
 
 // The runtime records each tool argument value as JSON text.
 const decodeArgument = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-const toolArguments = (args: unknown) =>
+export const toolArguments = (args: unknown) =>
   Predicate.isObject(args)
     ? Object.fromEntries(
         Object.entries(args).map(([key, value]) => [
@@ -332,7 +332,7 @@ const toolArguments = (args: unknown) =>
       )
     : (args ?? {});
 
-const capText = (value: string, limit: number) =>
+export const capText = (value: string, limit: number) =>
   value.length <= limit ? value : `${value.slice(0, limit)}…`;
 
 /** Skips the runtime's opening envelope around the launch prompt the view already shows. */
@@ -370,10 +370,9 @@ function transcriptSteps(
 }
 
 /** Reads the tail of the transcript at the named child's own unlinked profile path. */
-async function readChildTranscript(
+export async function readChildTranscriptRaw(
   profileRoot: string,
   child: InvokeRecord["children"][number],
-  prompt: string,
   byteCap: number,
 ) {
   const expected = (
@@ -416,22 +415,75 @@ async function readChildTranscript(
     let lineStart = 0;
     if (tailStart > 0) {
       const newline = bytes.indexOf(0x0a);
-      if (newline === -1) return { steps: [], truncated: true };
+      if (newline === -1) return { contents: "", truncated: true };
       lineStart = newline + 1;
     }
     const contents = bytes.toString("utf8", lineStart);
-    return { steps: transcriptSteps(contents, prompt), truncated: tailStart > 0 };
+    return { contents, truncated: tailStart > 0 };
   } finally {
     await handle.close();
   }
 }
 
-class AntigravityChildWorkReadError extends Schema.TaggedError<AntigravityChildWorkReadError>()(
+async function readChildTranscript(
+  profileRoot: string,
+  child: InvokeRecord["children"][number],
+  prompt: string,
+  byteCap: number,
+) {
+  const raw = await readChildTranscriptRaw(profileRoot, child, byteCap);
+  if (raw === undefined) return undefined;
+  return {
+    steps: raw.contents.length === 0 ? [] : transcriptSteps(raw.contents, prompt),
+    truncated: raw.truncated,
+  };
+}
+
+export class AntigravityChildWorkReadError extends Schema.TaggedError<AntigravityChildWorkReadError>()(
   "AntigravityChildWorkReadError",
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
     return "Could not read Antigravity subagent records.";
+  }
+}
+
+export async function resolveAntigravityInvokeRecord(
+  profileRoot: string,
+  input: {
+    readonly rootSessionId: string;
+    readonly nativeTaskId: string;
+    readonly childSessionId?: string | null | undefined;
+    readonly launch: BatchLaunch;
+    readonly siblings: ReadonlyArray<BatchLaunch & { readonly nativeTaskId: string }>;
+  },
+): Promise<InvokeRecord | undefined> {
+  const detached = await findDetachedInvokeRecord(
+    profileRoot,
+    input.rootSessionId,
+    input.nativeTaskId,
+  );
+  if (detached !== undefined) return detached;
+  if (input.childSessionId != null && NATIVE_ID.test(input.childSessionId)) {
+    return {
+      toolCallId: input.nativeTaskId,
+      launches: [{ role: input.launch.title ?? "", prompt: input.launch.prompt }],
+      children: [{ conversationId: input.childSessionId }],
+    };
+  }
+  const databasePath = (
+    await antigravityManagedPath(
+      profileRoot,
+      ["antigravity-acp", "conversations", `${input.rootSessionId}.db`],
+      "file",
+    )
+  )?.path;
+  if (databasePath === undefined) return undefined;
+  const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return findInvokeRecord(database, input);
+  } finally {
+    database.close();
   }
 }
 
@@ -449,27 +501,7 @@ export const readAntigravityChildWork = Effect.fn("readAntigravityChildWork")(fu
     try: async (): Promise<ReadonlyArray<OrchestrationV2NativeChildWork>> => {
       const profileRoot = await antigravityProfileRoot(input.profileDirectory);
       if (profileRoot === undefined) return [];
-      let record = await findDetachedInvokeRecord(
-        profileRoot,
-        input.rootSessionId,
-        input.nativeTaskId,
-      );
-      if (record === undefined) {
-        const databasePath = (
-          await antigravityManagedPath(
-            profileRoot,
-            ["antigravity-acp", "conversations", `${input.rootSessionId}.db`],
-            "file",
-          )
-        )?.path;
-        if (databasePath === undefined) return [];
-        const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-        try {
-          record = findInvokeRecord(database, input);
-        } finally {
-          database.close();
-        }
-      }
+      const record = await resolveAntigravityInvokeRecord(profileRoot, input);
       if (record === undefined) return [];
       const { launches, children } = record;
       // One budget for the whole batch, so the response stays small however many children ran.

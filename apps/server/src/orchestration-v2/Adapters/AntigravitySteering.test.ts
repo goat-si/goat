@@ -591,7 +591,7 @@ describe("Antigravity steering", () => {
         "idle",
         "a reported, killed subagent must leave running before the steered prompt settles",
       );
-      yield* opened.releaseSteer;
+      yield* Deferred.succeed(opened.releaseSteer, undefined);
     }).pipe(Effect.provide(layerSession)),
   );
 });

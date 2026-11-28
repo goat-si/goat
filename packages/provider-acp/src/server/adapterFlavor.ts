@@ -21,6 +21,8 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type { ElicitationQuestionForm } from "./elicitationForm.ts";
 import type { AcpSessionModeState, AcpToolCallState } from "./runtimeModel.ts";
+import type { AcpSubagentTranscriptEntry } from "./subagentTranscript.ts";
+export type { AcpSubagentTranscriptEntry } from "./subagentTranscript.ts";
 import type { AcpPermissionDisposition } from "./clientPolicy.ts";
 import type * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import type { BackgroundWork } from "@goat/provider-core/server/notification";
@@ -282,6 +284,23 @@ export interface AcpAdapterV2Flavor {
     readonly sessionId: string;
     readonly nativeTaskIds: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<string>>;
+  /**
+   * Reads projected timeline entries for a subagent whose provider writes child work to a local
+   * transcript instead of streaming child ACP notifications. Called periodically while active and
+   * once more with `finalize: true` before transitioning the subagent to a terminal or idle state.
+   */
+  readonly readSubagentTranscript?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskId: string;
+    readonly childSessionId: string | null;
+    readonly launch: { readonly title: string | null; readonly prompt: string };
+    readonly siblings: ReadonlyArray<{
+      readonly nativeTaskId: string;
+      readonly title: string | null;
+      readonly prompt: string;
+    }>;
+    readonly finalize: boolean;
+  }) => Effect.Effect<ReadonlyArray<AcpSubagentTranscriptEntry>>;
   readonly supportsCompaction?: boolean;
   /** Sends `/compact` as a prompt, only to sessions whose advertised commands include `compact`. */
   readonly compactViaAdvertisedCommand?: boolean;

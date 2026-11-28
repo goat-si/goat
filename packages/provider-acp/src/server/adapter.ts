@@ -1,3 +1,8 @@
+import {
+  buildAcpStandardToolTurnItem,
+  makeAcpSubagentTranscriptController,
+} from "./subagentTranscript.ts";
+export type { AcpSubagentTranscriptEntry } from "./subagentTranscript.ts";
 import { makeRecordWakeReport } from "./recordWakeReport.ts";
 import { confirmPromptMemory, preparePromptMemory } from "./promptMemory.ts";
 import {
@@ -44,15 +49,7 @@ import { followNextPrompt, makeAcpPromptSteer, type AcpPromptSettle } from "./pr
 import { makeAcpPromptContent } from "./promptContent.ts";
 import { makeAcpProviderRetry } from "./providerRetry.ts";
 import { makeAcpWakeBuffer } from "./wakeBuffer.ts";
-import {
-  acpBackendWebSearch,
-  acpMcpToolCallOutput,
-  acpProjectedCommandExitCode,
-  commandExitCode,
-  pathFromToolCall,
-  resolvedPathInfo,
-  webSearchLabel,
-} from "./toolProjection.ts";
+import { acpMcpToolCallOutput, commandExitCode, pathFromToolCall } from "./toolProjection.ts";
 export { acpMcpToolCallOutput } from "./toolProjection.ts";
 import { acpUnfinishedStopMessage } from "./unfinishedStop.ts";
 export { acpUnfinishedStopMessage } from "./unfinishedStop.ts";
@@ -136,12 +133,7 @@ import {
   resolveGoatMcpShippedToolId,
 } from "@goat/shared/goatMcpToolPresentation";
 import { compactDynamicToolOutput, htmlRenderFromToolItem } from "@goat/shared/toolOutput";
-import {
-  acpToolCallDiffPatch,
-  acpToolCallDiffUnpreviewable,
-  acpToolCallSnippetEdit,
-  structuredFileChanges,
-} from "./toolDiff.ts";
+import { acpToolCallDiffPatch, structuredFileChanges } from "./toolDiff.ts";
 export { acpToolCallDiffPatch, acpToolCallSnippetEdit } from "./toolDiff.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -166,11 +158,9 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { resolveNice } from "@goat/shared/toolPriority";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
-import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -1125,6 +1115,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return ordinal;
         };
 
+        const subagentTranscripts = makeAcpSubagentTranscriptController({
+          driver,
+          flavor,
+          sessionScope,
+          activeTurn,
+          carryoverSubagents,
+          providerMessageId,
+          providerTurnItemId,
+          resolveSubagentChildOrdinal,
+          emitProviderEvent,
+        });
+
         const { emit: emitProviderRetry, report: reportProviderRetry } = makeAcpProviderRetry({
           driver,
           activeTurn,
@@ -1851,6 +1853,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           };
           const subagent: ActiveAcpSubagent = existing ?? {
             task,
+            rootSessionId: context.nativeThreadId,
             childThreadId,
             childRootNodeId,
             turnItemId,
@@ -1872,6 +1875,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             },
             interruptedToolIds: new Set(),
             toolSessionIds: new Map(),
+            transcriptEntryFingerprints: new Map(),
+            transcriptStartedAt: new Map(),
+            transcriptOpenEntries: new Map(),
+            lastTranscriptEntryKinds: new Map(),
+            transcriptDrainPermit: yield* Semaphore.make(1),
+            transcriptFollowerStop: undefined,
+            transcriptFollowerStarted: false,
+            transcriptTrailingDrainStop: undefined,
+            transcriptTrailingDrainStarted: false,
           };
           subagent.task = task;
           context.subagents.set(nativeTaskId, subagent);
@@ -1964,7 +1976,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
           }
 
-          if (acpSubagentStatusIsTerminal(taskStatus)) yield* flushSubagentAssistant(subagent);
+          if (acpSubagentStatusIsTerminal(taskStatus)) {
+            yield* subagentTranscripts.stopFollower(subagent);
+            yield* subagentTranscripts.drain(subagent, true);
+            yield* subagentTranscripts.startTrailingDrain(subagent, taskStatus);
+            yield* flushSubagentAssistant(subagent);
+          }
           // A failed child's result explains the failure; it is not the child's reply.
           if (
             taskStatus !== "running" &&
@@ -2056,6 +2073,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           });
           if (acpSubagentStatusIsTerminal(taskStatus)) {
             subagent.terminalStatusProjected = true;
+          } else {
+            yield* subagentTranscripts.startFollower(subagent);
           }
         });
 
@@ -2786,160 +2805,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
             yield* rearmDeferredFinalize(context);
             return;
-          } else if (changes.length > 0) {
-            turnItem = {
-              ...base,
-              type: "file_change",
-              fileName: changes[0]!.path,
-              changes,
-              ...(diffText === undefined ? {} : { diffStr: diffText }),
-            };
           } else {
-            switch (toolCall.kind) {
-              case "read":
-                turnItem = {
-                  ...base,
-                  title: path ? formatReadToolLabel(path) : (title ?? "Read file"),
-                  type: "dynamic_tool",
-                  toolName: "Read",
-                  ...(path !== undefined &&
-                  path.length <= 4096 &&
-                  !/[\r\n]/.test(path) &&
-                  isWorkspaceImagePreviewPath(path)
-                    ? { viewedImagePath: path }
-                    : {}),
-                  input:
-                    path === undefined ||
-                    ["path", "filePath", "file_path"].some((key) => rawInputRecord?.[key] === path)
-                      ? (rawInputRecord ?? {})
-                      : { ...rawInputRecord, path },
-                  ...(rawOutput === undefined ? {} : { output: rawOutput }),
-                };
-                break;
-              case "search": {
-                const backendSearch = acpBackendWebSearch(
-                  rawInputRecord,
-                  rawOutput,
-                  typeof toolCall.data.title === "string" ? toolCall.data.title : title,
-                );
-                if (backendSearch !== undefined) {
-                  const label = webSearchLabel(
-                    nonEmptyText(toolCall.data.title, title ?? "Web search"),
-                  );
-                  turnItem = {
-                    ...base,
-                    title:
-                      backendSearch.query === undefined
-                        ? label
-                        : `${label}: ${backendSearch.query}`,
-                    type: "web_search",
-                    ...(backendSearch.query === undefined
-                      ? {}
-                      : { patterns: [backendSearch.query] }),
-                    ...(backendSearch.results.length === 0
-                      ? {}
-                      : { results: backendSearch.results }),
-                  };
-                  break;
-                }
-                const pathIsQuery = resolvedPathInfo(toolCall)?.fromQuery === true;
-                turnItem = {
-                  ...base,
-                  title:
-                    formatSearchToolLabel({
-                      rawInput: rawInputRecord,
-                      input: rawInputRecord,
-                      ...(path === undefined ? {} : { pattern: path }),
-                    }) ?? title,
-                  type: "file_search",
-                  ...(path === undefined ? {} : { pattern: path }),
-                  ...(path === undefined ||
-                  (pathIsQuery && textFromUnknown(rawOutput) === undefined)
-                    ? {}
-                    : {
-                        results: [
-                          {
-                            fileName: path,
-                            ...(textFromUnknown(rawOutput) === undefined
-                              ? {}
-                              : { preview: textFromUnknown(rawOutput) }),
-                          },
-                        ],
-                      }),
-                };
-                break;
-              }
-              case "execute": {
-                const exitCode = acpProjectedCommandExitCode(status, rawOutput);
-                turnItem = {
-                  ...base,
-                  type: "command_execution",
-                  input: toolCall.command ?? monitorCommand ?? "",
-                  ...(textFromUnknown(rawOutput) === undefined
-                    ? {}
-                    : { output: textFromUnknown(rawOutput) }),
-                  ...(exitCode === undefined ? {} : { exitCode }),
-                };
-                break;
-              }
-              case "edit":
-              case "delete":
-              case "move": {
-                const snippet = acpToolCallSnippetEdit(toolCall.data.content);
-                const unpreviewable = acpToolCallDiffUnpreviewable(toolCall.data.content);
-                turnItem = {
-                  ...base,
-                  type: "file_change",
-                  fileName: path ?? toolCall.title ?? "File change",
-                  ...(snippet ??
-                    (unpreviewable || diffText === undefined ? {} : { diffStr: diffText })),
-                };
-                break;
-              }
-              case "fetch": {
-                // Grok rawOutput.Content is unreadable by textFromUnknown; bounded content blocks duplicate it.
-                const snippet =
-                  textFromUnknown(toolCall.data.content) ?? textFromUnknown(rawOutput);
-                turnItem = {
-                  ...base,
-                  type: "web_search",
-                  ...(path === undefined ? {} : { patterns: [path] }),
-                  ...(path === undefined
-                    ? {}
-                    : {
-                        results: [
-                          {
-                            url: path,
-                            ...(snippet === undefined ? {} : { snippet }),
-                          },
-                        ],
-                      }),
-                };
-                break;
-              }
-              default:
-                if (projectAsCommandExecution) {
-                  const exitCode = acpProjectedCommandExitCode(status, rawOutput);
-                  turnItem = {
-                    ...base,
-                    type: "command_execution",
-                    input: toolCall.command ?? monitorCommand ?? "",
-                    ...(textFromUnknown(rawOutput) === undefined
-                      ? {}
-                      : { output: textFromUnknown(rawOutput) }),
-                    ...(exitCode === undefined ? {} : { exitCode }),
-                    ...(inputVariant === "monitor" ? { monitor: true } : {}),
-                  };
-                } else {
-                  turnItem = {
-                    ...base,
-                    type: "dynamic_tool",
-                    toolName: toolCall.title ?? toolCall.kind ?? null,
-                    input: rawInput ?? {},
-                    ...(rawOutput === undefined ? {} : { output: rawOutput }),
-                  };
-                }
-            }
+            turnItem = buildAcpStandardToolTurnItem({
+              base,
+              toolCall,
+              status,
+              title,
+              rawInput,
+              rawInputRecord,
+              rawOutput,
+              changes,
+              path,
+              diffText,
+              monitorCommand,
+              projectAsCommandExecution,
+              inputVariant,
+            });
           }
           if (failureReason !== undefined)
             turnItem = { ...turnItem, title: `${turnItem.title ?? "Tool"}: ${failureReason}` };
@@ -4656,6 +4537,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           status: OrchestrationV2Subagent["status"],
           resultOverride?: string | null,
         ) {
+          if (acpSubagentStatusIsTerminal(status)) {
+            yield* subagentTranscripts.stopFollower(subagent);
+            yield* subagentTranscripts.drain(subagent, true);
+            yield* subagentTranscripts.startTrailingDrain(subagent, status);
+          }
           yield* flushSubagentAssistant(subagent);
           yield* mutateCarryoverSubagentStatus(subagent, status, resultOverride);
           const now = subagent.task.updatedAt;
@@ -5919,7 +5805,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 yield* Ref.set(endedBackgroundTaskIds, new Set());
                 yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
                 yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
-                yield* Ref.set(carryoverSubagents, null);
+                const previousCarryover = yield* Ref.getAndSet(carryoverSubagents, null);
+                if (previousCarryover !== null) {
+                  yield* Effect.forEach(
+                    previousCarryover.subagents,
+                    subagentTranscripts.stopFollower,
+                    { discard: true },
+                  );
+                }
                 yield* Ref.set(suppressPostSettleMonitorPrompt, false);
                 yield* Ref.set(lastTurnRoute, null);
               }),
@@ -6440,7 +6333,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               yield* Ref.set(continuationRequested, false);
               yield* Ref.set(runningBackgroundTaskIds, new Set());
               yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
-              yield* Ref.set(carryoverSubagents, null);
+              const previousCarryover = yield* Ref.getAndSet(carryoverSubagents, null);
+              if (previousCarryover !== null) {
+                yield* Effect.forEach(
+                  previousCarryover.subagents,
+                  subagentTranscripts.stopFollower,
+                  { discard: true },
+                );
+              }
               yield* Ref.set(lastTurnRoute, null);
             }),
           );
@@ -7646,6 +7546,42 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }),
         );
 
+        const canReportBackgroundWork =
+          continuationRequests !== undefined &&
+          (flavor.followAgentWorkState === true || Boolean(flavor.enablePostSettleContinuation));
+        const sessionHasPendingBackgroundWork = Effect.gen(function* () {
+          if (!postSettleContinuationEnabled && !followsAgentWorkState) return false;
+          const rootSessionId = yield* Ref.get(activeSessionId);
+          if (
+            followsAgentWorkState &&
+            rootSessionId !== null &&
+            hasWorkingDescendant(rootSessionId)
+          )
+            return true;
+          if (
+            followsAgentWorkState &&
+            (agentWork?.state === "running" ||
+              agentWork?.state === "requires_action" ||
+              agentRequests.size > 0)
+          )
+            return true;
+          if ((yield* wakeBuffer.length) > 0) return true;
+          if ((yield* Ref.get(midTurnUnreportedCompletedTaskIds)).size > 0) return true;
+          if (yield* Ref.get(continuationRequested)) return true;
+          if ((yield* Ref.get(runningBackgroundTaskIds)).size > 0) return true;
+          const active = yield* Ref.get(activeTurn);
+          if (
+            active !== null &&
+            [...active.subagents.values()].some(acpSubagentHasPendingBackgroundWork)
+          ) {
+            return true;
+          }
+          const carryover = yield* Ref.get(carryoverSubagents);
+          if (carryover !== null && carryover.subagents.some(acpSubagentHasPendingBackgroundWork)) {
+            return true;
+          }
+          return false;
+        });
         const sessionRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: options.instanceId,
           driver,
@@ -7664,47 +7600,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     : flavor.getModelContextWindow?.(selection, session);
                 },
               }),
-          ...(continuationRequests !== undefined &&
-          (flavor.followAgentWorkState === true || Boolean(flavor.enablePostSettleContinuation))
-            ? {
-                hasPendingBackgroundWork: Effect.gen(function* () {
-                  if (!postSettleContinuationEnabled && !followsAgentWorkState) return false;
-                  const rootSessionId = yield* Ref.get(activeSessionId);
-                  if (
-                    followsAgentWorkState &&
-                    rootSessionId !== null &&
-                    hasWorkingDescendant(rootSessionId)
-                  )
-                    return true;
-                  if (
-                    followsAgentWorkState &&
-                    (agentWork?.state === "running" ||
-                      agentWork?.state === "requires_action" ||
-                      agentRequests.size > 0)
-                  )
-                    return true;
-                  if ((yield* wakeBuffer.length) > 0) return true;
-                  if ((yield* Ref.get(midTurnUnreportedCompletedTaskIds)).size > 0) return true;
-                  if (yield* Ref.get(continuationRequested)) return true;
-                  if ((yield* Ref.get(runningBackgroundTaskIds)).size > 0) return true;
-                  const active = yield* Ref.get(activeTurn);
-                  if (
-                    active !== null &&
-                    [...active.subagents.values()].some(acpSubagentHasPendingBackgroundWork)
-                  ) {
-                    return true;
-                  }
-                  const carryover = yield* Ref.get(carryoverSubagents);
-                  if (
-                    carryover !== null &&
-                    carryover.subagents.some(acpSubagentHasPendingBackgroundWork)
-                  ) {
-                    return true;
-                  }
-                  return false;
-                }),
-              }
+          ...(canReportBackgroundWork
+            ? { hasPendingBackgroundWork: sessionHasPendingBackgroundWork }
             : {}),
+          // Root-subscription probe: only GOAT's own trailing transcript reads. Replacement checks
+          // (includeSubagents) keep the session-wide answer they used before this probe existed.
+          hasPendingBackgroundWorkForThread: (providerThread, probeOptions) =>
+            probeOptions?.includeSubagents === true
+              ? canReportBackgroundWork
+                ? sessionHasPendingBackgroundWork
+                : Effect.succeed(false)
+              : Effect.sync(() =>
+                  subagentTranscripts.hasTrailingDrainForNativeThread(
+                    providerThread.nativeThreadRef?.nativeId,
+                  ),
+                ),
           ensureThread: Effect.fn("AcpAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               return yield* runtimeTransitionPermit.withPermit(
