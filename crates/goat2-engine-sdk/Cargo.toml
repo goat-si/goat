@@ -15,6 +15,11 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+time = { version = "0.3", features = ["formatting"] }
+
+[[bin]]
+name = "goat2-fake-pi"
+path = "src/bin/fake_pi.rs"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
