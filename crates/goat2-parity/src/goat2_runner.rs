@@ -181,6 +181,8 @@ pub mod drive {
             input: String,
             code: String,
         },
+        /// The runner restarted the host, after the latest line seen before it.
+        Restarted { after: u64 },
     }
 
     #[derive(Default)]
@@ -277,7 +279,8 @@ pub mod drive {
     }
 
     struct Session {
-        host: Host,
+        /// None only while the host restarts.
+        host: Option<Host>,
         fold: Fold,
         seen: Vec<Seen>,
         results: BTreeMap<String, Value>,
@@ -285,10 +288,12 @@ pub mod drive {
         latest: u64,
     }
     impl Session {
+        fn ws(&mut self) -> &mut WebSocket<MaybeTlsStream<TcpStream>> {
+            &mut self.host.as_mut().expect("host is running").ws
+        }
         fn send(&mut self, frame: &ClientFrame) -> Result<(), String> {
             let text = serde_json::to_string(frame).map_err(|e| e.to_string())?;
-            self.host
-                .ws
+            self.ws()
                 .send(Message::text(text))
                 .map_err(|e| e.to_string())
         }
@@ -301,7 +306,7 @@ pub mod drive {
                 if Instant::now() >= deadline {
                     return false;
                 }
-                match self.host.ws.read() {
+                match self.ws().read() {
                     Ok(Message::Text(text)) => self.frame(text.as_str()),
                     Ok(_) => {}
                     Err(tungstenite::Error::Io(e))
@@ -420,7 +425,11 @@ pub mod drive {
             }
         }
         let token = token();
-        let stderr = std::fs::File::create(base.join("host.stderr")).map_err(|e| e.to_string())?;
+        let stderr = std::fs::File::options()
+            .create(true)
+            .append(true)
+            .open(base.join("host.stderr"))
+            .map_err(|e| e.to_string())?;
         let mut child = Command::new(&host_bin)
             .env("GOAT2_DATA_DIR", base.join("data"))
             .env("GOAT2_HOST_PORT", "0")
@@ -452,7 +461,9 @@ pub mod drive {
         Ok(Host { child, ws })
     }
 
-    fn fake_reports(dir: &Path) -> StreamReport {
+    /// Every claim the recording needs (crate::fake_codex::claim_count) must have reported and
+    /// consumed its significant requests; a recorded thread GOAT 2 never opened is a mismatch.
+    fn fake_reports(dir: &Path, expected: usize) -> StreamReport {
         let mut report = StreamReport {
             consumed_all: false,
             outbound_checked: 0,
@@ -488,6 +499,19 @@ pub mod drive {
             report
                 .outbound_mismatches
                 .push("the fake codex never started (no session reached the engine)".into());
+        } else {
+            for claim in 0..expected {
+                if !dir.join(format!("report-{claim}.json")).is_file() {
+                    report.outbound_mismatches.push(format!(
+                        "recorded thread session {claim} was never opened by GOAT 2"
+                    ));
+                }
+            }
+            if dir.join(format!("report-{expected}.json")).is_file() {
+                report
+                    .outbound_mismatches
+                    .push("more engine sessions than the recording has".into());
+            }
         }
         report.consumed_all = found && all && report.outbound_mismatches.is_empty();
         report
@@ -530,9 +554,6 @@ pub mod drive {
         s.steps.iter().find_map(|step| match step {
             Step::Mcp { .. } | Step::AwaitCall { .. } => {
                 Some("MCP steps through the GOAT 2 host are not driven yet".to_owned())
-            }
-            Step::RestartHost { .. } => {
-                Some("restart_host is not driven by the GOAT 2 runner yet".to_owned())
             }
             Step::AdvanceClock { .. } | Step::ReleaseGate { .. } => {
                 Some("v1 replay clock/gate steps have no GOAT 2 counterpart".to_owned())
@@ -606,7 +627,7 @@ pub mod drive {
         let mut aliases = AliasMap::default();
         let mut failure: Option<String> = None;
         let mut session = Session {
-            host: start_host(base, &transcript)?,
+            host: Some(start_host(base, &transcript)?),
             fold: Fold::default(),
             seen: Vec::new(),
             results: BTreeMap::new(),
@@ -620,6 +641,21 @@ pub mod drive {
             let _ = std::fs::rename(&tmp, base.join("fake/release"));
         };
         for step in &scenario.scenario.steps {
+            if let Step::RestartHost { .. } = step {
+                // Stop the host (its engines with it), then start it again on the same data dir.
+                session.host = None;
+                session.host = Some(start_host(base, &transcript)?);
+                let after = session.latest;
+                session.seen.push(Seen::Restarted { after });
+                if let Some(thread_id) = session.thread.clone() {
+                    session.send(&ClientFrame::SubscribeThread {
+                        sub_id: "parity".into(),
+                        thread_id,
+                        after: None,
+                    })?;
+                }
+                continue;
+            }
             if let Step::Await { id, until, .. } = step {
                 let cond = until.clone();
                 // A wait for a run to end lets the fake finish one more turn.
@@ -734,10 +770,13 @@ pub mod drive {
         // Lines in log order; a refusal right after the line it followed.
         seen.sort_by_key(|s| match s {
             Seen::Line(seq, _) => (*seq, 0),
-            Seen::Refused { after, .. } => (*after, 1),
+            Seen::Refused { after, .. } | Seen::Restarted { after } => (*after, 1),
         });
         drop(session);
-        let report = fake_reports(&base.join("fake"));
+        let report = fake_reports(
+            &base.join("fake"),
+            crate::fake_codex::claim_count(&transcript)?,
+        );
         let mut events = Vec::new();
         let mut incomplete = false;
         for item in seen {
@@ -754,6 +793,9 @@ pub mod drive {
                     thread: thread_alias.clone(),
                     input,
                     code,
+                }),
+                Seen::Restarted { .. } => events.push(TraceEvent::HostRestarted {
+                    thread: thread_alias.clone(),
                 }),
             }
         }
@@ -803,6 +845,35 @@ pub mod drive {
         )
         .map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &out).map_err(|e| e.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// r13: a recorded thread session GOAT 2 never opened leaves the stream unconsumed.
+        #[test]
+        fn a_missing_claim_report_is_a_mismatch() {
+            let dir =
+                std::env::temp_dir().join(format!("goat2-parity-reports-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+            dir.join("report-0.json"),
+            r#"{"consumed":3,"significantTotal":2,"significantConsumed":2,"outboundChecked":5,"mismatches":[],"synthesized":[]}"#,
+        )
+        .unwrap();
+            let one = fake_reports(&dir, 1);
+            let two = fake_reports(&dir, 2);
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(one.consumed_all, "{one:?}");
+            assert!(!two.consumed_all);
+            assert!(
+                two.outbound_mismatches
+                    .iter()
+                    .any(|m| m.contains("session 1 was never opened"))
+            );
+        }
     }
 }
 

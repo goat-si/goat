@@ -128,7 +128,7 @@
     },
     "goat2": {
       "status": "unsupported",
-      "reason": "GOAT 2 send_input names no target run, and a steer to an idle thread starts a turn (goat2-design prd-src/part1/runtime.md); v1 refuses a steer aimed at an interrupted run (docs/parity/follow-up-modes.md R-late-steer; DispatchModeAdjustment.ts:14-39, Orchestrator.ts:4229-4245). Observed on goat2 2026-11-29: the steer is accepted and starts run r2, which the v1 recording cannot replay (it has no second turn). Open question to the owner."
+      "reason": "Deliberate difference (owner 2026-11-29, answer A): GOAT 2 has no run-targeted steer, and after Stop a person's next message starts a new turn. v1 refuses a steer aimed at an interrupted run with OrchestratorDispatchError 'Target run <id> is interrupted and cannot be steered' (apps/server/src/orchestration-v2/goat/DispatchModeAdjustment.ts:14-39, apps/server/src/orchestration-v2/Orchestrator.ts:4229-4245; docs/parity/follow-up-modes.md). Observed on goat2 2026-11-29: the steer is accepted and starts run r2, which this v1 recording cannot replay (no second turn)."
     }
   }
 }

@@ -72,49 +72,98 @@ fn text_input(frame: &Value) -> String {
         .unwrap_or_default()
 }
 
-impl Replay {
-    pub fn open(transcript: &Path, dir: &Path) -> Result<Self, String> {
-        let records = transcript::parse(&fs::read(transcript).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let frames: Vec<(bool, Value)> = records
-            .into_iter()
-            .filter_map(|record| match record {
-                Record::ExpectOutbound { frame, .. } => Some((true, frame)),
-                Record::EmitInbound { frame, .. } => Some((false, frame)),
-                _ => None,
-            })
-            .collect();
-        // Native threads in thread/start order: the id in the response to each thread/start.
-        let mut starts = Vec::new();
+type Frames = Vec<(bool, Value)>;
+type Sessions = (Vec<Frames>, Vec<(usize, String)>);
+
+/// The thread a thread/start or thread/resume at index i opens: the id in its response.
+fn opened(frames: &[(bool, Value)], i: usize) -> Option<String> {
+    let id = frames[i].1.get("id");
+    frames[i + 1..].iter().find_map(|(o, f)| {
+        (!o && f.get("method").is_none() && f.get("id") == id)
+            .then(|| f.pointer("/result/thread/id").and_then(Value::as_str))
+            .flatten()
+            .map(str::to_owned)
+    })
+}
+
+/// The recording's app-server sessions (runtime_exit-separated segments) and its claimable
+/// units: each thread a session starts or resumes, in recorded order. A GOAT 2 process (one per
+/// thread) claims the next one, so a host restart that resumes the thread in a new process
+/// replays the recording's next session.
+fn sessions(transcript: &Path) -> Result<Sessions, String> {
+    let records = transcript::parse(&fs::read(transcript).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let mut segments: Vec<Frames> = vec![Vec::new()];
+    for record in records {
+        match record {
+            Record::ExpectOutbound { frame, .. } => {
+                segments.last_mut().unwrap().push((true, frame))
+            }
+            Record::EmitInbound { frame, .. } => segments.last_mut().unwrap().push((false, frame)),
+            Record::RuntimeExit { .. } => segments.push(Vec::new()),
+            _ => {}
+        }
+    }
+    let mut units = Vec::new();
+    for (index, frames) in segments.iter().enumerate() {
         for (i, (outbound, frame)) in frames.iter().enumerate() {
-            if *outbound && method(frame) == "thread/start" {
-                let id = frame.get("id");
-                if let Some(thread) = frames[i + 1..].iter().find_map(|(o, f)| {
-                    (!o && f.get("method").is_none() && f.get("id") == id)
-                        .then(|| f.pointer("/result/thread/id").and_then(Value::as_str))
-                        .flatten()
-                }) {
-                    starts.push(thread.to_owned());
-                }
+            if *outbound
+                && matches!(method(frame), "thread/start" | "thread/resume")
+                && let Some(thread) = opened(frames, i)
+            {
+                units.push((index, thread));
             }
         }
+    }
+    Ok((segments, units))
+}
+
+/// How many fake processes a full replay of this recording needs (one report each).
+pub fn claim_count(transcript: &Path) -> Result<usize, String> {
+    Ok(sessions(transcript)?.1.len())
+}
+
+/// Request fields compared besides the text: a model the recording names must be the one GOAT 2
+/// asks for. Not compared: approvalPolicy (the fixtures predate v1's current full-access mapping,
+/// which GOAT 2 follows: CodexTurnStartParams.ts:75-90 sends a granular policy where the
+/// recordings say "never"), cwd, config overrides, client ids and collaboration settings, which
+/// are GOAT 2's own.
+fn param_mismatch(m: &str, recorded: &Value, live: &Value) -> Option<String> {
+    if !matches!(m, "thread/start" | "thread/resume" | "turn/start") {
+        return None;
+    }
+    let model = recorded.pointer("/params/model")?;
+    let sent = live.pointer("/params/model");
+    (sent != Some(model)).then(|| {
+        format!(
+            "{m} model differs: recorded {model}, sent {}",
+            sent.unwrap_or(&Value::Null)
+        )
+    })
+}
+
+impl Replay {
+    pub fn open(transcript: &Path, dir: &Path) -> Result<Self, String> {
+        let (mut segments, units) = sessions(transcript)?;
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let mut chosen = None;
-        for (claim, thread) in starts.iter().enumerate() {
+        for (claim, unit) in units.iter().enumerate() {
             match OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(dir.join(format!("claim-{claim}")))
             {
                 Ok(_) => {
-                    chosen = Some((claim, thread.clone()));
+                    chosen = Some((claim, unit.clone()));
                     break;
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e.to_string()),
             }
         }
-        let (claim, thread) = chosen.ok_or("no unclaimed thread/start exchange")?;
+        let (claim, (segment, thread)) =
+            chosen.ok_or("no unclaimed thread/start or thread/resume exchange")?;
+        let frames = std::mem::take(&mut segments[segment]);
         // One process per GOAT 2 thread, one v1 process for all: keep this thread's frames plus
         // frames that belong to no thread (initialize, account reads). A frame belongs to the thread
         // it names; a response to the request it answers; an unnamed notification to the request
@@ -123,22 +172,21 @@ impl Replay {
         let mut request_owner: std::collections::HashMap<String, Option<String>> =
             std::collections::HashMap::new();
         let mut current: Option<String> = None;
-        let mut start_index = 0;
         let mut exchanges: Vec<Exchange> = Vec::new();
-        for (outbound, frame) in frames {
-            let owner = if outbound {
-                let owner = if method(&frame) == "thread/start" {
-                    start_index += 1;
-                    starts.get(start_index - 1).cloned()
+        for i in 0..frames.len() {
+            let (outbound, frame) = &frames[i];
+            let owner = if *outbound {
+                let owner = if matches!(method(frame), "thread/start" | "thread/resume") {
+                    opened(&frames, i)
                 } else {
-                    thread_id(&frame).map(str::to_owned)
+                    thread_id(frame).map(str::to_owned)
                 };
                 if let Some(id) = frame.get("id") {
                     request_owner.insert(id.to_string(), owner.clone());
                 }
                 current = owner.clone();
                 owner
-            } else if let Some(id) = thread_id(&frame) {
+            } else if let Some(id) = thread_id(frame) {
                 Some(id.to_owned())
             } else if frame.get("method").is_none() {
                 frame
@@ -151,13 +199,13 @@ impl Replay {
             if owner.as_ref().is_some_and(|o| o != &thread) {
                 continue;
             }
-            if outbound {
+            if *outbound {
                 exchanges.push(Exchange {
-                    outbound: frame,
+                    outbound: frame.clone(),
                     inbound: Vec::new(),
                 });
             } else if let Some(e) = exchanges.last_mut() {
-                e.inbound.push(frame);
+                e.inbound.push(frame.clone());
             }
         }
         let used = vec![false; exchanges.len()];
@@ -259,6 +307,9 @@ impl Replay {
                 {
                     self.report.mismatches.push(format!("{m} text differs"));
                 }
+                if let Some(mismatch) = param_mismatch(m, &self.exchanges[pos].outbound, frame) {
+                    self.report.mismatches.push(mismatch);
+                }
                 output.extend(self.emit(pos, frame.get("id"), false));
                 self.used[pos] = true;
                 self.report.consumed += 1;
@@ -329,7 +380,7 @@ mod tests {
             .unwrap();
         r.handle(&json!({"method":"initialized"})).unwrap();
         let start = r
-            .handle(&json!({"id":43,"method":"thread/start","params":{}}))
+            .handle(&json!({"id":43,"method":"thread/start","params":{"model":"gpt-6-luna"}}))
             .unwrap();
         assert!(
             start
@@ -338,7 +389,7 @@ mod tests {
         );
         r.handle(&json!({"id":44,"method":"config/read","params":{}}))
             .unwrap();
-        let events = r.handle(&json!({"id":45,"method":"turn/start","params":{"input":[{"type":"text","text":"Respond with the following text: fixture simple ok"}]}})).unwrap();
+        let events = r.handle(&json!({"id":45,"method":"turn/start","params":{"model":"gpt-6-luna","input":[{"type":"text","text":"Respond with the following text: fixture simple ok"}]}})).unwrap();
         assert!(events.iter().any(|f| method(f) == "turn/completed"));
         assert_eq!(r.report.significant_total, r.report.significant_consumed);
         assert!(r.report.mismatches.is_empty());
@@ -390,7 +441,7 @@ mod tests {
             .clone();
         let config = r.handle(&json!({"id": 3, "method": "config/read", "params": {"cwd": "/w", "includeLayers": false}})).unwrap();
         assert!(config.iter().any(|f| f["id"] == 3));
-        let turn = r.handle(&json!({"id": 4, "method": "turn/start", "params": {"threadId": thread, "clientUserMessageId": "goat-input-1", "input": [{"text": "Respond with the following text: fixture simple ok", "text_elements": [], "type": "text"}]}})).unwrap();
+        let turn = r.handle(&json!({"id": 4, "method": "turn/start", "params": {"model": "gpt-6-luna", "threadId": thread, "clientUserMessageId": "goat-input-1", "input": [{"text": "Respond with the following text: fixture simple ok", "text_elements": [], "type": "text"}]}})).unwrap();
         assert!(
             turn.iter()
                 .any(|f| f["id"] == 4 && f.get("result").is_some())
@@ -433,5 +484,73 @@ mod tests {
         );
         assert!(turn.iter().any(|f| method(f) == "turn/started"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// After a host restart the thread's new process claims the recording's next session, which
+    /// resumes the same native thread.
+    #[test]
+    fn a_restarted_process_claims_the_resumed_session() {
+        let (first, dir) = setup("restart_idle_resume");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("scenarios/restart_idle_resume/transcripts/codex.ndjson");
+        let mut second = Replay::open(&path, &dir).unwrap();
+        assert_eq!(first.thread(), second.thread());
+        second
+            .handle(&json!({"id": 1, "method": "initialize", "params": {}}))
+            .unwrap();
+        second.handle(&json!({"method": "initialized"})).unwrap();
+        let resumed = second
+            .handle(&json!({"id": 2, "method": "thread/resume", "params": {"model": "gpt-6-luna", "threadId": first.thread()}}))
+            .unwrap();
+        assert!(
+            resumed
+                .iter()
+                .any(|f| f["id"] == 2 && f.get("result").is_some())
+        );
+        assert!(
+            second.report.mismatches.is_empty(),
+            "{:?}",
+            second.report.mismatches
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// r13: a request naming another model than the recording is a mismatch.
+    #[test]
+    fn a_different_model_is_a_mismatch() {
+        let recorded = json!({"method": "turn/start", "params": {"model": "gpt-6-luna"}});
+        assert!(
+            param_mismatch(
+                "turn/start",
+                &recorded,
+                &json!({"params": {"model": "gpt-6-luna"}})
+            )
+            .is_none()
+        );
+        assert!(
+            param_mismatch(
+                "turn/start",
+                &recorded,
+                &json!({"params": {"model": "other"}})
+            )
+            .is_some()
+        );
+        assert!(param_mismatch("turn/start", &recorded, &json!({"params": {}})).is_some());
+        assert_eq!(
+            claim_count(
+                &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("scenarios/thread_tools_send_wait/transcripts/codex.ndjson")
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            claim_count(
+                &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("scenarios/restart_idle_resume/transcripts/codex.ndjson")
+            )
+            .unwrap(),
+            2
+        );
     }
 }

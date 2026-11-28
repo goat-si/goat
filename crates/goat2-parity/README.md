@@ -68,7 +68,14 @@ host WebSocket (start_thread, send_input, queue commands, stop), reads the threa
 replayed checkpoint through read_page) and maps it with `AliasMap`. The fake replays the scenario's v1
 recording method by method (GOAT 2 frames differ from v1's): each process claims one native thread, answers
 each request from the next recorded exchange of that method, skips v1 setup reads, never skips a thread or
-turn request, compares turn/start and turn/steer text, and reports per claim in `GOAT2_PARITY_FAKE_DIR`.
+turn request, compares turn/start and turn/steer text and the model of thread/start, thread/resume and turn/start (not
+approvalPolicy: the fixtures predate v1's current full-access mapping, which GOAT 2 follows), and reports per claim in `GOAT2_PARITY_FAKE_DIR`.
 GOAT 2 logs a thread's first input as steer; a requested start observed as steer with no active run maps to
-start. Single-thread scenarios without MCP or restart steps only, so far; others report unsupported.
-REQUIRED.json gates the v1 target only.
+start. restart_host stops the host and starts it again on the same data dir; the thread's new fake process claims
+the recording's next session (claims are per thread started or resumed, in recorded order). Each turn/completed
+is held until the runner reaches a wait for a run to end (GOAT2_PARITY_FAKE_HOLD), so commands meant for a
+running turn reach it while it runs. Single-thread scenarios without MCP steps only, so far; others report
+unsupported.
+The stream counts as consumed only when every session the recording opens (each thread/start or
+thread/resume, per runtime_exit segment) has a report with all its thread and turn requests consumed.
+REQUIRED.json gates the v1 target only; an unfiltered goat2 run fails when no scenario passes.

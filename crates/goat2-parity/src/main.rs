@@ -291,6 +291,11 @@ fn execute() -> Result<(), String> {
             if selected == 0 {
                 return Err("no matching scenario".into());
             }
+            // Without a REQUIRED manifest (GOAT 2), at least one scenario must have run and passed.
+            if target_name != "v1" && !filtered && passed.is_empty() {
+                eprintln!("no {target_name} scenario passed");
+                failed = true;
+            }
             for message in missing_required(&scenarios, &required, &passed) {
                 eprintln!("{message}");
                 failed = true;
