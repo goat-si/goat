@@ -88,10 +88,15 @@ impl Run {
                 append_system_prompt: Some("GOAT bot brief".into()),
                 first_message_preamble: None,
             }),
-            launch: Some(LaunchSpec {
-                binary: None,
-                args: Vec::new(),
-                env: BTreeMap::from([("GOAT2_FAKE_CLAUDE_MARKER".into(), "1".into())]),
+            instance: Some(goat2_engine_api::ProviderTarget {
+                instance_id: "claudeAgent".into(),
+                launch: Some(LaunchSpec {
+                    binary: None,
+                    args: Vec::new(),
+                    env: BTreeMap::from([("GOAT2_FAKE_CLAUDE_MARKER".into(), "1".into())]),
+                }),
+                home: None,
+                shared_home: None,
             }),
         }
     }

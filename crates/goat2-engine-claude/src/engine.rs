@@ -43,8 +43,8 @@ use goat2_contracts::{
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnOutcome, TurnSettings,
-    TurnStartResult,
+    ProviderTarget, RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnOutcome,
+    TurnSettings, TurnStartResult,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -153,6 +153,57 @@ impl EngineFactory for ClaudeEngineFactory {
 
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
         Ok(crate::probe::probe(&self.options.launch).await)
+    }
+
+    /// The instance's own binary, environment and Claude home: a second account's sign-in
+    /// state is read from its home, not the shared one.
+    async fn probe_instance(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<ProviderProbeResult, EngineError> {
+        let (launch, _) = instance_launch(&self.options.launch, Some(target));
+        Ok(crate::probe::probe(&launch).await)
+    }
+}
+
+/// Launch options for a provider instance: its launch spec over the driver's options, then its
+/// Claude home as `CLAUDE_CONFIG_DIR` (v1 `makeClaudeEnvironment`, ClaudeHome.ts:33-46: a set
+/// home beats an inherited `CLAUDE_CONFIG_DIR`; `HOME` is left alone so macOS Keychain sign-in
+/// keeps working). The home is the one the person set for the instance (`shared_home`, v1
+/// `homePath`), else the host's private folder for a non-default instance (`home`); with
+/// neither, the environment decides. Returns whether the home came from the target, whose path
+/// is then kept out of every message the driver hands out (host rule: home paths are never
+/// stored or logged).
+pub fn instance_launch(
+    base: &LaunchOptions,
+    target: Option<&ProviderTarget>,
+) -> (LaunchOptions, bool) {
+    let mut launch = base.clone();
+    let Some(target) = target else {
+        return (launch, false);
+    };
+    if let Some(spec) = &target.launch {
+        if let Some(binary) = &spec.binary {
+            launch.binary = binary.clone();
+        }
+        launch.launch_args.extend(spec.args.iter().cloned());
+        launch
+            .env
+            .extend(spec.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    let home = [&target.shared_home, &target.home]
+        .into_iter()
+        .flatten()
+        .find(|path| !path.as_os_str().is_empty());
+    match home {
+        Some(home) => {
+            launch.env.push((
+                "CLAUDE_CONFIG_DIR".to_string(),
+                home.to_string_lossy().into_owned(),
+            ));
+            (launch, true)
+        }
+        None => (launch, false),
     }
 }
 
@@ -321,6 +372,8 @@ struct Inner {
     mcp_url: String,
     mcp_token: String,
     append_system_prompt: Option<String>,
+    /// `CLAUDE_CONFIG_DIR` came from the provider instance: its path stays out of messages.
+    home_from_instance: bool,
     state: Mutex<State>,
     events: mpsc::UnboundedSender<EngineEvent>,
     controls: Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
@@ -351,16 +404,7 @@ async fn start_session(
     options: ClaudeEngineOptions,
     spec: SessionSpec,
 ) -> Result<EngineHandle, EngineError> {
-    let mut launch = options.launch.clone();
-    if let Some(spec_launch) = &spec.launch {
-        if let Some(binary) = &spec_launch.binary {
-            launch.binary = binary.clone();
-        }
-        launch.launch_args.extend(spec_launch.args.iter().cloned());
-        launch
-            .env
-            .extend(spec_launch.env.iter().map(|(k, v)| (k.clone(), v.clone())));
-    }
+    let (launch, home_from_instance) = instance_launch(&options.launch, spec.instance.as_ref());
     let identity = match &spec.resume {
         Some(reference) if reference.driver == EngineDriver::ClaudeAgent => {
             SessionIdentity::Resume(reference.id.clone())
@@ -384,6 +428,7 @@ async fn start_session(
         cwd: spec.engine.cwd.clone(),
         mcp_url: spec.mcp.url.clone(),
         mcp_token: spec.mcp.bearer_token.clone(),
+        home_from_instance,
         append_system_prompt: spec
             .instructions
             .as_ref()
@@ -2067,12 +2112,17 @@ impl Inner {
         if auth_failure && !matches!(outcome, TurnOutcome::Interrupted) {
             let text = signed_out_message(
                 &self.cwd,
-                self.launch
-                    .env
-                    .iter()
-                    .rev()
-                    .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
-                    .map(|(_, v)| v.as_str()),
+                // A home the instance gave is not named (it would land in the stored failure).
+                if self.home_from_instance {
+                    None
+                } else {
+                    self.launch
+                        .env
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+                        .map(|(_, v)| v.as_str())
+                },
             );
             // Claude's sign-in is not answered through the engine (the person runs
             // `claude auth login`), so the request has no engine key.
@@ -2402,7 +2452,7 @@ impl Inner {
                     attachment.name
                 ));
             };
-            let bytes = std::fs::read(&path).map_err(|error| {
+            let bytes = util::read_no_follow(&path).map_err(|error| {
                 format!(
                     "Image attachment '{}' could not be read: {error}",
                     attachment.name

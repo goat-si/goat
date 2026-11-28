@@ -8,6 +8,8 @@
 //! `GOAT2_CODEX_BIN` is the Codex program the driver starts (absolute path, e.g. a fake codex
 //! app-server for parity runs); unset = `codex` on the host's PATH. The engine process
 //! inherits the host's environment except host identity and the UI token.
+//! `GOAT2_CLAUDE_BIN` is the Claude Code program the Claude driver starts (absolute path);
+//! unset = `claude` on the host's PATH.
 
 use std::path::PathBuf;
 
@@ -26,6 +28,8 @@ pub struct HostConfig {
     pub engine: EngineChoice,
     /// `GOAT2_CODEX_BIN`: the Codex program; `None` = `codex` on PATH.
     pub codex_bin: Option<PathBuf>,
+    /// `GOAT2_CLAUDE_BIN`: the Claude Code program; `None` = `claude` on PATH.
+    pub claude_bin: Option<PathBuf>,
     /// Exit when stdin closes (the parent died). Off for tests.
     pub exit_on_stdin_close: bool,
 }
@@ -49,6 +53,9 @@ impl HostConfig {
             Ok(other) => return Err(format!("GOAT2_ENGINE: unknown engine {other}")),
         };
         let codex_bin = std::env::var_os("GOAT2_CODEX_BIN")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        let claude_bin = std::env::var_os("GOAT2_CLAUDE_BIN")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from);
         let mut args = args.into_iter();
@@ -83,6 +90,7 @@ impl HostConfig {
             ui_token,
             engine,
             codex_bin,
+            claude_bin,
             exit_on_stdin_close: true,
         })
     }

@@ -32,6 +32,8 @@ pub enum Reason {
     InvalidRequest,
     /// A command this host build does not serve yet (Part 2 frames whose module is not in).
     NotAvailable,
+    /// The thread's log could not be written: it takes no more writes until the host restarts.
+    RestartRequired,
     /// No provider instance of that id (v1 `provider_not_found`).
     ProviderNotFound,
     /// The provider's driver is not built into this host.
@@ -53,6 +55,7 @@ impl Reason {
             Self::PayloadTooLarge => "payload_too_large",
             Self::InvalidRequest => "invalid_request",
             Self::NotAvailable => "not_available",
+            Self::RestartRequired => "restart_required",
             Self::ProviderNotFound => "provider_not_found",
             Self::DriverUnavailable => "driver_unavailable",
             Self::Internal => "internal",
@@ -74,7 +77,9 @@ impl Reason {
             Self::ChildBudget => AgentSurfaceErrorCode::ResourceExhausted,
             Self::PayloadTooLarge | Self::InvalidRequest => AgentSurfaceErrorCode::InvalidRequest,
             Self::NotAvailable => AgentSurfaceErrorCode::Unavailable,
-            Self::DriverUnavailable => AgentSurfaceErrorCode::FailedPrecondition,
+            Self::RestartRequired | Self::DriverUnavailable => {
+                AgentSurfaceErrorCode::FailedPrecondition
+            }
             Self::Internal => AgentSurfaceErrorCode::Internal,
         }
     }

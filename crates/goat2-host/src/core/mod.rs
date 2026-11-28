@@ -102,6 +102,8 @@ pub struct Runtime {
     pub last_answer: String,
     /// The active run's scheduler slot, parked while the run waits on a child.
     pub run_slot: Option<Arc<sched::RunSlot>>,
+    /// A write to the thread's log failed: no further write or run until the host restarts.
+    pub fenced: bool,
 }
 
 /// The link an engine asked the person to open to sign in (`EngineEvent::AuthRequired.url`), kept

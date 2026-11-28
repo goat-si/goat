@@ -28,6 +28,8 @@ use crate::engine::{EngineError, EngineFactory, ProviderTarget};
 pub type ProviderList = Option<Vec<ServerProviderEntry>>;
 
 const FILE: &str = "provider-instances.json";
+/// Folder under the data dir that holds each non-default instance's private home.
+const HOMES: &str = "provider-homes";
 /// Upper bound on one driver's probe; a slower probe is reported as timed out.
 const PROBE_DEADLINE: Duration = Duration::from_secs(30);
 /// The message of a row whose probe is still running.
@@ -74,6 +76,8 @@ struct State {
 
 pub struct Providers {
     path: PathBuf,
+    /// `<dataDir>/provider-homes`: one private folder per non-default instance.
+    homes: PathBuf,
     factories: BTreeMap<String, Arc<dyn EngineFactory>>,
     state: Mutex<State>,
     list: watch::Sender<ProviderList>,
@@ -118,6 +122,7 @@ impl Providers {
         }
         Self {
             path,
+            homes: data_dir.join(HOMES),
             factories,
             state: Mutex::new(State {
                 instances,
@@ -149,23 +154,33 @@ impl Providers {
     }
 
     /// The factory a thread's engine starts with (the factory registry: provider instance ->
-    /// its driver), or why it cannot start (v1 refuses a provider that is off or unknown).
-    pub fn factory_for_start(&self, instance_id: &str) -> Result<Arc<dyn EngineFactory>, String> {
-        let state = self.state.lock().expect("providers");
-        let Some(instance) = state
-            .instances
-            .iter()
-            .find(|i| i.instance_id == instance_id)
-        else {
+    /// its driver) and the instance it runs as, or why it cannot start (v1 refuses a provider
+    /// that is off or unknown).
+    pub fn factory_for_start(
+        &self,
+        instance_id: &str,
+    ) -> Result<(Arc<dyn EngineFactory>, ProviderTarget), String> {
+        let instance = {
+            let state = self.state.lock().expect("providers");
+            state
+                .instances
+                .iter()
+                .find(|i| i.instance_id == instance_id && valid_instance_id(&i.instance_id))
+                .cloned()
+        };
+        let Some(instance) = instance else {
             return Err(format!("provider {instance_id} is not set up in this host"));
         };
         if !instance.enabled {
             return Err(format!("provider {instance_id} is turned off in settings"));
         }
-        self.factories
+        let factory = self
+            .factories
             .get(&instance.driver)
             .cloned()
-            .ok_or_else(|| format!("this host has no {} driver", instance.driver))
+            .ok_or_else(|| format!("this host has no {} driver", instance.driver))?;
+        // Folder work outside the providers lock.
+        Ok((factory, self.target_of(&instance)?))
     }
 
     /// Refuse an instance id no listed instance has (before any probe starts).
@@ -174,7 +189,7 @@ impl Providers {
         if state
             .instances
             .iter()
-            .any(|i| i.instance_id == instance_id && self.factories.contains_key(&i.driver))
+            .any(|i| i.instance_id == instance_id && self.listed(i))
         {
             Ok(())
         } else {
@@ -190,10 +205,7 @@ impl Providers {
         let targets: Vec<(ProviderInstance, u64)> = {
             let mut guard = self.state.lock().expect("providers");
             let state = &mut *guard;
-            let listed = state
-                .instances
-                .iter()
-                .filter(|i| self.factories.contains_key(&i.driver));
+            let listed = state.instances.iter().filter(|i| self.listed(i));
             let picked: Vec<ProviderInstance> = match only {
                 Some(id) => {
                     let found: Vec<_> = listed.filter(|i| i.instance_id == id).cloned().collect();
@@ -219,20 +231,29 @@ impl Providers {
         let probes =
             futures_util::future::join_all(targets.iter().map(|(i, generation)| async move {
                 let factory = self.factories[&i.driver].as_ref();
-                let probe = if i.enabled {
-                    probe(factory).await
+                // A turned-off instance gets no folder; one whose home cannot be prepared is
+                // never probed (it would fall back to the shared home's credentials).
+                let (probe, target) = if !i.enabled {
+                    (
+                        status_only(ServerProviderState::Disabled, "Turned off in settings."),
+                        None,
+                    )
                 } else {
-                    status_only(ServerProviderState::Disabled, "Turned off in settings.")
+                    match self.target_of(i) {
+                        Ok(target) => (probe(factory, &target).await, Some(target)),
+                        Err(why) => (status_only(ServerProviderState::Error, &why), None),
+                    }
                 };
                 // Sign-in methods for an instance with no flow yet (v1 lists them idle).
                 // Bounded like the probe: a hanging driver never stalls the whole list.
-                let methods = if i.enabled && factory.setup().can_authenticate {
-                    tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target_of(i)))
-                        .await
-                        .ok()
-                        .and_then(Result::ok)
-                } else {
-                    None
+                let methods = match target {
+                    Some(target) if factory.setup().can_authenticate => {
+                        tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target))
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
+                    }
+                    _ => None,
                 };
                 (i.instance_id.clone(), *generation, probe, methods)
             }))
@@ -258,13 +279,12 @@ impl Providers {
             // be discarded by a newer refresh or setting, and an empty or partial first list
             // would read as "no providers".
             if !state.ready {
-                let factories = &self.factories;
-                let probes = &state.probes;
-                state.ready = state
+                let ready = state
                     .instances
                     .iter()
-                    .filter(|i| factories.contains_key(&i.driver))
-                    .all(|i| probes.contains_key(&i.instance_id));
+                    .filter(|i| self.listed(i))
+                    .all(|i| state.probes.contains_key(&i.instance_id));
+                state.ready = ready;
             }
         }
         self.publish(host);
@@ -291,9 +311,12 @@ impl Providers {
             return Ok(running);
         }
         let (tx, rx) = mpsc::unbounded_channel();
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_start(&target_of(&instance), method_id, tx)).await?,
+            bounded(factory.auth_start(&target, method_id, tx)).await?,
         );
         self.record_auth(host, instance_id, state.clone())?;
         let watching = host.clone();
@@ -311,9 +334,12 @@ impl Providers {
         flow_id: &str,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_cancel(&target_of(&instance), flow_id)).await?,
+            bounded(factory.auth_cancel(&target, flow_id)).await?,
         );
         // Cancelling an older flow never hides the one that runs now.
         self.record_auth_if(host, instance_id, state.clone(), |current| {
@@ -328,10 +354,10 @@ impl Providers {
         instance_id: &str,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
-        let state = clean_auth(
-            instance_id,
-            bounded(factory.auth_logout(&target_of(&instance))).await?,
-        );
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
+        let state = clean_auth(instance_id, bounded(factory.auth_logout(&target)).await?);
         self.record_auth(host, instance_id, state.clone())?;
         // Re-probed in a task: this answers a command and must not wait on a probe.
         let probing = host.clone();
@@ -397,7 +423,7 @@ impl Providers {
         state
             .instances
             .iter()
-            .find(|i| i.instance_id == instance_id)
+            .find(|i| i.instance_id == instance_id && valid_instance_id(&i.instance_id))
             .and_then(|i| Some((i.clone(), self.factories.get(&i.driver)?.clone())))
             .ok_or_else(|| {
                 ProviderRefusal::NotFound(format!("No provider instance {instance_id}."))
@@ -479,10 +505,10 @@ impl Providers {
 
     /// Add or change an instance (v1 settings `providerInstances` upsert), save, publish.
     pub fn set_instance(&self, host: &Host, next: ProviderInstance) -> Result<(), ProviderRefusal> {
-        let id = next.instance_id.trim();
-        if id.is_empty() || id != next.instance_id {
+        // The id names the instance's home folder: v1's slug rule, checked before any path.
+        if !valid_instance_id(&next.instance_id) {
             return Err(ProviderRefusal::Invalid(
-                "instanceId must be a non-empty name without surrounding spaces".into(),
+                "instanceId must start with a letter and use only letters, digits, '_' or '-' (at most 64)".into(),
             ));
         }
         if !self.factories.contains_key(&next.driver) {
@@ -493,6 +519,17 @@ impl Providers {
         }
         {
             let mut state = self.state.lock().expect("providers");
+            // Ids name folders, and macOS folders ignore case: two ids that differ only in
+            // case would share one home (and its credentials).
+            if let Some(other) = state.instances.iter().find(|i| {
+                i.instance_id != next.instance_id
+                    && i.instance_id.eq_ignore_ascii_case(&next.instance_id)
+            }) {
+                return Err(ProviderRefusal::Invalid(format!(
+                    "instanceId {} differs from the existing {} only in letter case",
+                    next.instance_id, other.instance_id
+                )));
+            }
             // Saved first: a failed save changes nothing.
             let mut instances = state.instances.clone();
             match instances
@@ -561,6 +598,9 @@ impl Providers {
     ) -> Vec<ServerProviderEntry> {
         let mut out = Vec::new();
         for instance in &state.instances {
+            if !valid_instance_id(&instance.instance_id) {
+                continue; // Kept in the file, never listed or given a home.
+            }
             let Some(factory) = self.factories.get(&instance.driver) else {
                 continue; // A driver this build does not have: kept in the file, not listed.
             };
@@ -603,8 +643,8 @@ impl Providers {
     }
 }
 
-async fn probe(factory: &dyn EngineFactory) -> ProviderProbeResult {
-    match tokio::time::timeout(PROBE_DEADLINE, factory.probe()).await {
+async fn probe(factory: &dyn EngineFactory, target: &ProviderTarget) -> ProviderProbeResult {
+    match tokio::time::timeout(PROBE_DEADLINE, factory.probe_instance(target)).await {
         Ok(Ok(mut probe)) => {
             // A sign-in action with an unusable URL would stop the whole list: dropped.
             if probe
@@ -733,11 +773,91 @@ fn install_running(phase: &ProviderInstallPhase) -> bool {
     )
 }
 
-fn target_of(instance: &ProviderInstance) -> ProviderTarget {
-    ProviderTarget {
-        instance_id: ProviderInstanceId::new(instance.instance_id.clone()),
-        // Instances carry no launch settings yet: the driver's default binary and environment.
-        launch: None,
+impl Providers {
+    /// Listed: a valid id and a driver this build has.
+    fn listed(&self, instance: &ProviderInstance) -> bool {
+        valid_instance_id(&instance.instance_id) && self.factories.contains_key(&instance.driver)
+    }
+
+    /// The instance as a driver runs it. A non-default instance gets its private home,
+    /// created (mode 0700) before it is handed over; the default instance (id = driver kind)
+    /// uses the driver's shared home. A home is never deleted here: credentials stay until the
+    /// person signs out. Err when the home cannot be prepared (the message names no path):
+    /// the caller reports it and never falls back to the shared home.
+    fn target_of(&self, instance: &ProviderInstance) -> Result<ProviderTarget, String> {
+        if !valid_instance_id(&instance.instance_id) {
+            return Err(format!(
+                "provider {} is not a valid instance id",
+                instance.instance_id
+            ));
+        }
+        let home = if instance.instance_id == instance.driver {
+            None
+        } else {
+            let home = self.homes.join(&instance.instance_id);
+            if let Err(err) = prepare_home(&self.homes, &home) {
+                // No path in the log: home paths stay out of tracing.
+                tracing::warn!(instance = %instance.instance_id, error = %err, "provider home not prepared");
+                return Err("Could not prepare this provider's private home folder.".into());
+            }
+            Some(home)
+        };
+        Ok(ProviderTarget {
+            instance_id: ProviderInstanceId::new(instance.instance_id.clone()),
+            // Instances carry no launch settings yet: the driver's default binary and environment.
+            launch: None,
+            home,
+            // Provider settings carry no shared home yet: the driver's default.
+            shared_home: None,
+        })
+    }
+}
+
+/// v1 `ProviderInstanceId` (providerInstance.ts slug): a letter, then letters, digits, `_` or
+/// `-`, at most 64 characters. No dot, slash or NUL can reach the home path.
+pub fn valid_instance_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    id.len() <= 64
+        && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Create `root` and `home` (its direct child) as private folders, or check existing ones:
+/// each must be a real folder, never a symlink (which could point the home outside
+/// `root`), and ends up mode 0700. Errors name no path.
+fn prepare_home(root: &Path, home: &Path) -> std::io::Result<()> {
+    for dir in [root, home] {
+        plain_dir_or_absent(dir)?;
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+        // Checked again after creating: nothing may have swapped in a link meanwhile.
+        plain_dir_or_absent(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
+}
+
+fn plain_dir_or_absent(dir: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => Err(std::io::Error::other(
+            "a provider home folder is a link or not a folder",
+        )),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
     }
 }
 

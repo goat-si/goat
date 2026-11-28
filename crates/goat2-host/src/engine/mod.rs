@@ -5,6 +5,7 @@
 //! attachment lookup. [fake::FakeEngine] is a scripted engine for tests and for UI work without
 //! Codex (`GOAT2_ENGINE=fake`).
 
+pub mod claude;
 pub mod codex;
 pub mod fake;
 

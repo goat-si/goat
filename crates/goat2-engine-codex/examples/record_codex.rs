@@ -53,7 +53,7 @@ fn spec(
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     }
 }
 
