@@ -361,17 +361,30 @@ impl Multi {
         (Self { dir }, options)
     }
 
-    fn pid(&self, n: usize) -> i32 {
-        std::fs::read_to_string(self.dir.join(format!("pid{n}")))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap()
+    /// Waits (up to 5 s) until the n-th Codex process has started.
+    async fn started(&self, n: usize) {
+        for _ in 0..250 {
+            if let Ok(pid) = std::fs::read_to_string(self.dir.join(format!("pid{n}")))
+                && !pid.trim().is_empty()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("Codex process {n} never started");
     }
 
+    /// Whether the n-th Codex process still exists (a process that never wrote its pid, because
+    /// its group was ended first, does not).
     fn alive(&self, n: usize) -> bool {
+        let Ok(pid) = std::fs::read_to_string(self.dir.join(format!("pid{n}"))) else {
+            return false;
+        };
+        let Ok(pid) = pid.trim().parse::<i32>() else {
+            return false;
+        };
         // SAFETY: signal 0 only checks the process exists.
-        unsafe { libc::kill(self.pid(n), 0) == 0 }
+        unsafe { libc::kill(pid, 0) == 0 }
     }
 
     async fn ended(&self, n: usize) -> bool {
@@ -607,7 +620,8 @@ async fn cancel_while_codex_initializes_waits_for_its_exit() {
         .unwrap()
         .flow_id
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    multi.started(0).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(multi.alive(0), "Codex is up and initializing");
     f.auth_cancel(&target, &flow).await.unwrap();
     assert!(
@@ -626,8 +640,8 @@ async fn cancel_while_codex_initializes_waits_for_its_exit() {
 #[cfg(unix)]
 #[tokio::test]
 async fn expiry_while_codex_initializes_ends_it_before_reporting() {
-    let (multi, mut options) = Multi::new("init-expiry", vec![stalled_initialize(5_000)]);
-    options.auth_timeout = Duration::from_millis(500);
+    let (multi, mut options) = Multi::new("init-expiry", vec![stalled_initialize(10_000)]);
+    options.auth_timeout = Duration::from_millis(1_500);
     let f = CodexEngineFactory::new(options);
     let (tx, mut updates) = mpsc::unbounded_channel();
     f.auth_start(&default_target(), None, tx).await.unwrap();
