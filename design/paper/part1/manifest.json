@@ -1,0 +1,101 @@
+[
+ {
+  "id": "2R-1",
+  "page": "p-1-0",
+  "name": "봇 홈 — SSOT (기본 첫 화면)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 94774,
+  "shot": true
+ },
+ {
+  "id": "1KL4-1",
+  "page": "p-1-0",
+  "name": "봇 홈 — 레일에 봇 추가 (… → 검색)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 105275,
+  "shot": true
+ },
+ {
+  "id": "1FKW-0",
+  "page": "p-1-0",
+  "name": "봇 홈 — 봇 고정 (드래그해서 핀)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 100678,
+  "shot": true
+ },
+ {
+  "id": "FF-1",
+  "page": "p-1-0",
+  "name": "봇 홈 — 사이드바 접힘",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 55740,
+  "shot": true
+ },
+ {
+  "id": "12P-1",
+  "page": "p-1-0",
+  "name": "봇 홈 — 콜드 스타트 (보내기 먼저)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 95692,
+  "shot": true
+ },
+ {
+  "id": "25D-0",
+  "page": "p-1-0",
+  "name": "봇 홈 — 작업 열림",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 87294,
+  "shot": true
+ },
+ {
+  "id": "2D0-1",
+  "page": "p-1-0",
+  "name": "봇 얼굴 — GOAT 무리 (SSOT)",
+  "w": 1440,
+  "h": 1160,
+  "jsxBytes": 212281,
+  "shot": true
+ },
+ {
+  "id": "2PU-1",
+  "page": "p-1-0",
+  "name": "새 봇 — 얼굴 고르기",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 60728,
+  "shot": true
+ },
+ {
+  "id": "U8-1",
+  "page": "p-1-0",
+  "name": "봇 홈 — 상태 노트",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 96141,
+  "shot": true
+ },
+ {
+  "id": "LXD-0",
+  "page": "p-3-1",
+  "name": "T0 · 스레드 모드 첫 진입 (lazy load)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 59284,
+  "shot": true
+ },
+ {
+  "id": "C2Y-0",
+  "page": "p-3-1",
+  "name": "T1 · 스레드 Chat (GOAT 렌더러)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 100917,
+  "shot": true
+ }
+]
