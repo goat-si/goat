@@ -173,6 +173,40 @@ fn required_ids(schema: Option<&Map<String, Value>>) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// v1 `typedAnswer` for numbers (elicitationForm.ts:153-161): a finite number, an integer field
+/// only a whole one. The value is kept as given: integers that fit 64 bits stay exact, larger
+/// whole numbers stay the same float (never clamped to another value, final review finding 15).
+fn number_answer(answer: &Value, integer: bool) -> Option<Number> {
+    if let Value::Number(number) = answer
+        && (number.is_i64() || number.is_u64())
+    {
+        return Some(number.clone());
+    }
+    if let Value::String(text) = answer {
+        let text = text.trim();
+        if let Ok(value) = text.parse::<i64>() {
+            return Some(Number::from(value));
+        }
+        if let Ok(value) = text.parse::<u64>() {
+            return Some(Number::from(value));
+        }
+    }
+    let parsed = match answer {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) if !s.trim().is_empty() => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }?;
+    if !parsed.is_finite() || (integer && parsed.fract() != 0.0) {
+        return None;
+    }
+    // Whole numbers inside the 64-bit range are written as integers; f64 holds them exactly here
+    // only up to 2^53, and larger ones came in as integer text or numbers above.
+    if integer && parsed >= i64::MIN as f64 && parsed < i64::MAX as f64 {
+        return Some(Number::from(parsed as i64));
+    }
+    Number::from_f64(parsed)
+}
+
 fn typed_answer(field: &Field, answer: &Value) -> Option<Value> {
     match field {
         Field::Text => answer.as_str().map(|s| Value::String(s.to_owned())),
@@ -182,21 +216,7 @@ fn typed_answer(field: &Field, answer: &Value) -> Option<Value> {
             Value::String(s) if s == "false" => Some(Value::Bool(false)),
             _ => None,
         },
-        Field::Number { integer } => {
-            let parsed = match answer {
-                Value::Number(n) => n.as_f64(),
-                Value::String(s) if !s.trim().is_empty() => s.trim().parse::<f64>().ok(),
-                _ => None,
-            }?;
-            if !parsed.is_finite() || (*integer && parsed.fract() != 0.0) {
-                return None;
-            }
-            if *integer {
-                Some(Value::Number(Number::from(parsed as i64)))
-            } else {
-                Number::from_f64(parsed).map(Value::Number)
-            }
-        }
+        Field::Number { integer } => number_answer(answer, *integer).map(Value::Number),
         Field::Choice { values } => answer
             .as_str()
             .filter(|s| values.contains(*s))
@@ -405,5 +425,30 @@ mod tests {
                 .unwrap()["tags"],
             json!(["b"])
         );
+    }
+
+    /// Final review finding 15 (v1 elicitationForm.ts:153-161): an integer answer keeps its value;
+    /// it is never clamped to another number.
+    #[test]
+    fn large_integers_keep_their_value() {
+        let form = parse_elicitation_form(
+            &json!({"properties": {"n": {"type": "integer", "title": "N"}}, "required": ["n"]}),
+            "m",
+            false,
+        )
+        .unwrap();
+        let content = |answer: Value| {
+            form.content(json!({ "n": answer }).as_object().unwrap())
+                .map(|c| c["n"].clone())
+        };
+        assert_eq!(content(json!("1e20")), Some(json!(1e20)));
+        assert_eq!(content(json!(1e20)), Some(json!(1e20)));
+        assert_eq!(
+            content(json!("9007199254740993")),
+            Some(json!(9_007_199_254_740_993_i64))
+        );
+        assert_eq!(content(json!(u64::MAX)), Some(json!(u64::MAX)));
+        assert_eq!(content(json!("-12")), Some(json!(-12)));
+        assert_eq!(content(json!("1.5")), None);
     }
 }

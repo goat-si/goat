@@ -238,17 +238,101 @@ impl McpOverAcp {
         }
     }
 
-    /// v1 `dispose`: end every session (session shutdown).
+    /// v1 `dispose` (mcpOverAcpBridge.ts:278-283): end every session at once (`concurrency:
+    /// "unbounded"`) and forget them all afterwards (`ensuring connections.clear()`). The whole
+    /// shutdown has one [DISCONNECT_TIMEOUT] deadline, so the agent process is stopped after at
+    /// most that long however many connections hang (final review finding 17).
     pub async fn dispose(&self) {
-        let ids: Vec<String> = self
+        let params: Vec<Value> = self
             .connections
             .lock()
             .expect("connections")
             .keys()
-            .cloned()
+            .map(|id| json!({ "connectionId": id }))
             .collect();
-        for id in ids {
-            let _ = self.disconnect(&json!({ "connectionId": id })).await;
+        let all = futures::future::join_all(params.iter().map(|p| self.disconnect(p)));
+        let _ = tokio::time::timeout(DISCONNECT_TIMEOUT, all).await;
+        self.connections.lock().expect("connections").clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    /// An MCP endpoint that opens sessions and never answers a DELETE (held connections).
+    fn endpoint_that_hangs_on_delete() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let line = line.trim_end().to_owned();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                if request_line.starts_with("DELETE") {
+                    held.push(stream);
+                    continue;
+                }
+                let message: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let reply = json!({"jsonrpc": "2.0", "id": message["id"], "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "goat", "version": "0"}}}).to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nmcp-session-id: s-1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        url
+    }
+
+    /// Final review finding 17 (v1 mcpOverAcpBridge.ts:278-283): session shutdown ends every
+    /// connection at once under one deadline, and forgets them even when the endpoint never
+    /// answers.
+    #[tokio::test]
+    async fn dispose_ends_connections_in_parallel_under_one_deadline() {
+        let bridge = McpOverAcp::new(endpoint_that_hangs_on_delete(), "Bearer t");
+        for _ in 0..3 {
+            let connected = bridge
+                .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
+                .unwrap();
+            let id = connected["connectionId"].as_str().unwrap().to_owned();
+            bridge
+                .message(&json!({"connectionId": id, "method": "initialize", "params": {}}))
+                .await
+                .unwrap();
         }
+        // Virtual time from here: each DELETE waits out its 5 s timeout.
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
+        bridge.dispose().await;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed <= DISCONNECT_TIMEOUT + Duration::from_millis(100),
+            "dispose took {elapsed:?}"
+        );
+        assert!(bridge.connections.lock().unwrap().is_empty());
     }
 }

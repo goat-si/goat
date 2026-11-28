@@ -5,10 +5,11 @@
 //! and a cwd; v1's optional `approvalPolicy` / `sandboxPolicy` are never set, so the branches for
 //! them reduce to v1's `undefined` cases.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use goat2_contracts::RuntimeMode;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// v1 `AcpPermissionDisposition`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +146,190 @@ pub fn changed_paths_of_tool_call(tool_call: &Value) -> ChangedPaths {
     } else {
         ChangedPaths::Unknown
     }
+}
+
+/// v1 `mergeAcpChangedPaths` (clientPolicy.ts:98-107) and `changedPathsField` (runtimeModel.ts:936-938):
+/// every path either side named, unknown if either is; None when no path is named.
+pub fn merge_changed_paths(
+    left: Option<ChangedPaths>,
+    right: ChangedPaths,
+) -> Option<ChangedPaths> {
+    let merged = match (left, right) {
+        (Some(ChangedPaths::Unknown), _) | (_, ChangedPaths::Unknown) => ChangedPaths::Unknown,
+        (None, known) => known,
+        (Some(ChangedPaths::Known(mut left)), ChangedPaths::Known(right)) => {
+            for path in right {
+                if !left.contains(&path) {
+                    left.push(path);
+                }
+            }
+            if left.len() > MAX_ACP_CHANGED_PATHS {
+                ChangedPaths::Unknown
+            } else {
+                ChangedPaths::Known(left)
+            }
+        }
+    };
+    match merged {
+        ChangedPaths::Known(paths) if paths.is_empty() => None,
+        other => Some(other),
+    }
+}
+
+/// v1 `autoAcceptPolicyRequest` with `withTrackedChangedPaths` (autoAcceptEdits.ts:21-32,148-160): the
+/// permission request as policy reads it. The kind comes from the tracked call when the request
+/// has none, and the paths earlier updates of the same call named join the request's locations;
+/// when those are unknown (or the call had an update the driver could not read, `unread`) a
+/// location without a path makes the request's paths unknown (final review finding 2).
+pub fn auto_accept_policy_request(
+    request: &Value,
+    tracked_kind: Option<&str>,
+    tracked_paths: Option<&ChangedPaths>,
+    unread: bool,
+) -> Value {
+    let mut request = request.clone();
+    let Some(tool_call) = request.get_mut("toolCall").and_then(Value::as_object_mut) else {
+        return request;
+    };
+    if tool_call.get("kind").is_none_or(Value::is_null)
+        && let Some(kind) = tracked_kind
+    {
+        tool_call.insert("kind".into(), json!(kind));
+    }
+    let seen = if unread {
+        Some(&ChangedPaths::Unknown)
+    } else {
+        tracked_paths
+    };
+    let unreadable = || vec![json!({ "path": "" })];
+    let locations = match (seen, tool_call.get("locations")) {
+        (None, _) => return request,
+        (Some(ChangedPaths::Known(paths)), _) if paths.is_empty() => return request,
+        (Some(ChangedPaths::Unknown), _) => unreadable(),
+        (Some(ChangedPaths::Known(_)), Some(own)) if !own.is_null() && !own.is_array() => {
+            unreadable()
+        }
+        (Some(ChangedPaths::Known(paths)), own) => own
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .chain(paths.iter().map(|path| json!({ "path": path })))
+            .collect(),
+    };
+    tool_call.insert("locations".into(), Value::Array(locations));
+    request
+}
+
+/// v1 `MAX_UNREAD_TOOL_CALLS` (autoAcceptEdits.ts:63).
+pub const MAX_UNREAD_TOOL_CALLS: usize = 4096;
+
+/// v1 `makeAcpUnreadToolCalls` (autoAcceptEdits.ts:71-131): the tool calls of the session that had an
+/// update the driver could not read, so the paths they changed are not all known. Entries are
+/// never removed; an update naming no tool call taints its whole session (every session when it
+/// names none either), and past the cap every tool call counts.
+#[derive(Debug, Default)]
+pub struct UnreadToolCalls {
+    every_tool_everywhere: bool,
+    every_tool_in: HashSet<String>,
+    by_session: HashMap<Option<String>, HashSet<String>>,
+    size: usize,
+}
+
+impl UnreadToolCalls {
+    fn saturate(&mut self) {
+        self.every_tool_everywhere = true;
+        self.by_session.clear();
+        self.every_tool_in.clear();
+    }
+
+    /// Record what an unreadable update named (v1 `add`).
+    pub fn add(&mut self, session_id: Option<&str>, tool_call_id: Option<&str>) {
+        if self.every_tool_everywhere || self.size > MAX_UNREAD_TOOL_CALLS {
+            return;
+        }
+        let Some(tool_call_id) = tool_call_id else {
+            let Some(session) = session_id else {
+                self.saturate();
+                return;
+            };
+            if self.every_tool_in.contains(session) {
+                return;
+            }
+            if let Some(previous) = self.by_session.remove(&Some(session.to_owned())) {
+                self.size -= previous.len();
+            }
+            if self.size >= MAX_UNREAD_TOOL_CALLS {
+                self.size = MAX_UNREAD_TOOL_CALLS + 1;
+                self.saturate();
+                return;
+            }
+            self.every_tool_in.insert(session.to_owned());
+            self.size += 1;
+            return;
+        };
+        if session_id.is_some_and(|s| self.every_tool_in.contains(s)) {
+            return;
+        }
+        let key = session_id.map(str::to_owned);
+        if self
+            .by_session
+            .get(&key)
+            .is_some_and(|ids| ids.contains(tool_call_id))
+        {
+            return;
+        }
+        if self.size >= MAX_UNREAD_TOOL_CALLS {
+            self.size = MAX_UNREAD_TOOL_CALLS + 1;
+            self.saturate();
+            return;
+        }
+        self.by_session
+            .entry(key)
+            .or_default()
+            .insert(tool_call_id.to_owned());
+        self.size += 1;
+    }
+
+    /// v1 `has`.
+    pub fn has(&self, session_id: &str, tool_call_id: &str) -> bool {
+        self.every_tool_everywhere
+            || self.size > MAX_UNREAD_TOOL_CALLS
+            || self.every_tool_in.contains(session_id)
+            || self
+                .by_session
+                .get(&Some(session_id.to_owned()))
+                .is_some_and(|ids| ids.contains(tool_call_id))
+            || self
+                .by_session
+                .get(&None)
+                .is_some_and(|ids| ids.contains(tool_call_id))
+    }
+}
+
+/// v1 `unreadToolCallUpdate` (autoAcceptEdits.ts:44-60) for the updates the driver cannot read as
+/// tool updates: a `sessionUpdate` that is not a string (it may have been a tool call), or a tool
+/// update without a tool call id. Returns the session and tool call it named, each None when it
+/// is not a non-empty string; None for a readable update.
+pub fn unread_tool_call_update(params: &Value) -> Option<(Option<String>, Option<String>)> {
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let update = params.get("update");
+    let tool_call_id = text(update.and_then(|u| u.get("toolCallId")));
+    match update
+        .and_then(|u| u.get("sessionUpdate"))
+        .and_then(Value::as_str)
+    {
+        Some("tool_call" | "tool_call_update" | "tool_call_content_chunk")
+            if tool_call_id.is_none() => {}
+        Some(_) => return None,
+        None => {}
+    }
+    Some((text(params.get("sessionId")), tool_call_id))
 }
 
 fn resolve_permission_path(path: &str, cwd: Option<&str>) -> Option<PathBuf> {
@@ -416,5 +601,90 @@ mod tests {
             select_auto_approved_option(&options).as_deref(),
             Some("once")
         );
+    }
+
+    /// Final review finding 2 (v1 autoAcceptEdits.ts:21-32,71-131,148-160).
+    #[test]
+    fn tracked_paths_and_unread_updates_reach_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let p = policy(RuntimeMode::AutoAcceptEdits, cwd);
+        let inside = format!("{cwd}/a.txt");
+        let request = json!({"sessionId": "s", "toolCall": {"toolCallId": "t", "locations": [{"path": inside}]}});
+        let seen =
+            |paths: &[&str]| ChangedPaths::Known(paths.iter().map(|p| p.to_string()).collect());
+        let decide = |kind: Option<&str>, paths: Option<&ChangedPaths>, unread: bool| {
+            permission_disposition(
+                &p,
+                &auto_accept_policy_request(&request, kind, paths, unread)["toolCall"],
+            )
+        };
+        // The request has no kind: the tracked one counts.
+        assert_eq!(decide(Some("edit"), None, false), Disposition::Allow);
+        assert_eq!(decide(None, None, false), Disposition::Ask);
+        let outside = seen(&["/etc/passwd"]);
+        assert_eq!(
+            decide(Some("edit"), Some(&outside), false),
+            Disposition::Ask
+        );
+        assert_eq!(
+            decide(Some("edit"), Some(&seen(&[inside.as_str()])), false),
+            Disposition::Allow
+        );
+        assert_eq!(
+            decide(Some("edit"), Some(&ChangedPaths::Unknown), false),
+            Disposition::Ask
+        );
+        assert_eq!(decide(Some("edit"), None, true), Disposition::Ask);
+        // Paths only grow; past the cap they are unknown.
+        let merged = merge_changed_paths(Some(seen(&["a"])), seen(&["b", "a"]));
+        assert_eq!(merged, Some(seen(&["a", "b"])));
+        assert_eq!(merge_changed_paths(None, seen(&[])), None);
+        assert_eq!(
+            merge_changed_paths(merged, ChangedPaths::Unknown),
+            Some(ChangedPaths::Unknown)
+        );
+        let many: Vec<String> = (0..=MAX_ACP_CHANGED_PATHS).map(|i| i.to_string()).collect();
+        assert_eq!(
+            merge_changed_paths(Some(seen(&["x"])), ChangedPaths::Known(many)),
+            Some(ChangedPaths::Unknown)
+        );
+        // Unreadable updates.
+        assert_eq!(
+            unread_tool_call_update(
+                &json!({"sessionId": "s", "update": {"sessionUpdate": "tool_call"}})
+            ),
+            Some((Some("s".into()), None))
+        );
+        assert_eq!(
+            unread_tool_call_update(&json!({"update": {"sessionUpdate": 3, "toolCallId": "t"}})),
+            Some((None, Some("t".into())))
+        );
+        assert_eq!(
+            unread_tool_call_update(
+                &json!({"sessionId": "s", "update": {"sessionUpdate": "tool_call", "toolCallId": "t"}})
+            ),
+            None
+        );
+        assert_eq!(
+            unread_tool_call_update(
+                &json!({"sessionId": "s", "update": {"sessionUpdate": "plan"}})
+            ),
+            None
+        );
+        let mut unread = UnreadToolCalls::default();
+        unread.add(Some("s"), Some("t"));
+        assert!(unread.has("s", "t") && !unread.has("s", "u") && !unread.has("o", "t"));
+        unread.add(None, Some("u"));
+        assert!(unread.has("o", "u"));
+        unread.add(Some("s"), None);
+        assert!(unread.has("s", "anything") && !unread.has("o", "anything"));
+        unread.add(None, None);
+        assert!(unread.has("o", "anything"));
+        let mut capped = UnreadToolCalls::default();
+        for i in 0..=MAX_UNREAD_TOOL_CALLS {
+            capped.add(Some("s"), Some(&i.to_string()));
+        }
+        assert!(capped.has("other", "never-seen"));
     }
 }

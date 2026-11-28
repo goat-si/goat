@@ -61,8 +61,8 @@ use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
 use crate::policy::{
-    Disposition, PermissionChoice, RuntimePolicy, mcp_tool_approval_elicitation_disposition,
-    select_auto_approved_option, select_permission_option_id,
+    Disposition, PermissionChoice, RuntimePolicy, UnreadToolCalls, auto_accept_policy_request,
+    mcp_tool_approval_elicitation_disposition, unread_tool_call_update,
 };
 use crate::process::{ChildProcess, Launch};
 use crate::subagents::{SubagentTracker, ToolRoute, TurnRef};
@@ -250,6 +250,8 @@ struct State {
     /// A `config_option_update` arrived; it replaces the setup response's options even when it
     /// is handled first (v1 probe.ts:545-547 prefers the update).
     config_options_from_update: bool,
+    /// Tool calls with an update the driver could not read (see [UnreadToolCalls]).
+    unread_tool_calls: UnreadToolCalls,
 }
 
 struct Shared {
@@ -540,6 +542,15 @@ impl Shared {
     }
 
     fn on_session_update(self: &Arc<Self>, params: &Value) {
+        // v1 makeUndecodableNotificationHandler (autoAcceptEdits.ts:133-155): what an unreadable
+        // update may have changed stays unknown to auto-accept (final review finding 2).
+        if let Some((session, tool_call)) = unread_tool_call_update(params) {
+            self.state
+                .lock()
+                .expect("state")
+                .unread_tool_calls
+                .add(session.as_deref(), tool_call.as_deref());
+        }
         let Some(update) = params.get("update") else {
             return;
         };
@@ -795,18 +806,49 @@ impl Shared {
             }
         }
         let policy = self.policy.lock().expect("policy").clone();
-        let disposition = self.flavor.permission_disposition(&policy, &params);
         let tool_call = params.get("toolCall").cloned().unwrap_or(Value::Null);
+        // v1 adapter.ts:5148-5175 with autoAcceptPolicyRequest (autoAcceptEdits.ts:148-160): policy
+        // reads every path this call's updates named, not only the request's (final review
+        // finding 2). Tracked calls are the root session's.
+        let policy_request = {
+            let state = self.state.lock().expect("state");
+            let session = text_field(&params, "sessionId");
+            let own = session
+                .as_deref()
+                .is_none_or(|s| self.session_id.get().is_some_and(|own| own == s));
+            let id = text_field(&tool_call, "toolCallId");
+            let (kind, paths) = match (&id, state.turn.as_ref()) {
+                (Some(id), Some(turn)) if own => turn.projector.tracked_call(id),
+                _ => (None, None),
+            };
+            let unread = id.as_deref().is_some_and(|id| {
+                state
+                    .unread_tool_calls
+                    .has(session.as_deref().unwrap_or_default(), id)
+            });
+            auto_accept_policy_request(&params, kind.as_deref(), paths.as_ref(), unread)
+        };
+        let disposition = self.flavor.permission_disposition(&policy, &policy_request);
         match disposition {
             Disposition::Allow => {
-                if let Some(option_id) = select_auto_approved_option(&options) {
+                // v1 `selectAutoApprovedPermissionOption`: allow-once first, then the flavor's
+                // session choice (never a broader grant listed before it, final review finding 1).
+                if let Some(option_id) = self
+                    .flavor
+                    .permission_option_id(&options, PermissionChoice::Accept)
+                    .or_else(|| {
+                        self.flavor
+                            .permission_option_id(&options, PermissionChoice::AcceptForSession)
+                    })
+                {
                     let _ = responder.respond(selected(&option_id));
                     return;
                 }
             }
             Disposition::Deny => {
                 let _ = responder.respond(
-                    select_permission_option_id(&options, PermissionChoice::Decline)
+                    self.flavor
+                        .permission_option_id(&options, PermissionChoice::Decline)
                         .map(|id| selected(&id))
                         .unwrap_or_else(cancelled),
                 );
@@ -1299,11 +1341,12 @@ impl Shared {
         true
     }
 
+    /// The prompt's content blocks, and whether `preamble` went in front of them.
     fn prompt_blocks(
         &self,
         inputs: &[EngineInput],
         preamble: Option<String>,
-    ) -> Result<Vec<ContentBlock>, String> {
+    ) -> Result<(Vec<ContentBlock>, bool), String> {
         let init = self.init.get().cloned().unwrap_or_default();
         let resolve =
             |a: &ChatAttachment| self.resolver.as_ref().and_then(|r| r(&self.thread_id, a));
@@ -1339,11 +1382,14 @@ impl Shared {
             };
         }
         let mut blocks = Vec::new();
-        // Slash commands must stay first (v1 acpAppContext skips context for them).
+        // Slash commands must stay first: v1 acpAppContext.ts:63-64 skips the context for them and
+        // does not commit it, so the next prompt still carries it (final review finding 10).
+        let mut sent_preamble = false;
         if let Some(preamble) = preamble.filter(|p| !p.trim().is_empty())
             && !text.trim_start().starts_with('/')
         {
             blocks.push(ContentBlock::Text(TextContent::new(preamble)));
+            sent_preamble = true;
         }
         if !text.is_empty() {
             blocks.push(ContentBlock::Text(TextContent::new(text)));
@@ -1389,7 +1435,7 @@ impl Shared {
         if blocks.is_empty() {
             return Err("A turn requires text or supported attachments.".into());
         }
-        Ok(blocks)
+        Ok((blocks, sent_preamble))
     }
 
     /// Send one `session/prompt` for `turn_id`; its answer settles the turn in the background.
@@ -1762,6 +1808,44 @@ impl Shared {
     }
 }
 
+/// v1 `makeStrictNdJsonRpcParser` (effect-acp strictParser.ts:18-30): the longest stdout line, in
+/// characters (v1 counts UTF-16 units; this counts Unicode scalar values).
+const MAX_FRAME_CHARS: usize = 16 * 1024 * 1024;
+
+/// Read one stdout line (newline included), at most [MAX_FRAME_CHARS] characters: a longer line
+/// fails the connection before it is held whole (final review finding 5). Invalid UTF-8 is
+/// replaced, as v1's `TextDecoder` does. None at end of file.
+async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Option<String>> {
+    let mut line: Vec<u8> = Vec::new();
+    let mut chars = 0usize;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then(|| String::from_utf8_lossy(&line).into_owned()));
+        }
+        let newline = available.iter().position(|b| *b == b'\n');
+        let take = newline.map_or(available.len(), |i| i + 1);
+        // UTF-8 continuation bytes do not start a character.
+        chars += available[..newline.unwrap_or(take)]
+            .iter()
+            .filter(|b| (**b & 0xC0) != 0x80)
+            .count();
+        if chars > MAX_FRAME_CHARS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ACP frame exceeds the maximum size",
+            ));
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+        }
+    }
+}
+
 /// The id GOAT gives each `session/prompt` of a turn.
 pub fn prompt_id_of(turn_id: &str, prompt_seq: u64) -> String {
     format!("{turn_id}:{prompt_seq}")
@@ -1946,8 +2030,8 @@ impl EngineSession for AcpSession {
                 .await;
         }
         let preamble = shared.state.lock().expect("state").preamble.clone();
-        let blocks = match shared.prompt_blocks(&inputs, preamble) {
-            Ok(blocks) => blocks,
+        let (blocks, sent_preamble) = match shared.prompt_blocks(&inputs, preamble) {
+            Ok(prompt) => prompt,
             Err(reason) => return TurnStartResult::Declined { reason },
         };
         let (turn_id, prompt_seq) = {
@@ -1980,7 +2064,9 @@ impl EngineSession for AcpSession {
                 finalize_generation: 0,
                 preserve_runtime: false,
             });
-            state.preamble = None;
+            if sent_preamble {
+                state.preamble = None;
+            }
             (turn_id, state.prompt_counter)
         };
         match shared.send_prompt(turn_id.clone(), prompt_seq, blocks) {
@@ -2003,7 +2089,7 @@ impl EngineSession for AcpSession {
             };
         }
         let blocks = match shared.prompt_blocks(&inputs, None) {
-            Ok(blocks) => blocks,
+            Ok((blocks, _)) => blocks,
             Err(reason) => return SteerResult::Declined { reason },
         };
         let prompt_seq = {
@@ -2168,7 +2254,7 @@ impl EngineSession for AcpSession {
                     _ => None,
                 };
                 let response = choice
-                    .and_then(|c| select_permission_option_id(&options, c))
+                    .and_then(|c| self.shared.flavor.permission_option_id(&options, c))
                     .map(|id| selected(&id))
                     .unwrap_or_else(cancelled);
                 responder
@@ -2340,6 +2426,187 @@ impl From<EngineError> for StartFailure {
 /// How a probe's start failure names an agent that wants a sign-in.
 pub(crate) const AUTH_REQUIRED_PREFIX: &str = "authentication required";
 
+/// The sign-in links a failed start sent (session-scoped `AuthRequired` with a URL), in order.
+/// Link-less sign-in notices are left out: the host would let one replace the link.
+fn signin_links(events: Option<mpsc::UnboundedReceiver<EngineEvent>>) -> Vec<EngineEvent> {
+    let Some(mut events) = events else {
+        return Vec::new();
+    };
+    let mut links = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let EngineEvent::AuthRequired {
+            url: Some(url),
+            message,
+            ..
+        } = event
+        {
+            links.push(EngineEvent::AuthRequired {
+                turn_id: None,
+                url: Some(url),
+                message,
+            });
+        }
+    }
+    links
+}
+
+/// A start that failed after the agent sent the person a sign-in link (final review finding 7).
+/// v1 hands such a link to the provider's runtime coordinator, which outlives the failed start
+/// (registry adapter.ts:425-436; the probe keeps it too, probe.ts:461-487). GOAT 2 hands it to
+/// the host as a session-scoped `AuthRequired` on this handle, so it stays until the person
+/// resolves it or the session stops. The turn that caused the start is declined with the start
+/// error; a later turn starts the agent again and then runs on it.
+struct SigninPending {
+    factory: AcpEngineFactory,
+    spec: SessionSpec,
+    events: mpsc::UnboundedSender<EngineEvent>,
+    /// The start error, answered to the first turn.
+    error: Mutex<Option<String>>,
+    /// The agent once a later start worked.
+    live: Mutex<Option<Arc<AcpSession>>>,
+    stopped: AtomicBool,
+    /// One start at a time.
+    starting: tokio::sync::Mutex<()>,
+}
+
+impl SigninPending {
+    fn handle(
+        factory: AcpEngineFactory,
+        spec: SessionSpec,
+        error: EngineError,
+        links: Vec<EngineEvent>,
+    ) -> EngineHandle {
+        let (events, rx) = mpsc::unbounded_channel();
+        for link in links {
+            let _ = events.send(link);
+        }
+        // A resumable session stays the card's pointer; without one there is none yet.
+        let engine_ref = spec.resume.clone().unwrap_or_else(|| EngineRef {
+            driver: factory.flavor.engine_driver(),
+            id: String::new(),
+        });
+        EngineHandle {
+            session: Box::new(Self {
+                factory,
+                spec,
+                events,
+                error: Mutex::new(Some(error.to_string())),
+                live: Mutex::new(None),
+                stopped: AtomicBool::new(false),
+                starting: tokio::sync::Mutex::new(()),
+            }),
+            events: rx,
+            engine_ref,
+        }
+    }
+
+    fn live(&self) -> Option<Arc<AcpSession>> {
+        self.live.lock().expect("live").clone()
+    }
+}
+
+#[async_trait]
+impl EngineSession for SigninPending {
+    async fn start_turn(
+        &self,
+        inputs: Vec<EngineInput>,
+        settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let starting = self.starting.lock().await;
+        if self.stopped.load(Ordering::SeqCst) {
+            return TurnStartResult::Declined {
+                reason: "the agent process has ended".into(),
+            };
+        }
+        if let Some(live) = self.live() {
+            drop(starting);
+            return live.start_turn(inputs, settings).await;
+        }
+        if let Some(reason) = self.error.lock().expect("error").take() {
+            return TurnStartResult::Declined { reason };
+        }
+        match self.factory.start_inner(self.spec.clone()).await {
+            Ok(started) => {
+                let live = Arc::new(started.session);
+                *self.live.lock().expect("live") = Some(Arc::clone(&live));
+                let mut agent_events = started.events;
+                let events = self.events.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = agent_events.recv().await {
+                        if events.send(event).is_err() {
+                            return;
+                        }
+                    }
+                });
+                drop(starting);
+                live.start_turn(inputs, settings).await
+            }
+            Err(failure) => {
+                for link in signin_links(failure.events) {
+                    let _ = self.events.send(link);
+                }
+                TurnStartResult::Declined {
+                    reason: failure.error.to_string(),
+                }
+            }
+        }
+    }
+
+    async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
+        match self.live() {
+            Some(live) => live.steer(turn_id, inputs).await,
+            None => SteerResult::Declined {
+                reason: "the agent has not started".into(),
+            },
+        }
+    }
+
+    async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
+        match self.live() {
+            Some(live) => live.interrupt(turn_id).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
+        match self.live() {
+            Some(live) => live.answer_request(key, answer).await,
+            None => Err(EngineError::Unavailable(format!("no open request {key}"))),
+        }
+    }
+
+    async fn set_config(&self, settings: &TurnSettings) -> Result<(), EngineError> {
+        match self.live() {
+            Some(live) => live.set_config(settings).await,
+            // The next start applies the turn's settings.
+            None => Ok(()),
+        }
+    }
+
+    fn group_rss_bytes(&self) -> Option<u64> {
+        self.live().and_then(|live| live.group_rss_bytes())
+    }
+
+    fn process_group_id(&self) -> Option<i32> {
+        self.live().and_then(|live| live.process_group_id())
+    }
+
+    async fn shutdown(&self) {
+        let _starting = self.starting.lock().await;
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        match self.live() {
+            Some(live) => live.shutdown().await,
+            None => {
+                let _ = self.events.send(EngineEvent::Exited {
+                    reason: "shutdown".into(),
+                });
+            }
+        }
+    }
+}
+
 pub struct StartedAcp {
     pub session: AcpSession,
     pub events: mpsc::UnboundedReceiver<EngineEvent>,
@@ -2349,12 +2616,25 @@ pub struct StartedAcp {
 #[async_trait]
 impl EngineFactory for AcpEngineFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
-        let started = self.start_acp(spec).await?;
-        Ok(EngineHandle {
-            session: Box::new(started.session),
-            events: started.events,
-            engine_ref: started.engine_ref,
-        })
+        match self.start_inner(spec.clone()).await {
+            Ok(started) => Ok(EngineHandle {
+                session: Box::new(started.session),
+                events: started.events,
+                engine_ref: started.engine_ref,
+            }),
+            Err(failure) => {
+                let links = signin_links(failure.events);
+                if links.is_empty() || self.probe {
+                    return Err(failure.error);
+                }
+                Ok(SigninPending::handle(
+                    self.clone(),
+                    spec,
+                    failure.error,
+                    links,
+                ))
+            }
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -2486,12 +2766,19 @@ impl AcpEngineFactory {
                 let flavor = Arc::clone(&flavor);
                 async move {
                     loop {
-                        let mut line = String::new();
-                        match reader.read_line(&mut line).await {
-                            Ok(0) => return None,
-                            Err(error) => return Some((Err(error), reader)),
-                            Ok(_) => {}
-                        }
+                        let line = match read_frame(&mut reader).await {
+                            Ok(Some(line)) => line,
+                            Ok(None) => return None,
+                            Err(error) => {
+                                if error.kind() == std::io::ErrorKind::InvalidData
+                                    && let Some(shared) = weak.upgrade()
+                                {
+                                    *shared.transport_failure.lock().expect("failure") =
+                                        Some(error.to_string());
+                                }
+                                return Some((Err(error), reader));
+                            }
+                        };
                         let line = line.trim_end_matches(['\r', '\n']).to_owned();
                         if line.trim().is_empty() {
                             continue;
@@ -2770,7 +3057,8 @@ impl AcpEngineFactory {
         let resume_id = spec
             .resume
             .as_ref()
-            .filter(|r| r.driver == flavor.engine_driver())
+            // An empty id is no session (a start that never opened one, [SigninPending]).
+            .filter(|r| r.driver == flavor.engine_driver() && !r.id.is_empty())
             .map(|r| r.id.clone());
         let setup_once = || async {
             if let Some(session_id) = &resume_id {
@@ -2858,6 +3146,17 @@ impl AcpEngineFactory {
                         .find(|m| m.kind.is_none() || m.kind.as_deref() == Some("agent"))
                         .cloned(),
                 };
+                // v1 AcpSessionRuntime.ts:1514-1527: when the agent lists its sign-in methods, a
+                // configured method it does not name is refused before any authenticate; only an
+                // agent without a list gets the configured id as is (final review finding 11).
+                if let Some(id) = &configured
+                    && method.is_none()
+                    && init.raw.get("authMethods").is_some_and(Value::is_array)
+                {
+                    return Err(EngineError::StartFailed(format!(
+                        "authenticate {id}: ACP agent did not advertise configured authentication method \"{id}\""
+                    )));
+                }
                 let method_id = method.as_ref().map(|m| m.id.clone()).or(configured);
                 let Some(method_id) = method_id else {
                     shared.auth_required(

@@ -16,6 +16,8 @@ use std::time::Duration;
 
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+use crate::stderr::StderrTail;
+
 /// Called with each stderr line, without its line ending.
 pub type StderrHook = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -108,29 +110,8 @@ impl std::fmt::Display for ExitSummary {
     }
 }
 
-const STDERR_TAIL_BYTES: usize = 64 * 1024;
 /// The shortest time a group gets between TERM and KILL on an ordinary stop.
 const TERM_MIN: Duration = Duration::from_millis(100);
-
-/// The last 64 KB of the child's stderr, for diagnostics.
-#[derive(Debug, Default)]
-pub struct StderrTail {
-    bytes: Vec<u8>,
-}
-
-impl StderrTail {
-    fn push(&mut self, chunk: &[u8]) {
-        self.bytes.extend_from_slice(chunk);
-        if self.bytes.len() > STDERR_TAIL_BYTES {
-            let cut = self.bytes.len() - STDERR_TAIL_BYTES;
-            self.bytes.drain(..cut);
-        }
-    }
-
-    pub fn text(&self) -> String {
-        String::from_utf8_lossy(&self.bytes).into_owned()
-    }
-}
 
 /// A running child that owns its process group.
 pub struct ChildProcess {
@@ -210,22 +191,30 @@ impl ChildProcess {
             .ok_or_else(|| io::Error::other("child exited before its pid was read"))?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
-        let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
+        let stderr_tail = Arc::new(Mutex::new(StderrTail::new(
+            crate::stderr::home_directories(),
+        )));
         let (closed_tx, stderr_closed) = tokio::sync::watch::channel(child.stderr.is_none());
         if let Some(stderr) = child.stderr.take() {
             let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
                 // Bounded chunks: a newline-free stream cannot grow host memory (v1
-                // AcpJsonRpcConnection.test.ts:419-441).
-                crate::stderr::read_bounded_lines(stderr, |line| {
-                    if let Ok(mut tail) = tail.lock() {
-                        tail.push(line);
-                    }
-                    if let Some(hook) = &on_stderr_line {
-                        let text = String::from_utf8_lossy(line);
-                        hook(text.trim_end_matches(['\r', '\n']));
-                    }
-                })
+                // AcpJsonRpcConnection.test.ts:419-441). The tail takes every chunk at once (v1
+                // AcpSessionRuntime.ts:835), the hook whole lines.
+                crate::stderr::read_bounded(
+                    stderr,
+                    |chunk| {
+                        if let Ok(mut tail) = tail.lock() {
+                            tail.push(chunk);
+                        }
+                    },
+                    |line| {
+                        if let Some(hook) = &on_stderr_line {
+                            let text = String::from_utf8_lossy(line);
+                            hook(text.trim_end_matches(['\r', '\n']));
+                        }
+                    },
+                )
                 .await;
                 let _ = closed_tx.send(true);
             });
@@ -267,14 +256,10 @@ impl ChildProcess {
     /// The last stderr output, sanitized (v1 `sanitizeAcpStderrExcerpt`): it ends up in errors and
     /// exit reasons the host stores, so credentials, sign-in links and home paths are removed.
     pub fn stderr_tail(&self) -> String {
-        let raw = self
-            .stderr_tail
+        self.stderr_tail
             .lock()
             .map(|tail| tail.text())
-            .unwrap_or_default();
-        let mut tail = String::new();
-        crate::stderr::append_tail(&mut tail, &raw);
-        crate::stderr::sanitize_stderr_excerpt(&tail, &crate::stderr::home_directories())
+            .unwrap_or_default()
     }
 
     /// Ordinary stop: close stdin, then always signal the group (the leader exiting does not

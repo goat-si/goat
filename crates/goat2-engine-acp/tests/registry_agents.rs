@@ -696,7 +696,7 @@ async fn generic_agent_auth_method_custom_models_and_command_code_mcp() {
         ("GOAT_ACP_AUTH_METHOD_ID", "agent-login"),
         ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
     ];
-    // A method the agent does not accept is still the one GOAT asks for.
+    // A configured method the agent's list does not name is refused (final review finding 11).
     let wrong = RegistryAgentFlavor::new("some-agent", command(&env), false)
         .with_auth_method_id(Some("other".into()));
     let error = factory(wrong)
@@ -745,6 +745,52 @@ async fn generic_agent_auth_method_custom_models_and_command_code_mcp() {
     assert_eq!(
         logged(&read_log(&http_log), "session/new")[0]["params"]["mcpServers"][0]["type"],
         "http"
+    );
+    handle.session.shutdown().await;
+}
+
+/// Final review finding 11 (v1 AcpSessionRuntime.ts:1514-1527): a configured sign-in method the
+/// agent's advertised list does not name is refused without calling authenticate; without a list
+/// the configured method is used.
+#[tokio::test]
+async fn configured_auth_method_must_be_in_an_advertised_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let listed = [
+        (
+            "GOAT_ACP_AUTH_METHODS",
+            r#"[{"id": "agent-login", "name": "Agent"}]"#,
+        ),
+        ("GOAT_ACP_AUTH_REQUIRED", "1"),
+        ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
+    ];
+    let flavor = RegistryAgentFlavor::new("some-agent", command(&listed), false)
+        .with_auth_method_id(Some("other".into()));
+    let error = factory(flavor)
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains(r#"did not advertise configured authentication method "other""#),
+        "{error}"
+    );
+    assert!(logged(&read_log(&log), "authenticate").is_empty());
+
+    std::fs::remove_file(&log).unwrap();
+    let unlisted = [
+        ("GOAT_ACP_AUTH_METHODS", "null"),
+        ("GOAT_ACP_AUTH_METHOD_ID", "agent-login"),
+        ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
+    ];
+    let flavor = RegistryAgentFlavor::new("some-agent", command(&unlisted), false)
+        .with_auth_method_id(Some("agent-login".into()));
+    let handle = start(flavor, dir.path(), RuntimeMode::FullAccess).await;
+    assert_eq!(
+        logged(&read_log(&log), "authenticate")[0]["params"]["methodId"],
+        "agent-login"
     );
     handle.session.shutdown().await;
 }

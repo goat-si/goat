@@ -787,3 +787,77 @@ async fn stop_settles_a_wedged_prompt_at_once() {
     session.handle.session.shutdown().await;
     assert_eq!(outcome, TurnOutcome::Interrupted);
 }
+
+/// Final review finding 1 (v1 acpSupport.ts:196-211): "Allow all edits this session" answers Grok's
+/// session-scoped option even when a persistent project grant is listed before it.
+#[tokio::test]
+async fn session_approval_answers_the_session_scoped_option() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("script.jsonl");
+    let step = json!({"request": "session/request_permission", "params": {"sessionId": "$SESSION",
+        "toolCall": {"toolCallId": "edit-1", "kind": "edit", "title": "Write a.txt",
+            "locations": [{"path": "/tmp/goat2-a.txt"}]},
+        "options": [
+            {"optionId": "allow-project-edits", "name": "Always allow edits in this project", "kind": "allow_always"},
+            {"optionId": "allow-edits-session", "name": "Yes, allow all edits during this session", "kind": "allow_always"},
+            {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
+            {"optionId": "reject-once", "name": "No", "kind": "reject_once"}]}});
+    std::fs::write(&script, step.to_string()).unwrap();
+    let mut session = start(&[("GOAT_ACP_SCRIPT", script.to_str().unwrap())]).await;
+    send(&session, "hello").await;
+    let (events, outcome) = until_finished(&mut session, |event| match event {
+        EngineEvent::RequestOpened {
+            key,
+            kind: RequestKind::Approval,
+            ..
+        } => Some((
+            key.clone(),
+            RequestAnswer {
+                outcome: RequestOutcome::AcceptForSession,
+                text: None,
+                answers: None,
+            },
+        )),
+        _ => None,
+    })
+    .await;
+    session.handle.session.shutdown().await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert!(
+        answer_text(&events).contains(r#""optionId":"allow-edits-session""#),
+        "{}",
+        answer_text(&events)
+    );
+}
+
+/// Final review finding 9 (v1 acpSupport.ts:299-324): a new reasoning effort on the same model
+/// is written before the next turn.
+#[tokio::test]
+async fn effort_change_on_the_same_model_is_written() {
+    let mut session = start_with(
+        &[
+            ("GOAT_ACP_GROK_MODELS", "1"),
+            ("GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG", "1"),
+        ],
+        RuntimeMode::ApprovalRequired,
+        selection(Some("high")),
+        Duration::ZERO,
+    )
+    .await;
+    session.settings = TurnSettings {
+        model_selection: selection(Some("low")),
+        runtime_mode: RuntimeMode::ApprovalRequired,
+    };
+    send(&session, "hello").await;
+    let (_, outcome) = until_finished(&mut session, |_| None).await;
+    session.handle.session.shutdown().await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    let log = read_log(&session.log);
+    let writes = logged(&log, "session/set_model");
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    assert_eq!(writes[1]["params"]["modelId"], "grok-4.6");
+    assert_eq!(
+        writes[1]["params"]["_meta"],
+        json!({"reasoningEffort": "low"})
+    );
+}
