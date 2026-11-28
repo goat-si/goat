@@ -777,4 +777,24 @@ impl McpHost for Host {
         }
         handoff(&request_id, "open")
     }
+
+    async fn bot_notes_read(
+        &self,
+        caller: &Caller,
+        args: crate::api::BotNotesReadArgs,
+    ) -> SurfaceResult {
+        crate::bot::mcp::notes_read(self, caller, args).await
+    }
+
+    async fn bot_notes_change(
+        &self,
+        caller: &Caller,
+        args: crate::api::BotNotesChangeArgs,
+    ) -> SurfaceResult {
+        let _fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
+        crate::bot::mcp::notes_change(self, caller, args).await
+    }
 }

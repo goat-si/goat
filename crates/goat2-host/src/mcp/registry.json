@@ -638,5 +638,93 @@
       "questions": "1 to 4 questions shown in turn on one card, each {id, header (12 characters or fewer), question, options: 2 to 4 {label, description}}.",
       "recommended": "decision: the option id you recommend."
     }
+  },
+  {
+    "path": "bot.notes_read",
+    "name": "goat_bot_notes_read",
+    "summary": "Read your bot notes",
+    "description": "From a bot session, read the bot's standing notes: the newest ones, plus older notes that match query.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Find an older note",
+        "args": {
+          "query": "deploy key"
+        }
+      }
+    ],
+    "guide": "Your session already started with your newest notes; read again to find older notes about something specific.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "query": "Words to match older notes against."
+    }
+  },
+  {
+    "path": "bot.notes_change",
+    "name": "goat_bot_notes_change",
+    "summary": "Change your bot notes",
+    "description": "From a bot session, save a note a person's message asked for, or correct an earlier one with replaces. Retry with the same clientRequestId to save it once.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string"
+        },
+        "replaces": {
+          "type": "string"
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Remember a rule",
+        "args": {
+          "note": "Open PRs as drafts",
+          "clientRequestId": "note-1"
+        }
+      },
+      {
+        "title": "Correct a rule",
+        "args": {
+          "note": "Open PRs ready for review",
+          "replaces": "Open PRs as drafts",
+          "clientRequestId": "note-2"
+        }
+      }
+    ],
+    "guide": "Save a note only when the person asked you to remember or change something; quote their rule in your own words in one line. To correct a note, pass its old text as replaces: the new line replaces it. A saved note reaches your session from its next start.",
+    "annotations": {
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "note": "The note, one line, at most 500 characters.",
+      "replaces": "The text of the earlier note this one replaces.",
+      "clientRequestId": "Saves the note once across retries."
+    },
+    "idempotency": "key",
+    "idempotencyReason": "A note saved with a clientRequestId is saved once."
   }
 ]

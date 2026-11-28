@@ -233,6 +233,28 @@ pub enum AskKind {
 
 pub use goat2_contracts::DecisionOption;
 
+/// `bot.notes_read` / `goat_bot_notes_read`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BotNotesReadArgs {
+    /// Words to match older notes against (the newest notes always show).
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+/// `bot.notes_change` / `goat_bot_notes_change`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BotNotesChangeArgs {
+    /// The note, one line, at most 500 characters (longer is cut).
+    pub note: String,
+    /// The text of the earlier note this one replaces.
+    #[serde(default)]
+    pub replaces: Option<String>,
+    #[serde(default)]
+    pub client_request_id: Option<String>,
+}
+
 /// What the MCP module needs from the host. The MCP module owns the registry, `goat_describe`,
 /// argument decoding, `clientRequestId` reservation and the HTTP/auth layer; the host owns the
 /// effects. Every method returns the v1 three-shape envelope.
@@ -252,4 +274,24 @@ pub trait McpHost: Send + Sync + 'static {
     async fn report_result(&self, caller: &Caller, args: ReportResultArgs) -> SurfaceResult;
     async fn user_send(&self, caller: &Caller, args: UserSendArgs) -> SurfaceResult;
     async fn request_ask(&self, caller: &Caller, args: RequestAskArgs) -> SurfaceResult;
+    /// A bot reads its notes.
+    async fn bot_notes_read(&self, caller: &Caller, args: BotNotesReadArgs) -> SurfaceResult {
+        let _ = (caller, args);
+        SurfaceResult::err(
+            ErrorCode::Unavailable,
+            "not_supported",
+            "no bot notes here",
+            false,
+        )
+    }
+    /// A bot saves or corrects a note.
+    async fn bot_notes_change(&self, caller: &Caller, args: BotNotesChangeArgs) -> SurfaceResult {
+        let _ = (caller, args);
+        SurfaceResult::err(
+            ErrorCode::Unavailable,
+            "not_supported",
+            "no bot notes here",
+            false,
+        )
+    }
 }

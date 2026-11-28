@@ -541,3 +541,61 @@ async fn a_bot_question_card_survives_a_restart_and_its_answer_wakes_the_bot() {
     .await;
     assert!(t.host.store().card(&id).unwrap().needs_you.is_none());
 }
+
+#[tokio::test]
+async fn a_bot_reads_and_changes_its_notes_through_mcp() {
+    let t = setup().await;
+    let (b, id) = bot(&t);
+    say(&t, &id, "m-1", "remember that PRs are drafts").await;
+    eventually("running", || running(&t, &id)).await;
+    let me = caller(&t, &id).await;
+    let change =
+        |note: &str, replaces: Option<&str>, key: &str| goat2_host::api::BotNotesChangeArgs {
+            note: note.into(),
+            replaces: replaces.map(str::to_owned),
+            client_request_id: Some(key.into()),
+        };
+    let saved = t
+        .host
+        .bot_notes_change(&me, change("Open PRs as drafts", None, "k1"))
+        .await;
+    assert!(
+        matches!(&saved, SurfaceResult::Ok { value } if value["saved"] == true),
+        "{saved:?}"
+    );
+    let again = t
+        .host
+        .bot_notes_change(&me, change("Open PRs as drafts", None, "k1"))
+        .await;
+    assert!(
+        matches!(&again, SurfaceResult::Ok { value } if value["saved"] == false && value["reason"] == "already_saved")
+    );
+    let fixed = t
+        .host
+        .bot_notes_change(
+            &me,
+            change(
+                "Open PRs ready for review",
+                Some("Open PRs as drafts"),
+                "k2",
+            ),
+        )
+        .await;
+    assert!(
+        matches!(&fixed, SurfaceResult::Ok { value } if value["correction"] == "replaced"),
+        "{fixed:?}"
+    );
+    let read = t
+        .host
+        .bot_notes_read(&me, goat2_host::api::BotNotesReadArgs { query: None })
+        .await;
+    let SurfaceResult::Ok { value } = read else {
+        panic!("{read:?}")
+    };
+    let standing = value["standing"].as_str().unwrap();
+    assert!(standing.contains("Open PRs ready for review"));
+    assert!(!standing.contains(": Open PRs as drafts"));
+    let file = std::fs::read_to_string(notes::notes_path(t.dir.path(), b.bot_id.as_str())).unwrap();
+    assert!(file.starts_with(notes::NOTES_HEADER));
+    assert_eq!(file.lines().filter(|l| l.starts_with("- ")).count(), 2);
+}

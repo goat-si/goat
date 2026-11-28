@@ -329,6 +329,14 @@ async fn dispatch(
             }
             host.request_ask(caller, a).await
         }
+        "bot.notes_read" => {
+            host.bot_notes_read(caller, decode!(args, e, api::BotNotesReadArgs))
+                .await
+        }
+        "bot.notes_change" => {
+            host.bot_notes_change(caller, decode!(args, e, api::BotNotesChangeArgs))
+                .await
+        }
         "surface.describe" => describe(&args),
         _ => SurfaceResult::err(
             ErrorCode::InvalidRequest,

@@ -5,6 +5,7 @@
 pub mod asks;
 pub mod brief;
 pub mod guards;
+pub mod mcp;
 pub mod notes;
 pub mod registry;
 
