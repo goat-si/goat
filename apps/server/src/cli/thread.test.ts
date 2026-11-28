@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import { vi } from "vite-plus/test";
 
 import {
   latestRunError,
@@ -485,5 +486,8 @@ it.live("resolves a path inside a git worktree of the project's repository to th
     assert.strictEqual(ambiguous._tag, "ThreadUsageError");
     assert.include(ambiguous.message, "sample (project-sample)");
     assert.include(ambiguous.message, "feature (project-feature)");
+    vi.stubEnv("GIT_DIR", ".git");
+    yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+    assert.deepStrictEqual(yield* resolveFrom([sample], path.join(worktree, "pkg")), sample);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

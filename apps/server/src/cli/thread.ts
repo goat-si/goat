@@ -30,6 +30,7 @@ import { mcpToolSession, type McpToolSession } from "../mcp/AcpMcpStdioBridge.ts
 import { CliCredentialError } from "./cliCredential.ts";
 import { expandHomePath } from "../os-jank.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { unsetInheritedRepositoryEnv } from "../vcs/VcsProcess.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveShellCredential } from "./login.ts";
 import { generatedVerbsNote } from "./agentSurfaceCommand.ts";
@@ -252,9 +253,15 @@ const listAllProjects = Effect.fn("cli.thread.listAllProjects")(function* (tools
 /** The checkouts of the git repository at `directory`, or none outside a repository. */
 const listGitCheckouts = Effect.fn("cli.thread.listGitCheckouts")(function* (directory: string) {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const env = unsetInheritedRepositoryEnv(process.env, yield* HostProcess.Platform);
   const list = (args: ReadonlyArray<string>) =>
     processRunner
-      .run({ command: "git", args: ["worktree", "list", "--porcelain", ...args], cwd: directory })
+      .run({
+        command: "git",
+        args: ["worktree", "list", "--porcelain", ...args],
+        cwd: directory,
+        env,
+      })
       .pipe(
         Effect.option,
         Effect.map((result) =>
