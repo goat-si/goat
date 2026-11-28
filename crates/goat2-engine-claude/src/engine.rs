@@ -36,9 +36,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use goat2_contracts::{
-    AssistantMessagePhase, ChatAttachment, ChatAttachmentType, EngineDriver, EngineItemLocator,
-    EngineRef, InputId, ItemId, MessageId, NativeItemRef, NativeRefStrength, PlanId,
-    ProviderCapabilities, ProviderProbeResult, RequestId, RequestKind, RequestOutcome,
+    AssistantMessagePhase, ChatAttachment, ChatAttachmentType, ContentStreamKind, EngineDriver,
+    EngineItemLocator, EngineRef, InputId, ItemId, MessageId, NativeItemRef, NativeRefStrength,
+    PlanId, ProviderCapabilities, ProviderProbeResult, RequestId, RequestKind, RequestOutcome,
     SubagentOrigin, ThreadId, TurnItem, TurnItemBody, TurnItemStatus,
 };
 use goat2_engine_api::{
@@ -1633,24 +1633,79 @@ impl Inner {
             }
             Some("content_block_delta") => {
                 let delta = event.get("delta");
-                if delta.and_then(|d| d.get("type")).and_then(Value::as_str) != Some("text_delta") {
+                let (kind, field) = match delta.and_then(|d| d.get("type")).and_then(Value::as_str)
+                {
+                    Some("text_delta") => (ContentStreamKind::AssistantText, "text"),
+                    // v1 reasoningDeltas (ClaudeAdapterV2.ts:6809-6820): thinking streams live on
+                    // the reasoning item's id; the snapshot completes it under the same id.
+                    Some("thinking_delta") => (ContentStreamKind::ReasoningText, "thinking"),
+                    _ => return,
+                };
+                let (Some(message_id), Some(index), Some(text)) = (
+                    turn.stream_message.clone(),
+                    event.get("index").and_then(Value::as_u64),
+                    delta.and_then(|d| d.get(field)).and_then(Value::as_str),
+                ) else {
+                    return;
+                };
+                self.emit_delta(turn, &message_id, index, kind, text);
+            }
+            // A thinking block can start with text already (v1 :6799-6808).
+            Some("content_block_start") => {
+                let block = event.get("content_block");
+                if block.and_then(|b| b.get("type")).and_then(Value::as_str) != Some("thinking") {
                     return;
                 }
                 let (Some(message_id), Some(index), Some(text)) = (
                     turn.stream_message.clone(),
                     event.get("index").and_then(Value::as_u64),
-                    delta.and_then(|d| d.get("text")).and_then(Value::as_str),
+                    block
+                        .and_then(|b| b.get("thinking"))
+                        .and_then(Value::as_str),
                 ) else {
                     return;
                 };
-                self.emit(EngineEvent::TextDelta {
-                    turn_id: turn.id.clone(),
-                    item_id: ItemId::from(format!("{message_id}:{index}")),
-                    text: text.to_string(),
-                });
+                self.emit_delta(
+                    turn,
+                    &message_id,
+                    index,
+                    ContentStreamKind::ReasoningText,
+                    text,
+                );
             }
             _ => {}
         }
+    }
+
+    /// A live delta on the block's item id (`<message id>:<block index>`, the id its completed
+    /// item gets from the snapshot). Assistant text keeps the `TextDelta` shorthand.
+    fn emit_delta(
+        &self,
+        turn: &Turn,
+        message_id: &str,
+        index: u64,
+        kind: ContentStreamKind,
+        text: &str,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let turn_id = turn.id.clone();
+        let item_id = ItemId::from(format!("{message_id}:{index}"));
+        let text = text.to_string();
+        self.emit(match kind {
+            ContentStreamKind::AssistantText => EngineEvent::TextDelta {
+                turn_id,
+                item_id,
+                text,
+            },
+            stream_kind => EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            },
+        });
     }
 
     fn on_assistant(&self, state: &mut State, message: &Value) {
