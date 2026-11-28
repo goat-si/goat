@@ -58,7 +58,8 @@ set loaded from the index.
 ## Startup
 
 1. Lock, open the index (missing / SQLITE_CORRUPT / NOTADB / user_version mismatch -> rebuild: read
-   `card.json` of every folder and verify each log's last line; other errors fail `open`).
+   `card.json` of every folder and verify each log's last line, skipping and removing `.trash-*`
+   folders; other errors fail `open`).
 2. Load every row (one row per thread). New index epoch for every start.
 3. Only rows with `dirty=1` or an active run: verify the log tail, refold lines after `appliedSeq`,
    abandon incomplete creates (only rows with `creating=1`; the same damage on an existing thread
@@ -108,8 +109,11 @@ following symlinks.
 
 `Fold` has the shape in `structure/20_data.md`: activeRunId, activeRunInputIds,
 activeRunReachedEngine, queuedInputIds, heldInputs, openRequests, runningChildIds, lastRunOutcome,
-counters. Until lane C merges the added fields, `src/contract.rs` defines that exact shape and
-re-exports everything else from `goat2-contracts`. Rules: input.accepted -> queue; input.delivered
+counters. Until lane C merges the added fields, `src/contract.rs` defines that exact shape as
+`StoreFold` (used in card.json) and re-exports everything else from `goat2-contracts`. Checkpoint
+lines carry the current contract `Fold`, converted from `StoreFold`; until the merge they lack
+activeRunInputIds, activeRunReachedEngine, heldInputs, runningChildIds and lastRunOutcome. The store
+never restores its own state from a checkpoint. Rules: input.accepted -> queue; input.delivered
 accepted -> leaves the queue; declined -> stays queued and leaves activeRunInputIds; unknown -> held
 under `resend:<runId>`. run.finished: run inputs still queued are delivered if the run reached the
 engine, held if the outcome is unknown, else stay queued. An unknown outcome opens request
