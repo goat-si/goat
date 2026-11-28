@@ -157,7 +157,9 @@ function setup() {
     registry,
     router,
     startThreads: () => {
-      stack.defer(startThreadNotifications(registry, router));
+      const stop = startThreadNotifications(registry, router);
+      stack.defer(stop);
+      return stop;
     },
     setShell: (id: string, value: unknown) => registry.set(shellAtom(id), value),
     setEnvironmentIds: (ids: ReadonlyArray<string>) => registry.set(environmentIdsAtom, ids),
@@ -281,4 +283,149 @@ it("invalidates cached bot ownership when taskChanges advances (negative->positi
   app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-3" }));
   await vi.waitFor(() => expect(TestNotification.sent).toHaveLength(2));
   expect(state.feed).toHaveBeenCalledTimes(3);
+});
+
+it("does not cache a stale lookup answer when taskChanges advances while the RPC is in flight", async () => {
+  await using app = setup();
+  app.setEnvironmentIds(["one", "two"]);
+  app.registry.set(supportedIds, new Set(["one"]));
+  app.registry.set(connectionPhase("one"), "connected");
+  app.registry.set(connectionPhase("two"), "connected");
+  app.registry.set(revisions, AsyncResult.success({ value: 0 }));
+
+  const worker = {
+    id: "mcp:worker-inflight-race",
+    title: "In-flight race worker",
+    creationSource: "mcp" as const,
+  };
+  let resolveFirst: ((value: unknown) => void) | undefined;
+  state.feed
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    )
+    .mockResolvedValue(
+      AsyncResult.success({
+        cursor: 0,
+        hasMore: false,
+        mode: "needs_you",
+        events: [],
+        ownsWorker: true,
+      }),
+    );
+
+  app.setShell("two", shell(worker));
+  app.startThreads();
+
+  // Start lookup while taskChanges revision is 0.
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-1" }));
+  await vi.waitFor(() => expect(state.feed).toHaveBeenCalledTimes(1));
+
+  // Ownership changes while the first lookup is still pending.
+  app.registry.set(revisions, AsyncResult.success({ value: 1 }));
+  resolveFirst?.(
+    AsyncResult.success({
+      cursor: 0,
+      hasMore: false,
+      mode: "needs_you",
+      events: [],
+      ownsWorker: false,
+    }),
+  );
+  await vi.waitFor(() => expect(TestNotification.sent).toHaveLength(1));
+
+  // Because taskChanges advanced in flight, the stale false answer must not be cached under revision 1.
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-2" }));
+  await vi.waitFor(() => expect(state.feed).toHaveBeenCalledTimes(2));
+  expect(TestNotification.sent).toHaveLength(1);
+});
+
+it("does not cache or recreate taskChanges subscriptions when origin is removed while lookup is in flight", async () => {
+  await using app = setup();
+  app.setEnvironmentIds(["one", "two"]);
+  app.registry.set(supportedIds, new Set(["one"]));
+  app.registry.set(connectionPhase("one"), "connected");
+  app.registry.set(connectionPhase("two"), "connected");
+  app.registry.set(revisions, AsyncResult.success({ value: 0 }));
+
+  const subscribeSpy = vi.spyOn(app.registry, "subscribe");
+  const worker = {
+    id: "mcp:worker-removed-origin",
+    title: "Removed origin worker",
+    creationSource: "mcp" as const,
+  };
+
+  let resolveRemoved: ((value: unknown) => void) | undefined;
+  state.feed.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveRemoved = resolve;
+      }),
+  );
+  app.setShell("two", shell(worker));
+  app.startThreads();
+  subscribeSpy.mockClear();
+
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-1" }));
+  await vi.waitFor(() => expect(state.feed).toHaveBeenCalledTimes(1));
+
+  app.setEnvironmentIds(["two"]);
+  resolveRemoved?.(
+    AsyncResult.success({
+      cursor: 0,
+      hasMore: false,
+      mode: "needs_you",
+      events: [],
+      ownsWorker: false,
+    }),
+  );
+  // Wait for ownedByBot and its .then() handler to finish delivering the notification.
+  await vi.waitFor(() => expect(TestNotification.sent).toHaveLength(1));
+  expect(subscribeSpy.mock.calls.filter(([atom]) => atom === revisions)).toHaveLength(0);
+});
+
+it("does not recreate taskChanges subscriptions when coordinator is disposed while lookup is in flight", async () => {
+  await using app = setup();
+  app.setEnvironmentIds(["one", "two"]);
+  app.registry.set(supportedIds, new Set(["one"]));
+  app.registry.set(connectionPhase("one"), "connected");
+  app.registry.set(connectionPhase("two"), "connected");
+  app.registry.set(revisions, AsyncResult.success({ value: 0 }));
+
+  const subscribeSpy = vi.spyOn(app.registry, "subscribe");
+  const worker = {
+    id: "mcp:worker-disposed-coord",
+    title: "Disposed coordinator worker",
+    creationSource: "mcp" as const,
+  };
+
+  let resolveDisposed: ((value: unknown) => void) | undefined;
+  const pending = new Promise((resolve) => {
+    resolveDisposed = resolve;
+  });
+  state.feed.mockImplementationOnce(() => pending);
+  app.setShell("two", shell(worker));
+  const stop = app.startThreads();
+  subscribeSpy.mockClear();
+
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-1" }));
+  await vi.waitFor(() => expect(state.feed).toHaveBeenCalledTimes(1));
+
+  stop();
+  resolveDisposed?.(
+    AsyncResult.success({
+      cursor: 0,
+      hasMore: false,
+      mode: "needs_you",
+      events: [],
+      ownsWorker: false,
+    }),
+  );
+  await pending;
+  // Drain microtasks for runAtomCommand + Promise.all + ownedByBot continuation.
+  for (let tick = 0; tick < 6; tick++) await Promise.resolve();
+  expect(subscribeSpy.mock.calls.filter(([atom]) => atom === revisions)).toHaveLength(0);
+  expect(TestNotification.sent).toHaveLength(0);
 });

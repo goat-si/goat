@@ -277,6 +277,7 @@ export function startThreadNotifications(
   const BOT_OWNERSHIP_CACHE_LIMIT = 500;
   const BOT_OWNERSHIP_CACHE_TTL_MS = 15_000;
   const BOT_OWNERSHIP_CONCURRENCY = 4;
+  let disposed = false;
   // Caches confirmed worker-ownership answers with a short TTL and invalidates immediately
   // when the origin's bot taskChanges stream advances.
   const botOwnershipCache = new Map<
@@ -286,6 +287,18 @@ export function startThreadNotifications(
   const botOriginInvalidators = new Map<EnvironmentId, () => void>();
   const botOwnershipKey = (origin: EnvironmentId, destination: EnvironmentId, threadId: ThreadId) =>
     `${origin}\u0000${destination}\u0000${threadId}`;
+  const isActiveBotOrigin = (origin: EnvironmentId) => {
+    if (disposed) return false;
+    if (!registry.get(environmentSummaries.environmentIdsAtom).includes(origin)) return false;
+    const presentation = registry.get(environmentPresentations.presentationAtom(origin));
+    if (presentation?.connection !== undefined && presentation.connection.phase !== "connected") {
+      return false;
+    }
+    return (
+      presentation?.serverConfig?.environment.capabilities.goatBotAttention === true &&
+      registry.get(channelEnvironment.listBotAttention.permissionAtom(origin))
+    );
+  };
   const extractTaskChangeRevision = (
     result: AsyncResult.AsyncResult<unknown, unknown>,
   ): unknown => {
@@ -321,7 +334,7 @@ export function startThreadNotifications(
     }
   };
   const watchOriginTaskChanges = (origin: EnvironmentId) => {
-    if (botOriginInvalidators.has(origin)) return;
+    if (disposed || botOriginInvalidators.has(origin)) return;
     let initialized = false;
     let lastRevision: unknown;
     const unsubscribe = registry.subscribe(
@@ -341,7 +354,13 @@ export function startThreadNotifications(
     );
     botOriginInvalidators.set(origin, unsubscribe);
   };
-  const rememberBotOwnership = (origin: EnvironmentId, key: string, owned: boolean) => {
+  const rememberBotOwnership = (
+    origin: EnvironmentId,
+    key: string,
+    owned: boolean,
+    revision: unknown,
+  ) => {
+    if (!isActiveBotOrigin(origin)) return;
     if (botOwnershipCache.size >= BOT_OWNERSHIP_CACHE_LIMIT && !botOwnershipCache.has(key)) {
       const oldest = botOwnershipCache.keys().next().value;
       if (oldest !== undefined) botOwnershipCache.delete(oldest);
@@ -350,7 +369,7 @@ export function startThreadNotifications(
     botOwnershipCache.set(key, {
       owned,
       expiresAt: Date.now() + BOT_OWNERSHIP_CACHE_TTL_MS,
-      revision: readOriginTaskChangeRevision(origin),
+      revision,
     });
   };
 
@@ -365,17 +384,7 @@ export function startThreadNotifications(
           ) {
             return false;
           }
-          const presentation = registry.get(environmentPresentations.presentationAtom(origin));
-          if (
-            presentation?.connection !== undefined &&
-            presentation.connection.phase !== "connected"
-          ) {
-            return false;
-          }
-          return (
-            presentation?.serverConfig?.environment.capabilities.goatBotAttention === true &&
-            registry.get(channelEnvironment.listBotAttention.permissionAtom(origin))
-          );
+          return isActiveBotOrigin(origin);
         });
 
   const ownedByBot = async (
@@ -406,6 +415,8 @@ export function startThreadNotifications(
       const batch = uncached.slice(index, index + BOT_OWNERSHIP_CONCURRENCY);
       const results = await Promise.all(
         batch.map(async (origin) => {
+          // Capture revision before awaiting so answers raced by taskChanges are never cached.
+          const revisionBefore = readOriginTaskChangeRevision(origin);
           const result = await runAtomCommand(
             registry,
             channelEnvironment.listBotAttention,
@@ -417,7 +428,18 @@ export function startThreadNotifications(
           );
           if (result._tag === "Success") {
             const owned = result.value.ownsWorker === true;
-            rememberBotOwnership(origin, botOwnershipKey(origin, environmentId, threadId), owned);
+            if (
+              !disposed &&
+              isActiveBotOrigin(origin) &&
+              readOriginTaskChangeRevision(origin) === revisionBefore
+            ) {
+              rememberBotOwnership(
+                origin,
+                botOwnershipKey(origin, environmentId, threadId),
+                owned,
+                revisionBefore,
+              );
+            }
             return owned;
           }
           return false;
@@ -903,6 +925,7 @@ export function startThreadNotifications(
   onSettings();
 
   return () => {
+    disposed = true;
     unsubscribeSettings();
     unsubscribeRoute();
     unsubscribeEnvironmentIds();

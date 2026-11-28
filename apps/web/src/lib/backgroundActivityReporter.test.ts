@@ -80,6 +80,7 @@ describe("layer", () => {
     const listeners = {
       addEventListener: target.addEventListener.bind(target),
       removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
     };
     vi.stubGlobal("window", {
       ...listeners,
@@ -203,65 +204,16 @@ describe("layer", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("bounds concurrent client activity RPCs across many connected environments", () =>
+  it.effect("keeps at most one in-flight report per environment across overlapping triggers", () =>
     Effect.gen(function* () {
-      const envIds = Array.from({ length: 10 }, (_, index) => EnvironmentId.make(`env-${index}`));
+      const envIds = [EnvironmentId.make("env-0"), EnvironmentId.make("env-1")];
       const entries = yield* SubscriptionRef.make(
         new Map(envIds.map((id) => [id, { enabled: true }])),
       );
       const release = yield* Deferred.make<void>();
-      let inFlight = 0;
-      let peakConcurrency = 0;
-      let completed = 0;
-
-      const registry = EnvironmentRegistry.EnvironmentRegistry.of({
-        entries,
-        state: () =>
-          Effect.succeed<SupervisorConnectionState>({
-            ...AVAILABLE_CONNECTION_STATE,
-            phase: "connected",
-          }),
-        run: () =>
-          Effect.acquireUseRelease(
-            Effect.sync(() => {
-              inFlight += 1;
-              if (inFlight > peakConcurrency) peakConcurrency = inFlight;
-            }),
-            () => Deferred.await(release),
-            () =>
-              Effect.sync(() => {
-                inFlight -= 1;
-                completed += 1;
-              }),
-          ),
-      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-
-      yield* Layer.build(
-        layer.pipe(Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry))),
-      );
-      yield* TestClock.adjust("1 second");
-      expect(peakConcurrency).toBe(4);
-      expect(inFlight).toBe(4);
-
-      yield* Deferred.succeed(release, undefined);
-      yield* TestClock.adjust("1 millis");
-      expect(completed).toBe(10);
-      expect(peakConcurrency).toBe(4);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("does not let stalled environments starve healthy environment lease renewals", () =>
-    Effect.gen(function* () {
-      const stalledIds = Array.from({ length: 12 }, (_, index) =>
-        EnvironmentId.make(`stalled-${index}`),
-      );
-      const healthyId = EnvironmentId.make("healthy-0");
-      const allIds = [...stalledIds, healthyId];
-      const stalledSet = new Set<EnvironmentId>(stalledIds);
-      const entries = yield* SubscriptionRef.make(
-        new Map(allIds.map((id) => [id, { enabled: true }])),
-      );
-      const healthyReportTimes: number[] = [];
+      const inFlightByEnv = new Map<EnvironmentId, number>();
+      const peakByEnv = new Map<EnvironmentId, number>();
+      const callsByEnv = new Map<EnvironmentId, number>();
 
       const registry = EnvironmentRegistry.EnvironmentRegistry.of({
         entries,
@@ -271,33 +223,125 @@ describe("layer", () => {
             phase: "connected",
           }),
         run: (environmentId: EnvironmentId) =>
-          stalledSet.has(environmentId)
-            ? Effect.never
-            : Clock.currentTimeMillis.pipe(
-                Effect.tap((now) =>
-                  Effect.sync(() => {
-                    healthyReportTimes.push(now);
-                  }),
-                ),
-                Effect.asVoid,
-              ),
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              callsByEnv.set(environmentId, (callsByEnv.get(environmentId) ?? 0) + 1);
+              const next = (inFlightByEnv.get(environmentId) ?? 0) + 1;
+              inFlightByEnv.set(environmentId, next);
+              if (next > (peakByEnv.get(environmentId) ?? 0)) {
+                peakByEnv.set(environmentId, next);
+              }
+            }),
+            () => Deferred.await(release),
+            () =>
+              Effect.sync(() => {
+                inFlightByEnv.set(environmentId, (inFlightByEnv.get(environmentId) ?? 1) - 1);
+              }),
+          ),
       } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
 
       yield* Layer.build(
         layer.pipe(Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry))),
       );
 
-      // Advance across 3 reporting cycles while all 12 stalled peers hang indefinitely.
-      yield* TestClock.adjust("20 seconds");
-      yield* TestClock.adjust("25 seconds");
-      yield* TestClock.adjust("25 seconds");
-      yield* TestClock.adjust("25 seconds");
+      yield* TestClock.adjust("1 second");
+      // Trigger another report pass while the first attempt is still in flight.
+      window.dispatchEvent(new Event("focus"));
+      yield* TestClock.adjust("1 second");
 
-      expect(healthyReportTimes.length).toBeGreaterThanOrEqual(3);
-      for (let index = 1; index < healthyReportTimes.length; index++) {
-        const gap = healthyReportTimes[index]! - healthyReportTimes[index - 1]!;
-        expect(gap).toBeLessThan(45_000);
+      for (const envId of envIds) {
+        expect(peakByEnv.get(envId)).toBe(1);
+        expect(callsByEnv.get(envId)).toBe(1);
+      }
+
+      yield* Deferred.succeed(release, undefined);
+      yield* TestClock.adjust("1 millis");
+      // Next scheduled pass runs once the previous attempt has settled.
+      yield* TestClock.adjust("25 seconds");
+      for (const envId of envIds) {
+        expect(callsByEnv.get(envId)).toBe(2);
+        expect(peakByEnv.get(envId)).toBe(1);
       }
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "does not let 40 stalled environments delay healthy lease renewals or issue duplicate concurrent retries",
+    () =>
+      Effect.gen(function* () {
+        const stalledIds = Array.from({ length: 40 }, (_, index) =>
+          EnvironmentId.make(`stalled-${index}`),
+        );
+        const healthyId = EnvironmentId.make("healthy-0");
+        const allIds = [...stalledIds, healthyId];
+        const stalledSet = new Set<EnvironmentId>(stalledIds);
+        const entries = yield* SubscriptionRef.make(
+          new Map(allIds.map((id) => [id, { enabled: true }])),
+        );
+        const healthyReportTimes: number[] = [];
+        const stalledInFlight = new Map<EnvironmentId, number>();
+        let maxStalledConcurrentPerEnv = 0;
+
+        const registry = EnvironmentRegistry.EnvironmentRegistry.of({
+          entries,
+          state: () =>
+            Effect.succeed<SupervisorConnectionState>({
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "connected",
+            }),
+          run: (environmentId: EnvironmentId) =>
+            stalledSet.has(environmentId)
+              ? Effect.acquireUseRelease(
+                  Effect.sync(() => {
+                    const next = (stalledInFlight.get(environmentId) ?? 0) + 1;
+                    stalledInFlight.set(environmentId, next);
+                    if (next > maxStalledConcurrentPerEnv) maxStalledConcurrentPerEnv = next;
+                  }),
+                  () => Effect.never,
+                  () =>
+                    Effect.sync(() => {
+                      stalledInFlight.set(
+                        environmentId,
+                        (stalledInFlight.get(environmentId) ?? 1) - 1,
+                      );
+                    }),
+                )
+              : Clock.currentTimeMillis.pipe(
+                  Effect.tap((now) =>
+                    Effect.sync(() => {
+                      healthyReportTimes.push(now);
+                    }),
+                  ),
+                  Effect.asVoid,
+                ),
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+
+        yield* Layer.build(
+          layer.pipe(
+            Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry)),
+          ),
+        );
+
+        // First pass must report to the healthy peer immediately without waiting on 40 stalled peers.
+        yield* TestClock.adjust("1 second");
+        expect(healthyReportTimes).toHaveLength(1);
+
+        // Trigger an overlapping focus event mid-timeout: stalled peers must not get duplicate calls.
+        window.dispatchEvent(new Event("focus"));
+        yield* TestClock.adjust("1 second");
+        expect(maxStalledConcurrentPerEnv).toBe(1);
+
+        // Advance across 3 reporting cycles while all 40 stalled peers hang indefinitely.
+        yield* TestClock.adjust("25 seconds");
+        yield* TestClock.adjust("25 seconds");
+        yield* TestClock.adjust("25 seconds");
+
+        expect(maxStalledConcurrentPerEnv).toBe(1);
+        expect(healthyReportTimes.length).toBeGreaterThanOrEqual(4);
+        for (let index = 1; index < healthyReportTimes.length; index++) {
+          const gap = healthyReportTimes[index]! - healthyReportTimes[index - 1]!;
+          expect(gap).toBeLessThan(45_000);
+        }
+      }).pipe(Effect.scoped),
   );
 });
