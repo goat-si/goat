@@ -50,4 +50,17 @@ appliedSeq: number,
  * Card index global sequence, the `subscribeCards` cursor, at most
  * [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */
-cardSeq: number, openAsks?: number, unread?: boolean, };
+cardSeq: number, 
+/**
+ * Open requests that need a person (`fold.openRequests` except kind `resend`), folded by the
+ * store. Omitted when 0.
+ */
+openAsks?: number, 
+/**
+ * Derived by the host when it serves a card: the thread's last item not from the person is
+ * newer than the `lastReadSeq` that `mark_read` keeps in `~/.goat2/ui-state.json`. Read state
+ * is UI state, not thread history (PRD model.md, storage.md): the store never sets it, so it
+ * is never written to `card.json` or `goat.jsonl` and is not part of the frozen format.
+ * Omitted when false.
+ */
+unread?: boolean, };
