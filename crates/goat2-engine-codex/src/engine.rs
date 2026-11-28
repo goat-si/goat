@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -111,26 +111,23 @@ impl EngineFactory for CodexEngineFactory {
     fn capabilities(&self) -> crate::contract::ProviderCapabilities {
         crate::capabilities::codex_capabilities()
     }
+
+    /// v1 `checkCodexProviderStatus` (src/probe.rs): install, version, sign-in and Codex's own
+    /// model catalog, from a short-lived app-server.
+    async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        Ok(crate::probe::probe(&self.options).await)
+    }
 }
 
-/// v1 `codexAppServerArgs(launchArgs, routeArgs, unloadImmediately = true)`.
-/// The launch for one session: the factory's options, then the host's [LaunchSpec] (binary,
-/// extra arguments, environment) on top.
-fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
-    let program = spec
-        .launch
-        .as_ref()
-        .and_then(|l| l.binary.clone())
-        .unwrap_or_else(|| options.program.clone());
-    let mut launch = Launch::new(&program).without_host_identity();
+/// v1 `codexAppServerArgs(launchArgs, routeArgs, unloadImmediately = true)` with v1's client
+/// identity: the factory's binary, arguments and environment.
+pub(crate) fn base_launch(options: &CodexEngineOptions, program: &Path, cwd: PathBuf) -> Launch {
+    let mut launch = Launch::new(program).without_host_identity();
     for arg in ["app-server", "-c", "thread_unload_delay_secs=0"] {
         launch = launch.arg(arg);
     }
     launch.args.extend(options.extra_args.iter().cloned());
-    if let Some(host) = &spec.launch {
-        launch.args.extend(host.args.iter().map(OsString::from));
-    }
-    launch.cwd = Some(PathBuf::from(&spec.engine.cwd));
+    launch.cwd = Some(cwd);
     launch.kill_grace = options.kill_grace;
     // v1 codexAppServerEnvironment: the originator first, the supplied environment may override.
     launch.env_set.push((
@@ -138,7 +135,20 @@ fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
         CODEX_CLIENT_NAME.into(),
     ));
     launch.env_set.extend(options.env_set.iter().cloned());
+    launch
+}
+
+/// The launch for one session: [base_launch], then the host's [LaunchSpec] (binary, extra
+/// arguments, environment) on top.
+fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
+    let program = spec
+        .launch
+        .as_ref()
+        .and_then(|l| l.binary.clone())
+        .unwrap_or_else(|| options.program.clone());
+    let mut launch = base_launch(options, &program, PathBuf::from(&spec.engine.cwd));
     if let Some(host) = &spec.launch {
+        launch.args.extend(host.args.iter().map(OsString::from));
         launch.env_set.extend(
             host.env
                 .iter()
