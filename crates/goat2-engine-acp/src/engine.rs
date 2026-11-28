@@ -11,6 +11,12 @@
 //! - `packages/provider-acp/src/server/acpAppContext.ts`: context the session has not seen goes in
 //!   front of the next prompt; GOAT 2 sends `Instructions.first_message_preamble` and, for agents
 //!   without a system prompt channel, `append_system_prompt` that way.
+//! - Background work (v1 `deferredBackground.ts:13-233`, `adapter.ts:3880-3899,7874-8082`): a flavor
+//!   with `defers_finalize_for_background_work` keeps the turn open after its prompt answers while
+//!   background tasks or subagents run, finishes it a debounce after the work ends, finishes it at
+//!   once on the agent's own wake turn, and with `preserve_runtime_on_settled_interrupt` ends it on
+//!   interrupt without cancelling or restarting the agent. v1's post-settle continuation runs (wake
+//!   frames replayed as a new run) need host support and are not carried.
 //!
 //! Requests are built from `agent_client_protocol::v1::schema` types. Inbound traffic is taken as
 //! `UntypedMessage` so v1's normalization (`normalize.rs`) and each flavor's fixes run on the JSON
@@ -31,10 +37,11 @@ use agent_client_protocol::v1::schema::{
 };
 use agent_client_protocol::{Agent, Client, Lines, Responder, UntypedMessage};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use goat2_contracts::{
-    ApprovalDecision, ChatAttachment, ChatAttachmentType, EngineRef, ItemId, ProviderCapabilities,
-    ProviderRequestKind, RequestId, RequestKind, RequestOutcome, ThreadId, TurnItem, TurnItemBody,
-    TurnItemStatus,
+    ApprovalDecision, ChatAttachment, ChatAttachmentType, EngineRef, ItemId, ModelSelection,
+    ProviderCapabilities, ProviderRequestKind, RequestId, RequestKind, RequestOutcome, ThreadId,
+    TurnItem, TurnItemBody, TurnItemStatus,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
@@ -47,8 +54,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
 use crate::flavor::{
     AcpFlavor, AgentEnv, AuthFailure, AuthPolicy, ConfigWrite, ExtAnswer, ExtRequest, FlavorEvent,
-    ModeContext, ModeWrite, ModelWrite, NativeElicitationForm, PromptAttachment, PromptError,
-    ResumeMethod, StderrLine, StdoutLine,
+    ModeContext, ModeWrite, ModelWrite, NativeElicitationForm, PromptAttachment, PromptContext,
+    PromptError, ResumeMethod, StderrLine, StdoutLine,
 };
 use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
@@ -59,7 +66,10 @@ use crate::policy::{
 };
 use crate::process::{ChildProcess, Launch};
 use crate::subagents::{SubagentTracker, ToolRoute, TurnRef};
-use crate::wire::{InitializeInfo, ModeState, SessionSetup, parse_modes, text_field};
+use crate::wire::{
+    InitializeInfo, ModeState, SessionSetup, config_option_id, parse_modes, select_values,
+    str_field, text_field,
+};
 
 type Conn = agent_client_protocol::v1::ConnectionTo<Agent>;
 type ValueResponder = Responder<Value, agent_client_protocol::V1>;
@@ -90,6 +100,10 @@ impl Default for AcpTimeouts {
     }
 }
 
+/// v1 `ACP_DEFERRED_FINALIZE_DEBOUNCE` (deferredBackground.ts:45-47): Grok summaries can trail
+/// hydrated tools by over two seconds.
+pub const DEFERRED_FINALIZE_DEBOUNCE: Duration = Duration::from_millis(3000);
+
 /// Starts ACP agent processes for one flavor.
 #[derive(Clone)]
 pub struct AcpEngineFactory {
@@ -103,6 +117,8 @@ pub struct AcpEngineFactory {
     probe: bool,
     /// Instance settings for [EngineFactory::probe] (see [crate::probe::ProbeConfig]).
     pub(crate) probe_config: Arc<crate::probe::ProbeConfig>,
+    /// How long a deferred turn waits after its background work ended before it finishes.
+    deferred_finalize: Duration,
 }
 
 impl AcpEngineFactory {
@@ -115,7 +131,14 @@ impl AcpEngineFactory {
             mcp_bridge: McpBridgeCommand::locate(),
             probe: false,
             probe_config: Arc::default(),
+            deferred_finalize: DEFERRED_FINALIZE_DEBOUNCE,
         }
+    }
+
+    /// Use this debounce instead of [DEFERRED_FINALIZE_DEBOUNCE] (tests).
+    pub fn with_deferred_finalize(mut self, debounce: Duration) -> Self {
+        self.deferred_finalize = debounce;
+        self
     }
 
     /// The factory for provider probes (see [crate::probe]): session setup that answers
@@ -194,6 +217,13 @@ struct ActiveTurn {
     settled_tx: watch::Sender<bool>,
     /// v1 `workAccepted`: the agent reported foreground work running during this turn.
     work_accepted: bool,
+    /// The prompt answered while background work ran (v1 `promptSettled` with
+    /// `deferFinalizeForBackgroundWork`): the turn finishes with this answer once the work ends.
+    prompt_settled: Option<Result<Value, String>>,
+    /// Bumped by every update during the deferral; a scheduled finalize runs only if current.
+    finalize_generation: u64,
+    /// An interrupt of a settled prompt keeps the agent running (v1 settled soft interrupt).
+    preserve_runtime: bool,
 }
 
 #[derive(Default)]
@@ -210,8 +240,9 @@ struct State {
     /// Text that goes in front of the next prompt (preamble, instructions without a system channel).
     preamble: Option<String>,
     runtime_mode: Option<goat2_contracts::RuntimeMode>,
-    /// The selection last applied; any change (model or options) is written again.
-    model_selection: Option<goat2_contracts::ModelSelection>,
+    /// The whole selection last written (model options such as reasoning effort included); any
+    /// change (model or options) is written again.
+    model_selection: Option<ModelSelection>,
     /// The latest `available_commands_update` list (probes read it; v1 probe.ts:470-476).
     available_commands: Option<Vec<Value>>,
     /// Agent-native subagents (see [crate::subagents]).
@@ -250,6 +281,10 @@ struct Shared {
     mcp_over_acp: OnceLock<Arc<crate::mcp_over_acp::McpOverAcp>>,
     /// The environment the agent process runs with (v1 `watchPromptOutcome` reads it).
     agent_env: AgentEnv,
+    deferred_finalize: Duration,
+    cwd: String,
+    /// The agent program the session launched (v1 Grok runs `grok inspect` with it).
+    program: PathBuf,
 }
 
 fn emit(shared: &Shared, event: EngineEvent) {
@@ -262,6 +297,12 @@ fn json_or_null<T: serde::Serialize>(value: &T) -> Value {
 
 fn meta_of(map: Option<Map<String, Value>>) -> Option<agent_client_protocol::v1::schema::Meta> {
     map.and_then(|m| serde_json::from_value(Value::Object(m)).ok())
+}
+
+/// v1 `hasAcpDeferredBackgroundWork` (deferredBackground.ts:13-43): background tasks the turn
+/// waits for, or subagents it started that still run.
+fn deferred_work(state: &State, turn: &ActiveTurn) -> bool {
+    turn.projector.has_deferred_background_work() || state.subagents.blocks_turn(&turn.turn_id)
 }
 
 impl Shared {
@@ -319,6 +360,7 @@ impl Shared {
                     .flavor
                     .normalize_update(normalize_v1_session_update(params));
                 self.on_session_update(&params);
+                self.rearm_deferred_finalize();
             }
             "elicitation/complete" | "session/elicitation/complete" => {
                 if let Some(id) = text_field(&params, "elicitationId") {
@@ -339,6 +381,7 @@ impl Shared {
                 for event in self.flavor.ext_notification(method, &params) {
                     self.on_flavor_event(event);
                 }
+                self.rearm_deferred_finalize();
             }
         }
     }
@@ -421,6 +464,24 @@ impl Shared {
                     emit(self, event);
                 }
             }
+            FlavorEvent::BackgroundTask {
+                session_id,
+                task_id,
+                status,
+                output,
+            } => {
+                if self.session_id.get() != Some(&session_id) {
+                    return;
+                }
+                let mut out = Vec::new();
+                if let Some(turn) = self.state.lock().expect("state").turn.as_mut() {
+                    turn.projector
+                        .background_task(&task_id, status, output.as_deref(), &mut out);
+                }
+                for event in out {
+                    emit(self, event);
+                }
+            }
             FlavorEvent::ForegroundWork {
                 session_id,
                 running,
@@ -478,13 +539,37 @@ impl Shared {
             && self.init.get().is_some_and(|i| i.protocol_version == 2)
     }
 
-    fn on_session_update(&self, params: &Value) {
+    fn on_session_update(self: &Arc<Self>, params: &Value) {
         let Some(update) = params.get("update") else {
             return;
         };
         // Updates of other sessions are the agent's subagents (v1 adapter.ts:3817-3879).
         let child = text_field(params, "sessionId")
             .filter(|session| self.session_id.get().is_some_and(|own| own != session));
+        // v1 adapter.ts:3880-3899: a frame of the agent's own wake turn after the prompt answered.
+        // With background work still running it waits for a continuation run (which GOAT 2 does not
+        // start); otherwise the turn finishes now. Either way it is not part of this turn.
+        if child.is_none() && self.flavor.is_wake_notification(params) {
+            let finish = {
+                let state = self.state.lock().expect("state");
+                match state.turn.as_ref() {
+                    Some(turn) if turn.prompt_settled.is_some() => Some((
+                        turn.turn_id.clone(),
+                        turn.prompt_seq,
+                        (!deferred_work(&state, turn))
+                            .then(|| turn.prompt_settled.clone())
+                            .flatten(),
+                    )),
+                    _ => None,
+                }
+            };
+            if let Some((turn_id, seq, result)) = finish {
+                if let Some(result) = result {
+                    self.finalize(&turn_id, seq, result);
+                }
+                return;
+            }
+        }
         let native_children = self.native_children();
         let flavor = self.flavor.as_ref();
         let kind = update
@@ -560,6 +645,23 @@ impl Shared {
                             turn.projector.apply(&update, &mut out);
                         }
                     }
+                    // v1 adapter.ts:4047-4111: injected user text carries background output (the
+                    // projector's) and subagent ends (the tracker's, also after the turn).
+                    "user_message_chunk" => {
+                        if let Some(turn) = turn.as_mut() {
+                            turn.projector.apply(update, &mut out);
+                        }
+                        let content = update.get("content");
+                        if content.and_then(|c| c.get("type")).and_then(Value::as_str)
+                            == Some("text")
+                            && let Some(text) =
+                                content.and_then(|c| c.get("text")).and_then(Value::as_str)
+                        {
+                            state
+                                .subagents
+                                .injected_user_text(flavor, text, &mut turn, &mut out);
+                        }
+                    }
                     _ => {
                         if let Some(turn) = turn.as_mut() {
                             turn.projector.apply(update, &mut out);
@@ -631,9 +733,17 @@ impl Shared {
                     let _ = responder
                         .respond_with_error(agent_client_protocol::Error::method_not_found());
                 }
-                ExtRequest::CapturePlan { markdown, response } => {
+                ExtRequest::CapturePlan {
+                    markdown,
+                    fallback,
+                    response,
+                } => {
                     let mut out = Vec::new();
                     if let Some(turn) = self.state.lock().expect("state").turn.as_mut() {
+                        // v1 `extractXAiExitPlanMarkdown(params, lastProposedPlanMarkdown)`.
+                        let markdown = markdown
+                            .or_else(|| turn.projector.last_proposed_plan())
+                            .unwrap_or(fallback);
                         turn.projector.proposed_plan(markdown, &mut out);
                     }
                     for event in out {
@@ -1015,8 +1125,102 @@ impl Shared {
     // ---- turns ---------------------------------------------------------------------------
 
     /// The prompt of `turn_id` answered (or failed). Settles the turn unless a later prompt took over.
-    /// Returns whether it settled the turn.
+    /// Returns whether the answer was the turn's (it settled the turn, or the turn now waits for
+    /// its background work with this answer).
     fn settle(
+        self: &Arc<Self>,
+        turn_id: &str,
+        prompt_seq: u64,
+        result: Result<Value, String>,
+    ) -> bool {
+        {
+            let mut guard = self.state.lock().expect("state");
+            let state = &mut *guard;
+            let Some(turn) = state.turn.as_ref() else {
+                return false;
+            };
+            if turn.turn_id != turn_id
+                || turn.prompt_seq != prompt_seq
+                || turn.prompt_settled.is_some()
+            {
+                return false;
+            }
+            // v1 `deferFinalizeForBackgroundWork`: a finished prompt with background tasks or
+            // subagents still running keeps the turn open until they end.
+            let finished = match &result {
+                Ok(response) => {
+                    let stop = response
+                        .get("stopReason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("end_turn");
+                    stop != "cancelled" && unfinished_stop_message(stop).is_none()
+                }
+                Err(_) => false,
+            };
+            if finished
+                && !turn.interrupted
+                && self.flavor.defers_finalize_for_background_work()
+                && deferred_work(state, turn)
+            {
+                state.turn.as_mut().expect("turn").prompt_settled = Some(result);
+                return true;
+            }
+        }
+        self.finalize(turn_id, prompt_seq, result)
+    }
+
+    /// v1 `makeRearmDeferredFinalize` / `makeDeferredFinalizeScheduler` (deferredBackground.ts:
+    /// 131-181, 224-233): once a deferred turn's background work has ended, finish it after the
+    /// debounce unless another update arrives first.
+    fn rearm_deferred_finalize(self: &Arc<Self>) {
+        let (turn_id, prompt_seq, generation) = {
+            let mut guard = self.state.lock().expect("state");
+            let state = &mut *guard;
+            let Some(turn) = state.turn.as_ref() else {
+                return;
+            };
+            if turn.prompt_settled.is_none() || turn.interrupted || deferred_work(state, turn) {
+                return;
+            }
+            let turn = state.turn.as_mut().expect("turn");
+            turn.finalize_generation += 1;
+            (
+                turn.turn_id.clone(),
+                turn.prompt_seq,
+                turn.finalize_generation,
+            )
+        };
+        let shared = Arc::clone(self);
+        let debounce = self.deferred_finalize;
+        tokio::spawn(async move {
+            // The debounce is v1's settling window, not a synchronization: a newer update bumps the
+            // generation and this run does nothing.
+            if !debounce.is_zero() {
+                tokio::time::sleep(debounce).await;
+            }
+            let result = {
+                let state = shared.state.lock().expect("state");
+                match state.turn.as_ref() {
+                    Some(turn)
+                        if turn.turn_id == turn_id
+                            && turn.prompt_seq == prompt_seq
+                            && turn.finalize_generation == generation
+                            && !turn.interrupted
+                            && !deferred_work(&state, turn) =>
+                    {
+                        turn.prompt_settled.clone()
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(result) = result {
+                shared.finalize(&turn_id, prompt_seq, result);
+            }
+        });
+    }
+
+    /// End the turn with its prompt's answer. Returns whether it ended the turn.
+    fn finalize(
         self: &Arc<Self>,
         turn_id: &str,
         prompt_seq: u64,
@@ -1062,18 +1266,22 @@ impl Shared {
                     TurnItemStatus::Failed,
                 ),
             };
+            let preserve_runtime = turn.preserve_runtime;
             state.subagents.release_held_tools(&mut turn.projector);
             turn.projector.finish(tool_status, &mut out);
-            state
-                .subagents
-                .turn_settled(turn_id, matches!(outcome, TurnOutcome::Done), &mut out);
+            state.subagents.turn_settled(
+                turn_id,
+                matches!(outcome, TurnOutcome::Done),
+                preserve_runtime,
+                &mut out,
+            );
             let turn = state.turn.as_mut().expect("turn");
             let ordinal = turn.projector.next_ordinal();
             let _ = turn.settled_tx.send(true);
             state.ordinal = ordinal;
             state.turn = None;
             self.cancel_pending(state, &mut out);
-            if interrupted && self.flavor.restart_after_interrupt() {
+            if interrupted && self.flavor.restart_after_interrupt() && !preserve_runtime {
                 restart = true;
             }
             out.push(EngineEvent::TurnFinished {
@@ -1300,7 +1508,21 @@ impl Shared {
                 setup.config_options = state.config_options.clone();
                 setup
             };
-            match self.flavor.model_write(&settings.model_selection, &setup) {
+            let init = self.init.get().cloned().unwrap_or_default();
+            let write = self
+                .flavor
+                .model_write_for(&settings.model_selection, &setup, &init);
+            self.apply_model_write(write).await?;
+            self.state.lock().expect("state").model_selection =
+                Some(settings.model_selection.clone());
+        }
+        Ok(())
+    }
+
+    /// Run one [ModelWrite].
+    fn apply_model_write(&self, write: ModelWrite) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            match write {
                 ModelWrite::Keep => {}
                 ModelWrite::Unavailable { message } => return Err(message),
                 ModelWrite::ConfigOption { config_id, value } => {
@@ -1333,11 +1555,46 @@ impl Shared {
                         self.write_config(write).await?;
                     }
                 }
+                ModelWrite::Sequence(writes) => {
+                    for write in writes {
+                        self.apply_model_write(write).await?;
+                    }
+                }
+                ModelWrite::OrElse(first, second) => {
+                    if self.apply_model_write(*first).await.is_err() {
+                        self.apply_model_write(*second).await?;
+                    }
+                }
+                ModelWrite::OptionalConfigByCategory { category, value } => {
+                    let option = self
+                        .state
+                        .lock()
+                        .expect("state")
+                        .config_options
+                        .iter()
+                        .find(|o| {
+                            str_field(o, "type") == Some("select")
+                                && str_field(o, "category") == Some(category.as_str())
+                        })
+                        .cloned();
+                    let Some(option) = option else {
+                        return Ok(());
+                    };
+                    let offered = select_values(&option).iter().any(|(v, _)| *v == value);
+                    if !offered || str_field(&option, "currentValue") == Some(value.as_str()) {
+                        return Ok(());
+                    }
+                    let Some(config_id) = config_option_id(&option).map(str::to_owned) else {
+                        return Ok(());
+                    };
+                    // A rejected effort is skipped and the agent's default applies.
+                    let _ = self
+                        .apply_model_write(ModelWrite::ConfigOption { config_id, value })
+                        .await;
+                }
             }
-            self.state.lock().expect("state").model_selection =
-                Some(settings.model_selection.clone());
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// v1 runtime `setConfigOption` (AcpSessionRuntime.ts:1023-1075, 1363-1420) and the
@@ -1676,6 +1933,18 @@ impl EngineSession for AcpSession {
         if let Err(reason) = shared.apply_settings(settings).await {
             return TurnStartResult::Declined { reason };
         }
+        let mut inputs = inputs;
+        if let Some(first) = inputs.first_mut() {
+            let context = PromptContext {
+                cwd: shared.cwd.clone(),
+                program: shared.program.clone(),
+                launch_env: shared.agent_env.set.clone(),
+            };
+            first.text = shared
+                .flavor
+                .rewrite_user_text_for(std::mem::take(&mut first.text), &context)
+                .await;
+        }
         let preamble = shared.state.lock().expect("state").preamble.clone();
         let blocks = match shared.prompt_blocks(&inputs, preamble) {
             Ok(blocks) => blocks,
@@ -1698,7 +1967,8 @@ impl EngineSession for AcpSession {
                 shared.session_id(),
                 turn_id.clone(),
                 state.ordinal,
-            );
+            )
+            .with_flavor(Arc::clone(&shared.flavor), shared.agent_env.set.clone());
             state.turn = Some(ActiveTurn {
                 turn_id: turn_id.clone(),
                 projector,
@@ -1706,6 +1976,9 @@ impl EngineSession for AcpSession {
                 interrupted: false,
                 settled_tx,
                 work_accepted: false,
+                prompt_settled: None,
+                finalize_generation: 0,
+                preserve_runtime: false,
             });
             state.preamble = None;
             (turn_id, state.prompt_counter)
@@ -1762,6 +2035,52 @@ impl EngineSession for AcpSession {
 
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
         let shared = &self.shared;
+        // v1 adapter.ts:7874-8082: the prompt already answered and the turn waits for background
+        // work. There is no prompt to cancel, so the turn ends here; with
+        // `preserveRuntimeOnSettledInterrupt` the agent is neither cancelled nor restarted and its
+        // MCP calls keep running (`stopMcpCalls: !settledSoftInterrupt`), so its background work
+        // goes on.
+        let settled = {
+            let mut out = Vec::new();
+            let settled = {
+                let mut state = shared.state.lock().expect("state");
+                match state.turn.as_mut() {
+                    Some(turn) if turn.turn_id == turn_id && turn.prompt_settled.is_some() => {
+                        turn.interrupted = true;
+                        turn.preserve_runtime =
+                            shared.flavor.preserve_runtime_on_settled_interrupt();
+                        let settled = (
+                            turn.prompt_seq,
+                            turn.prompt_settled.clone(),
+                            turn.preserve_runtime,
+                        );
+                        shared.cancel_pending(&mut state, &mut out);
+                        if !settled.2
+                            && let Some(bridge) = shared.mcp_over_acp.get()
+                        {
+                            bridge.stop_calls();
+                        }
+                        Some(settled)
+                    }
+                    _ => None,
+                }
+            };
+            for event in out {
+                emit(shared, event);
+            }
+            settled
+        };
+        if let Some((prompt_seq, Some(result), preserve)) = settled {
+            if !preserve {
+                let mut cancel = CancelNotification::new(shared.session_id());
+                if let Some(meta) = meta_of(shared.flavor.cancel_meta()) {
+                    cancel = cancel.meta(meta);
+                }
+                let _ = shared.notify("session/cancel", json_or_null(&cancel));
+            }
+            shared.finalize(turn_id, prompt_seq, result);
+            return Ok(());
+        }
         let mut settled_rx = {
             let mut out = Vec::new();
             let rx = {
@@ -1791,6 +2110,19 @@ impl EngineSession for AcpSession {
             cancel = cancel.meta(meta);
         }
         let _ = shared.notify("session/cancel", json_or_null(&cancel));
+        if shared.flavor.settles_prompt_on_cancel() {
+            let prompt_seq = shared
+                .state
+                .lock()
+                .expect("state")
+                .turn
+                .as_ref()
+                .filter(|t| t.turn_id == turn_id)
+                .map(|t| t.prompt_seq);
+            if let Some(seq) = prompt_seq {
+                shared.settle(turn_id, seq, Ok(json!({"stopReason": "cancelled"})));
+            }
+        }
         let waited = tokio::time::timeout(shared.timeouts.cancel, async {
             while !*settled_rx.borrow() {
                 if settled_rx.changed().await.is_err() {
@@ -2105,6 +2437,9 @@ impl AcpEngineFactory {
             probe: self.probe,
             last_stderr: Mutex::new(String::new()),
             agent_env,
+            deferred_finalize: self.deferred_finalize,
+            cwd: spec.engine.cwd.clone(),
+            program: launch.program.clone(),
         });
 
         let stderr_hook = {
@@ -2361,7 +2696,8 @@ impl AcpEngineFactory {
         }
 
         // A probe never signs in, eagerly or on demand (v1 probe.ts:418-432; review 1 finding 3).
-        if let (false, AuthPolicy::Eager { method_id }) = (self.probe, flavor.auth_policy()) {
+        if let (false, AuthPolicy::Eager { method_id }) = (self.probe, flavor.auth_policy_for(spec))
+        {
             let request = AuthenticateRequest::new(method_id.clone());
             if let Err(error) = shared
                 .request(
@@ -2512,7 +2848,7 @@ impl AcpEngineFactory {
             Err(error) if is_auth_required(&error) => {
                 // v1 authenticateAfterRequired (AcpSessionRuntime.ts:1505-1555).
                 // v1 uses the configured `authMethodId` whether or not it authenticated eagerly.
-                let configured = match flavor.auth_policy() {
+                let configured = match flavor.auth_policy_for(spec) {
                     AuthPolicy::OnRequired { method_id } => method_id,
                     AuthPolicy::Eager { method_id } => Some(method_id),
                 };

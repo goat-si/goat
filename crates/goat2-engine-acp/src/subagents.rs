@@ -96,6 +96,10 @@ struct Subagent {
     started_ms: i64,
     /// The terminal status last written as an item (v1 `terminalStatusProjected`).
     written: Option<TurnItemStatus>,
+    /// Its turn was interrupted while the agent kept it running (v1 settled soft interrupt): the
+    /// item was written as interrupted, and later reports update its status without writing it
+    /// again (v1 carryover with `projectsLateTerminals: false`, adapter.ts:4640-4670, 6544-6556).
+    quiet: bool,
 }
 
 /// The running turn, as the tracker needs it.
@@ -109,7 +113,7 @@ pub struct TurnRef<'a> {
 pub enum ToolRoute {
     /// The tracker took it (a subagent, or a tool held until its input arrives).
     Handled,
-    /// Project this update as a tool (possibly with the flavor's normalized title).
+    /// Project this update as a tool.
     Project(Value),
 }
 
@@ -204,7 +208,15 @@ impl SubagentTracker {
             self.held_tools.insert(id, merged);
             return ToolRoute::Handled;
         }
-        if extraction && let Some(subagent) = flavor.extract_subagent(&normalized) {
+        // v1 :2618-2621: a poll of a background task this turn registered resembles subagent
+        // hydration; it is a tool.
+        let background_report = active
+            .projector
+            .reports_on_registered_background_task(flavor, &normalized);
+        if extraction
+            && !background_report
+            && let Some(subagent) = flavor.extract_subagent(&normalized)
+        {
             active.projector.close_segments(out);
             self.launch_tools.insert(id.clone());
             self.held_tools.insert(id, merged);
@@ -215,13 +227,8 @@ impl SubagentTracker {
             // A held tool that is not a subagent after all is a tool with what it has so far.
             active.projector.observe_tool_call(&tool_json(&normalized));
         }
-        let mut update = update.clone();
-        if normalized.title != merged.title
-            && let (Some(title), Some(object)) = (&normalized.title, update.as_object_mut())
-        {
-            object.insert("title".into(), json!(title));
-        }
-        ToolRoute::Project(update)
+        // The projector merges and normalizes the update itself (v1 keeps the normalized state).
+        ToolRoute::Project(update.clone())
     }
 
     /// v1 `emitSubagent` (:1790-2070).
@@ -270,6 +277,7 @@ impl SubagentTracker {
                     ordinal,
                     started_ms: now_ms(),
                     written: None,
+                    quiet: false,
                 });
                 self.subagents.len() - 1
             }
@@ -333,7 +341,10 @@ impl SubagentTracker {
             title: subagent.title.clone(),
             progress: nonempty(&subagent.assistant_text),
         });
-        if is_terminal(subagent.status) && subagent.written != Some(subagent.status) {
+        if is_terminal(subagent.status)
+            && subagent.written != Some(subagent.status)
+            && !subagent.quiet
+        {
             let item = self.item(subagent);
             out.push(EngineEvent::ItemCompleted {
                 turn_id: subagent.owner_turn_id.clone(),
@@ -656,6 +667,35 @@ impl SubagentTracker {
         self.apply(flavor, update, turn, out);
     }
 
+    /// v1 `extractSubagentEndNotice` (adapter.ts:3775-3797, 4088-4111): a subagent end the agent
+    /// announced in injected user text (xAI `Background subagent <id> ... completed`).
+    pub fn injected_user_text(
+        &mut self,
+        flavor: &dyn AcpFlavor,
+        text: &str,
+        turn: &mut Option<TurnRef<'_>>,
+        out: &mut Vec<EngineEvent>,
+    ) {
+        if let Some(notice) = flavor.subagent_end_notice(text) {
+            self.finish(
+                flavor,
+                &notice.child_session_id,
+                notice.status,
+                None,
+                turn,
+                out,
+            );
+        }
+    }
+
+    /// v1 `hasAcpDeferredBackgroundWork` (deferredBackground.ts:13-43): a subagent the turn
+    /// started still runs.
+    pub fn blocks_turn(&self, turn_id: &str) -> bool {
+        self.subagents
+            .iter()
+            .any(|s| s.owner_turn_id == turn_id && blocks_settlement(s.status))
+    }
+
     /// Before the turn's projector finishes: held tools that never became subagents are tools.
     pub fn release_held_tools(&mut self, projector: &mut TurnProjector) {
         let held = std::mem::take(&mut self.held_tools);
@@ -668,8 +708,36 @@ impl SubagentTracker {
 
     /// The turn ended. An interrupted or failed turn interrupts its running subagents
     /// (v1 `terminalizeCarryoverSubagents` :4833-4851); after a completed turn they carry over.
-    pub fn turn_settled(&mut self, turn_id: &str, completed: bool, out: &mut Vec<EngineEvent>) {
+    /// `kept_running`: the turn was interrupted after its prompt answered and the agent was left
+    /// running (v1 `preserveRuntimeOnSettledInterrupt`, :7874-7900, 6544-6556): its subagents are
+    /// written as interrupted with the turn but keep running, and their later ends only update
+    /// their status.
+    pub fn turn_settled(
+        &mut self,
+        turn_id: &str,
+        completed: bool,
+        kept_running: bool,
+        out: &mut Vec<EngineEvent>,
+    ) {
         if completed {
+            return;
+        }
+        if kept_running {
+            for index in 0..self.subagents.len() {
+                let subagent = &self.subagents[index];
+                if subagent.owner_turn_id != turn_id || is_terminal(subagent.status) {
+                    continue;
+                }
+                let mut item = self.item(subagent);
+                item.status = TurnItemStatus::Interrupted;
+                out.push(EngineEvent::ItemCompleted {
+                    turn_id: turn_id.to_owned(),
+                    item: Box::new(item),
+                    locator: None,
+                });
+                self.subagents[index].written = Some(TurnItemStatus::Interrupted);
+                self.subagents[index].quiet = true;
+            }
             return;
         }
         self.interrupt_where(|s| s.owner_turn_id == turn_id, out);
@@ -834,7 +902,7 @@ mod tests {
             projector.tool("task-1").is_none(),
             "the launch never becomes a tool"
         );
-        tracker.turn_settled("turn-1", true, &mut out);
+        tracker.turn_settled("turn-1", true, false, &mut out);
         assert!(
             out.is_empty(),
             "a completed turn leaves background agents running"
@@ -903,7 +971,7 @@ mod tests {
             tracker.root_tool(&flavor, false, &launch("task-3"), &mut turn, &mut out);
         }
         out.clear();
-        tracker.turn_settled("turn-2", false, &mut out);
+        tracker.turn_settled("turn-2", false, false, &mut out);
         let written = subagent_items(&out);
         assert_eq!(written.len(), 1);
         assert_eq!(
@@ -918,6 +986,55 @@ mod tests {
             (written[0].0.as_str(), written[0].1.status),
             ("turn-3", TurnItemStatus::Interrupted)
         );
+    }
+
+    /// v1 adapter.ts:6544-6556, 4640-4670, 7874-7900 (Grok `preserveRuntimeOnSettledInterrupt`): a
+    /// turn interrupted while the agent keeps running writes its subagents as interrupted, and their
+    /// later end only updates their status.
+    #[test]
+    fn subagents_of_a_kept_running_turn_end_quietly() {
+        let flavor = crate::agents::grok::Grok::default();
+        let mut tracker = tracker();
+        let mut projector = projector();
+        let mut out = Vec::new();
+        let child = "11111111-2222-3333-4444-555555555555";
+        {
+            let mut turn = Some(TurnRef {
+                turn_id: "turn-1",
+                projector: &mut projector,
+            });
+            let spawn = json!({"sessionUpdate": "tool_call", "toolCallId": "spawn-1", "title": "Task",
+                "status": "completed", "rawInput": {"prompt": "Count the files", "description": "File counter"},
+                "rawOutput": {"text": format!("Subagent started in background.\nsubagent_id: {child}")}});
+            assert_eq!(
+                tracker.root_tool(&flavor, false, &spawn, &mut turn, &mut out),
+                ToolRoute::Handled
+            );
+        }
+        assert!(tracker.blocks_turn("turn-1"));
+        out.clear();
+        tracker.turn_settled("turn-1", false, true, &mut out);
+        let written = subagent_items(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].1.status, TurnItemStatus::Interrupted);
+        out.clear();
+        tracker.injected_user_text(
+            &flavor,
+            &format!("Background subagent {child} (File counter) completed successfully"),
+            &mut None,
+            &mut out,
+        );
+        assert!(matches!(
+            &out[..],
+            [EngineEvent::SubagentUpdate {
+                turn_id: None,
+                status: TurnItemStatus::Completed,
+                ..
+            }]
+        ));
+        out.clear();
+        tracker.exited(&mut out);
+        assert!(out.is_empty(), "an ended subagent is not interrupted again");
     }
 
     /// v1 adapter.ts:1816-1822: hydration without a known launch does not create a subagent.

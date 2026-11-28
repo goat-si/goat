@@ -2,9 +2,9 @@
 //!
 //! v1 `packages/provider-grok/src/server/xaiAcpExtension.ts:880-1235` (schemas, question extraction,
 //! answer normalization, plan capture) and `packages/provider-grok/src/server/adapter.ts:171-230`
-//! (registration). Gap: v1 falls back to the last plan file Grok wrote
-//! (`lastProposedPlanMarkdown`, `extractGrokPlanMarkdownFromToolCallData`); GOAT 2 uses the request's
-//! `planContent` or the empty-plan text.
+//! (registration). Without `planContent` the plan is the one last captured in the turn (v1
+//! `lastProposedPlanMarkdown`, which the plan file Grok writes feeds; see `grok_plan`), else the
+//! empty-plan text.
 
 use goat2_contracts::{UserInputOption, UserInputQuestion};
 use serde_json::{Map, Value, json};
@@ -34,9 +34,10 @@ fn unwrap(params: &Value) -> &Value {
     }
 }
 
-/// v1 `extractXAiExitPlanMarkdown` without the plan-file fallback.
-pub fn exit_plan_markdown(params: &Value) -> String {
-    trimmed(unwrap(params).get("planContent")).unwrap_or_else(|| EMPTY_PLAN_MARKDOWN.to_owned())
+/// v1 `extractXAiExitPlanMarkdown` (xaiAcpExtension.ts:921-935): the request's plan; the driver falls
+/// back to the turn's last captured plan, then [EMPTY_PLAN_MARKDOWN].
+pub fn exit_plan_markdown(params: &Value) -> Option<String> {
+    trimmed(unwrap(params).get("planContent"))
 }
 
 /// v1 `makeXAiExitPlanModeCapturedResponse`: abandon Grok's own plan gate so the turn goes on.
@@ -214,6 +215,7 @@ pub fn xai_request_action(method: &str, params: &Value) -> Option<ExtRequest> {
     if EXIT_PLAN_MODE.contains(&method) {
         return Some(ExtRequest::CapturePlan {
             markdown: exit_plan_markdown(params),
+            fallback: EMPTY_PLAN_MARKDOWN.to_owned(),
             response: exit_plan_captured_response(),
         });
     }
@@ -291,13 +293,11 @@ mod tests {
     #[test]
     fn exit_plan_takes_content_or_the_empty_plan() {
         assert_eq!(
-            exit_plan_markdown(&json!({"planContent": "  # Plan  "})),
-            "# Plan"
+            exit_plan_markdown(&json!({"planContent": "  # Plan  "})).as_deref(),
+            Some("# Plan")
         );
-        assert_eq!(
-            exit_plan_markdown(&json!({"planContent": null})),
-            EMPTY_PLAN_MARKDOWN
-        );
+        assert_eq!(exit_plan_markdown(&json!({"planContent": null})), None);
+        assert_eq!(exit_plan_markdown(&json!({"planContent": "  "})), None);
         assert_eq!(exit_plan_captured_response()["outcome"], "abandoned");
     }
 }
