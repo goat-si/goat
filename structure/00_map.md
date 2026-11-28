@@ -10,7 +10,7 @@ State: `real` = has working code, `stub` = placeholder, `legacy` = superseded, t
 | `crates/goat2-engine-codex` | Rust | Codex app-server driver on pinned JSON Schema (`schema/codex-0.167.0/`), process group, steer/turn results | B | stub on goat2 |
 | `crates/goat2-parity` | Rust | v1 behaviour scenarios (recorded sessions) runnable against v1 and GOAT 2 | D | stub on goat2 |
 | `crates/goat2-host` | Rust (bin `goat2-host`) | The host: mailbox/lane, caps, follow-ups, child wake, restart settlement, MCP (`rmcp`), WebSocket API | E | stub |
-| `packages/contracts-rs` | TS (generated) | TS types + JSON Schema from goat2-contracts. Never hand-edit | C | generated |
+| `packages/contracts-rs` | TS (generated) | TS types + JSON Schema from goat2-contracts. Never hand-edit | C | generated (`a2c6b7c`) |
 | `apps/web` | TS/React | UI: Paper look 1:1 (bot home, thread view), talks only to the host WebSocket | F | prototype (Paper SSOT parts, placeholder data) |
 | `apps/desktop` | TS/Electron | Window shell; spawns and supervises `goat2-host`; packages GOAT 2 (Dev) | G | stub |
 | `apps/server` | TS/Node | Old Node host stub (`/health`) | - | **legacy**: replaced by `crates/goat2-host`; remove once G ships |

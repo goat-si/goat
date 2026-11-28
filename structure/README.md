@@ -20,4 +20,4 @@ The owner updates it after every merge into `goat2` that changes a boundary.
 | [60_planned.md](60_planned.md) | UI shells for surfaces whose backend is later or undecided |
 | [90_gaps.md](90_gaps.md) | Known gaps between this structure and the code |
 
-Last synced: goat2 `ede0169` + owner decisions 2026-11-28 ~21:40 KST.
+Last synced: goat2 `a2c6b7c` (lane C contracts merge) + owner decisions 2026-11-28.
