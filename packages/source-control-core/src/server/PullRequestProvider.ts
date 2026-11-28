@@ -552,6 +552,7 @@ export interface PullRequestProviderApi {
   readonly submitReview: (
     input: ProviderRepositoryRef & {
       readonly number: number;
+      readonly expectedHeadSha?: string;
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly revision?: PullRequestSubmitReviewInput["revision"];

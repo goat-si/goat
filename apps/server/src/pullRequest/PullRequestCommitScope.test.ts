@@ -4,9 +4,14 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import { fakePullRequestProvider } from "@goat/source-control-testing/fakeSourceControlDriver";
 import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
-import { project, makeService, changeRequest } from "./pullRequestTestFixtures.ts";
+import {
+  project,
+  makeService,
+  changeRequest,
+  fakeProvider,
+  hostedChangeRequest,
+} from "./pullRequestTestFixtures.ts";
 import { activityListing } from "./pullRequestActivityListing.testkit.ts";
 
 it.effect("a refused merge notifies readers so they re-read the conflicting state", () =>
@@ -16,7 +21,7 @@ it.effect("a refused merge notifies readers so they re-read the conflicting stat
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequestSummary: () =>
             Effect.succeed({
               ...changeRequest(1, "2026-09-16T00:00:00.000Z"),
@@ -57,7 +62,7 @@ it.effect("reads a commit's diff only for a commit the change request lists", ()
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
-        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           ...activityListing(listed, "b".repeat(40)),
           getDiff: (input) =>
             Effect.sync(() => {
@@ -68,6 +73,8 @@ it.effect("reads a commit's diff only for a commit the change request lists", ()
                 nextCursor: null,
               };
             }),
+          getDiffFilePaths: () =>
+            Effect.succeed({ files: [{ oldPath: "a.ts", newPath: "a.ts" }], nextCursor: null }),
           getDiffFileContents: (input) =>
             Effect.sync(() => {
               read.push(input.commit);
@@ -92,5 +99,40 @@ it.effect("reads a commit's diff only for a commit the change request lists", ()
     yield* service.diff({ ...ref, commit: "AAAAAAA" });
     yield* service.diffFileContents({ ...ref, ...file, commit: "aaaaaaa" });
     assert.deepStrictEqual(read, [listed, listed]);
+  }),
+);
+
+it.effect("refuses a review when the requested head has moved before submitting", () =>
+  Effect.gen(function* () {
+    let writes = 0;
+    const head = "a".repeat(40);
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () => Effect.succeed({ ...hostedChangeRequest(""), headSha: head }),
+          submitReview: ({ expectedHeadSha }) =>
+            Effect.sync(() => {
+              assert.strictEqual(expectedHeadSha, head);
+              writes++;
+            }),
+        }),
+      ],
+    });
+    const input = {
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      verdict: "approve" as const,
+      body: "",
+      comments: [],
+    };
+    const error = yield* service
+      .submitReview({ ...input, expectedHeadSha: "b".repeat(40) })
+      .pipe(Effect.flip);
+    assert.include(error.detail, "Review the new commits");
+    assert.strictEqual(writes, 0);
+    yield* service.submitReview({ ...input, expectedHeadSha: "aaaaaaa" });
+    assert.strictEqual(writes, 1);
   }),
 );

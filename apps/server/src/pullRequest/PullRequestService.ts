@@ -1,3 +1,4 @@
+import { pinnedReviewHead } from "./pinnedReviewHead.ts";
 import { guardDiffFileContents, withListedCommit } from "./withListedCommit.ts";
 import { addressedProjectOf, observeRead } from "./addressedProject.ts";
 import { missingProjectError } from "./pullRequestMissingProject.ts";
@@ -139,7 +140,6 @@ import {
 import { noteRefinedHost, unreadListResult, withListResult } from "./pullRequestListFallback.ts";
 import { withOverviewThreads } from "./pullRequestActivityFields.ts";
 import { VERDICT_LABELS } from "./pullRequestReviewVerdictLabels.ts";
-
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
 }
@@ -175,7 +175,6 @@ const FILES_VIEWED_CACHE_CAPACITY = 128;
 const VIEWER_CACHE_CAPACITY = 32;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
-
 const routingCredential = Context.Reference<{
   readonly credentialFingerprint: string;
   readonly viewer: string;
@@ -332,7 +331,6 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<void>;
   }
 >()("goat/pullRequest/PullRequestService") {}
-
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 const LABEL_CHANGE_REFUSAL = "You need triage access on this repository to change its labels.";
 export interface SupportedProject {
@@ -373,7 +371,6 @@ interface RepositoryBatch {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
 }
-
 const LIST_CURSOR_PATTERN =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,9})\|(\d{1,9}(?:,\d{1,9})*)?(?:\|([\w.:~+-]{1,128}))?$/;
 
@@ -388,7 +385,6 @@ function parseListCursor(raw: string): ListCursor | null {
     ...(match[4] === undefined ? {} : { resumeAfter: match[4] }),
   };
 }
-
 export const make = Effect.gen(function* () {
   const mergedPullRequests = yield* PubSub.sliding<PullRequestMergeEvent>(64);
   const stateChanges = yield* PubSub.sliding<ThreadPullRequestKey>(64);
@@ -2051,18 +2047,23 @@ export const make = Effect.gen(function* () {
                 "You need write access on this repository to comment on a line of a change request.",
               );
             }
-            return project.api
-              .submitReview({
-                cwd: project.project.workspaceRoot,
-                repository: project.repository,
-                host: project.host,
-                number: input.number,
-                verdict: input.verdict,
-                body: input.body,
-                comments: input.comments,
-                ...(input.revision === undefined ? {} : { revision: input.revision }),
-              })
-              .pipe(Effect.mapError(toPullRequestError("submitReview")));
+            return pinnedReviewHead(project, input, toPullRequestError("submitReview")).pipe(
+              Effect.flatMap((expectedHeadSha) =>
+                project.api
+                  .submitReview({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                    verdict: input.verdict,
+                    body: input.body,
+                    comments: input.comments,
+                    ...(expectedHeadSha === undefined ? {} : { expectedHeadSha }),
+                    ...(input.revision === undefined ? {} : { revision: input.revision }),
+                  })
+                  .pipe(Effect.mapError(toPullRequestError("submitReview"))),
+              ),
+            );
           }),
         );
       }),
@@ -3718,5 +3719,4 @@ export const make = Effect.gen(function* () {
     invalidate,
   });
 });
-
 export const layer = Layer.effect(PullRequestService, make);

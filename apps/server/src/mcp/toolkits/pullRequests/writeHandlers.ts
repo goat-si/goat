@@ -106,8 +106,21 @@ export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandler
     goat_pull_request_comment_update: write(({ commentId, kind, body }, ref) =>
       service.updateComment({ ...ref, commentId, kind, body }),
     ),
-    goat_pull_request_review_submit: write(({ verdict, body, comments }, ref) =>
-      service.submitReview({ ...ref, verdict, body, comments }),
+    goat_pull_request_review_submit: write(({ verdict, body, comments, expectedHeadSha }, ref) =>
+      verdict === "approve" && expectedHeadSha === undefined
+        ? Effect.fail(
+            new PullRequestOperationError({
+              operation: "submitReview",
+              detail: "Approving needs expectedHeadSha from the headSha you reviewed.",
+            }),
+          )
+        : service.submitReview({
+            ...ref,
+            verdict,
+            body,
+            comments,
+            ...(expectedHeadSha === undefined ? {} : { expectedHeadSha }),
+          }),
     ),
     goat_pull_request_thread_reply: write(({ threadId, body }, ref) =>
       service.replyToThread({ ...ref, threadId, body }),

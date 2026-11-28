@@ -96,6 +96,7 @@ export const makeWriteTools = (
     }),
     make("review_submit", {
       verdict: PullRequestSubmitReviewInput.fields.verdict,
+      expectedHeadSha: PullRequestSubmitReviewInput.fields.expectedHeadSha,
       body: PullRequestSubmitReviewInput.fields.body,
       comments: PullRequestSubmitReviewInput.fields.comments,
     }),

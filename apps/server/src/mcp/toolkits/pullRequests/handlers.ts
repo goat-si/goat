@@ -312,7 +312,10 @@ const make = Effect.gen(function* () {
       const holder =
         callerProject !== undefined && holders.some((holder) => holder.id === callerProject.id)
           ? callerProject
-          : first;
+          : yield* pullRequests.addressedProject(first.id).pipe(
+              Effect.mapError((cause) => new PullRequestListFailedError({ cause })),
+              Effect.map((project) => project ?? first),
+            );
       // The holder's own host and full path, so a short Azure DevOps name builds its
       // org/project/_git URL.
       return { input: { ...input, host: key.host, repository: key.repository }, project: holder };

@@ -307,14 +307,11 @@ export type GitHubPullRequestApiError =
   | SourceControlRateLimit.SourceControlRateLimitPausedError
   | GitHubViewerLoginUnavailableError
   | GitHubPullRequestUpdatedAtUnavailableError;
-
 const { isNotFoundOnly } = GitHubGraphQlClient;
 const isGitHubApiResponseError = Schema.is(GitHubRequestPolicy.GitHubApiResponseError);
 const isGitHubServerError = (error: unknown): boolean =>
   isGitHubApiResponseError(error) && error.status >= 500;
-
 export const NODE_ID_CACHE_CAPACITY = 128;
-
 export interface GitHubPullRequestListBatch {
   readonly items: ReadonlyArray<GitHubPullRequestListItem>;
   readonly truncated: boolean;
@@ -646,6 +643,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
+      readonly expectedHeadSha?: string;
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly revision?: PullRequestSubmitReviewInput["revision"];
@@ -2437,7 +2435,9 @@ export const make = Effect.gen(function* () {
           path: path + "/reviews",
           body: {
             ...buildReviewSubmission(input),
-            ...(revision === undefined ? {} : { commit_id: revision.headSha }),
+            ...(input.expectedHeadSha === undefined && revision === undefined
+              ? {}
+              : { commit_id: input.expectedHeadSha ?? revision?.headSha }),
           },
         })
         .pipe(Effect.asVoid);

@@ -629,7 +629,7 @@ describe("GitCafePullRequestProvider", () => {
     });
     return Effect.gen(function* () {
       const provider = yield* GitCafePullRequestProvider.make;
-      const mergeTarget = { ...target, expectedHeadSha: baseOid };
+      const mergeTarget = { ...target, headSha: baseOid };
       const result = yield* provider
         .runAction({ ...mergeTarget, action: "merge", mergeMethod: "squash" })
         .pipe(Effect.result);
