@@ -31,3 +31,6 @@ textarea.goat2-input::placeholder { color: #5D5D5D; opacity: 1; }
 [data-thread-frame] [data-overlay] { border-radius: 14px 0 0 14px !important; border-color: #E2E2E2 !important; border-width: 0.5px 0 0 0.5px !important; }
 [data-thread-frame] [data-workspace-bg] { border-radius: 14px 0 0 14px !important; }
 [data-hidden="true"] { visibility: hidden; }
+/* Thread frame columns follow the window height (the board draws them at 900px). */
+[data-thread-frame] [data-sidebar-col] { height: 100% !important; }
+[data-thread-frame] [data-rail-col] { height: calc(100% - 40px) !important; }

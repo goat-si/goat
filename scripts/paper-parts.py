@@ -294,7 +294,7 @@ TSB = "0.0.4.1"         # sidebar column
 TLIST = TSB + ".2.0"
 P("ThreadFrame", T1, "0", "position: 'relative'", "rail: ReactNode; main: ReactNode; header: ReactNode; lights: ReactNode; sidebar: ReactNode; toggle: object; menu: object; bottom: object; panel: object; stamp: ReactNode",
   slots={"0.0.0": "{rail}", "0.1.0": "{main}", "0.2.0": "{header}", "0.3": "{lights}", "0.4.1": "{sidebar}"},
-  attrs={"": 'data-frame="" data-thread-frame=""', "0.0": 'data-frame-inner=""', "0.2": 'data-topbar=""', "0.5": 'data-overlay=""', "0.4.0": 'data-workspace-bg=""', "0.6": "{...toggle}", "0.7.0": "{...menu}", "0.7.1": "{...bottom}", "0.7.2": "{...panel}"},
+  attrs={"": 'data-frame="" data-thread-frame=""', "0.0": 'data-rail-col=""', "0.2": 'data-topbar=""', "0.5": 'data-overlay=""', "0.4.0": 'data-workspace-bg=""', "0.4": 'data-sidebar-col=""', "0.6": "{...toggle}", "0.7.0": "{...menu}", "0.7.1": "{...bottom}", "0.7.2": "{...panel}"},
   before={"0.7.0": "{stamp}"})
 P("ThreadTrafficLights", T1, "0.0.3", "#FF5F57")
 P("ThreadMain", T1, "0.0.1.0", "justifyContent: 'space-between'", "timeline: ReactNode; composer: ReactNode", slots={"0.0": "{timeline}", "1": "{composer}"})

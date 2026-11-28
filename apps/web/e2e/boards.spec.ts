@@ -174,3 +174,20 @@ test("thread view: reorder queued with arrow keys; edit state resets when switch
   await expect(page.getByLabel("Message", { exact: true })).toHaveValue("");
   await expect(page.getByText("Run the e2e suite?")).toBeVisible();
 });
+
+test("thread mode: start a thread, approve a request, workspace follows the window height", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.getByLabel("New thread").click();
+  await page.getByLabel("Message", { exact: true }).fill("Count the TODOs in api-server");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.locator("[data-timeline]")).toContainText("Count the TODOs in api-server");
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("");
+  await page.locator("[data-thread-row=t-auth]").click();
+  await page.locator("[data-option=accept]").click();
+  await expect(page.getByText("Run the e2e suite?")).toHaveCount(0);
+  for (const height of [760, 1100]) {
+    await page.setViewportSize({ width: 1440, height });
+    const bg = await page.locator("[data-workspace-bg]").boundingBox();
+    expect(Math.round(bg!.y + bg!.height)).toBe(height);
+  }
+});

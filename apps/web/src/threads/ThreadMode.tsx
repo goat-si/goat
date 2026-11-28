@@ -2,7 +2,7 @@
 // (origin/dev 916b5ccc: Sidebar Activity view, ChatHeader, MessagesTimeline, TimelineWorkGroupRows, WorkLog,
 // TurnFoldLabel, ChatComposer/ComposerSurface, QueuedRunsControl), so the generated parts carry v1's
 // resolved look; this file maps GOAT 2 data onto them.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ProviderGlyph } from "@goat2/provider-icons";
 import * as P from "../paper/parts.tsx";
 import { useClient, useHost, useHostContext, useThread } from "../host/HostProvider.tsx";
@@ -137,11 +137,21 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
   useTicker(running);
   const scroller = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const snap = useHost();
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const outbox = card ? snap.outbox.filter((o) => o.target.threadId === card.id) : [];
-  useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [thread.entries.length]);
+  // New content at the end scrolls to the bottom; an older page prepended keeps the reader's place.
+  const anchor = useRef<{ first: string | undefined; last: string | undefined; height: number }>({ first: undefined, last: undefined, height: 0 });
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const first = thread.entries[0]?.key, last = thread.entries.at(-1)?.key;
+    const prev = anchor.current;
+    if (last !== prev.last) el.scrollTop = el.scrollHeight;
+    else if (first !== prev.first) el.scrollTop += el.scrollHeight - prev.height;
+    anchor.current = { first, last, height: el.scrollHeight };
+  });
   const run = async (body: Parameters<typeof client.command>[0]) => {
     setError(null);
     const r = await client.command(body);

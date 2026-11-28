@@ -1125,7 +1125,7 @@ export function ThreadFrame({ rail, main, header, lights, sidebar, toggle, menu,
   return (
     <div data-frame="" data-thread-frame="" style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', fontSize: '12px', fontSynthesis: 'none', lineHeight: '16px', MozOsxFontSmoothing: 'grayscale', overflow: 'clip', overflowWrap: 'anywhere', WebkitFontSmoothing: 'antialiased' }}>
       <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', flexShrink: 0, height: '900px', minHeight: '0px', overflow: 'clip', position: 'relative', width: '1440px' }}>
-        <div data-frame-inner="" style={{ boxSizing: 'border-box', height: '860px', left: '0px', position: 'absolute', top: '40px', width: '44px' }}>
+        <div data-rail-col="" style={{ boxSizing: 'border-box', height: '860px', left: '0px', position: 'absolute', top: '40px', width: '44px' }}>
           {rail}
         </div>
         <div style={{ backgroundColor: '#FFFFFF', bottom: '0px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', left: '300px', position: 'absolute', right: '0px', top: '40px' }}>
@@ -1135,7 +1135,7 @@ export function ThreadFrame({ rail, main, header, lights, sidebar, toggle, menu,
           {header}
         </div>
         {lights}
-        <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '900px', left: '44px', position: 'absolute', top: '0px', width: '256px' }}>
+        <div data-sidebar-col="" style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '900px', left: '44px', position: 'absolute', top: '0px', width: '256px' }}>
           <div data-workspace-bg="" style={{ backgroundColor: '#F7F7F7', borderTopLeftRadius: '12px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
           {sidebar}
         </div>

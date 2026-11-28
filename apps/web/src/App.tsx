@@ -5,7 +5,7 @@ import { ProviderGlyph } from "@goat2/provider-icons";
 import * as P from "./paper/parts.tsx";
 import { useClient, useHost, useHostContext, useThread } from "./host/HostProvider.tsx";
 import { botRows, workerThreads, type BotRowData } from "./host/store.ts";
-import type { CommandResult, RequestOpened } from "./host/wire.ts";
+import type { CommandResult, RequestOpened, RequestOutcome } from "./host/wire.ts";
 import { Planned, plannedProps } from "./planned/Planned.tsx";
 import { useUi, type UiStore } from "./ui-state/uiState.ts";
 import { clock, duration, shortTime } from "./lib/format.ts";
@@ -295,23 +295,40 @@ export function RequestCard({ threadId, request, onHide }: { threadId: string; r
   const client = useClient();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState("");
   const [title, ...rest] = request.summary.split("\n");
-  const answer = async (optionId: string) => {
-    setPending(optionId); setError(null);
-    const r: CommandResult = await client.command({ type: "resolve_request", threadId, requestId: request.requestId, outcome: "answered", optionId });
+  const resolve = async (key: string, body: { outcome: RequestOutcome; optionId?: string; text?: string }) => {
+    setPending(key); setError(null);
+    const r: CommandResult = await client.command({ type: "resolve_request", threadId, requestId: request.requestId, ...body });
     setPending(null);
     if (!r.ok) setError(r.error?.message ?? "The host did not take this answer.");
   };
-  const options = request.kind === "decision" ? request.options ?? [] : [];
-  const buttons = options.length > 0
-    ? options.map((o, i) => {
-      const props = btn(o.label, () => void answer(o.id), { "aria-busy": pending === o.id, title: o.consequence ?? o.label, "data-option": o.id });
-      return i === 0 ? <P.DecisionPrimary key={o.id} label={o.label} button={props} /> : <P.DecisionSecondary key={o.id} label={o.label} button={props} />;
-    })
-    : [<P.DecisionSecondary key="later" label="Not now" button={btn("Not now (hides it here; it still waits)", onHide)} />, <Planned key="p" id="inbox" style={{ alignSelf: "center" }} />];
+  const action = (key: string, label: string, primary: boolean, body: { outcome: RequestOutcome; optionId?: string; text?: string }, title?: string) => {
+    const props = btn(label, () => void resolve(key, body), { "aria-busy": pending === key, title: title ?? label, "data-option": key });
+    return primary ? <P.DecisionPrimary key={key} label={label} button={props} /> : <P.DecisionSecondary key={key} label={label} button={props} />;
+  };
+  let buttons: ReactNode[];
+  let body: ReactNode = rest.join(" ") || null;
+  if (request.kind === "decision" && (request.options?.length ?? 0) > 0) {
+    buttons = request.options!.map((o, i) => action(o.id, o.label, i === 0, { outcome: "decided", optionId: o.id }, o.consequence));
+  } else if (request.kind === "approval") {
+    buttons = [action("accept", "Approve", true, { outcome: "accept" }), action("decline", "Decline", false, { outcome: "decline" })];
+  } else if (request.kind === "resend") {
+    buttons = [action("resend", "Resend", true, { outcome: "resend" }, "Send the message again"), action("dropped", "Drop", false, { outcome: "dropped" })];
+  } else if (request.kind === "question") {
+    body = <>
+      {body}
+      <textarea className="goat2-input" rows={2} aria-label="Answer" value={answerText} onChange={(e) => setAnswerText(e.target.value)}
+        style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #ECECEC", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: "#0D0D0D" }} />
+    </>;
+    buttons = [action("answered", "Answer", true, { outcome: "answered", text: answerText.trim() })];
+  } else {
+    body = body ?? "Signing in from here is not built yet.";
+    buttons = [<P.DecisionSecondary key="later" label="Not now" button={btn("Not now (hides it here; it still waits)", onHide)} />, <Planned key="p" id="settings-accounts" style={{ alignSelf: "center" }} />];
+  }
   return (
     <div data-request={request.requestId}>
-      <P.DecisionCard title={title} body={rest.join(" ") || (options.length === 0 ? "Answering this here is not built yet." : null)} buttons={<P.DecisionButtons>{buttons}</P.DecisionButtons>} />
+      <P.DecisionCard title={title} body={body} buttons={<P.DecisionButtons>{buttons}</P.DecisionButtons>} />
       {error && <div role="alert" style={{ color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12, padding: "6px 4px" }}>{error}</div>}
     </div>
   );
