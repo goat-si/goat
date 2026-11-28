@@ -74,7 +74,7 @@ export const makeClaudeCloudFolderTrust = Effect.fn("ClaudeCloudFolderTrust.make
     const isGoatWorktree = Effect.fn("ClaudeCloudFolderTrust.isGoatWorktree")(function* (
       folder: string,
     ) {
-      const live = new Set(
+      const live = new Set<string>(
         (yield* input.projects.list())
           .filter((row) => row.deletedAt === null)
           .map((row) => row.projectId),

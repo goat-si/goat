@@ -89,15 +89,14 @@ const harness = (
       { projectId: live, worktreePath: WORKTREE },
       { projectId: deleted, worktreePath: "/fixture/worktrees/gone" },
     ];
-    const projection = refuseFullShellSnapshot(
-      Projection.ProjectionStoreV2.of({
-        getShellSnapshot: (options?: Projection.ShellSnapshotOptions) =>
-          Effect.succeed({
-            threads: shells.filter((shell) => shell.worktreePath === options?.worktreePath),
-            archivedThreads: [],
-          } as never),
-      } as never),
-    );
+    const projection = Projection.ProjectionStoreV2.of({
+      getShellSnapshot: refuseFullShellSnapshot((options?: Projection.ShellSnapshotOptions) =>
+        Effect.succeed({
+          threads: shells.filter((shell) => shell.worktreePath === options?.worktreePath),
+          archivedThreads: [],
+        } as never),
+      ),
+    } as never);
     const cli = ClaudeCloudCli.ClaudeCloudCli.of({
       // Like Claude: choosing Yes writes the folder's trust into its own config.
       acceptTrust: (_login: ClaudeCloudLogin, cwd: string) =>

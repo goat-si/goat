@@ -9,23 +9,12 @@ export const isBoundedShellRead = (options: ShellSnapshotOptions | undefined) =>
   options?.familyOf !== undefined;
 
 /**
- * Makes a service's shell reads die unless bounded. A real install's full snapshot holds thousands
- * of threads and stalls the server for seconds, so callers after a few threads must filter.
+ * Makes shell reads die unless bounded. A real install's full snapshot holds thousands of threads
+ * and stalls the server for seconds, so callers after a few threads must filter.
  */
-export const refuseFullShellSnapshot = <
-  S extends {
-    readonly getShellSnapshot: (
-      options?: ShellSnapshotOptions,
-    ) => Effect.Effect<unknown, unknown, never>;
-  },
->(
-  service: S,
-): S => ({
-  ...service,
-  getShellSnapshot: ((options?: ShellSnapshotOptions) =>
+export const refuseFullShellSnapshot =
+  <A, E>(read: (options?: ShellSnapshotOptions) => Effect.Effect<A, E>) =>
+  (options?: ShellSnapshotOptions): Effect.Effect<A, E> =>
     isBoundedShellRead(options)
-      ? service.getShellSnapshot(options)
-      : Effect.die(
-          new Error("A bounded lookup read the full shell snapshot"),
-        )) as S["getShellSnapshot"],
-});
+      ? read(options)
+      : Effect.die(new Error("A bounded lookup read the full shell snapshot"));

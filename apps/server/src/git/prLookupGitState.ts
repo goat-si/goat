@@ -130,6 +130,9 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     }
     saveFingerprint(cwd, metadata.repository);
     saveFingerprint(branchKey, metadata.refs);
+    // A lookup already in flight read the old shared state; later ones must not join it.
+    const previousShared = sharedStamps.get(cwd);
+    if (previousShared !== undefined && previousShared !== metadata.shared) restartReads(cwd);
     sharedStamps.delete(cwd);
     if (metadata.shared !== null) {
       if (sharedStamps.size >= options.capacity) {

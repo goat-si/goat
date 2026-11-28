@@ -73,7 +73,8 @@ const layerUnboundedServices = Layer.mergeAll(
 const layerServices = Layer.effect(
   ProjectionStore.ProjectionStoreV2,
   Effect.gen(function* () {
-    return refuseFullShellSnapshot(yield* ProjectionStore.ProjectionStoreV2);
+    const service = yield* ProjectionStore.ProjectionStoreV2;
+    return { ...service, getShellSnapshot: refuseFullShellSnapshot(service.getShellSnapshot) };
   }),
 ).pipe(Layer.provideMerge(layerUnboundedServices));
 const layerDatabase = SqlitePersistence.layerMemory.pipe(

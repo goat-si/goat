@@ -6,7 +6,11 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
 import { git, initRepoWithCommit, layerTest, makeTmpDir } from "./testing/gitFixture.ts";
-import { makeGitMetadataFingerprint, splitBranchSections } from "./gitMetadataFingerprint.ts";
+import {
+  makeGitMetadataFingerprint,
+  splitBranchSections,
+  userGitConfigFiles,
+} from "./gitMetadataFingerprint.ts";
 
 const setup = Effect.gen(function* () {
   const cwd = yield* makeTmpDir();
@@ -354,4 +358,28 @@ it.effect("linked worktrees share a remote-read stamp until the remote or an inc
     yield* append("[include]\n\tpath = extra.config\n");
     assert.isNull(yield* shared(worktree, "linked"));
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("legacy remote files turn sharing off, since they change in place", () =>
+  Effect.gen(function* () {
+    const { cwd } = yield* setup;
+    const fs = yield* FileSystem.FileSystem;
+    const read = yield* makeGitMetadataFingerprint({ userConfigFiles: [] });
+    assert.isNotNull((yield* read(cwd, "main"))?.shared);
+    yield* fs.makeDirectory(`${cwd}/.git/remotes`);
+    yield* fs.writeFileString(`${cwd}/.git/remotes/legacy`, "URL: https://example.com/a.git\n");
+    assert.isNull((yield* read(cwd, "main"))?.shared);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("system config is skipped only when GIT_CONFIG_NOSYSTEM reads as true", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const files = (nosystem: string) =>
+      userGitConfigFiles(path, { HOME: "/home/someone", GIT_CONFIG_NOSYSTEM: nosystem });
+    assert.include(files("0"), "/etc/gitconfig");
+    assert.include(files("false"), "/etc/gitconfig");
+    assert.notInclude(files("1"), "/etc/gitconfig");
+    assert.notInclude(files("yes"), "/etc/gitconfig");
+  }).pipe(Effect.provide(layerTest)),
 );

@@ -278,19 +278,18 @@ export const bootstrapScenario = (
                     },
                   }),
         }),
-        Layer.mock(ThreadManagement.ThreadManagementService)(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          countThreads: () => Effect.succeed(0),
           // Startup looks for a thread in the bootstrapped project only.
-          refuseFullShellSnapshot({
-            countThreads: () => Effect.succeed(0),
-            getShellSnapshot: () =>
-              Effect.succeed({
-                threads: [],
-                archivedThreads: [],
-                schemaVersion: 1,
-                snapshotSequence: 0,
-              }),
-          }),
-        ),
+          getShellSnapshot: refuseFullShellSnapshot(() =>
+            Effect.succeed({
+              threads: [],
+              archivedThreads: [],
+              schemaVersion: 1,
+              snapshotSequence: 0,
+            }),
+          ),
+        }),
         Layer.mock(ThreadLaunch.ThreadLaunchService)({
           launch: (input) => {
             assert.equal(input.modelSelection.instanceId, instanceId);

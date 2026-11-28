@@ -268,22 +268,21 @@ export function makeHarness(options: HarnessOptions = {}) {
           Effect.gen(function* () {
             const service = yield* ThreadManagement.ThreadManagementService;
             // Launches look up only the threads sharing a worktree.
-            return ThreadManagement.ThreadManagementService.of(
-              refuseFullShellSnapshot({
-                ...service,
-                streamStoredEventsFrom:
-                  options.launchEvents?.(service.streamStoredEventsFrom) ??
-                  service.streamStoredEventsFrom,
-                dispatch: (command) =>
-                  (options.dispatch?.(command, service.dispatch) ?? service.dispatch(command)).pipe(
-                    Effect.tap(() =>
-                      prepared !== undefined && command.type === "prepared-run.release"
-                        ? Deferred.succeed(prepared, undefined)
-                        : Effect.void,
-                    ),
+            return ThreadManagement.ThreadManagementService.of({
+              ...service,
+              getShellSnapshot: refuseFullShellSnapshot(service.getShellSnapshot),
+              streamStoredEventsFrom:
+                options.launchEvents?.(service.streamStoredEventsFrom) ??
+                service.streamStoredEventsFrom,
+              dispatch: (command) =>
+                (options.dispatch?.(command, service.dispatch) ?? service.dispatch(command)).pipe(
+                  Effect.tap(() =>
+                    prepared !== undefined && command.type === "prepared-run.release"
+                      ? Deferred.succeed(prepared, undefined)
+                      : Effect.void,
                   ),
-              }),
-            );
+                ),
+            });
           }),
         ).pipe(Layer.provide(layerThreadManagement)),
         layerReceipts,

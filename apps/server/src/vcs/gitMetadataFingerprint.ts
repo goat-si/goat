@@ -17,6 +17,9 @@ const CONFIG_SECTION_MAX_BYTES = 256 * 1024;
 // FAT/exFAT mtimes have two-second resolution; network filesystems may be coarser.
 const CONFIG_MTIME_GRANULARITY_MS = 2_000;
 
+/** Git's reading of a boolean environment variable that is set. */
+const gitEnvTrue = (value: string) => /^(?:true|yes|on|1)$/i.test(value.trim());
+
 /** Config files git reads besides the repository's own, as far as the environment shows them. */
 export function userGitConfigFiles(path: Path.Path, env: NodeJS.ProcessEnv): ReadonlyArray<string> {
   const home = env.HOME ?? env.USERPROFILE ?? "";
@@ -29,7 +32,7 @@ export function userGitConfigFiles(path: Path.Path, env: NodeJS.ProcessEnv): Rea
         ];
   // Packaged gits keep their system config under their own prefix.
   const system =
-    env.GIT_CONFIG_NOSYSTEM !== undefined
+    env.GIT_CONFIG_NOSYSTEM !== undefined && gitEnvTrue(env.GIT_CONFIG_NOSYSTEM)
       ? []
       : env.GIT_CONFIG_SYSTEM !== undefined
         ? [env.GIT_CONFIG_SYSTEM]
@@ -224,11 +227,14 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
         Effect.orElseSucceed(() => null),
       ),
     );
+    // Legacy remote files are edited in place without touching their directory.
+    const legacy = yield* Effect.forEach(["remotes", "branches"], (directory) =>
+      fs.readDirectory(path.join(commonDir, directory)).pipe(Effect.orElseSucceed(() => [])),
+    );
+    if (legacy.some((entries) => entries.length > 0)) return null;
     const files = [
       path.join(commonDir, "packed-refs"),
       path.join(commonDir, "reftable", "tables.list"),
-      path.join(commonDir, "remotes"),
-      path.join(commonDir, "branches"),
       ...heads,
       ...targets.flatMap((target) => (target === null ? [] : [path.join(commonDir, target)])),
     ];
@@ -306,10 +312,18 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       }
       // An include can depend on the worktree, so a repository with one shares nothing.
       const outside = config?.sections == null ? null : yield* sharedStamp(dirs.commonDir, remotes);
+      // Hashed: it holds config text and keys long-lived cache entries.
       const shared =
         outside === null
           ? null
-          : [dirs.commonDir, ...repositoryStamps.slice(1), outside].join("\u0000");
+          : Hex.encode(
+              yield* digest.digest(
+                Digest.sha256,
+                new TextEncoder().encode(
+                  [dirs.commonDir, ...repositoryStamps.slice(1), outside].join("\u0000"),
+                ),
+              ),
+            );
       return {
         root: dirs.root,
         repository: `${dirs.gitDir}\u0000${repositoryStamps.join("\u0000")}`,

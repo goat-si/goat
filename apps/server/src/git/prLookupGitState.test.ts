@@ -235,3 +235,20 @@ it.effect("invalidating any worktree moves every cwd's lookup generation", () =>
     assert.notEqual(state.lookupGeneration("/repo/a"), afterForget);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("a changed shared stamp keeps later lookups out of a flight that read the old one", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    yield* git(cwd, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    yield* git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 16 });
+    yield* state.validate(cwd, "feature", false);
+    const before = state.lookupGeneration(cwd);
+    // Only the default branch's target moves: no file of this branch's own fingerprint changes.
+    yield* git(cwd, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    yield* state.validate(cwd, "feature", false);
+    assert.notEqual(state.lookupGeneration(cwd), before);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
