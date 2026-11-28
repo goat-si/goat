@@ -16,4 +16,8 @@ sessionThreadId: ThreadId,
 /**
  * v1 `defaultModelSelection`.
  */
-defaultModelSelection: ModelSelection, instructions?: string, };
+defaultModelSelection: ModelSelection, 
+/**
+ * v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes (bytes checked by serde only).
+ */
+instructions?: string, };
