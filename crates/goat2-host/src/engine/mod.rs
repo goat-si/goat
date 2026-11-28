@@ -188,6 +188,11 @@ pub trait EngineSession: Send + Sync {
     fn group_rss_bytes(&self) -> Option<u64> {
         None
     }
+    /// The engine's process group id, recorded in `host.json` so the next start can kill it
+    /// if this host dies.
+    fn process_group_id(&self) -> Option<i32> {
+        None
+    }
     /// Stop the process group (lane B `kill_group()`). Idempotent.
     async fn shutdown(&self);
 }

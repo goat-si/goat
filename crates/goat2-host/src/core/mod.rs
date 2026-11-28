@@ -144,7 +144,10 @@ pub(crate) struct Inner {
     pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
+    engine_groups_hook: Mutex<Option<EngineGroupsHook>>,
 }
+
+type EngineGroupsHook = Box<dyn Fn(Vec<i32>) + Send + Sync>;
 
 /// The host. Cheap to clone.
 #[derive(Clone)]
@@ -181,9 +184,29 @@ impl Host {
                 dedupe: Mutex::new(HashMap::new()),
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
+                engine_groups_hook: Mutex::new(None),
             }),
         };
         Ok(host)
+    }
+
+    /// Called with the live engine process groups whenever they change (`host.json`).
+    pub fn on_engine_groups(&self, hook: impl Fn(Vec<i32>) + Send + Sync + 'static) {
+        *self.inner.engine_groups_hook.lock().expect("hook") = Some(Box::new(hook));
+    }
+
+    pub(crate) fn engine_groups_changed(&self) {
+        let groups: Vec<i32> = self
+            .inner
+            .sessions
+            .lock()
+            .expect("sessions")
+            .values()
+            .filter_map(|(_, s)| s.process_group_id())
+            .collect();
+        if let Some(hook) = self.inner.engine_groups_hook.lock().expect("hook").as_ref() {
+            hook(groups);
+        }
     }
 
     pub fn set_mcp_url(&self, url: String) {
@@ -225,6 +248,7 @@ impl Host {
         for (_, (_, session)) in sessions {
             session.shutdown().await;
         }
+        self.engine_groups_changed();
     }
 
     /// The actor mailbox for a thread, spawning the actor if needed. `None` if the thread is

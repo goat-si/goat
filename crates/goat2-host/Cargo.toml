@@ -31,6 +31,9 @@ axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 rmcp = { version = "3.12", features = ["server", "transport-streamable-http-server"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 tokio-tungstenite = "0.28"

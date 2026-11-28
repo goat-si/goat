@@ -554,6 +554,7 @@ impl Actor {
                     .lock()
                     .expect("sessions")
                     .insert(self.id.clone(), (pgen, session.clone()));
+                self.host.engine_groups_changed();
                 self.session = Some(Session { pgen, session });
                 let mut events = handle.events;
                 let tx = self.tx.clone();
@@ -1242,6 +1243,8 @@ impl Actor {
             if sessions.get(&self.id).is_some_and(|(p, _)| *p == s.pgen) {
                 sessions.remove(&self.id);
             }
+            drop(sessions);
+            self.host.engine_groups_changed();
         }
         self.host.revoke_tokens(&self.id);
     }
