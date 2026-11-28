@@ -1,0 +1,59 @@
+{
+  "type": "command_result",
+  "reqId": "r",
+  "ok": true,
+  "value": {
+    "authState": {
+      "instanceId": "codex",
+      "phase": "waiting",
+      "flowId": "f",
+      "authorizationUrl": "https://example.org",
+      "expiresAt": null,
+      "message": null,
+      "methods": [
+        {
+          "id": "m",
+          "name": "Browser",
+          "description": null,
+          "type": "agent"
+        }
+      ],
+      "interaction": null
+    },
+    "installState": {
+      "driver": "codex",
+      "operationId": null,
+      "phase": "idle",
+      "downloadedBytes": 0,
+      "totalBytes": null,
+      "version": null,
+      "installedVersion": null,
+      "executablePath": null,
+      "source": null,
+      "canRemove": false,
+      "message": null
+    },
+    "accepted": true,
+    "registrySearch": {
+      "agents": []
+    },
+    "registryPrepare": {
+      "agentId": "a",
+      "version": "1",
+      "distribution": "npx",
+      "prepared": true
+    },
+    "notes": {
+      "revision": null,
+      "notes": [
+        {
+          "index": 0,
+          "date": null,
+          "text": "hello",
+          "replacedBy": 1
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

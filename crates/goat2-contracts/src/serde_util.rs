@@ -153,3 +153,20 @@ mod tests {
         assert!(serde_json::to_value(&step).is_err());
     }
 }
+
+/// Enforces the v1 UTF-8 byte limit on bot instructions.
+pub mod instructions {
+    use serde::{Deserialize, Deserializer, de::Error};
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+        let value = Option::<String>::deserialize(d)?;
+        if value
+            .as_ref()
+            .is_some_and(|s| s.len() > crate::limits::BOT_INSTRUCTIONS_MAX_BYTES)
+        {
+            return Err(D::Error::custom(
+                "bot instructions exceed 16384 UTF-8 bytes",
+            ));
+        }
+        Ok(value)
+    }
+}
