@@ -634,3 +634,99 @@ test("interrupt includes a child discovered while the root stop is in flight", a
     } finally { gate.release(); }
   } finally { await session.shutdown(); }
 });
+
+test("child interrupt acknowledgement alone does not settle a still-active child", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const waitReached = Promise.withResolvers<void>(), waitGate = Promise.withResolvers<void>();
+  const wait = async (_ms: number, signal: AbortSignal) => { waitReached.resolve(); await Promise.race([waitGate.promise, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }))]); };
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events), wait);
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); await tick(); fake.setActive({ child: { type: "running" } }); fake.keepActive("child");
+    const stopping = session.interrupt(turn.turnId); await tick();
+    fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+    assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+    await waitReached.promise; fake.setActive({}); waitGate.resolve(); await stopping; await tick();
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 1);
+  } finally { waitGate.resolve(); await session.shutdown(); }
+});
+
+test("child stop confirmation deadline fails the session visibly", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] }); const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const waiting = Promise.withResolvers<void>();
+  const wait = async (_ms: number, signal: AbortSignal) => { waiting.resolve(); await new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true })); };
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), wait);
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); await tick(); fake.setActive({ child: { type: "running" } }); fake.keepActive("child");
+    const stopping = session.interrupt(turn.turnId); await waiting.promise; t.mock.timers.tick(10_000);
+    await assert.rejects(stopping, /interrupt failed/);
+    assert.deepEqual(failures, ["OpenCode 2 could not stop native child work"]);
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
+  } finally { await session.shutdown(); }
+});
+
+test("reconnect discovers an active child even before tool metadata names it", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setActive({ [session.engineRef]: { type: "running" }, child: { type: "running" }, foreign: { type: "running" } }); fake.setParent("child", session.engineRef);
+    fake.setHistory([{ id: "m", type: "assistant", time: { created: 2 }, content: [{ type: "tool", id: "task", name: "subagent", state: { status: "streaming", input: {} }, time: { created: 2 } }] }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    fake.setRequests([{ id: "child-permission", sessionID: "child", action: "shell", resources: ["*"] }, { id: "foreign-permission", sessionID: "foreign", action: "shell", resources: ["*"] }]);
+    fake.breakStream(); await tick(); await tick(); await tick();
+    const opened = events.flatMap((event) => event.type === "request_opened" ? [event.key] : []);
+    assert.ok(opened.includes("child-permission")); assert.ok(!opened.includes("foreign-permission")); assert.deepEqual(failures, []);
+  } finally { await session.shutdown(); }
+});
+
+test("each 2.x todowrite call publishes one uniquely keyed snapshot", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    for (const [id, status] of [["todo-a", "in_progress"], ["todo-b", "completed"]]) {
+      fake.emit("session.tool.input.started", { sessionID: session.engineRef, assistantMessageID: "m", id, name: "todowrite" });
+      fake.emit("session.tool.called", { sessionID: session.engineRef, assistantMessageID: "m", id, input: {}, executed: true });
+      fake.emit("session.tool.success", { sessionID: session.engineRef, assistantMessageID: "m", id, executed: true, content: [{ type: "text", text: "saved" }], metadata: { todos: [{ content: "work", status }] } });
+    }
+    await tick();
+    const items = events.flatMap((event) => event.type === "item_completed" && event.item.type === "todo_list" ? [event.item] : []);
+    assert.deepEqual(items.map((entry) => entry.id), ["todo-a", "todo-b"]);
+    assert.deepEqual(items.map((entry) => entry.steps[0]?.status), ["running", "completed"]);
+    assert.equal(new Set(items.map((entry) => entry.id)).size, items.length);
+  } finally { await session.shutdown(); }
+});
+
+test("reconnect buffers new execution activity before applying an older idle snapshot", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), async () => {});
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setHistory([{ id: "idle", type: "idle", outcome: "succeeded", time: { created: 2 } }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    const history = fake.holdHistory();
+    try {
+      fake.breakStream(); await history.reached;
+      fake.emit("session.execution.started", { sessionID: session.engineRef }); await tick(); history.release(); await tick(); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0); assert.deepEqual(failures, []);
+      fake.emit("session.text.ended", { sessionID: session.engineRef, assistantMessageID: "m", ordinal: 0, text: "new work" });
+      fake.emit("session.execution.succeeded", { sessionID: session.engineRef }); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "done").length, 1);
+    } finally { history.release(); }
+  } finally { await session.shutdown(); }
+});
+
+test("reconnect backfill and buffered compaction events yield one completed item", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setActive({ [session.engineRef]: { type: "running" } });
+    fake.setHistory([{ id: "msg_123", type: "compaction", status: "completed", summary: "Summary", recent: "", reason: "auto", time: { created: 2 } }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    const history = fake.holdHistory();
+    try {
+      fake.breakStream(); await history.reached;
+      fake.emit("session.compaction.started", { sessionID: session.engineRef, reason: "auto", recent: "" }, { id: "evt_123" });
+      fake.emit("session.compaction.ended", { sessionID: session.engineRef, reason: "auto", text: "Summary", recent: "" }, { id: "evt_124" });
+      await tick(); history.release(); await tick(); await tick();
+      assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1); assert.deepEqual(failures, []);
+    } finally { history.release(); }
+  } finally { await session.shutdown(); }
+});

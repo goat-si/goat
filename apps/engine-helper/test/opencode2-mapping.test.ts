@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { FormInfo, PermissionRequest } from "@opencode/client";
 import { formAnswer, formQuestions, formReply } from "../src/engines/opencode2/forms.ts";
 import { malformedModel, modelRef, modelVariantCapabilities, openCodeVariant, sameModel } from "../src/engines/opencode2/modelRef.ts";
-import { cuaMcpServerName, deniesSubagents, goatMcpServerName, permissionReply, sameRules, sessionRules, type Rule } from "../src/engines/opencode2/permissions.ts";
+import { cuaMcpServerName, deniesSubagents, goatMcpServerName, permissionKind, permissionReply, sameRules, sessionRules, type Rule } from "../src/engines/opencode2/permissions.ts";
 
 const selection = { instanceId: "opencode", model: " provider/model/sub ", options: [{ id: "variant", value: "high" }] };
 const nativeForm: FormInfo = { id: "form-1", sessionID: "child-1", title: "Questions", fields: [
@@ -121,4 +121,11 @@ test("runtime modes and native approval decisions preserve per-session grants", 
   assert.equal(permissionReply(request, "cancel", []).reply.decision, "reject");
   assert.equal(permissionReply({ ...request, action: "subagent" }, "accept", []).reply.decision, "once");
   assert.throws(() => permissionReply(request, "answered", []), { code: "bad_request" });
+});
+
+test("approval kinds follow the native action and tool name", () => {
+  assert.equal(permissionKind("external_directory"), "file-read");
+  assert.equal(permissionKind("anything", "apply_patch"), "file-change");
+  assert.equal(permissionKind("anything", "code_search"), "file-read");
+  assert.equal(permissionKind("shell"), "command");
 });

@@ -1237,3 +1237,26 @@ test("failed history reconciliation waits for descendant interruption cleanup", 
     assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
   } finally { prompt.release(); child.release(); await session.shutdown(); }
 });
+
+test("1.x emits only the latest todo snapshot once before every terminal outcome", async () => {
+  for (const outcome of ["done", "failed", "interrupted"] as const) {
+    fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+    const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+    const session = await opencodeEngine.start(params, host);
+    try {
+      const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+      assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await new Promise<void>((resolve) => setImmediate(resolve));
+      await fake.sendEvent("todo.updated", { sessionID: session.engineRef, todos: [{ content: "work", status: "pending", priority: "high" }] });
+      await fake.sendEvent("todo.updated", { sessionID: session.engineRef, todos: [{ content: "work", status: "completed", priority: "high" }] });
+      assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "todo_list").length, 0);
+      if (outcome === "failed") await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
+      else if (outcome === "interrupted") await session.interrupt(turn.turnId);
+      else await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+      await finished.promise;
+      const items = events.flatMap((event) => event.type === "item_completed" && event.item.type === "todo_list" ? [event.item] : []);
+      assert.equal(items.length, 1); assert.equal(items[0]?.steps[0]?.status, "completed");
+      const allIds = events.flatMap((event) => event.type === "item_completed" ? [event.item.id] : []); assert.equal(new Set(allIds).size, allIds.length);
+      assert.ok(events.findIndex((event) => event.type === "item_completed" && event.item.type === "todo_list") < events.findIndex((event) => event.type === "turn_finished"));
+    } finally { await session.shutdown(); }
+  }
+});

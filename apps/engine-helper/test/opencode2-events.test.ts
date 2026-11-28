@@ -58,6 +58,39 @@ test("recovery rejects a snapshot that conflicts with an already completed messa
   assert.throws(() => projection.recoverText("m", "text", 0, "different", true), /conflicts/);
 });
 
+test("replayed compaction events match recovered history without duplicating the item", () => {
+  const events: EngineEvent[] = []; const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.recoverCompaction("msg_123", 0, "completed", "Summary");
+  projection.handle({ id: "evt_123", type: "session.compaction.started", data: { sessionID: "session", reason: "auto", recent: "" } } as unknown as V2Event);
+  projection.handle({ id: "evt_124", type: "session.compaction.ended", data: { sessionID: "session", reason: "auto", text: "Summary", recent: "" } } as unknown as V2Event);
+  assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1);
+});
+
+test("a later terminal text event cannot contradict recovered history", () => {
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.recoverText("m", "text", 0, "snapshot", true);
+  assert.throws(() => projection.handle({ id: "evt_end", type: "session.text.ended", data: { sessionID: "session", assistantMessageID: "m", ordinal: 0, text: "different" } } as unknown as V2Event), /conflicts/);
+});
+
+test("replayed compaction with conflicting content fails visibly", () => {
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.recoverCompaction("msg_123", 0, "completed", "Summary");
+  projection.handle({ id: "evt_123", type: "session.compaction.started", data: { sessionID: "session", reason: "auto", recent: "" } } as unknown as V2Event);
+  assert.throws(() => projection.handle({ id: "evt_124", type: "session.compaction.ended", data: { sessionID: "session", reason: "auto", text: "Different", recent: "" } } as unknown as V2Event), /conflicts/);
+});
+
+test("a replayed manual compaction uses its native input ID for history matching", () => {
+  const events: EngineEvent[] = []; const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.recoverCompaction("msg_manual", 0, "completed", "Summary");
+  projection.handle({ id: "evt_other", type: "session.compaction.started", data: { sessionID: "session", inputID: "msg_manual", reason: "manual", recent: "" } } as unknown as V2Event);
+  projection.handle({ id: "evt_end", type: "session.compaction.ended", data: { sessionID: "session", reason: "manual", text: "Summary", recent: "" } } as unknown as V2Event);
+  assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1);
+});
+
 test("reasoning content redacts a token split across native deltas", () => {
   const events: EngineEvent[] = [];
   const raw = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

@@ -56,7 +56,7 @@ test("todo validation, stable ids, cancellation and blank labels", () => {
   const context = { ...ctx, name: "todowrite", todoPlanId: "plan", input: {} };
   const value = result(success(text("ok"), metadata), context);
   assert.equal(value.type, "todo_list");
-  if (value.type === "todo_list") assert.deepEqual([value.id, value.planId, value.steps], ["session:todo:turn", "plan", [{ id: "session:todo:turn:1", text: "first", status: "pending" }, { id: "session:todo:turn:3", text: "Todo 3", status: "running" }, { id: "session:todo:turn:4", text: "done", status: "completed" }]]);
+  if (value.type === "todo_list") assert.deepEqual([value.id, value.planId, value.steps], ["call", "plan", [{ id: "call:1", text: "first", status: "pending" }, { id: "call:3", text: "Todo 3", status: "running" }, { id: "call:4", text: "done", status: "completed" }]]);
   assert.equal(projectTodoList({ todos: [{ content: "x", status: "other" }] }, context), undefined);
   assert.equal(result(success(text("ok"), { todos: [{ content: "x", status: "other" }] }), context).type, "dynamic_tool");
   assert.equal(projectTodoList(metadata, ctx), undefined);

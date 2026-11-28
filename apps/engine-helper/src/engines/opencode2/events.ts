@@ -23,6 +23,8 @@ export class OpenCode2Projection {
   private compactionId: string | undefined;
   private compactionCount = 0;
   private finalizedCompactions = 0;
+  private readonly recoveredCompactions = new Map<string, { status: "running" | "completed" | "failed"; summary?: string }>();
+  private replayingCompaction: string | undefined;
   private readonly host: EngineHost;
   private readonly turnId: string;
   constructor(host: EngineHost, turnId: string) { this.host = host; this.turnId = turnId; }
@@ -58,13 +60,19 @@ export class OpenCode2Projection {
     const title = status === "completed" ? "Context compacted" : status === "failed" ? "Compaction failed" : "Compaction interrupted";
     this.host.emit({ type: "item_completed", turnId: this.turnId, item: item({ ...this.base(id), title, status }, "compaction", { driver: "opencode", ...(summary ? { summary } : {}) }), locator: { turnId: this.turnId, itemId: id } });
   }
-  recoverCompaction(ordinal: number, status: "running" | "completed" | "failed", summary?: string) {
+  recoverCompaction(id: string, ordinal: number, status: "running" | "completed" | "failed", summary?: string) {
+    this.recoveredCompactions.set(id, { status, ...(summary === undefined ? {} : { summary }) });
     if (ordinal < this.finalizedCompactions) return;
     this.compactionId ??= `${this.turnId}:compaction:${this.compactionCount++}`;
     if (status !== "running") this.finishCompaction(status, summary);
   }
   handle(event: V2Event): boolean {
     if (!["session.text.started", "session.text.delta", "session.text.ended", "session.reasoning.started", "session.reasoning.delta", "session.reasoning.ended", "session.step.ended", "session.step.failed", "session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(event.type)) return false;
+    if (event.type === "session.compaction.started") {
+      // OpenCode 2.0.28 stores inputID, or its event ID with evt_ replaced by msg_.
+      const id = event.data.inputID ?? event.id.replace(/^evt_/, "msg_");
+      if (this.recoveredCompactions.has(id)) { this.replayingCompaction = id; return true; }
+    }
     if (this.seen.has(event.id)) return true;
     if (this.seen.size >= 16384) throw new Error("OpenCode event limit exceeded");
     this.seen.add(event.id);
@@ -75,7 +83,7 @@ export class OpenCode2Projection {
         const data = event.data; const id = `${data.assistantMessageID}:${kind}:${data.ordinal}`;
         let state = this.texts.get(id);
         if (!state) { state = { kind, message: data.assistantMessageID, text: "", sent: "", completed: false }; this.texts.set(id, state); }
-        if (state.completed) return true;
+        if (state.completed) { if ("text" in data && data.text !== state.text) throw new Error("OpenCode stream text conflicts with recovered output"); return true; }
         if ("delta" in data) state.text += data.delta;
         else if ("text" in data) state.text = data.text;
         this.emitText(id, state);
@@ -89,6 +97,12 @@ export class OpenCode2Projection {
       case "session.compaction.started":
         this.compactionId = `${this.turnId}:compaction:${this.compactionCount++}`; return true;
       case "session.compaction.ended": case "session.compaction.failed": {
+        if (this.replayingCompaction) {
+          const prior = this.recoveredCompactions.get(this.replayingCompaction); this.replayingCompaction = undefined;
+          if (prior?.status === "running") { this.finishCompaction(event.type === "session.compaction.ended" ? "completed" : "failed", event.type === "session.compaction.ended" ? event.data.text : undefined); return true; }
+          if ((event.type === "session.compaction.ended" && (prior?.status !== "completed" || prior.summary !== event.data.text)) || (event.type === "session.compaction.failed" && prior?.status !== "failed")) throw new Error("OpenCode recovered compaction conflicts with stream");
+          return true;
+        }
         this.finishCompaction(event.type === "session.compaction.ended" ? "completed" : "failed", event.type === "session.compaction.ended" ? event.data.text : undefined);
         return true;
       }

@@ -49,12 +49,12 @@ function isJson(v: unknown, ancestors = new Set<object>()): v is JsonValue {
   return valid;
 }
 
-export function projectTodoList(metadata: unknown, context: Pick<ToolProjectionContext, "sessionId" | "turnId" | "todoPlanId" | "now" | "startedAt">): HelperItem | undefined {
-  if (!record(metadata) || !Array.isArray(metadata.todos) || !context.todoPlanId || !context.sessionId || !context.turnId) return undefined;
+export function projectTodoList(metadata: unknown, context: Pick<ToolProjectionContext, "sessionId" | "turnId" | "toolId" | "todoPlanId" | "now" | "startedAt">): HelperItem | undefined {
+  if (!record(metadata) || !Array.isArray(metadata.todos) || !context.todoPlanId || !context.sessionId || !context.turnId || !context.toolId) return undefined;
   const todos: unknown[] = metadata.todos;
   if (!todos.every((todo) => record(todo) && typeof todo.content === "string" &&
     (todo.status === "pending" || todo.status === "in_progress" || todo.status === "completed" || todo.status === "cancelled"))) return undefined;
-  const nativeId = `${context.sessionId}:todo:${context.turnId}`;
+  const nativeId = context.toolId;
   const steps: Extract<HelperItem, { type: "todo_list" }>["steps"] = [];
   todos.forEach((value, index) => {
     const todo = value as { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" };

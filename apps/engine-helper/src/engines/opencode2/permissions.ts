@@ -7,6 +7,13 @@ import { HelperError } from "../../protocol.ts";
 export type Rule = PermissionRule;
 export type RulesPolicy = { runtimeMode: RuntimeMode; interactionMode?: "plan" | "default" };
 export type McpServerNames = { readonly goat: string; readonly cua: string | null };
+// permissionRules.ts:12-44: classify by native permission or the tool that requested it.
+export function permissionKind(action: string, tool?: string): "file-change" | "file-read" | "command" {
+  const value = action.toLowerCase(), name = tool?.toLowerCase() ?? "";
+  if (["edit", "write", "patch", "apply_patch"].includes(value) || ["edit", "write", "patch", "apply_patch"].includes(name)) return "file-change";
+  if (["read", "glob", "grep", "lsp", "external_directory"].includes(value) || name === "read" || name.includes("glob") || name.includes("grep") || name.includes("search")) return "file-read";
+  return "command";
+}
 const rule = (action: string, effect: Rule["effect"]): Rule => ({ action, resource: "*", effect });
 const digest = (threadId: string) => createHash("sha256").update(threadId).digest("hex").slice(0, 16);
 export const goatMcpServerName = (threadId: string): string => {
