@@ -93,17 +93,18 @@ async fn ui_and_agent_paths_through_the_real_server() {
         "main bot GOAT exists"
     );
 
-    // Provider subscriptions are refused with their subId until the providers module lands.
+    // The providers subscription answers with the list (the fake cannot probe: a warning row).
     ws.send(Message::text(
         json!({"type":"subscribe_providers","subId":"providers"}).to_string(),
     ))
     .await
     .unwrap();
-    let (refusal, _) = until(&mut ws, |f| {
-        f["type"] == "error" && f["subId"] == "providers"
+    let (list, _) = until(&mut ws, |f| {
+        f["type"] == "providers" && f["subId"] == "providers"
     })
     .await;
-    assert_eq!(refusal["code"], "not_available");
+    assert_eq!(list["providers"][0]["instanceId"], "codex", "{list}");
+    assert_eq!(list["providers"][0]["probe"]["status"], "warning", "{list}");
 
     ws.send(Message::text(json!({
         "type":"start_thread","reqId":"r1","clientRequestId":"c1","kind":"user","title":"hello",
@@ -377,6 +378,63 @@ async fn real_codex_turn_through_the_host() {
     assert_eq!(finished["outcome"], "completed", "{finished}");
     let answer = answer.expect("an assistant answer was stored");
     assert!(answer.to_lowercase().contains("pong"), "answer: {answer}");
+    ws.close(None).await.unwrap();
+    running.shutdown().await;
+}
+
+/// The providers list through the real server with the real Codex probe: the codex row is ready,
+/// signed in, with Codex's own models. Needs a signed-in codex; run with
+/// `cargo test -p goat2-host --test end_to_end -- --ignored real_codex_provider`.
+#[tokio::test]
+#[ignore = "runs the real codex CLI probe; needs a signed-in codex"]
+async fn real_codex_provider_row_through_the_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = HostConfig {
+        data_dir: dir.path().to_path_buf(),
+        port: 0,
+        ui_token: Some("ui-secret".into()),
+        engine: EngineChoice::Codex,
+        codex_bin: None,
+        exit_on_stdin_close: false,
+    };
+    let running = goat2_host::server::start_with_engine(cfg, None)
+        .await
+        .unwrap();
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(format!("{}?token=ui-secret", running.ready.ws_url))
+            .await
+            .unwrap();
+    ws.send(Message::text(
+        json!({"type":"subscribe_providers","subId":"p"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let list = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let Some(Ok(Message::Text(text))) = ws.next().await else {
+                panic!("socket closed");
+            };
+            let f: Value = serde_json::from_str(&text).unwrap();
+            if f["type"] == "providers" {
+                return f;
+            }
+        }
+    })
+    .await
+    .expect("a providers frame within 90 s");
+    let codex = list["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["instanceId"] == "codex")
+        .cloned()
+        .expect("a codex row");
+    assert_eq!(codex["probe"]["status"], "ready", "{codex}");
+    assert_eq!(codex["probe"]["installed"], true);
+    assert!(
+        !codex["probe"]["models"].as_array().unwrap().is_empty(),
+        "{codex}"
+    );
     ws.close(None).await.unwrap();
     running.shutdown().await;
 }

@@ -671,14 +671,14 @@ impl Actor {
         self.phase = Phase::Starting(permit);
         let host = self.host.clone();
         let tx = self.tx.clone();
+        let instance = card.engine.provider_instance_id.to_string();
         tokio::spawn(async move {
             let _slot = host.inner.sched.start_slot().await;
-            let result = host
-                .inner
-                .engine
-                .start(spec)
-                .await
-                .map_err(|e| e.to_string());
+            // The thread's provider instance picks the driver (the factory registry).
+            let result = match host.inner.providers.factory_for_start(&instance) {
+                Ok(factory) => factory.start(spec).await.map_err(|e| e.to_string()),
+                Err(reason) => Err(reason),
+            };
             let _ = tx.send(Msg::Started { pgen, result });
         });
     }

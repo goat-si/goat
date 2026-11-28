@@ -1938,11 +1938,10 @@ async fn part2_fields_carry_what_the_host_knows() {
     // A Part 2 command whose module has not landed is refused as not available.
     let refused = t
         .host
-        .command(ClientFrame::RefreshProviders {
+        .command(ClientFrame::ProviderInstallStart {
             req_id: "r".into(),
-            client_request_id: "p2-refresh".into(),
-            instance_id: None,
-            refresh_models: None,
+            client_request_id: "p2-install".into(),
+            instance_id: "codex".into(),
         })
         .await
         .unwrap_err();
@@ -2620,6 +2619,613 @@ fn steer_cancelled(turn: &str, ids: Vec<&str>) -> goat2_host::engine::EngineEven
             reason: "discarded".into(),
         },
     }
+}
+
+#[tokio::test]
+async fn providers_list_refresh_and_instance_settings() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    // The initial probe may have run before the fake had a probe set: refresh once.
+    t.host.command(refresh("prov-0", None)).await.unwrap();
+    let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    assert!(codex.enabled);
+    assert_eq!(codex.driver, "codex");
+    assert_eq!(
+        codex.capabilities,
+        goat2_host::engine::codex::codex_capabilities()
+    );
+    assert_eq!(codex.probe.models[0].slug, "gpt-6.1-terra");
+    // Refresh probes again and pushes the new result.
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    t.host
+        .command(refresh("prov-1", Some("codex")))
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    // Unknown instance.
+    let missing = t
+        .host
+        .command(refresh("prov-2", Some("nope")))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.reason, "provider_not_found");
+    // Turn it off: listed as disabled, saved.
+    t.host
+        .command(set_instance("prov-3", "codex", "codex", false))
+        .await
+        .unwrap();
+    let off = eventually_provider(&t, |e| !e.enabled).await;
+    assert_eq!(
+        off.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+    let saved = std::fs::read_to_string(
+        t._dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("provider-instances.json"),
+    )
+    .unwrap();
+    assert!(saved.contains("\"enabled\": false"), "{saved}");
+    // A driver this build does not have is refused.
+    let grok = t
+        .host
+        .command(set_instance("prov-4", "grok", "grok", true))
+        .await
+        .unwrap_err();
+    assert_eq!(grok.reason, "driver_unavailable");
+    // Back on: probed again.
+    t.host
+        .command(set_instance("prov-5", "codex", "codex", true))
+        .await
+        .unwrap();
+    let on = eventually_provider(&t, |e| {
+        e.enabled && e.probe.status == goat2_contracts::ServerProviderState::Ready
+    })
+    .await;
+    assert_eq!(on.probe.version.as_deref(), Some("0.168.0"));
+}
+
+#[tokio::test]
+async fn a_driver_that_cannot_probe_is_listed_with_that_reason() {
+    let t = setup(manual()).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Warning
+    );
+    assert_eq!(
+        codex.probe.message.as_deref(),
+        Some("This driver cannot report its status yet.")
+    );
+    // Not "not found": the row does not know whether the provider is installed.
+    assert!(codex.probe.installed);
+}
+
+#[tokio::test]
+async fn an_engine_sign_in_link_shows_on_its_provider() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    let id = start_user_thread(&t, "prov-auth", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            key: None,
+            url: Some("https://auth.example.invalid/device?code=ABC".into()),
+            message: "Sign in to Codex".into(),
+        },
+    );
+    let codex = eventually_provider(&t, |e| e.probe.auth.action.is_some()).await;
+    let action = codex.probe.auth.action.unwrap();
+    assert_eq!(action.url, "https://auth.example.invalid/device?code=ABC");
+    assert_eq!(action.message, "Sign in to Codex");
+    // Settling the request takes the link off the entry.
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "prov-auth-done".into(),
+            thread_id: id.clone(),
+            request_id: action.elicitation_id.as_str().into(),
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| e.probe.auth.action.is_none()).await;
+}
+
+fn ready_probe(version: &str) -> goat2_contracts::ProviderProbeResult {
+    serde_json::from_value(serde_json::json!({
+        "installed": true, "version": version, "status": "ready",
+        "auth": { "status": "authenticated", "type": "chatgpt" },
+        "models": [{ "slug": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "isCustom": false, "isDefault": true, "capabilities": null }],
+        "checkedAt": "2026-11-29T00:00:00Z"
+    }))
+    .unwrap()
+}
+
+fn refresh(key: &str, instance: Option<&str>) -> ClientFrame {
+    ClientFrame::RefreshProviders {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: instance.map(Into::into),
+        refresh_models: None,
+    }
+}
+
+fn set_instance(key: &str, id: &str, driver: &str, enabled: bool) -> ClientFrame {
+    ClientFrame::SetProviderInstance {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: id.into(),
+        driver: driver.into(),
+        acp_agent_id: None,
+        enabled,
+        display_name: None,
+    }
+}
+
+/// The codex entry of the providers list once `pred` holds for it.
+async fn eventually_provider(
+    t: &T,
+    pred: impl Fn(&goat2_contracts::ServerProviderEntry) -> bool,
+) -> goat2_contracts::ServerProviderEntry {
+    let rx = t.host.watch_providers();
+    let find = || {
+        rx.borrow()
+            .as_ref()
+            .and_then(|l| {
+                l.iter()
+                    .find(|e| e.instance_id.as_str() == "codex")
+                    .cloned()
+            })
+            .filter(|e| pred(e))
+    };
+    eventually("provider entry", || find().is_some()).await;
+    find().unwrap()
+}
+
+#[tokio::test]
+async fn provider_instance_settings_survive_a_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            t.host
+                .command(set_instance("prov-restart", "codex", "codex", false))
+                .await
+                .unwrap();
+            eventually_provider(&t, |e| !e.enabled).await;
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert!(!codex.enabled);
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+}
+
+#[tokio::test]
+async fn a_provider_sign_in_flow_is_shown_and_settles() {
+    let t = setup(manual()).await;
+    let method: goat2_contracts::ProviderAuthMethod = serde_json::from_value(serde_json::json!({
+        "id": "chatgpt", "name": "Sign in with ChatGPT", "description": null, "type": "agent"
+    }))
+    .unwrap();
+    t.fake.set_provider_setup(
+        Some((
+            vec![method],
+            auth_state("codex", "waiting", Some("https://auth.example.invalid/x")),
+        )),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("auth-0", None)).await.unwrap();
+    let idle = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    assert!(idle.setup.as_ref().unwrap().can_authenticate);
+    let flow = idle.auth_flow.unwrap();
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Idle);
+    assert_eq!(flow.methods.unwrap()[0].id, "chatgpt");
+    // Start: the driver's state is answered and shown.
+    let started = t.host.command(auth_start("auth-1")).await.unwrap();
+    let state = started.auth_state.unwrap();
+    assert_eq!(state.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    assert_eq!(
+        state.authorization_url.as_deref(),
+        Some("https://auth.example.invalid/x")
+    );
+    eventually_provider(&t, |e| {
+        e.auth_flow
+            .as_ref()
+            .is_some_and(|a| a.phase == goat2_contracts::ProviderAuthPhase::Waiting)
+    })
+    .await;
+    // A second start while it runs answers the running flow; the driver is not asked again.
+    let again = t.host.command(auth_start("auth-2")).await.unwrap();
+    assert_eq!(again.auth_state.unwrap().flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(t.fake.auth_starts(), 1);
+    // An update for another instance is dropped; success is shown and the provider re-probed.
+    let updates = t.fake.auth_updates().unwrap();
+    updates
+        .send(auth_state("other", "succeeded", None))
+        .unwrap();
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    updates
+        .send(auth_state("codex", "succeeded", None))
+        .unwrap();
+    let done = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    assert_eq!(
+        done.auth_flow.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn a_provider_install_is_shown_and_settles() {
+    let t = setup(manual()).await;
+    t.fake
+        .set_provider_setup(None, Some(install_state("downloading")));
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("inst-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_install)).await;
+    let started = t
+        .host
+        .command(ClientFrame::ProviderInstallStart {
+            req_id: "r".into(),
+            client_request_id: "inst-1".into(),
+            instance_id: "codex".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        started.install_state.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Downloading
+    );
+    eventually_provider(&t, |e| e.install.is_some()).await;
+    t.fake.set_probe(Ok(ready_probe("0.169.0")));
+    t.fake
+        .install_updates()
+        .unwrap()
+        .send(install_state("succeeded"))
+        .unwrap();
+    let done = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.169.0")).await;
+    assert_eq!(
+        done.install.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Succeeded
+    );
+}
+
+fn auth_state(
+    instance: &str,
+    phase: &str,
+    url: Option<&str>,
+) -> goat2_contracts::ProviderAuthState {
+    serde_json::from_value(serde_json::json!({
+        "instanceId": instance, "phase": phase, "flowId": "flow-1", "authorizationUrl": url,
+        "expiresAt": null, "message": null
+    }))
+    .unwrap()
+}
+
+fn install_state(phase: &str) -> goat2_contracts::ProviderInstallState {
+    serde_json::from_value(serde_json::json!({
+        "driver": "codex", "operationId": "op-1", "phase": phase, "downloadedBytes": 0,
+        "totalBytes": null, "version": "0.169.0", "installedVersion": "0.167.0", "canRemove": false,
+        "message": null
+    }))
+    .unwrap()
+}
+
+fn auth_start(key: &str) -> ClientFrame {
+    ClientFrame::ProviderAuthStart {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: "codex".into(),
+        method_id: Some("chatgpt".into()),
+    }
+}
+
+#[tokio::test]
+async fn a_thread_starts_on_its_provider_instance_driver() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let codex = FakeEngine::new(manual());
+    let claude = FakeEngine::new(manual());
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let host = Host::open_with_factories(
+        opts(&path, 1),
+        Arc::new(store),
+        std::collections::BTreeMap::from([
+            (
+                "codex".to_owned(),
+                Arc::new(codex.clone()) as Arc<dyn goat2_host::engine::EngineFactory>,
+            ),
+            (
+                "claudeAgent".to_owned(),
+                Arc::new(claude.clone()) as Arc<dyn goat2_host::engine::EngineFactory>,
+            ),
+        ]),
+        StallRecorder::open(&path).unwrap(),
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake: claude.clone(),
+        _dir: Some(dir),
+    };
+    let id = start_thread_on(&t, "on-claude", "claudeAgent").await;
+    eventually("claude started", || running(&t, &id)).await;
+    assert!(
+        codex.calls().is_empty(),
+        "codex never started: {:?}",
+        codex.calls().len()
+    );
+    // A provider that is turned off cannot start a thread: the run fails with that reason.
+    t.host
+        .command(set_instance("prov-off", "codex", "codex", false))
+        .await
+        .unwrap();
+    let off = start_thread_on(&t, "on-codex-off", "codex").await;
+    eventually("refused run", || {
+        events(&t, &off).iter().any(|e| matches!(e, LogEvent::RunFinished(f)
+            if f.reason.as_deref().is_some_and(|r| r.contains("provider codex is turned off in settings"))))
+    })
+    .await;
+    assert!(codex.calls().is_empty());
+}
+
+async fn start_thread_on(t: &T, key: &str, instance: &str) -> ThreadId {
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: format!("r-{key}"),
+            client_request_id: key.into(),
+            kind: ThreadKind::User,
+            title: Some(key.into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: instance.into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap()
+        .thread_id
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_slow_probe_never_holds_other_commands() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.fake.set_probe_delay(Duration::from_secs(2));
+    let started = Instant::now();
+    t.host
+        .command(refresh("slow-1", Some("codex")))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "refresh answers at once"
+    );
+    // Another command completes while the probe still runs.
+    let other = Instant::now();
+    start_user_thread(&t, "slow-other", None).await;
+    assert!(
+        other.elapsed() < Duration::from_millis(500),
+        "not held behind the probe"
+    );
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+}
+
+#[tokio::test]
+async fn a_slow_probe_never_overwrites_a_newer_setting() {
+    // The initial on-demand probe is slow; the provider is turned off while it runs.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    fake.set_probe(Ok(ready_probe("0.167.0")));
+    fake.set_probe_delay(Duration::from_millis(400));
+    let t = open_at(&path, Some(dir), fake, 1).await;
+    // The first subscription starts the initial probes; let that slow probe start (it reads
+    // the settings, then waits).
+    let _rx = t.host.watch_providers();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    t.host
+        .command(set_instance("over-2", "codex", "codex", false))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert!(!codex.enabled);
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_sign_in_link_is_not_attached() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    let id = start_user_thread(&t, "bad-link", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            key: None,
+            url: Some(" https://auth.example.invalid/x".into()),
+            message: "Sign in".into(),
+        },
+    );
+    eventually("sign-in request", || signins(&t, &id).len() == 1).await;
+    // A later change publishes the list; the bad link is left off, so the list still serializes.
+    t.fake.set_probe(Ok(ready_probe("0.170.0")));
+    t.host.command(refresh("bad-link-r", None)).await.unwrap();
+    let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.170.0")).await;
+    assert!(codex.probe.auth.action.is_none());
+    serde_json::to_value(&codex).expect("the entry serializes");
+}
+
+#[tokio::test]
+async fn a_failed_settings_save_changes_nothing() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    // The temporary file cannot be created: a folder is in its place.
+    std::fs::create_dir(
+        t._dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("provider-instances.json.tmp"),
+    )
+    .unwrap();
+    let refused = t
+        .host
+        .command(set_instance("save-fail", "codex", "codex", false))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "internal");
+    t.host.command(refresh("save-fail-r", None)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(eventually_provider(&t, |_| true).await.enabled, "still on");
+}
+
+#[tokio::test]
+async fn a_driver_sign_in_url_that_is_not_valid_is_dropped() {
+    let t = setup(manual()).await;
+    let mut start = auth_state("codex", "waiting", None);
+    start.authorization_url = Some(" https://auth.example.invalid/padded\n".into());
+    t.fake.set_provider_setup(Some((Vec::new(), start)), None);
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("bad-url-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_authenticate)).await;
+    let started = t.host.command(auth_start("bad-url-1")).await.unwrap();
+    let state = started.auth_state.unwrap();
+    assert_eq!(state.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    assert_eq!(
+        state.authorization_url, None,
+        "the bad URL is dropped, the phase stays"
+    );
+    let codex = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    serde_json::to_value(&codex).expect("the entry still serializes");
+}
+
+#[tokio::test]
+async fn cancelling_an_older_flow_keeps_the_running_one() {
+    let t = setup(manual()).await;
+    t.fake.set_provider_setup(
+        Some((
+            Vec::new(),
+            auth_state("codex", "waiting", Some("https://auth.example.invalid/x")),
+        )),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("old-flow-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_authenticate)).await;
+    t.host.command(auth_start("old-flow-1")).await.unwrap();
+    t.host
+        .command(ClientFrame::ProviderAuthCancel {
+            req_id: "r".into(),
+            client_request_id: "old-flow-2".into(),
+            instance_id: "codex".into(),
+            flow_id: "flow-0".into(),
+        })
+        .await
+        .unwrap();
+    let codex = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    let flow = codex.auth_flow.unwrap();
+    assert_eq!(flow.flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+}
+
+#[tokio::test]
+async fn turning_a_provider_back_on_never_sends_an_empty_list() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    let mut rx = t.host.watch_providers();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    t.host
+        .command(set_instance("chk-off", "codex", "codex", false))
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| !e.enabled).await;
+    t.fake.set_probe_delay(Duration::from_millis(300));
+    rx.borrow_and_update();
+    t.host
+        .command(set_instance("chk-on", "codex", "codex", true))
+        .await
+        .unwrap();
+    // Every list sent until the probe lands keeps the codex row (as being checked).
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let changed = tokio::time::timeout_at(deadline.into(), rx.changed()).await;
+        let list = rx.borrow_and_update().clone().unwrap();
+        let codex = list.iter().find(|e| e.instance_id.as_str() == "codex");
+        assert!(codex.is_some(), "a list without the codex row: {list:?}");
+        let codex = codex.unwrap();
+        if codex.probe.status == goat2_contracts::ServerProviderState::Ready || changed.is_err() {
+            assert!(codex.enabled);
+            break;
+        }
+        assert_eq!(codex.probe.message.as_deref(), Some("Checking status…"));
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_during_the_initial_probe_never_sends_an_empty_first_list() {
+    // A UI subscribes (starting the initial probe) and refreshes at once: the refresh makes
+    // the initial probe's results stale, yet the first list must still list the provider.
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.fake.set_probe_delay(Duration::from_millis(300));
+    let mut rx = t.host.watch_providers();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    t.host.command(refresh("first-1", None)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), rx.changed())
+        .await
+        .expect("a first list")
+        .unwrap();
+    let list = rx.borrow_and_update().clone().unwrap();
+    let codex = list.iter().find(|e| e.instance_id.as_str() == "codex");
+    assert!(codex.is_some(), "first published list: {list:?}");
+    assert_eq!(codex.unwrap().probe.version.as_deref(), Some("0.167.0"));
+}
+
+#[tokio::test]
+async fn providers_are_probed_on_demand_and_once() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(t.fake.probes(), 0, "no probe at startup");
+    // A full refresh before anyone subscribes is the initial probe.
+    t.host.command(refresh("once-1", None)).await.unwrap();
+    let _a = t.host.watch_providers();
+    let _b = t.host.watch_providers();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        t.fake.probes(),
+        1,
+        "subscriptions after a full refresh probe nothing more"
+    );
 }
 
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
