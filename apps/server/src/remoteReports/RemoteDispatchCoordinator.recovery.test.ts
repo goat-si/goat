@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import { ChannelChildWorkId, ChannelTaskId, RunId, ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as ChildStore from "../channels/channelChildWorkStore.ts";
@@ -13,6 +14,7 @@ import {
   origin as reportOrigin,
   remote as reportRemote,
   runId as reportRun,
+  at as reportAt,
   report as makeReport,
   answer as reportAnswer,
 } from "./RemoteDispatchCoordinator.testkit.ts";
@@ -43,6 +45,7 @@ import {
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
 import { withLinkedHost } from "../sshRemote/testkit/LinkedHostFixture.ts";
 import * as Coordinator from "./RemoteDispatchCoordinator.ts";
+import * as ServerActivation from "../serverActivation.ts";
 
 const origin = ThreadId.make("recovery-origin");
 const remoteThread = ThreadId.make("remote-thread");
@@ -63,6 +66,7 @@ const fixture = Effect.gen(function* () {
   const notices: Array<string> = [];
   let reportsAnswer = false;
   const asked: Array<Ssh.SshHostToolCall> = [];
+  const reportCalls = yield* Queue.unbounded<Ssh.SshHostToolCall>();
   let answer: Answer = Effect.die("The fixture was not told how to answer resolve.");
   const dependencies = Layer.mergeAll(
     Layer.succeed(SqlClient.SqlClient, sql),
@@ -78,7 +82,10 @@ const fixture = Effect.gen(function* () {
     Layer.mock(Ssh.SshRemoteDispatch)({
       launchThread: () => Effect.die("A lost launch must never be launched again."),
       callHostTool: (call) => {
-        if (call.tool === "goat_origin_reports_wait") return reportsAnswer ? answer : Effect.never;
+        if (call.tool === "goat_origin_reports_wait")
+          return Queue.offer(reportCalls, call).pipe(
+            Effect.andThen(reportsAnswer ? answer : Effect.never),
+          );
         if (call.tool !== "goat_origin_resolve_binding") return Effect.never;
         asked.push(call);
         return answer;
@@ -99,6 +106,7 @@ const fixture = Effect.gen(function* () {
       reportsAnswer = true;
     },
     asked,
+    reportCalls,
     answer: (value: Answer) => {
       answer = value;
     },
@@ -109,6 +117,75 @@ const fixture = Effect.gen(function* () {
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const LONG_AGO = "1969-12-31T23:00:00.000Z";
+
+it.effect("restart observes a thread without replaying its stored cancel ceiling", () =>
+  Effect.gen(function* () {
+    const f = yield* reportFixture;
+    yield* f.sql`INSERT INTO remote_dispatches
+      (correlation_id,kind,origin_thread_id,host,remote_thread_id,read_key,delivery,state,reports_supported,
+        cancel_requested_at,cancel_ceiling,created_at,updated_at)
+      VALUES ('restart','thread',${reportOrigin},'box',${reportRemote},'key','notify_only','running',1,
+        ${reportAt},'approval-required',${reportAt},${reportAt})`;
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      yield* TestClock.adjust("5 seconds");
+      assert.equal((yield* Queue.take(f.calls)).call.tool, "goat_origin_reports_wait");
+      assert.equal((yield* c.get("restart"))!.state, "running");
+      yield* f.replyLatest(Effect.succeed(reportAnswer([], "completed")));
+      yield* Queue.take(f.commits);
+      assert.equal((yield* c.get("restart"))!.state, "cancelled");
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(reportDatabase)),
+);
+
+it.effect("restart parks running report drains until activation and the settle delay", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const activation = yield* Deferred.make<void>();
+    const readiness = yield* Deferred.make<void>();
+    yield* f.seedLost(LONG_AGO);
+    yield* f.sql`UPDATE remote_dispatches SET state = 'running', remote_thread_id = 'remote-thread', reports_supported = 1, report_cursor = 7 WHERE correlation_id = ${id}`;
+    yield* Effect.gen(function* () {
+      yield* Coordinator.RemoteDispatchCoordinator;
+      yield* TestClock.adjust("1 minute");
+      assert.strictEqual(yield* Queue.size(f.reportCalls), 0);
+      yield* Deferred.succeed(activation, undefined);
+      yield* TestClock.adjust("1 minute");
+      assert.strictEqual(yield* Queue.size(f.reportCalls), 0);
+      yield* Deferred.succeed(readiness, undefined);
+      yield* TestClock.adjust("4 seconds");
+      assert.strictEqual(yield* Queue.size(f.reportCalls), 0);
+      yield* TestClock.adjust("1 second");
+      const call = yield* Queue.take(f.reportCalls);
+      assert.strictEqual(call.arguments.afterSequence, 7);
+    }).pipe(
+      Effect.provide(f.layer),
+      Effect.provideService(ServerActivation.ServerActivation, Deferred.await(activation)),
+      Effect.provideService(ServerActivation.ServerCommandReady, Deferred.await(readiness)),
+    );
+  }).pipe(Effect.provide(database)),
+);
+
+it.effect("a drain restarted while readiness is pending is not replaced by recovery", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const readiness = yield* Deferred.make<void>();
+    yield* f.seedLost(LONG_AGO);
+    yield* f.sql`UPDATE remote_dispatches SET state = 'running', remote_thread_id = 'remote-thread', reports_supported = 1 WHERE correlation_id = ${id}`;
+    yield* Effect.gen(function* () {
+      const coordinator = yield* Coordinator.RemoteDispatchCoordinator;
+      yield* f.sql`UPDATE remote_dispatches SET state = 'idle' WHERE correlation_id = ${id}`;
+      yield* coordinator.resume("box", remoteThread);
+      yield* Queue.take(f.reportCalls);
+      yield* Deferred.succeed(readiness, undefined);
+      yield* TestClock.adjust("5 seconds");
+      assert.strictEqual(yield* Queue.size(f.reportCalls), 0);
+    }).pipe(
+      Effect.provide(f.layer),
+      Effect.provideService(ServerActivation.ServerCommandReady, Deferred.await(readiness)),
+    );
+  }).pipe(Effect.provide(database)),
+);
 
 it.effect("lost launch jitter preserves the age fence and varies retry eligibility", () =>
   Effect.gen(function* () {

@@ -62,7 +62,7 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import { forkParked, forkParkedFiber } from "./serverActivation.ts";
+import { forkParked, forkParkedFiber, SignalServerCommandReady } from "./serverActivation.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { getServerOwners } from "./telemetry/Identify.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -891,6 +891,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
     yield* commandGate.signalCommandReady;
+    yield* yield* SignalServerCommandReady;
     yield* releaseDeferredRecovery({
       gate: commandGate,
       recovery: providerRuntimeRecovery,

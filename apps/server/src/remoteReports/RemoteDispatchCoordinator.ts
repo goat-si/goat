@@ -1,6 +1,7 @@
 import { retryDelayMs } from "../retryJitter.ts";
 import { makeRefusalGrace } from "./remoteRefusalGrace.ts";
 import * as AutomationHold from "../automationHold.ts";
+import { parkDispatchRecovery } from "./parkDispatchRecovery.ts";
 // @effect-diagnostics nodeBuiltinImport:off - generate private read keys and identify the origin machine.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -884,8 +885,9 @@ const make = Effect.gen(function* () {
     }
   });
   // Replace a finishing poller as well: resume/cancel must never lose their restart.
-  const start = (id: string, waitForRun = false, interruptSent = false) =>
+  const start = (id: string, waitForRun = false, interruptSent = false, onlyUnowned = false) =>
     Effect.suspend(() => {
+      if (onlyUnowned && owners.has(id)) return Effect.void;
       const owner = ++generations;
       owners.set(id, owner);
       return FiberMap.run(
@@ -1145,14 +1147,13 @@ const make = Effect.gen(function* () {
   yield* db(sql`UPDATE remote_dispatches SET state = 'idle', updated_at = ${yield* now}
     WHERE kind = 'thread' AND reports_supported = 0 AND state = 'running'`);
   const active = yield* rows(sql`SELECT * FROM remote_dispatches WHERE state = 'running'`);
-  // Copied rows are another app's remote work; a person's own dispatches here start at once.
-  const resumeActive = Effect.forEach(
-    active,
-    (r) => start(r.correlation_id, r.launched_run_id === null),
-    { discard: true },
-  );
-  if ((yield* hold.current) === null) yield* resumeActive;
-  else yield* hold.awaitRelease.pipe(Effect.andThen(resumeActive), Effect.forkScoped);
+  yield* parkDispatchRecovery({
+    ids: active.map((r) => r.correlation_id),
+    awaitHold: hold.awaitRelease,
+    locks,
+    load,
+    start,
+  });
   const resolveLostLaunches = resolveLostThreadLaunches({ retryAt: resolveRetryAt, start }).pipe(
     Effect.andThen(
       probeUnreachableThreads({

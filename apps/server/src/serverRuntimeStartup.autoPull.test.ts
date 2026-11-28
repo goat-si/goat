@@ -37,7 +37,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { layerMemoryDefaultStarted } from "./server.ts";
-import { ServerActivation } from "./serverActivation.ts";
+import { ServerActivation, SignalServerCommandReady } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
@@ -63,6 +63,7 @@ it.effect.each([
         const initialized = yield* Deferred.make<void>();
         let initializationCount = 0;
         const activation = yield* Deferred.make<void>();
+        const commandReadySignal = yield* Deferred.make<void>();
         const prepared = yield* Deferred.make<void>();
         const commitTrial = yield* Deferred.make<void>();
         const statusCalled = yield* Deferred.make<string>();
@@ -263,6 +264,7 @@ it.effect.each([
           // Acquisition completes while settings.start is held; command readiness
           // follows settings.start in the real runtime and is checked after release.
           expect(initializationCount).toBe(0);
+          expect(yield* Deferred.isDone(commandReadySignal)).toBe(false);
           yield* Deferred.succeed(releaseSettings, undefined);
 
           // A reverted, awaited pull reaches statusDetails instead of prepareTrial.
@@ -277,6 +279,7 @@ it.effect.each([
           expect(yield* Deferred.await(statusCalled)).toBe(cwd);
           // statusDetails can never finish; readiness must not depend on it.
           yield* startup.awaitCommandReady;
+          yield* Deferred.await(commandReadySignal);
           if (!fails) yield* Deferred.await(initialized);
           expect(initializationCount).toBe(fails ? 0 : 1);
         }).pipe(
@@ -287,6 +290,10 @@ it.effect.each([
             }).pipe(Layer.provide(dependencies)),
           ),
           Effect.provideService(ServerActivation, Deferred.await(activation)),
+          Effect.provideService(
+            SignalServerCommandReady,
+            Deferred.succeed(commandReadySignal, undefined).pipe(Effect.asVoid),
+          ),
         );
         expect(yield* Deferred.isDone(statusInterrupted)).toBe(true);
       }),
