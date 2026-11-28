@@ -147,7 +147,9 @@ export interface AcpAdapterV2Flavor {
     (
       result: EffectAcpSchema.PromptResponse,
       options?: { readonly retired?: boolean },
-    ) => Effect.Effect<OrchestrationV2ProviderFailure | AcpResumablePromptFailure | undefined>
+    ) => Effect.Effect<
+      OrchestrationV2ProviderFailure | AcpResumablePromptFailure | "completed" | undefined
+    >
   >;
   readonly requiresSignIn?: (cause: unknown) => boolean;
   /** The flavor's runtime refuses a version the policy rates broken when it starts. */

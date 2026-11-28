@@ -21,6 +21,7 @@ export type PromptOutcomeCheck = Effect.Success<
 >;
 
 export function promptOutcomeFailure(outcome: Effect.Success<ReturnType<PromptOutcomeCheck>>) {
+  if (outcome === "completed") return { failure: undefined, resumeWith: undefined };
   return outcome !== undefined && "resumeWith" in outcome
     ? outcome
     : { failure: outcome, resumeWith: undefined };
@@ -30,7 +31,9 @@ export const readRetiredPromptOutcome = Effect.fn("AcpAdapterV2.readRetiredPromp
   function* (check: PromptOutcomeCheck | undefined, driver: ProviderDriverKind) {
     if (check === undefined) return undefined;
     return yield* check({ stopReason: "end_turn" }, { retired: true }).pipe(
-      Effect.map((outcome) => promptOutcomeFailure(outcome).failure),
+      Effect.map((outcome) =>
+        outcome === "completed" ? ("completed" as const) : promptOutcomeFailure(outcome).failure,
+      ),
       Effect.timeout("5 seconds"),
       Effect.catchCause((cause) =>
         Effect.logError("Failed to check a silent ACP prompt's outcome", { driver, cause }).pipe(

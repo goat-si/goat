@@ -6726,6 +6726,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               yield* cancelPendingRuntimeRequests();
               yield* terminalizeOpenForegroundTools(context, "failed");
               const recorded = yield* readRetiredPromptOutcome(checkPromptOutcome, driver);
+              if (recorded === "completed") {
+                yield* finalizeTurn(context, "completed");
+                return "retired" as const;
+              }
               const minutes = Math.max(1, Math.round(timeoutMillis / 60_000));
               yield* finalizeTurn(
                 context,

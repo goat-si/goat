@@ -14,8 +14,14 @@ const failureOf = (
   outcome:
     | OrchestrationV2ProviderFailure
     | { readonly failure: OrchestrationV2ProviderFailure }
+    | "completed"
     | undefined,
-) => (outcome !== undefined && "failure" in outcome ? outcome.failure : outcome);
+) =>
+  outcome === "completed"
+    ? assert.fail("expected no completed outcome")
+    : outcome !== undefined && "failure" in outcome
+      ? outcome.failure
+      : outcome;
 
 const USER_INPUT = 14;
 const PLANNER_RESPONSE = 15;
