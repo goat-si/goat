@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 import type * as GitVcsDriver from "./GitVcsDriver.ts";
+import { decodeGitText } from "./gitTextDecoder.ts";
+export { decodeGitText } from "./gitTextDecoder.ts";
 import { gitCommandContext } from "./gitCommandContext.ts";
 
 const OUTPUT_LINE_SEPARATOR = /\r\n|\r|\n/;
@@ -15,10 +17,10 @@ export const collectOutput = Effect.fnUntraced(function* (
   onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
   keepLineCallbacksAfterTruncation = false,
 ): Effect.fn.Return<{ readonly text: string; readonly truncated: boolean }, GitCommandError> {
-  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const lineStreamDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const chunks: Array<Uint8Array> = [];
   const lineDecoder = keepLineCallbacksAfterTruncation && onLine ? new TextDecoder() : null;
   let bytes = 0;
-  let text = "";
   let lineBuffer = "";
   let truncated = false;
   // Bound newline-free output; oversized lines are not useful to callbacks.
@@ -70,10 +72,11 @@ export const collectOutput = Effect.fnUntraced(function* (
     bytes += chunkToDecode.byteLength;
     truncated = appendTruncationMarker && nextBytes > maxOutputBytes;
 
-    const decoded = decoder.decode(chunkToDecode, { stream: !truncated });
-    text += decoded;
+    chunks.push(chunkToDecode);
     if (onLine) {
-      lineBuffer += lineDecoder ? lineDecoder.decode(chunk, { stream: true }) : decoded;
+      lineBuffer += lineDecoder
+        ? lineDecoder.decode(chunk, { stream: true })
+        : lineStreamDecoder.decode(chunkToDecode, { stream: !truncated });
       yield* emitCompleteLines(false);
     }
   });
@@ -89,15 +92,13 @@ export const collectOutput = Effect.fnUntraced(function* (
     }),
   );
 
-  const remainder = truncated ? "" : decoder.decode();
-  text += remainder;
   if (onLine) {
-    lineBuffer += remainder;
+    if (!truncated && !lineDecoder) lineBuffer += lineStreamDecoder.decode();
     if (lineDecoder) lineBuffer += lineDecoder.decode();
     yield* emitCompleteLines(true);
   }
   return {
-    text,
+    text: decodeGitText(Buffer.concat(chunks), truncated),
     truncated,
   };
 });

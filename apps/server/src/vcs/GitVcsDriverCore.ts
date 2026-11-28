@@ -60,7 +60,7 @@ import {
 } from "./primaryDefaultBranch.ts";
 import { checkConflictMarkers } from "./commitConflictMarkers.ts";
 import { gitCommandContext } from "./gitCommandContext.ts";
-import { collectOutput } from "./gitOutputCollector.ts";
+import { collectOutput, decodeGitText } from "./gitOutputCollector.ts";
 import { inProgressHeads } from "./commitOperationHeads.ts";
 import { makeReviewDiffHash } from "./reviewDiffHash.ts";
 import { statusUpstreamRefreshFailureCooldown } from "./statusRefreshCooldown.ts";
@@ -3199,7 +3199,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (bytes.includes(0)) {
       return yield* fileError("fs.readFile", `Cannot expand binary file '${input.newPath}'.`);
     }
-    return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+    return decodeGitText(bytes);
   });
 
   // Staged reads HEAD -> index, Unstaged reads index -> disk. The original views
