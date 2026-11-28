@@ -737,6 +737,7 @@ mod tests {
             role: goat2_contracts::BotRole::Member,
             session_thread_id: "t".into(),
             default_model_selection: test_selection(),
+            instructions: None,
         };
         host.cards
             .send(CardUpdate::BotChanged(Arc::new(bot)))
