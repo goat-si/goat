@@ -753,3 +753,80 @@ fn flush_and_close_report_a_thread_poisoned_by_an_unbatched_append() {
     assert!(store.flush().is_err(), "flush reports the poisoned thread");
     assert!(store.close().is_err());
 }
+
+// Review round 6.
+fn delete_with_fault(faults: Faults) {
+    let dir = tempfile::tempdir().unwrap();
+    let t = tid("t");
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(t.clone()), created("doomed", "/w"))
+            .unwrap();
+        let (_, rx) = store.subscribe_cards(None);
+        testing::set_faults(&store, faults);
+        assert!(
+            store.delete_thread(&t).is_err(),
+            "the durability error is reported"
+        );
+        testing::set_faults(&store, Faults::default());
+        assert!(store.find(&Default::default()).is_empty(), "no ghost card");
+        assert!(store.card(&t).unwrap().is_none());
+        assert!(
+            rx.try_iter()
+                .any(|u| matches!(u, goat2_thread_store::CardUpdate::Removed { .. })),
+            "subscribers learn about the removal"
+        );
+        assert!(matches!(
+            store.delete_thread(&t),
+            Err(StoreError::ThreadMissing(_))
+        ));
+        store
+            .create_thread(Some(t.clone()), created("reborn", "/w"))
+            .unwrap();
+        assert_eq!(store.card(&t).unwrap().unwrap().title, "reborn");
+        testing::crash(store);
+    }
+    let (store, _) = open(dir.path());
+    assert_eq!(store.card(&t).unwrap().unwrap().title, "reborn");
+    assert_eq!(store.find(&Default::default()).len(), 1);
+}
+
+#[test]
+fn a_delete_whose_directory_sync_fails_leaves_no_ghost_card() {
+    delete_with_fault(Faults {
+        fail_delete_dir_sync: true,
+        ..Default::default()
+    });
+}
+
+#[test]
+fn a_delete_whose_index_delete_fails_leaves_no_ghost_card() {
+    delete_with_fault(Faults {
+        fail_delete_index: true,
+        ..Default::default()
+    });
+}
+
+#[test]
+fn a_delete_whose_index_delete_fails_is_finished_at_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(tid("t")), created("doomed", "/w"))
+            .unwrap();
+        testing::set_faults(
+            &store,
+            Faults {
+                fail_delete_index: true,
+                ..Default::default()
+            },
+        );
+        assert!(store.delete_thread(&tid("t")).is_err());
+        testing::crash(store);
+    }
+    let (store, report) = open(dir.path());
+    assert_eq!(report.removed_deleted, vec!["t"]);
+    assert!(store.find(&Default::default()).is_empty());
+}

@@ -71,8 +71,14 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
 4. `run.finished` is followed by `checkpoint {card, fold}` in the same write; the checkpoint card has
    `appliedSeq` equal to its own seq.
 5. Create: row {dirty=1, creating=1} (FULL) -> mkdir -> goat.jsonl header + `thread.created` (sync) ->
-   directory syncs -> card.json + row (creating cleared). Delete: row dirty=1 -> rename the folder to
-   `threads/.trash-<id>-<hex>` -> directory sync -> row removed -> folder removed.
+   directory syncs -> card.json + row (creating cleared); the card is announced, with its cardSeq, only
+   after that and with the thread lock held. Delete: row dirty=1 -> rename the folder to
+   `threads/.trash-<id>-<hex>`; from the rename on the delete always completes in memory (card removed,
+   subscribers told, callers waiting on the thread get ThreadMissing) and a failed directory sync or row
+   delete is returned afterwards; the dirty row lets the next start finish it.
+
+Lock order: a thread's lock, then the thread map, then the shared lock (card set, index); the thread
+map is never held while a thread lock is taken.
 
 ## Startup
 

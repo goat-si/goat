@@ -60,6 +60,10 @@ pub struct Faults {
     pub stop_rebuild_before_rows: bool,
     /// Writing card.json fails with an I/O error.
     pub fail_cache_writes: bool,
+    /// `delete_thread`: syncing the threads directory after the rename fails.
+    pub fail_delete_dir_sync: bool,
+    /// `delete_thread`: removing the index row after the rename fails.
+    pub fail_delete_index: bool,
 }
 
 fn injected(what: &str) -> std::io::Error {
@@ -940,9 +944,15 @@ impl Store {
         }
         let mut writes: Vec<(ThreadCard, bool, String)> = Vec::new();
         {
-            let slots = self.slots.read().unwrap_or_else(|p| p.into_inner());
-            for id in &built {
-                if let Some(slot) = slots.get(id) {
+            let entries: Vec<Arc<Mutex<Slot>>> = {
+                let slots = self.slots.read().unwrap_or_else(|p| p.into_inner());
+                built
+                    .iter()
+                    .filter_map(|id| slots.get(id).cloned())
+                    .collect()
+            };
+            for slot in &entries {
+                {
                     let slot = lock(slot);
                     let active = slot.fold.active_run_id.is_some();
                     writes.push((slot.card.clone(), active, card_doc(&slot.card, &slot.fold)?));
@@ -2016,17 +2026,37 @@ impl Store {
             .threads_dir()
             .join(format!(".trash-{}-{}", id.as_str(), random_hex(8)));
         fs::rename(&slot.dir, &trash)?;
-        // From here on, anyone who was waiting for this lock must not touch the path again.
+        // From here on, anyone who was waiting for this lock must not touch the path again, and the
+        // delete is a fact: the in-memory removal always completes. Durability errors after this
+        // point are reported at the end; the row is already marked dirty, so a start that finds it
+        // without a folder finishes the delete.
         slot.health = Health::Deleted;
-        if self.opts.fsync {
-            sync_dir(&self.threads_dir())?;
+        let mut first_error: Option<StoreError> = None;
+        let dir_sync = if self.faults().fail_delete_dir_sync {
+            Err(injected("delete dir sync"))
+        } else if self.opts.fsync {
+            sync_dir(&self.threads_dir())
+        } else {
+            Ok(())
+        };
+        if let Err(e) = dir_sync {
+            first_error = Some(e.into());
         }
         if stop_after_rename {
-            return Ok(());
+            return first_error.map_or(Ok(()), Err);
         }
         {
             let mut shared = lock(&self.shared);
-            shared.index.delete(id.as_str())?;
+            let removed = if self.faults().fail_delete_index {
+                Err(StoreError::Io(injected("delete index row")))
+            } else {
+                shared.index.delete(id.as_str())
+            };
+            if let Err(e) = removed
+                && first_error.is_none()
+            {
+                first_error = Some(e);
+            }
             shared.cards.remove(id);
             let seq = shared.next_card_seq;
             shared.next_card_seq += 1;
@@ -2047,7 +2077,7 @@ impl Store {
         }
         drop(slot);
         let _ = fs::remove_dir_all(&trash);
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     /// The card index epoch (new for every `open`).
