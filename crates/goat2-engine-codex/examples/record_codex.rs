@@ -18,7 +18,9 @@ use goat2_engine_codex::protocol::client::{
     TurnSteerResponse, turn_start_params, turn_steer_params,
 };
 use goat2_engine_codex::protocol::methods;
-use goat2_engine_codex::protocol::server::{CommandApprovalResponse, CommandDecision, Notification, ServerRequest};
+use goat2_engine_codex::protocol::server::{
+    CommandApprovalResponse, CommandDecision, Notification, ServerRequest,
+};
 use goat2_engine_codex::transcript::{ExitKind, Recorder, Redactor, Transcript, privacy_scan};
 use goat2_engine_codex::transport::{Connection, Inbound};
 use serde_json::{Value, json};
@@ -41,9 +43,23 @@ impl Session {
     async fn spawn(cwd: &Path) -> Session {
         let mut launch = Launch::new("codex").without_host_identity();
         for arg in [
-            "app-server", "-c", "mcp_servers={}", "--disable", "apps", "--disable", "plugins",
-            "--disable", "browser_use", "--disable", "computer_use", "--disable", "in_app_browser",
-            "--disable", "memories", "--disable", "image_generation",
+            "app-server",
+            "-c",
+            "mcp_servers={}",
+            "--disable",
+            "apps",
+            "--disable",
+            "plugins",
+            "--disable",
+            "browser_use",
+            "--disable",
+            "computer_use",
+            "--disable",
+            "in_app_browser",
+            "--disable",
+            "memories",
+            "--disable",
+            "image_generation",
         ] {
             launch = launch.arg(arg);
         }
@@ -55,13 +71,21 @@ impl Session {
             child.take_stdout().expect("stdout"),
             Some(recorder.tap()),
         );
-        let session = Session { child, conn, inbound, recorder };
+        let session = Session {
+            child,
+            conn,
+            inbound,
+            recorder,
+        };
         let _: Value = session
             .conn
             .request(methods::INITIALIZE, &InitializeParams::goat("0.0.0"))
             .await
             .expect("initialize");
-        session.conn.notify(methods::INITIALIZED, &Value::Null).expect("initialized");
+        session
+            .conn
+            .notify(methods::INITIALIZED, &Value::Null)
+            .expect("initialized");
         session
     }
 
@@ -76,7 +100,12 @@ impl Session {
         loop {
             let next = tokio::time::timeout_at(deadline, self.inbound.recv())
                 .await
-                .unwrap_or_else(|_| panic!("timed out waiting for {what}; stderr:\n{}", self.child.stderr_tail()));
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "timed out waiting for {what}; stderr:\n{}",
+                        self.child.stderr_tail()
+                    )
+                });
             match next {
                 Some(Inbound::Notification(n)) => {
                     if done(&n) {
@@ -88,9 +117,14 @@ impl Session {
                     self.conn.respond(&id, answer).expect("respond");
                 }
                 Some(Inbound::Diagnostic(d)) => eprintln!("  diagnostic: {d}"),
-                Some(Inbound::LateResponse { method, .. }) => eprintln!("  late answer to {method}"),
+                Some(Inbound::LateResponse { method, .. }) => {
+                    eprintln!("  late answer to {method}")
+                }
                 Some(Inbound::Retired { method }) => panic!("codex went silent after {method}"),
-                None => panic!("codex exited while waiting for {what}; stderr:\n{}", self.child.stderr_tail()),
+                None => panic!(
+                    "codex exited while waiting for {what}; stderr:\n{}",
+                    self.child.stderr_tail()
+                ),
             }
         }
     }
@@ -137,7 +171,10 @@ async fn start_turn(session: &Session, thread: &str, text: &str, effort: &str) -
         )
         .await
         .expect("turn/start");
-    eprintln!("  turn/start answered in {} ms", started.elapsed().as_millis());
+    eprintln!(
+        "  turn/start answered in {} ms",
+        started.elapsed().as_millis()
+    );
     response.turn.id
 }
 
@@ -153,7 +190,8 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
             let mut s = Session::spawn(&cwd).await;
             let thread = start_thread(&s, &options(&cwd, model, "never", "read-only")).await;
             start_turn(&s, &thread, "Reply with exactly: GOAT2-OK", "low").await;
-            s.wait_for("turn/completed", turn_completed, &mut no_requests).await;
+            s.wait_for("turn/completed", turn_completed, &mut no_requests)
+                .await;
             s.finish(scenario).await
         }
         "steer" => {
@@ -166,17 +204,29 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
                 "low",
             )
             .await;
-            s.wait_for("item/started", |n| matches!(n, Notification::ItemStarted(_)), &mut no_requests).await;
+            s.wait_for(
+                "item/started",
+                |n| matches!(n, Notification::ItemStarted(_)),
+                &mut no_requests,
+            )
+            .await;
             let steered: TurnSteerResponse = s
                 .conn
                 .request(
                     methods::TURN_STEER,
-                    &turn_steer_params(&thread, &turn, "After that, reply with exactly: DONE STEERED", &[], Some("goat-msg-2")),
+                    &turn_steer_params(
+                        &thread,
+                        &turn,
+                        "After that, reply with exactly: DONE STEERED",
+                        &[],
+                        Some("goat-msg-2"),
+                    ),
                 )
                 .await
                 .expect("turn/steer");
             assert_eq!(steered.turn_id, turn);
-            s.wait_for("turn/completed", turn_completed, &mut no_requests).await;
+            s.wait_for("turn/completed", turn_completed, &mut no_requests)
+                .await;
             s.finish(scenario).await
         }
         "interrupt" => {
@@ -189,18 +239,31 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
                 "low",
             )
             .await;
-            s.wait_for("item/started", |n| matches!(n, Notification::ItemStarted(_)), &mut no_requests).await;
+            s.wait_for(
+                "item/started",
+                |n| matches!(n, Notification::ItemStarted(_)),
+                &mut no_requests,
+            )
+            .await;
             let _: Value = s
                 .conn
-                .request(methods::TURN_INTERRUPT, &TurnInterruptParams { thread_id: thread.clone(), turn_id: turn })
+                .request(
+                    methods::TURN_INTERRUPT,
+                    &TurnInterruptParams {
+                        thread_id: thread.clone(),
+                        turn_id: turn,
+                    },
+                )
                 .await
                 .expect("turn/interrupt");
-            s.wait_for("turn/completed", turn_completed, &mut no_requests).await;
+            s.wait_for("turn/completed", turn_completed, &mut no_requests)
+                .await;
             s.finish(scenario).await
         }
         "approval" => {
             let mut s = Session::spawn(&cwd).await;
-            let thread = start_thread(&s, &options(&cwd, model, "untrusted", "workspace-write")).await;
+            let thread =
+                start_thread(&s, &options(&cwd, model, "untrusted", "workspace-write")).await;
             start_turn(
                 &s,
                 &thread,
@@ -210,11 +273,15 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
             .await;
             let mut approve = |request: &ServerRequest| match request {
                 ServerRequest::CommandApproval(_) => {
-                    serde_json::to_value(CommandApprovalResponse { decision: CommandDecision::Accept }).unwrap()
+                    serde_json::to_value(CommandApprovalResponse {
+                        decision: CommandDecision::Accept,
+                    })
+                    .unwrap()
                 }
                 other => panic!("unexpected server request {}", other.method()),
             };
-            s.wait_for("turn/completed", turn_completed, &mut approve).await;
+            s.wait_for("turn/completed", turn_completed, &mut approve)
+                .await;
             s.finish(scenario).await
         }
         "resume" => {
@@ -223,7 +290,9 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
             let opts = options(&cwd, model, "never", "read-only");
             let thread = start_thread(&first, &opts).await;
             start_turn(&first, &thread, "Reply with exactly: FIRST", "low").await;
-            first.wait_for("turn/completed", turn_completed, &mut no_requests).await;
+            first
+                .wait_for("turn/completed", turn_completed, &mut no_requests)
+                .await;
             first.conn.close_input();
             first.child.shutdown().await;
 
@@ -235,7 +304,8 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
                 .expect("thread/resume");
             assert_eq!(resumed.thread.id, thread);
             start_turn(&s, &thread, "Reply with exactly: RESUMED", "low").await;
-            s.wait_for("turn/completed", turn_completed, &mut no_requests).await;
+            s.wait_for("turn/completed", turn_completed, &mut no_requests)
+                .await;
             s.finish(scenario).await
         }
         other => panic!("unknown scenario {other}"),
@@ -245,7 +315,12 @@ async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let flag = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
     let scenario = flag("--scenario").unwrap_or_else(|| "all".into());
     let out = PathBuf::from(flag("--out").expect("--out <dir>"));
     let model = flag("--model").unwrap_or_else(|| "gpt-6-luna".into());
@@ -266,7 +341,10 @@ async fn main() {
         if let Ok(dir) = std::env::var("GOAT2_RECORD_RAW_DIR") {
             // Debug only: the unredacted session, for a local look. Never commit these.
             let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(Path::new(&dir).join(format!("{name}.raw.json")), serde_json::to_string_pretty(&raw).unwrap());
+            let _ = std::fs::write(
+                Path::new(&dir).join(format!("{name}.raw.json")),
+                serde_json::to_string_pretty(&raw).unwrap(),
+            );
         }
         let mut transcript = match Redactor::new().redact(&raw) {
             Ok(t) => t,
@@ -300,7 +378,11 @@ async fn main() {
         }
         let path = out.join(format!("{name}.json"));
         std::fs::write(&path, text + "\n").expect("write transcript");
-        eprintln!("  wrote {} ({} entries, {counts:?})", path.display(), transcript.entries.len());
+        eprintln!(
+            "  wrote {} ({} entries, {counts:?})",
+            path.display(),
+            transcript.entries.len()
+        );
     }
     let _ = std::fs::remove_dir_all(&root);
     if failed {

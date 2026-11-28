@@ -53,13 +53,20 @@ async fn child_leads_its_own_group_at_lower_priority() {
     assert_eq!(grand_pgid, pid, "descendants stay in the group");
     let host = priority_of(0);
     assert_eq!(priority_of(pid), (host + 10).min(19));
-    assert_eq!(priority_of(grandchild), (host + 10).min(19), "descendants inherit nice");
+    assert_eq!(
+        priority_of(grandchild),
+        (host + 10).min(19),
+        "descendants inherit nice"
+    );
 
     let rss = child.group_rss_bytes().unwrap();
     assert!(rss > 0, "group memory is measured");
 
     child.shutdown().await;
-    assert!(wait_gone(grandchild).await, "shutdown kills the whole group");
+    assert!(
+        wait_gone(grandchild).await,
+        "shutdown kills the whole group"
+    );
     assert_eq!(child.group_rss_bytes().unwrap(), 0);
 }
 
@@ -70,19 +77,29 @@ async fn shutdown_kills_descendants_after_the_leader_exits() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(alive(grandchild), "descendant outlives the leader");
     child.shutdown().await;
-    assert!(wait_gone(grandchild).await, "group kill reaches the orphaned descendant");
+    assert!(
+        wait_gone(grandchild).await,
+        "group kill reaches the orphaned descendant"
+    );
 }
 
 #[tokio::test]
 async fn terminate_group_ends_within_one_kill_grace() {
     // The leader ignores TERM, so the group needs KILL after kill_grace.
-    let mut child = ChildProcess::spawn(&sh("trap '' TERM; echo ready; while true; do sleep 1; done")).unwrap();
+    let mut child = ChildProcess::spawn(&sh(
+        "trap '' TERM; echo ready; while true; do sleep 1; done",
+    ))
+    .unwrap();
     first_line(&mut child).await;
     let started = Instant::now();
     let summary = child.terminate_group().await;
     assert!(summary.signalled);
     // kill_grace (300 ms) plus reaping slack.
-    assert!(started.elapsed() < Duration::from_millis(1500), "took {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "took {:?}",
+        started.elapsed()
+    );
     assert!(!child.group_alive());
 }
 
@@ -91,14 +108,18 @@ async fn drop_kills_the_group() {
     let mut child = ChildProcess::spawn(&sh("sleep 60 & echo $!; wait")).unwrap();
     let grandchild: i32 = first_line(&mut child).await.trim().parse().unwrap();
     drop(child);
-    assert!(wait_gone(grandchild).await, "dropping the handle kills the group");
+    assert!(
+        wait_gone(grandchild).await,
+        "dropping the handle kills the group"
+    );
 }
 
 #[tokio::test]
 async fn host_identity_is_not_inherited() {
     // SAFETY: test-only environment mutation before spawning.
     unsafe { std::env::set_var("GOAT_TEST_IDENTITY_MARKER", "leak") };
-    let launch = sh("echo \"[$GOAT_TEST_IDENTITY_MARKER][$CODEX_THREAD_ID]\"").without_host_identity();
+    let launch =
+        sh("echo \"[$GOAT_TEST_IDENTITY_MARKER][$CODEX_THREAD_ID]\"").without_host_identity();
     let mut child = ChildProcess::spawn(&launch).unwrap();
     assert_eq!(first_line(&mut child).await, "[][]");
     child.shutdown().await;

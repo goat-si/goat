@@ -18,7 +18,8 @@ fn main() {
         Ok(path) => path,
         Err(_) => fail(2, "GOAT2_FAKE_CODEX_TRANSCRIPT is not set"),
     };
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(2, &format!("read {path}: {e}")));
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| fail(2, &format!("read {path}: {e}")));
     let transcript: Transcript =
         serde_json::from_str(&text).unwrap_or_else(|e| fail(2, &format!("parse {path}: {e}")));
     let realtime = std::env::var("GOAT2_FAKE_CODEX_REALTIME").is_ok_and(|v| v == "1");
@@ -30,13 +31,27 @@ fn main() {
 
     for (index, entry) in transcript.entries.iter().enumerate() {
         match entry {
-            Entry::ExpectOutbound { frame, wildcards, label } => {
+            Entry::ExpectOutbound {
+                frame,
+                wildcards,
+                label,
+            } => {
                 let line = match lines.next() {
                     Some(Ok(line)) => line,
-                    _ => fail(4, &format!("entry {index}: stdin closed while expecting {}", describe(frame, label))),
+                    _ => fail(
+                        4,
+                        &format!(
+                            "entry {index}: stdin closed while expecting {}",
+                            describe(frame, label)
+                        ),
+                    ),
                 };
-                let actual: Value = serde_json::from_str(&line)
-                    .unwrap_or_else(|e| fail(3, &format!("entry {index}: outbound line is not JSON: {e}: {line}")));
+                let actual: Value = serde_json::from_str(&line).unwrap_or_else(|e| {
+                    fail(
+                        3,
+                        &format!("entry {index}: outbound line is not JSON: {e}: {line}"),
+                    )
+                });
                 let rules = rules.with_extra_wildcards(wildcards);
                 if let Err(mismatch) = frames_match(frame, &actual, &rules) {
                     fail(
@@ -46,17 +61,19 @@ fn main() {
                         ),
                     );
                 }
-                if frame.get("method").is_some() {
-                    if let (Some(recorded), Some(live)) = (frame.get("id"), actual.get("id")) {
-                        let key = recorded.to_string();
-                        if ids.contains_key(&key) {
-                            fail(3, &format!("entry {index}: recorded id {key} bound twice"));
-                        }
-                        ids.insert(key, live.clone());
+                if frame.get("method").is_some()
+                    && let (Some(recorded), Some(live)) = (frame.get("id"), actual.get("id"))
+                {
+                    let key = recorded.to_string();
+                    if ids.contains_key(&key) {
+                        fail(3, &format!("entry {index}: recorded id {key} bound twice"));
                     }
+                    ids.insert(key, live.clone());
                 }
             }
-            Entry::EmitInbound { frame, after_ms, .. } => {
+            Entry::EmitInbound {
+                frame, after_ms, ..
+            } => {
                 if let Some(ms) = after_ms {
                     let ms = if realtime { *ms } else { (*ms).min(50) };
                     if ms > 0 {
@@ -65,14 +82,16 @@ fn main() {
                 }
                 let mut frame = frame.clone();
                 let is_response = frame.get("method").is_none();
-                if is_response {
-                    if let Some(id) = frame.get("id").map(Value::to_string) {
-                        if let Some(live) = ids.get(&id) {
-                            frame["id"] = live.clone();
-                        }
-                    }
+                if is_response
+                    && let Some(id) = frame.get("id").map(Value::to_string)
+                    && let Some(live) = ids.get(&id)
+                {
+                    frame["id"] = live.clone();
                 }
-                if writeln!(stdout, "{frame}").and_then(|_| stdout.flush()).is_err() {
+                if writeln!(stdout, "{frame}")
+                    .and_then(|_| stdout.flush())
+                    .is_err()
+                {
                     fail(5, &format!("entry {index}: stdout closed"));
                 }
             }
@@ -85,7 +104,10 @@ fn main() {
     for line in lines {
         match line {
             Ok(line) if line.trim().is_empty() => {}
-            Ok(line) => fail(3, &format!("unexpected outbound frame after the transcript ended: {line}")),
+            Ok(line) => fail(
+                3,
+                &format!("unexpected outbound frame after the transcript ended: {line}"),
+            ),
             Err(_) => break,
         }
     }
@@ -94,7 +116,12 @@ fn main() {
 fn describe(frame: &Value, label: &Option<String>) -> String {
     label
         .clone()
-        .or_else(|| frame.get("method").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            frame
+                .get("method")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| frame.to_string())
 }
 

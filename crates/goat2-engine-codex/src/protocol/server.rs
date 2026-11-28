@@ -13,9 +13,16 @@ use super::{RpcId, methods};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Notification {
     Error(ErrorNotification),
-    ThreadStarted { thread_id: String },
-    ThreadStatusChanged { thread_id: String, status: ThreadStatusWire },
-    ThreadClosed { thread_id: String },
+    ThreadStarted {
+        thread_id: String,
+    },
+    ThreadStatusChanged {
+        thread_id: String,
+        status: ThreadStatusWire,
+    },
+    ThreadClosed {
+        thread_id: String,
+    },
     TurnStarted(TurnNotification),
     TurnCompleted(TurnNotification),
     TurnPlanUpdated(TurnPlanUpdated),
@@ -27,13 +34,25 @@ pub enum Notification {
     ReasoningTextDelta(Delta),
     CommandOutputDelta(Delta),
     FileChangeOutputDelta(Delta),
-    ServerRequestResolved { thread_id: String, request_id: RpcId },
-    TokenUsageUpdated { thread_id: String, turn_id: Option<String>, usage: Value },
+    ServerRequestResolved {
+        thread_id: String,
+        request_id: RpcId,
+    },
+    TokenUsageUpdated {
+        thread_id: String,
+        turn_id: Option<String>,
+        usage: Value,
+    },
     McpStartupStatus(Value),
     /// A method this build does not read.
-    Unknown { method: String },
+    Unknown {
+        method: String,
+    },
     /// A known method whose params did not decode; logged and skipped.
-    Malformed { method: String, error: String },
+    Malformed {
+        method: String,
+        error: String,
+    },
 }
 
 impl Notification {
@@ -165,9 +184,11 @@ pub fn parse_notification(method: &str, params: Value) -> Notification {
                 status: s.status,
             })
         }
-        methods::THREAD_CLOSED => decode::<ThreadOnly>(params).map(|s| Notification::ThreadClosed {
-            thread_id: s.thread_id,
-        }),
+        methods::THREAD_CLOSED => {
+            decode::<ThreadOnly>(params).map(|s| Notification::ThreadClosed {
+                thread_id: s.thread_id,
+            })
+        }
         methods::TURN_STARTED => decode(params).map(Notification::TurnStarted),
         methods::TURN_COMPLETED => decode(params).map(Notification::TurnCompleted),
         methods::TURN_PLAN_UPDATED => decode(params).map(Notification::TurnPlanUpdated),
@@ -178,7 +199,9 @@ pub fn parse_notification(method: &str, params: Value) -> Notification {
         methods::REASONING_SUMMARY_DELTA => decode(params).map(Notification::ReasoningSummaryDelta),
         methods::REASONING_TEXT_DELTA => decode(params).map(Notification::ReasoningTextDelta),
         methods::COMMAND_OUTPUT_DELTA => decode(params).map(Notification::CommandOutputDelta),
-        methods::FILE_CHANGE_OUTPUT_DELTA => decode(params).map(Notification::FileChangeOutputDelta),
+        methods::FILE_CHANGE_OUTPUT_DELTA => {
+            decode(params).map(Notification::FileChangeOutputDelta)
+        }
         methods::SERVER_REQUEST_RESOLVED => {
             decode::<RequestResolvedParams>(params).map(|p| Notification::ServerRequestResolved {
                 thread_id: p.thread_id,
@@ -408,7 +431,10 @@ pub enum ParsedRequest {
 }
 
 pub fn parse_server_request(method: &str, params: Value) -> ParsedRequest {
-    fn decode<T: serde::de::DeserializeOwned>(params: Value, wrap: fn(T) -> ServerRequest) -> ParsedRequest {
+    fn decode<T: serde::de::DeserializeOwned>(
+        params: Value,
+        wrap: fn(T) -> ServerRequest,
+    ) -> ParsedRequest {
         match serde_json::from_value(params) {
             Ok(value) => ParsedRequest::Known(wrap(value)),
             Err(error) => ParsedRequest::Malformed(error.to_string()),
@@ -512,8 +538,12 @@ pub struct ElicitationParams {
 pub enum CommandDecision {
     Accept,
     AcceptForSession,
-    AcceptWithExecpolicyAmendment { execpolicy_amendment: Vec<String> },
-    ApplyNetworkPolicyAmendment { network_policy_amendment: NetworkPolicyAmendment },
+    AcceptWithExecpolicyAmendment {
+        execpolicy_amendment: Vec<String>,
+    },
+    ApplyNetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
     Decline,
     Cancel,
     Other(Value),
@@ -532,10 +562,14 @@ impl CommandDecision {
         match self {
             Self::Accept => json!("accept"),
             Self::AcceptForSession => json!("acceptForSession"),
-            Self::AcceptWithExecpolicyAmendment { execpolicy_amendment } => json!({
+            Self::AcceptWithExecpolicyAmendment {
+                execpolicy_amendment,
+            } => json!({
                 "acceptWithExecpolicyAmendment": { "execpolicy_amendment": execpolicy_amendment }
             }),
-            Self::ApplyNetworkPolicyAmendment { network_policy_amendment } => json!({
+            Self::ApplyNetworkPolicyAmendment {
+                network_policy_amendment,
+            } => json!({
                 "applyNetworkPolicyAmendment": { "network_policy_amendment": network_policy_amendment }
             }),
             Self::Decline => json!("decline"),
@@ -554,25 +588,23 @@ impl CommandDecision {
                 _ => Self::Other(value),
             },
             Value::Object(map) if map.len() == 1 => {
-                if let Some(inner) = map.get("acceptWithExecpolicyAmendment") {
-                    if let Some(Ok(rule)) = inner
+                if let Some(inner) = map.get("acceptWithExecpolicyAmendment")
+                    && let Some(Ok(rule)) = inner
                         .get("execpolicy_amendment")
                         .map(|v| serde_json::from_value::<Vec<String>>(v.clone()))
-                    {
-                        return Self::AcceptWithExecpolicyAmendment {
-                            execpolicy_amendment: rule,
-                        };
-                    }
+                {
+                    return Self::AcceptWithExecpolicyAmendment {
+                        execpolicy_amendment: rule,
+                    };
                 }
-                if let Some(inner) = map.get("applyNetworkPolicyAmendment") {
-                    if let Some(Ok(rule)) = inner
+                if let Some(inner) = map.get("applyNetworkPolicyAmendment")
+                    && let Some(Ok(rule)) = inner
                         .get("network_policy_amendment")
                         .map(|v| serde_json::from_value::<NetworkPolicyAmendment>(v.clone()))
-                    {
-                        return Self::ApplyNetworkPolicyAmendment {
-                            network_policy_amendment: rule,
-                        };
-                    }
+                {
+                    return Self::ApplyNetworkPolicyAmendment {
+                        network_policy_amendment: rule,
+                    };
                 }
                 Self::Other(value)
             }
@@ -628,10 +660,10 @@ impl PermissionsApprovalResponse {
     pub fn grant(requested: &Value, session: bool) -> Self {
         let mut granted = Map::new();
         for key in ["fileSystem", "network"] {
-            if let Some(value) = requested.get(key) {
-                if !value.is_null() {
-                    granted.insert(key.into(), value.clone());
-                }
+            if let Some(value) = requested.get(key)
+                && !value.is_null()
+            {
+                granted.insert(key.into(), value.clone());
             }
         }
         Self {

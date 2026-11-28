@@ -218,10 +218,14 @@ fn compare(
                 }
                 path.push(key.clone());
                 let a_value = a.get(key).unwrap_or(&Value::Null);
-                if !a.contains_key(key) && !rules.wildcards.iter().any(|w| pattern_matches(w, path)) {
+                if !a.contains_key(key) && !rules.wildcards.iter().any(|w| pattern_matches(w, path))
+                {
                     let err = mismatch(path, &e_value.to_string(), &Value::Null);
                     path.pop();
-                    return Err(Mismatch { actual: "<missing>".into(), ..err });
+                    return Err(Mismatch {
+                        actual: "<missing>".into(),
+                        ..err
+                    });
                 }
                 compare(e_value, a_value, rules, path, false)?;
                 path.pop();
@@ -244,7 +248,11 @@ fn compare(
         }
         (Value::Array(e), Value::Array(a)) => {
             if e.len() != a.len() {
-                return Err(mismatch(path, &format!("{} items", e.len()), &Value::from(format!("{} items", a.len()))));
+                return Err(mismatch(
+                    path,
+                    &format!("{} items", e.len()),
+                    &Value::from(format!("{} items", a.len())),
+                ));
             }
             for (index, (e_item, a_item)) in e.iter().zip(a).enumerate() {
                 path.push(index.to_string());
@@ -330,7 +338,10 @@ impl Recorder {
             transcript.entries = state.entries.clone();
         }
         if let Some(status) = exit {
-            transcript.entries.push(Entry::RuntimeExit { status, error: None });
+            transcript.entries.push(Entry::RuntimeExit {
+                status,
+                error: None,
+            });
         }
         transcript
     }
@@ -347,30 +358,98 @@ pub enum FieldRule {
 
 /// Keys whose string values are protocol values or synthetic text the recorder wrote.
 const KEEP_KEYS: &[&str] = &[
-    "type", "status", "method", "phase", "decision", "model", "modelProvider", "mode", "action",
-    "kind", "sortDirection", "itemsView", "approvalPolicy", "sandbox", "source", "effort",
-    "reasoningEffort", "serviceTier", "approvalsReviewer", "name", "title", "version", "jsonrpc",
-    "text", "delta", "command", "step", "platformOs", "platformFamily", "tool", "server",
-    "multiAgentMode", "historyMode", "optOutNotificationMethods", "activeFlags",
-    "availableDecisions", "execpolicy_amendment", "proposedExecpolicyAmendment", "environmentId",
+    "type",
+    "status",
+    "method",
+    "phase",
+    "decision",
+    "model",
+    "modelProvider",
+    "mode",
+    "action",
+    "kind",
+    "sortDirection",
+    "itemsView",
+    "approvalPolicy",
+    "sandbox",
+    "source",
+    "effort",
+    "reasoningEffort",
+    "serviceTier",
+    "approvalsReviewer",
+    "name",
+    "title",
+    "version",
+    "jsonrpc",
+    "text",
+    "delta",
+    "command",
+    "step",
+    "platformOs",
+    "platformFamily",
+    "tool",
+    "server",
+    "multiAgentMode",
+    "historyMode",
+    "optOutNotificationMethods",
+    "activeFlags",
+    "availableDecisions",
+    "execpolicy_amendment",
+    "proposedExecpolicyAmendment",
+    "environmentId",
 ];
 /// Keys holding identifiers.
 const ID_KEYS: &[&str] = &[
-    "id", "threadId", "turnId", "itemId", "approvalId", "requestId", "clientUserMessageId",
-    "clientId", "expectedTurnId", "senderThreadId", "receiverThreadIds", "agentThreadId",
-    "sessionId", "processId",
+    "id",
+    "threadId",
+    "turnId",
+    "itemId",
+    "approvalId",
+    "requestId",
+    "clientUserMessageId",
+    "clientId",
+    "expectedTurnId",
+    "senderThreadId",
+    "receiverThreadIds",
+    "agentThreadId",
+    "sessionId",
+    "processId",
 ];
 /// Keys holding filesystem paths.
 const PATH_KEYS: &[&str] = &[
-    "cwd", "path", "codexHome", "savedPath", "instructionSources", "agentPath", "rolloutPath",
-    "move_path", "scriptPath",
+    "cwd",
+    "path",
+    "codexHome",
+    "savedPath",
+    "instructionSources",
+    "agentPath",
+    "rolloutPath",
+    "move_path",
+    "scriptPath",
 ];
 /// Keys whose whole subtree is always text-redacted, whatever the keys inside are called.
 const REDACT_SUBTREE_KEYS: &[&str] = &[
-    "aggregatedOutput", "result", "contentItems", "arguments", "error", "additionalDetails",
-    "userAgent", "preview", "instructions", "baseInstructions", "developerInstructions",
-    "permissions", "reason", "networkApprovalContext", "diff", "results",
-    "tokenUsage", "gitInfo", "memoryCitation", "questions", "message",
+    "aggregatedOutput",
+    "result",
+    "contentItems",
+    "arguments",
+    "error",
+    "additionalDetails",
+    "userAgent",
+    "preview",
+    "instructions",
+    "baseInstructions",
+    "developerInstructions",
+    "permissions",
+    "reason",
+    "networkApprovalContext",
+    "diff",
+    "results",
+    "tokenUsage",
+    "gitInfo",
+    "memoryCitation",
+    "questions",
+    "message",
 ];
 
 /// Notification methods kept in recordings; every other notification is dropped.
@@ -452,16 +531,19 @@ impl Redactor {
         for entry in &transcript.entries {
             match entry {
                 Entry::ExpectOutbound { label, frame, .. } => {
-                    if let (Some(id), Some(method)) = (frame.get("id"), frame.get("method").and_then(Value::as_str)) {
-                        self.request_methods.insert(format!("out:{id}"), method.to_string());
+                    if let (Some(id), Some(method)) =
+                        (frame.get("id"), frame.get("method").and_then(Value::as_str))
+                    {
+                        self.request_methods
+                            .insert(format!("out:{id}"), method.to_string());
                     }
                     let mut changed = Vec::new();
                     let mut frame = frame.clone();
                     self.redact_value(&mut frame, &mut Vec::new(), false, &mut changed)?;
-                    if frame.pointer(MCP_AUTH_POINTER).is_some() {
-                        if let Some(slot) = frame.pointer_mut(MCP_AUTH_POINTER) {
-                            *slot = Value::String(RECORDED_TOKEN.into());
-                        }
+                    if frame.pointer(MCP_AUTH_POINTER).is_some()
+                        && let Some(slot) = frame.pointer_mut(MCP_AUTH_POINTER)
+                    {
+                        *slot = Value::String(RECORDED_TOKEN.into());
                     }
                     out.entries.push(Entry::ExpectOutbound {
                         label: label.clone(),
@@ -469,7 +551,11 @@ impl Redactor {
                         wildcards: changed,
                     });
                 }
-                Entry::EmitInbound { label, frame, after_ms } => {
+                Entry::EmitInbound {
+                    label,
+                    frame,
+                    after_ms,
+                } => {
                     if !self.keep_inbound(frame) {
                         continue;
                     }
@@ -511,9 +597,12 @@ impl Redactor {
     ) -> Result<(), RedactError> {
         let key = path.last().cloned();
         // Array items inherit the rule of the array's key.
-        let key = key
-            .filter(|k| k.parse::<usize>().is_err())
-            .or_else(|| path.iter().rev().find(|k| k.parse::<usize>().is_err()).cloned());
+        let key = key.filter(|k| k.parse::<usize>().is_err()).or_else(|| {
+            path.iter()
+                .rev()
+                .find(|k| k.parse::<usize>().is_err())
+                .cloned()
+        });
         match value {
             Value::Object(map) => {
                 let keys: Vec<String> = map.keys().cloned().collect();
@@ -544,7 +633,9 @@ impl Redactor {
                 let rule = if forced_text {
                     FieldRule::Text
                 } else {
-                    key.as_deref().map(Self::rule_for).unwrap_or(FieldRule::Text)
+                    key.as_deref()
+                        .map(Self::rule_for)
+                        .unwrap_or(FieldRule::Text)
                 };
                 let replacement = match rule {
                     FieldRule::Keep => None,
@@ -562,11 +653,11 @@ impl Redactor {
                     }
                     FieldRule::Text => Some("<redacted>".to_string()),
                 };
-                if let Some(replacement) = replacement {
-                    if *text != replacement {
-                        *text = replacement;
-                        changed.push(pointer);
-                    }
+                if let Some(replacement) = replacement
+                    && *text != replacement
+                {
+                    *text = replacement;
+                    changed.push(pointer);
                 }
             }
             _ => {}
@@ -584,7 +675,9 @@ pub fn is_id_shaped(text: &str) -> bool {
         || is_prefixed_uuid(text)
         || (!text.is_empty()
             && text.len() <= 40
-            && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
 }
 
 /// `<1-12 lowercase letters>-<uuid>`.
@@ -604,7 +697,9 @@ fn is_prefixed_hex(text: &str) -> bool {
     (1..=12).contains(&prefix.len())
         && prefix.chars().all(|c| c.is_ascii_lowercase())
         && (8..=64).contains(&hex.len())
-        && hex.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 fn is_uuid(text: &str) -> bool {
@@ -628,9 +723,15 @@ pub fn privacy_scan(text: &str, home: &Path, user: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut flag = |what: &'static str, needle: &str| {
         if let Some(at) = text.find(needle) {
-            let start = text[..at].char_indices().rev().nth(20).map_or(0, |(i, _)| i);
+            let start = text[..at]
+                .char_indices()
+                .rev()
+                .nth(20)
+                .map_or(0, |(i, _)| i);
             let end = (at + needle.len() + 20).min(text.len());
-            let end = (end..=text.len()).find(|i| text.is_char_boundary(*i)).unwrap_or(text.len());
+            let end = (end..=text.len())
+                .find(|i| text.is_char_boundary(*i))
+                .unwrap_or(text.len());
             findings.push(Finding {
                 what,
                 excerpt: text[start..end].to_string(),
@@ -650,7 +751,10 @@ pub fn privacy_scan(text: &str, home: &Path, user: &str) -> Vec<Finding> {
     // API keys (sk-...) and JWTs (eyJ...) at a word start, followed by a long token.
     for prefix in ["sk-", "eyJ"] {
         for (at, _) in text.match_indices(prefix) {
-            let word_start = text[..at].chars().next_back().is_none_or(|c| !c.is_ascii_alphanumeric());
+            let word_start = text[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphanumeric());
             let run = text[at + prefix.len()..]
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c))
@@ -679,7 +783,11 @@ pub fn privacy_scan(text: &str, home: &Path, user: &str) -> Vec<Finding> {
     }
     // Email-like strings.
     for (index, _) in text.match_indices('@') {
-        let before = text[..index].chars().rev().take_while(|c| c.is_ascii_alphanumeric() || "._%+-".contains(*c)).count();
+        let before = text[..index]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || "._%+-".contains(*c))
+            .count();
         let after: String = text[index + 1..]
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || ".-".contains(*c))
@@ -725,7 +833,8 @@ pub fn canonical(value: &Value) -> String {
     fn sort(value: &Value) -> Value {
         match value {
             Value::Object(map) => {
-                let sorted: BTreeMap<_, _> = map.iter().map(|(k, v)| (k.clone(), sort(v))).collect();
+                let sorted: BTreeMap<_, _> =
+                    map.iter().map(|(k, v)| (k.clone(), sort(v))).collect();
                 Value::Object(sorted.into_iter().collect())
             }
             Value::Array(items) => Value::Array(items.iter().map(sort).collect()),

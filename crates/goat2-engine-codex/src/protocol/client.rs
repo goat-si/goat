@@ -373,6 +373,10 @@ pub fn turn_steer_params(
 
 fn user_inputs(text: &str, images: &[PathBuf]) -> Vec<UserInput> {
     let mut input = vec![UserInput::text(text)];
-    input.extend(images.iter().map(|path| UserInput::LocalImage { path: path.clone() }));
+    input.extend(
+        images
+            .iter()
+            .map(|path| UserInput::LocalImage { path: path.clone() }),
+    );
     input
 }

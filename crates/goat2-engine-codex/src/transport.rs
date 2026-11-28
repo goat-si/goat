@@ -47,7 +47,10 @@ pub type Tap = Arc<dyn Fn(Direction, &Value) + Send + Sync>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inbound {
     Notification(Notification),
-    Request { id: RpcId, request: ServerRequest },
+    Request {
+        id: RpcId,
+        request: ServerRequest,
+    },
     /// The answer to a call that already failed with [CallError::Deadline].
     LateResponse {
         id: RpcId,
@@ -55,7 +58,9 @@ pub enum Inbound {
         result: Result<Value, RpcError>,
     },
     /// The connection gave up on a silent server (v1 "retired"); treat as process exit.
-    Retired { method: String },
+    Retired {
+        method: String,
+    },
     Diagnostic(String),
 }
 
@@ -81,8 +86,14 @@ pub fn deadline_for(method: &str) -> Option<Duration> {
     match method {
         "initialize" | "turn/start" => Some(Duration::from_secs(60)),
         "thread/start" | "thread/resume" | "thread/fork" => Some(Duration::from_secs(90)),
-        "config/read" | "thread/read" | "turn/steer" | "turn/interrupt" | "thread/unsubscribe"
-        | "thread/goal/set" | "thread/goal/clear" | "thread/settings/update"
+        "config/read"
+        | "thread/read"
+        | "turn/steer"
+        | "turn/interrupt"
+        | "thread/unsubscribe"
+        | "thread/goal/set"
+        | "thread/goal/clear"
+        | "thread/settings/update"
         | "thread/compact/start" => Some(Duration::from_secs(30)),
         _ => None,
     }
@@ -96,9 +107,12 @@ pub const LIVENESS_WINDOW: Duration = Duration::from_secs(60);
 /// Deadline and liveness settings (tests shorten them).
 #[derive(Clone)]
 pub struct TransportConfig {
-    pub deadline_for: Arc<dyn Fn(&str) -> Option<Duration> + Send + Sync>,
+    pub deadline_for: DeadlineFn,
     pub liveness_window: Duration,
 }
+
+/// Per-method deadline lookup.
+pub type DeadlineFn = Arc<dyn Fn(&str) -> Option<Duration> + Send + Sync>;
 
 impl Default for TransportConfig {
     fn default() -> Self {
@@ -165,7 +179,11 @@ enum Out {
 
 impl Connection {
     /// Start reader and writer tasks with v1 deadlines.
-    pub fn start<W, R>(stdin: W, stdout: R, tap: Option<Tap>) -> (Self, mpsc::UnboundedReceiver<Inbound>)
+    pub fn start<W, R>(
+        stdin: W,
+        stdout: R,
+        tap: Option<Tap>,
+    ) -> (Self, mpsc::UnboundedReceiver<Inbound>)
     where
         W: AsyncWrite + Unpin + Send + 'static,
         R: AsyncRead + Unpin + Send + 'static,
@@ -231,10 +249,10 @@ impl Connection {
                     continue;
                 }
                 shared.heard.send_modify(|n| *n += 1);
-                if let Some(tap) = &reader_tap {
-                    if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                        tap(Direction::Inbound, &value);
-                    }
+                if let Some(tap) = &reader_tap
+                    && let Ok(value) = serde_json::from_str::<Value>(&line)
+                {
+                    tap(Direction::Inbound, &value);
                 }
                 match parse_incoming(&line) {
                     Ok(Incoming::Response { id, result }) => resolve(&shared, id, Ok(result)),
@@ -251,7 +269,11 @@ impl Connection {
                             }
                             ParsedRequest::Unknown => {
                                 let error = RpcError::method_not_found(&method);
-                                send_frame(&reader_writer, reader_tap.as_ref(), error_frame(&id, &error));
+                                send_frame(
+                                    &reader_writer,
+                                    reader_tap.as_ref(),
+                                    error_frame(&id, &error),
+                                );
                                 let _ = shared.inbound.send(Inbound::Diagnostic(format!(
                                     "answered unknown server request {method} with -32601"
                                 )));
@@ -262,7 +284,11 @@ impl Connection {
                                     message: format!("GOAT could not read {method}: {reason}"),
                                     data: None,
                                 };
-                                send_frame(&reader_writer, reader_tap.as_ref(), error_frame(&id, &error));
+                                send_frame(
+                                    &reader_writer,
+                                    reader_tap.as_ref(),
+                                    error_frame(&id, &error),
+                                );
                                 let _ = shared.inbound.send(Inbound::Diagnostic(format!(
                                     "malformed server request {method}: {reason}"
                                 )));
@@ -318,7 +344,11 @@ impl Connection {
     }
 
     /// Like [Self::request] but returns the raw result.
-    pub async fn request_value<P: Serialize>(&self, method: &str, params: &P) -> Result<Value, CallError> {
+    pub async fn request_value<P: Serialize>(
+        &self,
+        method: &str,
+        params: &P,
+    ) -> Result<Value, CallError> {
         let deadline = (self.config.deadline_for)(method);
         self.call(method, params, deadline).await
     }
@@ -329,7 +359,8 @@ impl Connection {
         params: &P,
         deadline: Option<Duration>,
     ) -> Result<Value, CallError> {
-        let params = serde_json::to_value(params).map_err(|error| CallError::Decode(error.to_string()))?;
+        let params =
+            serde_json::to_value(params).map_err(|error| CallError::Decode(error.to_string()))?;
         let id = RpcId::Int(self.next_id.fetch_add(1, Ordering::Relaxed));
         let (tx, mut rx) = oneshot::channel();
         let sent_at = *self.shared.heard.borrow();
@@ -340,7 +371,11 @@ impl Connection {
             }
             pending.insert(id.clone(), Slot::Waiting(tx));
         }
-        if !send_frame(&self.writer, self.tap.as_ref(), request_frame(&id, method, params)) {
+        if !send_frame(
+            &self.writer,
+            self.tap.as_ref(),
+            request_frame(&id, method, params),
+        ) {
             self.forget(&id);
             return Err(CallError::Closed);
         }
@@ -366,13 +401,18 @@ impl Connection {
         mut rx: oneshot::Receiver<Result<Value, RpcError>>,
     ) -> Result<Value, CallError> {
         let retires_alone = method == "initialize";
-        if let Ok(mut pending) = self.shared.pending.lock() {
-            if let Some(Slot::Waiting(_)) = pending.remove(id) {
-                if !retires_alone && self.shared.late_slots.load(Ordering::Relaxed) < MAX_LATE_SLOTS {
-                    self.shared.late_slots.fetch_add(1, Ordering::Relaxed);
-                    pending.insert(id.clone(), Slot::Late { method: method.to_string() });
-                }
-            }
+        if let Ok(mut pending) = self.shared.pending.lock()
+            && let Some(Slot::Waiting(_)) = pending.remove(id)
+            && !retires_alone
+            && self.shared.late_slots.load(Ordering::Relaxed) < MAX_LATE_SLOTS
+        {
+            self.shared.late_slots.fetch_add(1, Ordering::Relaxed);
+            pending.insert(
+                id.clone(),
+                Slot::Late {
+                    method: method.to_string(),
+                },
+            );
         }
         // The answer may have landed between the timeout and taking the lock.
         if let Ok(answer) = rx.try_recv() {
@@ -385,7 +425,9 @@ impl Connection {
         {
             self.start_probe(method.to_string());
         }
-        Err(CallError::Deadline { method: method.to_string() })
+        Err(CallError::Deadline {
+            method: method.to_string(),
+        })
     }
 
     /// v1 liveness probe: `config/read`, or any frame, within the window; else retire.
@@ -414,8 +456,13 @@ impl Connection {
 
     /// Send a notification.
     pub fn notify<P: Serialize>(&self, method: &str, params: &P) -> Result<(), CallError> {
-        let params = serde_json::to_value(params).map_err(|error| CallError::Decode(error.to_string()))?;
-        if send_frame(&self.writer, self.tap.as_ref(), notification_frame(method, params)) {
+        let params =
+            serde_json::to_value(params).map_err(|error| CallError::Decode(error.to_string()))?;
+        if send_frame(
+            &self.writer,
+            self.tap.as_ref(),
+            notification_frame(method, params),
+        ) {
             Ok(())
         } else {
             Err(CallError::Closed)
@@ -455,7 +502,11 @@ fn send_frame(writer: &mpsc::UnboundedSender<Out>, tap: Option<&Tap>, frame: Val
 }
 
 fn resolve(shared: &Shared, id: RpcId, answer: Result<Value, RpcError>) {
-    let slot = shared.pending.lock().ok().and_then(|mut pending| pending.remove(&id));
+    let slot = shared
+        .pending
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&id));
     match slot {
         Some(Slot::Waiting(sender)) => {
             let _ = sender.send(answer);

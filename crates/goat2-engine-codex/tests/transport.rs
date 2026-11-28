@@ -45,13 +45,10 @@ async fn answers_correlate_by_id_even_out_of_order() {
     );
     let mut s = spawn_fake(&t, false, TransportConfig::default());
     let empty = json!({});
-    let (one, two) = tokio::join!(
-        s.conn.request_value("a/one", &empty),
-        async {
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            s.conn.request_value("a/two", &empty).await
-        }
-    );
+    let (one, two) = tokio::join!(s.conn.request_value("a/one", &empty), async {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        s.conn.request_value("a/two", &empty).await
+    });
     assert_eq!(one.unwrap(), json!({"n": 1}));
     assert_eq!(two.unwrap(), json!({"n": 2}));
     let (code, stderr) = fake_exit_of(&mut s).await;
@@ -81,13 +78,20 @@ async fn unknown_server_requests_get_method_not_found() {
         "unknown-request",
         vec![
             inb(json!({"id": 7, "method": "item/tool/call", "params": {"x": 1}})),
-            out(json!({"id": 7, "error": {"code": -32601, "message": "GOAT does not handle item/tool/call"}})),
-            inb(json!({"method": "turn/started", "params": {"threadId": "t", "turn": {"id": "u"}}})),
+            out(
+                json!({"id": 7, "error": {"code": -32601, "message": "GOAT does not handle item/tool/call"}}),
+            ),
+            inb(
+                json!({"method": "turn/started", "params": {"threadId": "t", "turn": {"id": "u"}}}),
+            ),
         ],
     );
     let mut s = spawn_fake(&t, false, TransportConfig::default());
     assert!(matches!(next(&mut s.inbound).await, Inbound::Diagnostic(d) if d.contains("-32601")));
-    assert!(matches!(next(&mut s.inbound).await, Inbound::Notification(Notification::TurnStarted(_))));
+    assert!(matches!(
+        next(&mut s.inbound).await,
+        Inbound::Notification(Notification::TurnStarted(_))
+    ));
     let (code, stderr) = fake_exit_of(&mut s).await;
     assert_eq!(code, Some(0), "{stderr}");
 }
@@ -121,9 +125,15 @@ async fn eof_while_waiting_is_closed() {
         ],
     );
     let mut s = spawn_fake(&t, false, TransportConfig::default());
-    assert_eq!(s.conn.request_value("turn/start", &json!({})).await, Err(CallError::Closed));
+    assert_eq!(
+        s.conn.request_value("turn/start", &json!({})).await,
+        Err(CallError::Closed)
+    );
     s.conn.closed().await;
-    assert_eq!(s.conn.request_value("turn/start", &json!({})).await, Err(CallError::Closed));
+    assert_eq!(
+        s.conn.request_value("turn/start", &json!({})).await,
+        Err(CallError::Closed)
+    );
     fake_exit_of(&mut s).await;
 }
 
@@ -137,7 +147,11 @@ async fn slow_answers_within_the_deadline_arrive() {
         ],
     );
     let mut s = spawn_fake(&t, true, TransportConfig::default());
-    let answer = s.conn.request_value("turn/start", &json!({})).await.unwrap();
+    let answer = s
+        .conn
+        .request_value("turn/start", &json!({}))
+        .await
+        .unwrap();
     assert_eq!(answer["turn"]["id"], "u");
     fake_exit_of(&mut s).await;
 }
@@ -149,16 +163,28 @@ async fn late_answers_after_a_deadline_are_delivered() {
         "late",
         vec![
             out(json!({"id": 1, "method": "turn/start", "params": {}})),
-            inb_after(json!({"method": "turn/started", "params": {"threadId": "t", "turn": {"id": "u"}}}), 50),
+            inb_after(
+                json!({"method": "turn/started", "params": {"threadId": "t", "turn": {"id": "u"}}}),
+                50,
+            ),
             inb_after(json!({"id": 1, "result": {"turn": {"id": "u"}}}), 400),
         ],
     );
-    let mut s = spawn_fake(&t, true, short(Duration::from_millis(200), Duration::from_secs(5)));
+    let mut s = spawn_fake(
+        &t,
+        true,
+        short(Duration::from_millis(200), Duration::from_secs(5)),
+    );
     assert_eq!(
         s.conn.request_value("turn/start", &json!({})).await,
-        Err(CallError::Deadline { method: "turn/start".into() })
+        Err(CallError::Deadline {
+            method: "turn/start".into()
+        })
     );
-    assert!(matches!(next(&mut s.inbound).await, Inbound::Notification(Notification::TurnStarted(_))));
+    assert!(matches!(
+        next(&mut s.inbound).await,
+        Inbound::Notification(Notification::TurnStarted(_))
+    ));
     match next(&mut s.inbound).await {
         Inbound::LateResponse { method, result, .. } => {
             assert_eq!(method, "turn/start");
@@ -175,15 +201,26 @@ async fn a_silent_server_is_probed_then_retired() {
         "silent",
         vec![
             out(json!({"id": 1, "method": "turn/steer", "params": {}})),
-            out(json!({"id": 2, "method": "config/read", "params": {"cwd": null, "includeLayers": false}})),
+            out(
+                json!({"id": 2, "method": "config/read", "params": {"cwd": null, "includeLayers": false}}),
+            ),
         ],
     );
-    let mut s = spawn_fake(&t, true, short(Duration::from_millis(100), Duration::from_millis(300)));
+    let mut s = spawn_fake(
+        &t,
+        true,
+        short(Duration::from_millis(100), Duration::from_millis(300)),
+    );
     assert!(matches!(
         s.conn.request_value("turn/steer", &json!({})).await,
         Err(CallError::Deadline { .. })
     ));
-    assert_eq!(next(&mut s.inbound).await, Inbound::Retired { method: "turn/steer".into() });
+    assert_eq!(
+        next(&mut s.inbound).await,
+        Inbound::Retired {
+            method: "turn/steer".into()
+        }
+    );
     assert!(s.conn.is_closed());
     // The fake saw the probe frame (exit 0 after stdin closes).
     let (code, stderr) = fake_exit_of(&mut s).await;
@@ -196,32 +233,56 @@ async fn a_server_that_answers_the_probe_stays() {
         "probe-answered",
         vec![
             out(json!({"id": 1, "method": "turn/steer", "params": {}})),
-            out(json!({"id": 2, "method": "config/read", "params": {"cwd": null, "includeLayers": false}})),
+            out(
+                json!({"id": 2, "method": "config/read", "params": {"cwd": null, "includeLayers": false}}),
+            ),
             inb(json!({"id": 2, "result": {"config": {}}})),
             out(json!({"id": 3, "method": "turn/interrupt", "params": {}})),
             inb(json!({"id": 3, "result": {}})),
         ],
     );
-    let mut s = spawn_fake(&t, true, short(Duration::from_millis(100), Duration::from_millis(2000)));
+    let mut s = spawn_fake(
+        &t,
+        true,
+        short(Duration::from_millis(100), Duration::from_millis(2000)),
+    );
     assert!(matches!(
         s.conn.request_value("turn/steer", &json!({})).await,
         Err(CallError::Deadline { .. })
     ));
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!s.conn.is_closed(), "a live server is not retired");
-    assert_eq!(s.conn.request_value("turn/interrupt", &json!({})).await.unwrap(), json!({}));
+    assert_eq!(
+        s.conn
+            .request_value("turn/interrupt", &json!({}))
+            .await
+            .unwrap(),
+        json!({})
+    );
     fake_exit_of(&mut s).await;
 }
 
 #[tokio::test]
 async fn an_initialize_deadline_retires_at_once() {
-    let t = transcript("init-deadline", vec![out(json!({"id": 1, "method": "initialize", "params": {}}))]);
-    let mut s = spawn_fake(&t, true, short(Duration::from_millis(100), Duration::from_secs(30)));
+    let t = transcript(
+        "init-deadline",
+        vec![out(json!({"id": 1, "method": "initialize", "params": {}}))],
+    );
+    let mut s = spawn_fake(
+        &t,
+        true,
+        short(Duration::from_millis(100), Duration::from_secs(30)),
+    );
     assert!(matches!(
         s.conn.request_value("initialize", &json!({})).await,
         Err(CallError::Deadline { .. })
     ));
-    assert_eq!(next(&mut s.inbound).await, Inbound::Retired { method: "initialize".into() });
+    assert_eq!(
+        next(&mut s.inbound).await,
+        Inbound::Retired {
+            method: "initialize".into()
+        }
+    );
     fake_exit_of(&mut s).await;
 }
 

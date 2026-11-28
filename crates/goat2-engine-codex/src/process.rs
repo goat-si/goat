@@ -53,7 +53,8 @@ impl Launch {
 
     /// The host's own agent identity must not leak into a Codex child.
     pub fn without_host_identity(mut self) -> Self {
-        self.env_remove_prefixes.extend(["GOAT_".to_string(), "T3CODE_".to_string()]);
+        self.env_remove_prefixes
+            .extend(["GOAT_".to_string(), "T3CODE_".to_string()]);
         self.env_remove.extend(
             [
                 "CODEX_THREAD_ID",
@@ -221,10 +222,10 @@ impl ChildProcess {
     /// group (the leader exiting does not prove its descendants did), TERM then KILL.
     pub async fn shutdown(&mut self) -> ExitSummary {
         self.stdin.take();
-        if self.reaped.is_none() {
-            if let Ok(Ok(status)) = tokio::time::timeout(self.kill_grace, self.child.wait()).await {
-                self.reaped = Some(status);
-            }
+        if self.reaped.is_none()
+            && let Ok(Ok(status)) = tokio::time::timeout(self.kill_grace, self.child.wait()).await
+        {
+            self.reaped = Some(status);
         }
         self.end_group().await
     }
@@ -283,10 +284,10 @@ impl ChildProcess {
             self.signal_group(Signal::Term);
             let deadline = tokio::time::Instant::now() + self.kill_grace;
             while self.group_alive() && tokio::time::Instant::now() < deadline {
-                if self.reaped.is_none() {
-                    if let Ok(Some(status)) = self.child.try_wait() {
-                        self.reaped = Some(status);
-                    }
+                if self.reaped.is_none()
+                    && let Ok(Some(status)) = self.child.try_wait()
+                {
+                    self.reaped = Some(status);
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -383,7 +384,9 @@ mod unix {
     }
 
     pub fn group_rss_bytes(pgid: u32) -> io::Result<u64> {
-        let output = Command::new("/bin/ps").args(["-A", "-o", "pgid=,rss="]).output()?;
+        let output = Command::new("/bin/ps")
+            .args(["-A", "-o", "pgid=,rss="])
+            .output()?;
         if !output.status.success() {
             return Err(io::Error::other(format!("ps failed: {}", output.status)));
         }

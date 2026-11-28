@@ -41,7 +41,8 @@ impl SchemaBook {
                 return Err(format!("schema has no definition {def}"));
             }
             root["$ref"] = json!(format!("#/definitions/{def}"));
-            let validator = jsonschema::draft7::new(&root).map_err(|e| format!("compile {def}: {e}"))?;
+            let validator =
+                jsonschema::draft7::new(&root).map_err(|e| format!("compile {def}: {e}"))?;
             self.cache.insert(def.to_string(), validator);
         }
         let validator = &self.cache[def];
@@ -53,7 +54,11 @@ impl SchemaBook {
                 format!("{} at {}", &text[..text.len().min(200)], e.instance_path())
             })
             .collect();
-        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 }
 
@@ -122,10 +127,16 @@ pub fn check_transcript(book: &mut SchemaBook, transcript: &Transcript) -> (Vec<
             (true, Some(id), None) => {
                 if let Some(result) = frame.get("result") {
                     counts.client_responses += 1;
-                    match server_methods.get(id).and_then(|m| response_def_for_server_method(m)) {
+                    match server_methods
+                        .get(id)
+                        .and_then(|m| response_def_for_server_method(m))
+                    {
                         Some(def) => Some((def.to_string(), result.clone())),
                         None => {
-                            failures.push(format!("{}#{index}: response to unknown server request {id}", transcript.scenario));
+                            failures.push(format!(
+                                "{}#{index}: response to unknown server request {id}",
+                                transcript.scenario
+                            ));
                             None
                         }
                     }
@@ -146,10 +157,16 @@ pub fn check_transcript(book: &mut SchemaBook, transcript: &Transcript) -> (Vec<
             (false, Some(id), None) => {
                 if let Some(result) = frame.get("result") {
                     counts.server_responses += 1;
-                    match client_methods.get(id).and_then(|m| response_def_for_client_method(m)) {
+                    match client_methods
+                        .get(id)
+                        .and_then(|m| response_def_for_client_method(m))
+                    {
                         Some(def) => Some((def.to_string(), result.clone())),
                         None => {
-                            failures.push(format!("{}#{index}: response to unknown request {id}", transcript.scenario));
+                            failures.push(format!(
+                                "{}#{index}: response to unknown request {id}",
+                                transcript.scenario
+                            ));
                             None
                         }
                     }
@@ -159,14 +176,17 @@ pub fn check_transcript(book: &mut SchemaBook, transcript: &Transcript) -> (Vec<
                 }
             }
             _ => {
-                failures.push(format!("{}#{index}: unclassifiable frame {frame}", transcript.scenario));
+                failures.push(format!(
+                    "{}#{index}: unclassifiable frame {frame}",
+                    transcript.scenario
+                ));
                 None
             }
         };
-        if let Some((def, value)) = check {
-            if let Err(error) = book.validate(&def, &value) {
-                failures.push(format!("{}#{index} ({def}): {error}", transcript.scenario));
-            }
+        if let Some((def, value)) = check
+            && let Err(error) = book.validate(&def, &value)
+        {
+            failures.push(format!("{}#{index} ({def}): {error}", transcript.scenario));
         }
     }
     (failures, counts)

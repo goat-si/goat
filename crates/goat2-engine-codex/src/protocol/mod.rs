@@ -53,10 +53,23 @@ impl RpcError {
 /// One frame read from Codex.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Incoming {
-    Response { id: RpcId, result: Value },
-    Error { id: RpcId, error: RpcError },
-    Notification { method: String, params: Value },
-    Request { id: RpcId, method: String, params: Value },
+    Response {
+        id: RpcId,
+        result: Value,
+    },
+    Error {
+        id: RpcId,
+        error: RpcError,
+    },
+    Notification {
+        method: String,
+        params: Value,
+    },
+    Request {
+        id: RpcId,
+        method: String,
+        params: Value,
+    },
 }
 
 /// Why a line could not be read as a frame.
@@ -103,7 +116,9 @@ pub fn classify(value: Value) -> Result<Incoming, ProtocolError> {
             } else if let Some(result) = object.remove("result") {
                 Ok(Incoming::Response { id, result })
             } else {
-                Err(ProtocolError::Unclassified(Value::Object(object).to_string()))
+                Err(ProtocolError::Unclassified(
+                    Value::Object(object).to_string(),
+                ))
             }
         }
         (_, other) => Err(ProtocolError::Unclassified(format!(

@@ -14,7 +14,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 pub fn load(name: &str) -> Transcript {
@@ -28,7 +30,8 @@ pub fn write_temp(transcript: &Transcript) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("goat2-engine-codex-tests-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join(format!("{}-{n}.json", transcript.scenario));
-    std::fs::write(&path, serde_json::to_string_pretty(transcript).unwrap()).expect("write transcript");
+    std::fs::write(&path, serde_json::to_string_pretty(transcript).unwrap())
+        .expect("write transcript");
     path
 }
 
@@ -44,9 +47,14 @@ pub fn transcript(scenario: &str, entries: Vec<Value>) -> Transcript {
 
 pub fn fake_launch(path: &std::path::Path, realtime: bool) -> Launch {
     let mut launch = Launch::new(env!("CARGO_BIN_EXE_goat2-fake-codex")).arg("app-server");
-    launch.env_set.push(("GOAT2_FAKE_CODEX_TRANSCRIPT".into(), path.as_os_str().to_owned()));
+    launch.env_set.push((
+        "GOAT2_FAKE_CODEX_TRANSCRIPT".into(),
+        path.as_os_str().to_owned(),
+    ));
     if realtime {
-        launch.env_set.push(("GOAT2_FAKE_CODEX_REALTIME".into(), "1".into()));
+        launch
+            .env_set
+            .push(("GOAT2_FAKE_CODEX_REALTIME".into(), "1".into()));
     }
     launch
 }
@@ -66,7 +74,11 @@ pub fn spawn_fake(transcript: &Transcript, realtime: bool, config: TransportConf
         None,
         config,
     );
-    FakeSession { child, conn, inbound }
+    FakeSession {
+        child,
+        conn,
+        inbound,
+    }
 }
 
 /// Close the connection's input, wait for the fake to exit, and return its exit code and stderr.
