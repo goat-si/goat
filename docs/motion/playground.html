@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><title>GOAT 2 · Bot motion playground</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-:root{--ink:#111113;--muted:#5E5E64;--faint:#8A8A90;--line:#ECECEE;--bg:#FFFFFF;--panel:#F7F7F8;--decide:#E5484D;--ease:cubic-bezier(0.23,1,0.32,1)}
+:root{--ink:#111113;--muted:#5E5E64;--faint:#8A8A90;--line:#ECECEE;--bg:#FFFFFF;--panel:#F7F7F8;--decide:#0169CC;--ease:cubic-bezier(0.23,1,0.32,1)}
 *{box-sizing:border-box} body{margin:0;font:14px/1.5 Inter,"Noto Sans KR",system-ui,sans-serif;color:var(--ink);background:var(--bg)}
 header{padding:32px 40px 8px} h1{font-size:28px;letter-spacing:-.02em;margin:0 0 4px} p.sub{color:var(--muted);margin:0}
 .bar{display:flex;gap:16px;align-items:center;padding:12px 40px 24px;color:var(--muted);font-size:13px}
@@ -19,7 +19,7 @@ header{padding:32px 40px 8px} h1{font-size:28px;letter-spacing:-.02em;margin:0 0
 .demo{margin:32px 40px;padding:20px;border:1px solid var(--line);border-radius:12px;display:flex;gap:20px;align-items:center}
 .demo .status{font-size:13px;color:var(--muted)} .demo .status b{color:var(--ink)}
 </style></head><body>
-<header><h1>Bot motion</h1><p class="sub">Each mood at 64px and 40px (sidebar). Pose math is <code>@goat2/bot-face</code> (hermes-agent face clock + GOAT 2 moods). Moving face = working (no ring), red dot = needs you, chip = which CLI.</p></header>
+<header><h1>Bot motion</h1><p class="sub">Each mood at 64px and 40px (sidebar). Pose math is <code>@goat2/bot-face</code> (hermes-agent face clock + GOAT 2 moods). Moving face = working (no ring), blue dot = needs you, chip = which CLI.</p></header>
 <div class="bar"><label><input type="checkbox" id="reduce"> Reduced motion</label><button id="cycle">Play a run (idle → ack → think → work → needs you → work → done → idle)</button></div>
 <div class="grid" id="grid"></div>
 <div class="demo"><div id="demoAv"></div><div class="status" id="demoStatus">Press “Play a run”.</div></div>
