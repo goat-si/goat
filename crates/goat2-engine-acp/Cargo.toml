@@ -1,0 +1,43 @@
+[package]
+name = "goat2-engine-acp"
+version = "0.0.0"
+description = "ACP driver on Zed's agent-client-protocol crate, plus the ACP registry and per-agent handling (Grok, fx, Antigravity, registry agents)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+agent-client-protocol = { version = "=5.6.1", features = ["unstable_mcp_over_acp"] }
+goat2-acp-mcp-bridge = { path = "../goat2-acp-mcp-bridge" }
+async-trait = "0.1"
+futures = "0.3"
+goat2-contracts = { path = "../goat2-contracts" }
+goat2-engine-api = { path = "../goat2-engine-api" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { version = "0.7", features = ["compat", "codec"] }
+base64 = "0.22"
+sha2 = "0.10"
+regex = "1"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# Managed binary installs (v1 registryArchive.ts / AcpRegistrySupport.ts:1382-1418).
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+bzip2 = "0.6"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Paused clock for TTL and reservation tests (Effect TestClock in v1).
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
+
+[[bin]]
+name = "goat2-acp-mock-agent"
+path = "src/bin/acp_mock_agent.rs"

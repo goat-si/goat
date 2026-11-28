@@ -763,10 +763,13 @@ async fn watch_auth(
             continue;
         }
         let succeeded = state.phase == ProviderAuthPhase::Succeeded;
-        // Stored only while this is still the instance's current flow (one lock).
+        // Stored only while this is still the instance's current flow (one lock). Once the flow
+        // has a terminal state (e.g. the Cancelled that auth_cancel recorded), a running phase
+        // the driver queued before it never brings the flow back.
+        let running = auth_running(&state.phase);
         let stored = providers
             .record_auth_if(&host, &instance_id, state, |c| {
-                c.is_some_and(|a| a.flow_id == flow_id)
+                c.is_some_and(|a| a.flow_id == flow_id && !(running && auth_terminal(&a.phase)))
             })
             .unwrap_or(false);
         if stored && succeeded {
@@ -785,8 +788,13 @@ async fn watch_install(
     while let Some(state) = rx.recv().await {
         let providers = &host.inner.providers;
         let succeeded = state.phase == ProviderInstallPhase::Succeeded;
+        // Same rule as sign-in: a terminal install state is never replaced by a running phase
+        // queued before it.
+        let running = install_running(&state.phase);
         let stored = match providers.record_install_if(&host, &driver, state, |c| {
-            c.is_some_and(|i| i.operation_id == operation_id)
+            c.is_some_and(|i| {
+                i.operation_id == operation_id && !(running && install_terminal(&i.phase))
+            })
         }) {
             Ok(stored) => stored,
             Err(_) => {
@@ -813,6 +821,22 @@ fn install_running(phase: &ProviderInstallPhase) -> bool {
         ProviderInstallPhase::Downloading
             | ProviderInstallPhase::Extracting
             | ProviderInstallPhase::Verifying
+    )
+}
+
+fn auth_terminal(phase: &ProviderAuthPhase) -> bool {
+    matches!(
+        phase,
+        ProviderAuthPhase::Succeeded | ProviderAuthPhase::Failed | ProviderAuthPhase::Cancelled
+    )
+}
+
+fn install_terminal(phase: &ProviderInstallPhase) -> bool {
+    matches!(
+        phase,
+        ProviderInstallPhase::Succeeded
+            | ProviderInstallPhase::Failed
+            | ProviderInstallPhase::Cancelled
     )
 }
 
