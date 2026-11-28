@@ -47,6 +47,45 @@ pub struct GroupRecord {
     pub identity: String,
 }
 
+/// Engine-group snapshots for `host.json`. Each snapshot is numbered when it is taken; a writer
+/// whose snapshot is older than the one already written drops it, so a late writer never removes
+/// a live engine group from `host.json`.
+pub struct HostJsonSnapshots {
+    path: PathBuf,
+    state: Mutex<(HostJson, u64)>,
+    issued: std::sync::atomic::AtomicU64,
+}
+
+impl HostJsonSnapshots {
+    pub fn new(path: PathBuf, base: HostJson) -> Self {
+        Self {
+            path,
+            state: Mutex::new((base, 0)),
+            issued: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Number the snapshot about to be taken.
+    pub fn take_seq(&self) -> u64 {
+        self.issued
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+    }
+
+    /// Write snapshot `seq` unless a newer one is already written. Returns whether it wrote.
+    pub fn write(&self, seq: u64, groups: Vec<GroupRecord>) -> bool {
+        let mut guard = self.state.lock().expect("host.json");
+        let (json, written) = &mut *guard;
+        if seq <= *written {
+            return false;
+        }
+        *written = seq;
+        json.engine_groups = groups;
+        let _ = write_host_json(&self.path, json);
+        true
+    }
+}
+
 /// The ready line printed to stdout once.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -244,17 +283,13 @@ pub async fn start_with_engine(
         engine_groups: Vec::new(),
     };
     write_host_json(&host_json, &base).map_err(|e| format!("host.json: {e}"))?;
-    // (host.json, seq of the snapshot it holds). Snapshots are numbered when taken; a writer
-    // whose snapshot is older than the one on disk drops it, so a late writer never removes a
-    // live engine group from host.json.
-    let state = Arc::new(Mutex::new((base, 0u64)));
-    let issued = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let snapshots = Arc::new(HostJsonSnapshots::new(host_json.clone(), base));
     {
-        let (state, path) = (state.clone(), host_json.clone());
+        let snapshots = snapshots.clone();
         host.on_engine_groups(move |groups| {
-            let seq = issued.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let seq = snapshots.take_seq();
             // Identities are read with `ps` off the async runtime.
-            let (state, path) = (state.clone(), path.clone());
+            let snapshots = snapshots.clone();
             std::thread::spawn(move || {
                 let records: Vec<GroupRecord> = groups
                     .into_iter()
@@ -265,13 +300,7 @@ pub async fn start_with_engine(
                         })
                     })
                     .collect();
-                let mut guard = state.lock().expect("host.json");
-                let (json, written) = &mut *guard;
-                if seq > *written {
-                    *written = seq;
-                    json.engine_groups = records;
-                    let _ = write_host_json(&path, json);
-                }
+                snapshots.write(seq, records);
             });
         });
     }
@@ -357,6 +386,25 @@ mod tests {
             "a group whose identity changed is left alone: {report}"
         );
         let _ = other.kill();
+    }
+
+    #[test]
+    fn a_late_older_snapshot_never_replaces_a_newer_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("host.json");
+        let snapshots = HostJsonSnapshots::new(path.clone(), HostJson::default());
+        let group = |pgid| GroupRecord {
+            pgid,
+            identity: format!("leader {pgid}"),
+        };
+        let older = snapshots.take_seq();
+        let newer = snapshots.take_seq();
+        // The newer snapshot (two live engines) is written first; the older one (one engine)
+        // finishes late and must not replace it.
+        assert!(snapshots.write(newer, vec![group(10), group(11)]));
+        assert!(!snapshots.write(older, vec![group(10)]));
+        let on_disk = read_host_json(&path).unwrap();
+        assert_eq!(on_disk.engine_groups, vec![group(10), group(11)]);
     }
 
     #[tokio::test]

@@ -1600,3 +1600,60 @@ async fn a_keyed_wait_mode_retry_still_waits() {
     assert_eq!(value["wait"]["released"], "completed");
     assert_eq!(value["wait"]["result"]["summary"], "done now");
 }
+
+#[tokio::test]
+async fn an_unreadable_log_refuses_a_keyed_write() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "ul-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    let child = child_id(
+        &t.host
+            .thread_start(
+                &me,
+                ThreadStartArgs {
+                    task: "c".into(),
+                    ..Default::default()
+                },
+            )
+            .await,
+    );
+    let before = count(&t, &child, "input.accepted");
+    // The child's log cannot be read: the host cannot tell whether the key was used.
+    let log = t
+        ._dir
+        .as_ref()
+        .unwrap()
+        .path()
+        .join("threads")
+        .join(child.as_str())
+        .join("goat.jsonl");
+    let saved = std::fs::read(&log).unwrap();
+    std::fs::remove_file(&log).unwrap();
+    let sent = t
+        .host
+        .thread_send(
+            &me,
+            goat2_host::api::ThreadSendArgs {
+                thread_id: child.clone(),
+                text: "x".into(),
+                mode: Some(InputMode::Followup),
+                client_request_id: Some("ul-key".into()),
+            },
+        )
+        .await;
+    match &sent {
+        SurfaceResult::Error { error } => {
+            assert_eq!(error.reason, "log_unreadable");
+            assert!(error.retryable);
+        }
+        other => panic!("expected log_unreadable, got {other:?}"),
+    }
+    std::fs::write(&log, saved).unwrap();
+    assert_eq!(
+        count(&t, &child, "input.accepted"),
+        before,
+        "nothing was written"
+    );
+}
