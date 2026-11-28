@@ -54,7 +54,9 @@ done
 MERGE_LOCK="/tmp/goat2-merge.lock"
 # One Dev build at a time per machine: the build worktree and its output are shared (review devbuild-2).
 BUILD_LOCK="/tmp/goat2-devbuild.lock"
-DEVBUILD="${GOAT2_DEVBUILD_DIR:-$HOME/Developer/goat2_devbuild}"   # override: local tests only
+# Fixed: install and remote builds always use this folder (review devbuild4-1). There is no override;
+# GOAT2_DEVBUILD_CHECK_ONLY=<path> only runs the folder check on <path> and exits (refusal tests).
+DEVBUILD="$HOME/Developer/goat2_devbuild"
 DEVBUILD_MARKER="goat2-devbuild-worktree"   # file in the build worktree's own git dir
 # The merge checkout on every machine (docs/lanes/PART1.md); the build worktree hangs off it.
 SOURCE_REPO="$HOME/Developer/goat2"
@@ -234,6 +236,15 @@ install_app() {
     echo "relaunched $APP_NAME"
   fi
 }
+
+if [[ -n "${GOAT2_DEVBUILD_CHECK_ONLY:-}" ]]; then
+  # Test hook for the build-folder guard: no lock, fetch, checkout, clean, build or install.
+  INVOKED_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  DEVBUILD="$GOAT2_DEVBUILD_CHECK_ONLY"
+  check_devbuild_path "$INVOKED_REPO"
+  echo "check only: $DEVBUILD would be accepted as the build worktree"
+  exit 0
+fi
 
 if [[ $INSTALL == 1 ]]; then
   INVOKED_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
