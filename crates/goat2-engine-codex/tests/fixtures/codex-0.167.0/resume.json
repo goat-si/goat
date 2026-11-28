@@ -1,0 +1,443 @@
+{
+  "provider": "codex",
+  "protocol": "codex.app-server",
+  "version": "0.167.0",
+  "scenario": "resume",
+  "metadata": {
+    "recordedWith": "codex 0.167.0, model gpt-6-luna",
+    "redaction": "goat2 Redactor (fail-closed)"
+  },
+  "entries": [
+    {
+      "type": "expect_outbound",
+      "frame": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "capabilities": {
+            "experimentalApi": true,
+            "optOutNotificationMethods": [
+              "turn/diff/updated"
+            ]
+          },
+          "clientInfo": {
+            "name": "goat2",
+            "title": "GOAT 2",
+            "version": "0.0.0"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "id": 1,
+        "result": {
+          "codexHome": "/redacted/0",
+          "platformFamily": "unix",
+          "platformOs": "macos",
+          "userAgent": "<redacted>"
+        }
+      },
+      "afterMs": 380
+    },
+    {
+      "type": "expect_outbound",
+      "frame": {
+        "method": "initialized"
+      }
+    },
+    {
+      "type": "expect_outbound",
+      "frame": {
+        "id": 2,
+        "method": "thread/resume",
+        "params": {
+          "approvalPolicy": "never",
+          "config": {
+            "mcp_servers.goat": {
+              "http_headers": {
+                "Authorization": "Bearer goat2-recorded-token-0000"
+              },
+              "url": "http://127.0.0.1:9/mcp"
+            }
+          },
+          "cwd": "/redacted/1",
+          "excludeTurns": true,
+          "model": "gpt-6-luna",
+          "sandbox": "read-only",
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+        }
+      },
+      "wildcards": [
+        "/params/cwd"
+      ]
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870300948,
+        "method": "thread/status/changed",
+        "params": {
+          "status": {
+            "type": "idle"
+          },
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+        }
+      },
+      "afterMs": 4
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "id": 2,
+        "result": {
+          "activePermissionProfile": null,
+          "approvalPolicy": "never",
+          "approvalsReviewer": "user",
+          "collaborationMode": {
+            "mode": "default",
+            "settings": {
+              "developer_instructions": null,
+              "model": "gpt-6-luna",
+              "reasoning_effort": "<redacted>"
+            }
+          },
+          "cwd": "/redacted/1",
+          "disabledPluginIds": [],
+          "initialTurnsPage": null,
+          "instructionSources": [
+            "/redacted/2"
+          ],
+          "itemsBackwardsCursor": "<redacted>",
+          "model": "gpt-6-luna",
+          "modelProvider": "openai",
+          "multiAgentMode": "explicitRequestOnly",
+          "reasoningEffort": "high",
+          "runtimeWorkspaceRoots": [
+            "<redacted>"
+          ],
+          "sandbox": {
+            "networkAccess": false,
+            "type": "readOnly"
+          },
+          "serviceTier": null,
+          "thread": {
+            "agentNickname": null,
+            "agentRole": null,
+            "canAcceptDirectInput": true,
+            "cliVersion": "<redacted>",
+            "createdAt": 1795870294,
+            "cwd": "/redacted/3",
+            "daybreakEnabled": null,
+            "environments": [
+              {
+                "cwd": "/redacted/1",
+                "environmentId": "local",
+                "runtimeWorkspaceRoots": [
+                  "<redacted>"
+                ]
+              }
+            ],
+            "ephemeral": false,
+            "extra": null,
+            "forkedFromId": null,
+            "gitInfo": null,
+            "historyMode": "paginated",
+            "id": "01a22236-0305-78d1-b410-099334a08f91",
+            "model": "gpt-6-luna",
+            "modelProvider": "openai",
+            "name": null,
+            "originator": "<redacted>",
+            "parentThreadId": null,
+            "path": "/redacted/4",
+            "preview": "<redacted>",
+            "projectId": null,
+            "reasoningEffort": "high",
+            "recencyAt": 1795870294,
+            "section": null,
+            "sectionEnteredAt": null,
+            "sessionId": "01a22236-0305-78d1-b410-099334a08f91",
+            "source": "vscode",
+            "status": {
+              "type": "idle"
+            },
+            "threadSource": null,
+            "turns": [],
+            "updatedAt": 1795870300
+          },
+          "turnsBackwardsCursor": "<redacted>"
+        }
+      },
+      "afterMs": 4
+    },
+    {
+      "type": "expect_outbound",
+      "frame": {
+        "id": 3,
+        "method": "turn/start",
+        "params": {
+          "clientUserMessageId": "goat-msg-1",
+          "effort": "low",
+          "input": [
+            {
+              "text": "Reply with exactly: RESUMED",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "id": 3,
+        "result": {
+          "turn": {
+            "completedAt": null,
+            "durationMs": null,
+            "error": null,
+            "id": "01a22236-1b34-7461-a767-41b851856888",
+            "items": [],
+            "itemsView": "notLoaded",
+            "rootTurnId": "<redacted>",
+            "startedAt": null,
+            "status": "inProgress"
+          }
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870300997,
+        "method": "thread/status/changed",
+        "params": {
+          "status": {
+            "activeFlags": [],
+            "type": "active"
+          },
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+        }
+      },
+      "afterMs": 6
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870300997,
+        "method": "turn/started",
+        "params": {
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turn": {
+            "completedAt": null,
+            "durationMs": null,
+            "error": null,
+            "id": "01a22236-1b34-7461-a767-41b851856888",
+            "items": [],
+            "itemsView": "notLoaded",
+            "rootTurnId": "<redacted>",
+            "startedAt": 1795870300,
+            "status": "inProgress"
+          }
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870302281,
+        "method": "item/started",
+        "params": {
+          "item": {
+            "clientId": "goat-msg-1",
+            "completedAtMs": null,
+            "content": [
+              {
+                "text": "Reply with exactly: RESUMED",
+                "text_elements": [],
+                "type": "text"
+              }
+            ],
+            "id": "01a22236-2048-7db1-82c3-afb670264d5c",
+            "startedAtMs": 1795870302281,
+            "type": "userMessage"
+          },
+          "startedAtMs": 1795870302281,
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 299
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870302286,
+        "method": "item/completed",
+        "params": {
+          "completedAtMs": 1795870302281,
+          "item": {
+            "clientId": "goat-msg-1",
+            "completedAtMs": 1795870302281,
+            "content": [
+              {
+                "text": "Reply with exactly: RESUMED",
+                "text_elements": [],
+                "type": "text"
+              }
+            ],
+            "id": "01a22236-2048-7db1-82c3-afb670264d5c",
+            "startedAtMs": 1795870302281,
+            "type": "userMessage"
+          },
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 4
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304148,
+        "method": "item/started",
+        "params": {
+          "item": {
+            "completedAtMs": null,
+            "delivery": null,
+            "id": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+            "memoryCitation": null,
+            "phase": "final_answer",
+            "questions": null,
+            "startedAtMs": 1795870304148,
+            "text": "",
+            "type": "agentMessage"
+          },
+          "startedAtMs": 1795870304148,
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 1509
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304151,
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "RES",
+          "itemId": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 3
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304151,
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "UM",
+          "itemId": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304151,
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "ED",
+          "itemId": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304276,
+        "method": "item/completed",
+        "params": {
+          "completedAtMs": 1795870304270,
+          "item": {
+            "completedAtMs": 1795870304270,
+            "delivery": null,
+            "id": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+            "memoryCitation": null,
+            "phase": "final_answer",
+            "questions": null,
+            "startedAtMs": 1795870304148,
+            "text": "RESUMED",
+            "type": "agentMessage"
+          },
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+        }
+      },
+      "afterMs": 8
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304312,
+        "method": "thread/status/changed",
+        "params": {
+          "status": {
+            "type": "idle"
+          },
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+        }
+      },
+      "afterMs": 0
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795870304312,
+        "method": "turn/completed",
+        "params": {
+          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "turn": {
+            "completedAt": 1795870304,
+            "durationMs": 3307,
+            "error": null,
+            "id": "01a22236-1b34-7461-a767-41b851856888",
+            "items": [
+              {
+                "completedAtMs": 1795870304270,
+                "delivery": null,
+                "id": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+                "memoryCitation": null,
+                "phase": "final_answer",
+                "questions": null,
+                "startedAtMs": 1795870304148,
+                "text": "RESUMED",
+                "type": "agentMessage"
+              }
+            ],
+            "itemsView": "summary",
+            "rootTurnId": "<redacted>",
+            "startedAt": 1795870300,
+            "status": "completed"
+          }
+        }
+      },
+      "afterMs": 0
+    }
+  ]
+}
