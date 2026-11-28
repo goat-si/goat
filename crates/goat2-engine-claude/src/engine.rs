@@ -173,6 +173,8 @@ struct Steer {
     input_ids: Vec<InputId>,
     /// `steer` answered Accepted; later outcomes go out as `SteerUpdated`.
     accepted: bool,
+    /// The writer acknowledged the steer on Claude's stdin.
+    written: bool,
     completed_sent: bool,
 }
 
@@ -296,6 +298,9 @@ struct Inner {
     stderr: Mutex<Option<StderrSource>>,
     /// Woken whenever the active turn settles.
     settled: Notify,
+    /// Held while a stdout frame is checked against the current generation and applied, and by
+    /// every generation change, so an old process's frame never lands in a newer session.
+    frame_gate: Mutex<()>,
     /// Held for the whole of an interrupt and of a turn start, so no turn starts on a process an
     /// interrupt is closing.
     stop_gate: tokio::sync::Mutex<()>,
@@ -375,6 +380,7 @@ async fn start_session(
         process: tokio::sync::Mutex::new(None),
         stderr: Mutex::new(None),
         settled: Notify::new(),
+        frame_gate: Mutex::new(()),
         stop_gate: tokio::sync::Mutex::new(()),
         generation: AtomicU64::new(0),
         next_request: AtomicU64::new(0),
@@ -630,6 +636,10 @@ impl Inner {
         if let Some(hook) = &self.options.frame_hook {
             hook(generation, line);
         }
+        let _gate = self.frame_gate.lock();
+        if generation != self.generation.load(Ordering::SeqCst) {
+            return;
+        }
         let Ok(frame) = protocol::parse_line(line) else {
             return;
         };
@@ -812,6 +822,7 @@ impl Inner {
     /// The next process generation, taken under the state lock so an exit settlement sees either
     /// the old generation with the old session or the new one.
     fn bump_generation(&self) -> u64 {
+        let _gate = self.frame_gate.lock();
         let _state = self.state.lock();
         self.generation.fetch_add(1, Ordering::SeqCst) + 1
     }
@@ -1025,22 +1036,28 @@ impl Inner {
         }
     }
 
-    /// This CLI has no `command_lifecycle`: every waiting steer is accepted on write.
+    /// This CLI has no `command_lifecycle`: a steer is accepted once it is written. Waiting
+    /// steers already on stdin are accepted now; one still being written is accepted by its own
+    /// `steer` call when the write lands (it then sees the lifecycle is absent).
     fn accept_waiting_steers(&self, state: &mut State) {
         let waiting: Vec<(String, oneshot::Sender<Result<(), String>>)> =
             state.steer_waiters.drain().collect();
+        let mut accepted = Vec::new();
         if let Some(turn) = state.turn.as_mut() {
             let turn_id = turn.id.clone();
-            for (uuid, _) in &waiting {
-                if let Some(steer) = turn.steers.get_mut(uuid) {
+            for (uuid, waiter) in waiting {
+                if let Some(steer) = turn.steers.get_mut(&uuid)
+                    && steer.written
+                {
                     steer.accepted = true;
                     if steer.phase == SteerPhase::Consumed {
                         self.consume_steer(&turn_id, steer);
                     }
+                    accepted.push(waiter);
                 }
             }
         }
-        for (_, waiter) in waiting {
+        for waiter in accepted {
             let _ = waiter.send(Ok(()));
         }
     }
@@ -2325,7 +2342,7 @@ impl EngineSession for ClaudeSession {
         let input_ids: Vec<InputId> = inputs.iter().map(|i| i.input_id.clone()).collect();
         let uuid = util::uuid();
         let (tx, mut rx) = oneshot::channel();
-        let wait = {
+        {
             let Ok(mut state) = inner.state.lock() else {
                 return SteerResult::Declined {
                     reason: "Claude session state is unavailable".into(),
@@ -2358,14 +2375,14 @@ impl EngineSession for ClaudeSession {
                     phase: SteerPhase::Sent,
                     input_ids,
                     accepted: false,
+                    written: false,
                     completed_sent: false,
                 },
             );
             if wait {
                 state.steer_waiters.insert(uuid.clone(), tx);
             }
-            wait
-        };
+        }
         let delivery = inner
             .deliver(&protocol::user_message(content, Some(&uuid), Some("next")))
             .await;
@@ -2385,28 +2402,42 @@ impl EngineSession for ClaudeSession {
             }
             return result;
         }
-        if !wait {
-            // Written to a CLI without command_lifecycle: accepted now, if its turn still runs.
+        {
+            // The write landed. On a CLI known to lack command_lifecycle that is the acceptance;
+            // otherwise Claude's verdict (queued/started/refused) decides below.
             let Ok(mut state) = inner.state.lock() else {
                 return SteerResult::Unknown {
                     reason: "Claude session state is unavailable".into(),
                 };
             };
+            let absent = state.lifecycle == Lifecycle::Absent;
+            let mut present = false;
+            let mut answer = None;
             if let Some(turn) = state.turn.as_mut()
                 && turn.id == turn_id
                 && let Some(steer) = turn.steers.get_mut(&uuid)
             {
-                steer.accepted = true;
-                if steer.phase == SteerPhase::Consumed {
-                    inner.consume_steer(turn_id, steer);
+                present = true;
+                steer.written = true;
+                if absent {
+                    steer.accepted = true;
+                    if steer.phase == SteerPhase::Consumed {
+                        inner.consume_steer(turn_id, steer);
+                    }
+                    answer = Some(SteerResult::Accepted);
                 }
-                return SteerResult::Accepted;
             }
-            // The turn ended while the message was being written: Claude may run it as its own
-            // next prompt, outside any GOAT turn.
-            return SteerResult::Unknown {
-                reason: "The Claude turn ended while the message was being written".into(),
-            };
+            if !present && absent {
+                // The turn ended while the message was being written: Claude may run it as its
+                // own next prompt, outside any GOAT turn.
+                answer = Some(SteerResult::Unknown {
+                    reason: "The Claude turn ended while the message was being written".into(),
+                });
+            }
+            if let Some(answer) = answer {
+                state.steer_waiters.remove(&uuid);
+                return answer;
+            }
         }
         match tokio::time::timeout(inner.options.steer_ack_timeout, &mut rx).await {
             Ok(Ok(Ok(()))) => SteerResult::Accepted,
