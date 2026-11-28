@@ -216,5 +216,11 @@ describe("cloneUrlRepositoryPath", () => {
       "gitlab.com/group/sub/repo",
     );
     expect(cloneUrlRepositoryPath("C:/repos/project.git")).toBeNull();
+    expect(cloneUrlRepositoryPath("git@forge.example:team#1/spec#2026.git")).toBe(
+      "forge.example/team#1/spec#2026",
+    );
+    expect(cloneUrlRepositoryPath("https://forge.example/team/spec.git#readme")).toBe(
+      "forge.example/team/spec",
+    );
   });
 });

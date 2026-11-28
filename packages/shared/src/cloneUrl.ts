@@ -32,6 +32,10 @@ function parseCloneUrl(url: string): {
   return null;
 }
 
+export function isScpLikeCloneUrl(url: string): boolean {
+  return SCP_LIKE_URL.test(url);
+}
+
 export function cloneUrlProtocol(url: string): CloneProtocol | null {
   return parseCloneUrl(url)?.protocol ?? null;
 }
@@ -86,7 +90,9 @@ export function cloneUrlRepositoryPath(url: string): string | null {
   if (isWindowsDrivePath(url.trim())) return null;
   const parsed = parseCloneUrl(url);
   if (!parsed) return null;
-  let pathSegments = (parsed.path.split(/[?#]/)[0] ?? "").split("/").filter(Boolean);
+  let pathSegments = (parsed.path.split(parsed.scp ? "?" : /[?#]/, 1)[0] ?? "")
+    .split("/")
+    .filter(Boolean);
   if (!parsed.scp) {
     try {
       pathSegments = pathSegments.map(decodeURIComponent);
