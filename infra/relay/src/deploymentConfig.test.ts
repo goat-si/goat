@@ -5,7 +5,18 @@ import {
   managedEndpointDigestInput,
   isManagedEndpointHostname,
   relayOwnsManagedEndpointZone,
+  RELAY_WORKER_OBSERVABILITY,
 } from "./deploymentConfig.ts";
+
+describe("relay Worker observability", () => {
+  it("records request URLs only through the relay's own redacting spans", () => {
+    expect(RELAY_WORKER_OBSERVABILITY.logs).toEqual({
+      enabled: true,
+      invocationLogs: false,
+      headSamplingRate: 0.01,
+    });
+  });
+});
 
 describe("relayOwnsManagedEndpointZone", () => {
   it("keeps the shared Cloudflare zone owned by production", () => {
