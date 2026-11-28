@@ -528,3 +528,10 @@ macro_rules! bounded_auth_dimension {
 }
 bounded_auth_dimension!(auth_cols, 500);
 bounded_auth_dimension!(auth_rows, 200);
+
+/// An optional key whose present value must not be null.
+pub fn present_nonnull<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
