@@ -585,6 +585,7 @@ impl Actor {
                         context: None,
                         options: None,
                         recommended: None,
+                        item: None,
                     }));
                 }
                 self.append(events);
@@ -1069,6 +1070,7 @@ impl Actor {
                     context: None,
                     options: None,
                     recommended: None,
+                    item: None,
                 }));
                 self.append(events);
             }
@@ -1396,6 +1398,7 @@ impl Actor {
                     context: None,
                     options: None,
                     recommended: None,
+                    item: None,
                 })]);
                 if recorded.is_none() {
                     // Nobody can see or answer an unrecorded request: decline the engine's
@@ -1511,6 +1514,7 @@ impl Actor {
                 context: None,
                 options: None,
                 recommended: None,
+                item: None,
             }));
         }
         self.append(events);
