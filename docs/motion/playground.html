@@ -14,7 +14,7 @@ header{padding:32px 40px 8px} h1{font-size:28px;letter-spacing:-.02em;margin:0 0
 .av{position:relative;flex-shrink:0} .av svg.face{position:absolute;left:0;top:0;overflow:visible}
 .chip{position:absolute;border-radius:9999px;background:#fff;display:flex;align-items:center;justify-content:center}
 .dot{position:absolute;border-radius:9999px;background:var(--decide);opacity:0;transition:opacity 200ms var(--ease)} .av[data-mood=needs_you] .dot{opacity:1}
-.label{font-size:12px;font-weight:600} .label.decide{color:#C8333A}
+.label{font-size:12px;font-weight:600} .label.decide{color:#0169CC}
 @keyframes spin{to{transform:rotate(360deg)}}
 .demo{margin:32px 40px;padding:20px;border:1px solid var(--line);border-radius:12px;display:flex;gap:20px;align-items:center}
 .demo .status{font-size:13px;color:var(--muted)} .demo .status b{color:var(--ink)}
@@ -86,7 +86,7 @@ MOODS.forEach(([m,name,when,chip],i)=>{const c=document.createElement('div');c.c
  const sizes=document.createElement('div');sizes.className='sizes';
  for(const sz of [64,40]){const a=avatar(sz,COLORS[i],chip,m);faces.push(a);sizes.appendChild(a)}
  c.innerHTML=`<div class="name">${name}</div>`;c.appendChild(sizes);
- const lab=document.createElement('div');lab.className='label'+(m==='needs_you'||m==='error'?' decide':'');lab.textContent=LABEL[m]||'—';c.appendChild(lab);
+ const lab=document.createElement('div');lab.className='label'+(m==='needs_you'?' decide':'');lab.textContent=LABEL[m]||'—';c.appendChild(lab);
  const w=document.createElement('div');w.className='when';w.textContent=when;c.appendChild(w);grid.appendChild(c)});
 const demo=avatar(64,'#FF8A1F','codex','idle');faces.push(demo);document.getElementById('demoAv').appendChild(demo);
 // one shared clock, capped at 30fps, paused when hidden (hermes face clock rules)
