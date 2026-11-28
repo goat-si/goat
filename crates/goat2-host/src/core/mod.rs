@@ -407,6 +407,19 @@ impl Host {
         });
     }
 
+    pub(crate) fn usage_update(
+        &self,
+        id: &ThreadId,
+        usage: goat2_contracts::ThreadTokenUsageSnapshot,
+    ) {
+        let mut live = self.inner.live.lock().expect("live");
+        let entry = live.entry(id.clone()).or_insert_with(new_live);
+        let _ = entry.tx.send(ThreadLive::Usage {
+            usage: Box::new(usage),
+            updated_at: crate::util::now_rfc3339(),
+        });
+    }
+
     pub(crate) fn stream_done(&self, id: &ThreadId, item_id: &ItemId) {
         let mut live = self.inner.live.lock().expect("live");
         if let Some(entry) = live.get_mut(id) {
