@@ -9,7 +9,6 @@ import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
-
 import * as GitCafeApi from "./GitCafeApi.ts";
 import * as GitCafeCredentials from "./GitCafeCredentials.ts";
 import * as GitCafePullRequestProvider from "./GitCafePullRequestProvider.ts";
@@ -630,14 +629,15 @@ describe("GitCafePullRequestProvider", () => {
     });
     return Effect.gen(function* () {
       const provider = yield* GitCafePullRequestProvider.make;
+      const mergeTarget = { ...target, expectedHeadSha: baseOid };
       const result = yield* provider
-        .runAction({ ...target, action: "merge", mergeMethod: "squash" })
+        .runAction({ ...mergeTarget, action: "merge", mergeMethod: "squash" })
         .pipe(Effect.result);
       assert.strictEqual(result._tag, succeeds ? "Success" : "Failure");
       assert.deepStrictEqual(server.writes(), ["POST /repos/owner/repo/pulls/7/merge"]);
       assert.deepInclude(server.sent.at(-1)?.body as object, {
+        headOid: baseOid,
         strategy: "squash",
-        headOid,
         expectedVersion: 4,
       });
       assertRequestId(server.sent.at(-1)?.body);
