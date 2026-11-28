@@ -456,6 +456,17 @@
         "commit": {
           "type": "string"
         },
+        "recorded": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Recording"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set for a session recorded by this crate's v1 runner (not lifted from a v1 fixture): `source` then names the recording driver in this crate and `sourceSha256` equals `sha256`."
+        },
         "sha256": {
           "type": "string"
         },
@@ -491,6 +502,33 @@
         "released"
       ],
       "type": "string"
+    },
+    "Recording": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "Recording date, `YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "engine": {
+          "description": "Engine binary and version that produced the frames, e.g. `codex-cli 0.167.0`.",
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "scrubbed": {
+          "description": "What was scrubbed from the frames before committing.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "date",
+        "engine",
+        "model",
+        "scrubbed"
+      ],
+      "type": "object"
     },
     "RunEnd": {
       "enum": [

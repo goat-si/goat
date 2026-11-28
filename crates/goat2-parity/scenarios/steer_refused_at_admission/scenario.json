@@ -1,26 +1,26 @@
 {
   "v": 1,
   "name": "steer_refused_at_admission",
-  "summary": "steer refused at admission",
+  "summary": "a steer aimed at a run that was interrupted is refused at admission; a steer at a completed run is instead kept as a new turn (DispatchModeAdjustment.afterLateSteer)",
   "spec": [
-    "docs/parity/README.md"
+    "docs/parity/follow-up-modes.md"
   ],
   "v1Refs": [
-    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/simple/input.ts:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_output.ts:20",
-    "apps/server/src/orchestration-v2/ThreadManagementService.ts:1417-1449",
-    "apps/server/src/mcp/OrchestratorMcpService.ts:222-226"
+    "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/codex_output.ts:20",
+    "apps/server/src/orchestration-v2/goat/DispatchModeAdjustment.ts:14-39",
+    "apps/server/src/orchestration-v2/Orchestrator.ts:4229-4245"
   ],
   "streams": {
     "codex": {
       "engine": "codex",
       "transcript": "transcripts/codex.ndjson",
       "provenance": {
-        "source": "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson",
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/codex_transcript.ndjson",
         "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
-        "sourceSha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e",
-        "sha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e"
+        "sourceSha256": "cdd4561a331f36d57540a40487533c717e58212dea8deeadce020a91a9c9b7b9",
+        "sha256": "cdd4561a331f36d57540a40487533c717e58212dea8deeadce020a91a9c9b7b9"
       }
     }
   },
@@ -36,8 +36,22 @@
       "id": "send1",
       "thread": "t1",
       "input": "i1",
-      "text": "Respond with the following text: fixture simple ok",
+      "text": "Do not answer immediately. First run the local shell command `sleep 30`, then respond with exactly: interrupt fixture should not finish naturally.",
       "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "running",
+      "thread": "t1",
+      "until": "run_status",
+      "run": "r1",
+      "status": "running"
+    },
+    {
+      "do": "interrupt",
+      "id": "interrupt",
+      "thread": "t1",
+      "run": "r1"
     },
     {
       "do": "await",
@@ -50,7 +64,7 @@
       "id": "send2",
       "thread": "t1",
       "input": "i2",
-      "text": "steer after completion",
+      "text": "steer after the interrupt",
       "mode": "steer",
       "run": "r1"
     }
@@ -79,7 +93,7 @@
           "input": "i1",
           "from": "user",
           "mode": "start",
-          "text": "Respond with the following text: fixture simple ok"
+          "text": "Do not answer immediately. First run the local shell command `sleep 30`, then respond with exactly: interrupt fixture should not finish naturally."
         },
         {
           "id": "e2",
@@ -95,14 +109,14 @@
           "kind": "run.finished",
           "thread": "t1",
           "run": "r1",
-          "status": "done"
+          "status": "interrupted"
         },
         {
           "id": "e4",
           "kind": "input.refused",
           "thread": "t1",
           "input": "i2",
-          "code": "thread_not_sendable"
+          "code": "OrchestratorDispatchError"
         }
       ]
     },
@@ -110,8 +124,7 @@
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "supported"
     },
     "goat2": {
       "status": "pending",

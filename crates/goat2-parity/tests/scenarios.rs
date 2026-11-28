@@ -57,7 +57,21 @@ fn pinned_prompts_match_source_when_available() {
         }
         let s = LoadedScenario::load(&dir).unwrap();
         for stream in s.scenario.streams.values() {
-            let data = fs::read(PathBuf::from(&v1).join(&stream.provenance.source)).unwrap();
+            // A session recorded by this crate's v1 runner has no v1 fixture: its source is the
+            // recording driver here, and its prompts are checked against the recording itself.
+            let data = if stream.provenance.recorded.is_some() {
+                let driver = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(&stream.provenance.source);
+                assert!(
+                    driver.is_file(),
+                    "{}: missing recording driver",
+                    s.scenario.name
+                );
+                fs::read(dir.join(&stream.transcript)).unwrap()
+            } else {
+                fs::read(PathBuf::from(&v1).join(&stream.provenance.source)).unwrap()
+            };
             transcript::verify_hash(&data, &stream.provenance.source_sha256).unwrap();
             if stream.provenance.transform.is_none() {
                 assert_eq!(data, fs::read(dir.join(&stream.transcript)).unwrap());
@@ -66,7 +80,7 @@ fn pinned_prompts_match_source_when_available() {
             for step in &s.scenario.steps {
                 if let goat2_parity::scenario::Step::Send { text: prompt, .. } = step
                     && prompt != "temporary queued text"
-                    && prompt != "steer after completion"
+                    && prompt != "steer after the interrupt"
                 {
                     assert!(text.contains(prompt), "{}: {prompt}", s.scenario.name);
                 }
@@ -164,7 +178,7 @@ fn pinned_step_prompts_equal_stored_outbound_frame_text() {
                 let absent = match loaded.scenario.name.as_str() {
                     "queue_edit_then_start" => input == "i2" && text == "temporary queued text" && loaded.scenario.steps.iter().any(|s| matches!(s, Step::QueueEdit { input: edited, text, .. } if edited == input && texts.contains(text))),
                     "queue_cancel_while_active" => input == "i2" && loaded.scenario.steps.iter().any(|s| matches!(s, Step::QueueCancel { input: cancelled, .. } if cancelled == input)),
-                    "steer_refused_at_admission" => text == "steer after completion",
+                    "steer_refused_at_admission" => text == "steer after the interrupt",
                     _ => false,
                 };
                 assert!(
@@ -196,4 +210,28 @@ fn scenario_v1_refs_resolve_when_root_available() {
                 .unwrap_or_else(|e| panic!("{}: {reference}: {e}", scenario.scenario.name));
         }
     }
+}
+
+/// The v1 runner's own TypeScript unit tests (trace mapping on synthetic v1 events), run through
+/// run-v1.sh --unit in a scratch copy inside the export.
+#[test]
+fn v1_runner_unit_tests_pass_when_available() {
+    let Some(v1) = std::env::var_os("GOAT_V1_ROOT") else {
+        println!("SKIPPED v1 runner unit tests: GOAT_V1_ROOT unset");
+        return;
+    };
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("v1-runner/run-v1.sh");
+    let output = std::process::Command::new("sh")
+        .arg(script)
+        .arg("--v1-root")
+        .arg(v1)
+        .arg("--unit")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

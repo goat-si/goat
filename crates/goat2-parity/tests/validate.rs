@@ -233,6 +233,34 @@ invalid_case!(await_call_unknown_call, |v: &mut serde_json::Value| {
         .unwrap()
         .push(serde_json::json!({"do":"await_call","id":"join","call":"unknown","timeoutMs":1}));
 });
+fn recording(v: &mut serde_json::Value) -> &mut serde_json::Value {
+    let p = &mut v["streams"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap()["provenance"];
+    p["recorded"] = serde_json::json!({"engine":"codex-cli 0.0.0","model":"m","date":"2026-11-29","scrubbed":"x"});
+    p
+}
+invalid_case!(recording_outside_v1_runner, |v: &mut serde_json::Value| {
+    // simple_turn's source is a v1 fixture path, which a recording may not claim.
+    recording(v);
+});
+invalid_case!(recording_with_transform, |v: &mut serde_json::Value| {
+    let p = recording(v);
+    p["source"] = "crates/goat2-parity/v1-runner/ParityMcpScenarios.integration.test.ts".into();
+    p["transform"] = "edited".into();
+});
+#[test]
+fn recording_naming_its_driver_loads() {
+    let f = Fixture::new();
+    f.edit(|v| {
+        recording(v)["source"] =
+            "crates/goat2-parity/v1-runner/ParityMcpScenarios.integration.test.ts".into();
+    });
+    LoadedScenario::load(&f.0).unwrap();
+}
 
 #[test]
 fn empty_v1_refs_is_rejected() {
@@ -251,4 +279,51 @@ fn empty_v1_refs_is_rejected() {
     let err = goat2_parity::scenario::LoadedScenario::load(&dir).unwrap_err();
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(err.contains("v1Refs"), "{err}");
+}
+
+#[test]
+fn input_creating_mcp_calls_declare_their_input_alias() {
+    let mcp = |path: &str, call: &str| serde_json::json!({"do":"mcp","id":format!("m-{call}"),"caller":"t1","path":path,"args":{},"call":call,"wait":true});
+    // A thread.send call names its input after the call id, so the expectation may use it.
+    let f = Fixture::new();
+    f.edit(|v| {
+        v["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(mcp("thread.send", "send9"));
+        let mut accepted = v["expect"]["threads"]["t1"][0].clone();
+        accepted["id"] = "e-send9".into();
+        accepted["input"] = "send9".into();
+        v["expect"]["threads"]["t1"]
+            .as_array_mut()
+            .unwrap()
+            .push(accepted);
+    });
+    assert!(LoadedScenario::load(&f.0).is_ok());
+    // A read-only path does not create an input, so the same alias is unknown.
+    let f = Fixture::new();
+    f.edit(|v| {
+        v["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(mcp("task.read", "read9"));
+        let mut accepted = v["expect"]["threads"]["t1"][0].clone();
+        accepted["id"] = "e-read9".into();
+        accepted["input"] = "read9".into();
+        v["expect"]["threads"]["t1"]
+            .as_array_mut()
+            .unwrap()
+            .push(accepted);
+    });
+    f.fails();
+    // A call id that collides with a send's input alias is rejected.
+    let f = Fixture::new();
+    f.edit(|v| {
+        let input = v["steps"][0]["input"].as_str().unwrap().to_owned();
+        v["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(mcp("task.create", &input));
+    });
+    f.fails();
 }
