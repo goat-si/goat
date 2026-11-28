@@ -15,12 +15,14 @@ How the references keep their guidelines, and what we take:
 
 ## Principles
 
-1. **Bots first, threads one level down.** The roster is home. A worker thread is a folded row
-   in the chat and a list in the overview; it is never hidden, only lowered.
+1. **Bots first, threads one level down.** The roster is home. The chat shows only what the bot
+   says and what it needs you to decide: bot messages, your messages, decision cards. Worker
+   threads, steps, evidence and sub-runs never appear in the chat. They live in the right panel:
+   Overview → Threads lists them, and opening one replaces the Overview with that thread.
 2. **Always say what ran.** Every run shows its provider chip. Model next to it where a person
    chooses or reads results. Full runtime only in Overview → Runtime.
-3. **Answer "what is it doing" in layers** (Muse): avatar motion → one-line status → folded run →
-   full thread. Each layer is opt-in.
+3. **Answer "what is it doing" in layers** (Muse): avatar motion → one-line status → chat
+   message → thread in the right panel. Each layer is opt-in.
 4. **Intent before automation** (Hermes): do not open panes, move focus or navigate because a tool
    produced something.
 5. **Tokens, not literals.** No hex, rgb or px in a screen. A new value is a token change.
@@ -61,7 +63,8 @@ beside their trigger (menus, popovers); `shadow-2xl` only for dialogs.
 ```
 
 - Provider marks are lifted from the GOAT codebase (`@goat2/provider-icons`), never redrawn.
-- The roster shows the chip only: no version, no machine. Runtime bar and composer: chip + model.
+- The roster shows the chip only: no version, no machine. Composer: chip + model on desktop, a
+  round chip-only button on mobile. There is no runtime bar.
 - Overview → Runtime: CLI + version, model + effort, machine, account, access, workspace.
 
 ## Folding
@@ -69,7 +72,7 @@ beside their trigger (menus, popovers); `shadow-2xl` only for dialogs.
 | Surface | Folded | Open |
 |---|---|---|
 | Roster | Avatar rail (dot and chip stay) | Name, status, last line |
-| Worker thread in chat | One line: title · steps · chip · model · time · Open thread | Step list; "Open thread" opens the existing coding view |
+| Worker thread | Not in the chat. A row in Overview → Threads (title, machine, state) | Right panel: back to Overview, title, state · steps · time, runtime line, key steps ("Show all N steps"), evidence card, sub-runs. Full coding view from there |
 | Overview | Hidden | Sections fold one by one; empty sections are not drawn; max 3 rows then "See all" |
 
 ## Copy

@@ -89,6 +89,11 @@ actions sit. Change the SSOT board first, then re-sync the platform boards (they
 | 모바일 iOS — 봇 홈 / 봇 대화 | 390 × 844 | Large title "Bots", search + new bot buttons, list grouped Needs you first, tab bar (Bots, Threads, Machines, Me), home indicator. Chat: back chevron with needs-you badge, centered bot + model, (i) opens the overview as a sheet |
 | 모바일 Android — 봇 홈 / 봇 대화 | 412 × 915 | M3: top app bar with search + account avatar, filter chips (All / Needs you / Running), extended FAB "New bot", navigation bar with pill indicator, gesture handle. Chat: back arrow, bot + model left, overflow menu opens the overview |
 
+Chat shows chat and decisions only (2026-11-28): no run folds, worker-thread rows, evidence
+cards or sub-runs in the transcript, on any platform. Threads open in the right panel only. State
+board: `봇 홈 — 스레드 열림 (state)` (Overview replaced by the open thread). On mobile the thread
+opens from (i) / overflow as a sheet.
+
 One model picker (2026-11-28): the runtime/model chip lives only in the composer, on every
 platform. The bar under the chat header is gone, and headers show the bot's job and machine, not
 the model. Versions stay in Overview → Runtime.
