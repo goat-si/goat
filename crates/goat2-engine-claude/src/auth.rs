@@ -101,6 +101,25 @@ pub struct AuthFlows {
     flows: Mutex<HashMap<String, Arc<Flow>>>,
 }
 
+/// A dropped factory (host shutting down) stops every open sign-in.
+impl Drop for AuthFlows {
+    fn drop(&mut self) {
+        let flows: Vec<Arc<Flow>> = match self.flows.get_mut() {
+            Ok(flows) => flows.drain().map(|(_, flow)| flow).collect(),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .drain()
+                .map(|(_, flow)| flow)
+                .collect(),
+        };
+        for flow in flows {
+            flow.publish(cancelled);
+            #[cfg(unix)]
+            flow.terminal.kill();
+        }
+    }
+}
+
 impl std::fmt::Debug for AuthFlows {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthFlows").finish_non_exhaustive()
@@ -164,7 +183,6 @@ impl AuthFlows {
             ));
         }
         let instance = target.instance_id.to_string();
-        self.stop(&instance);
         let terminal = pty::Terminal::spawn(&launch, &["auth", "login"]).map_err(|_| {
             EngineError::StartFailed("Could not open the provider sign-in terminal.".into())
         })?;
@@ -186,13 +204,23 @@ impl AuthFlows {
             updates: Mutex::new(Some(updates)),
             terminal,
         });
-        if let Ok(mut flows) = self.flows.lock() {
-            flows.insert(instance.clone(), flow.clone());
+        // The new flow replaces a running one in one step, so two starts for the same instance
+        // never leave a sign-in nobody can answer or cancel; the replaced one is stopped.
+        let previous = self
+            .flows
+            .lock()
+            .ok()
+            .and_then(|mut flows| flows.insert(instance.clone(), flow.clone()));
+        if let Some(previous) = previous {
+            previous.publish(cancelled);
+            previous.terminal.kill();
         }
-        // Output: each chunk replaces the transcript (last 16,384 characters) and moves the offset.
+        // Output: each chunk replaces the transcript (last 16,384 UTF-16 units, as v1 measures a
+        // JavaScript string) and moves the offset by the same units.
         let reader = flow.terminal.reader();
         let output_flow = flow.clone();
-        let output = std::thread::spawn(move || {
+        let (output_done, output_closed) = tokio::sync::oneshot::channel::<()>();
+        std::thread::spawn(move || {
             let mut transcript = String::new();
             let mut offset: u64 = 0;
             let mut pending: Vec<u8> = Vec::new();
@@ -213,16 +241,7 @@ impl AuthFlows {
                 if chunk.is_empty() {
                     continue;
                 }
-                offset += chunk.chars().count() as u64;
-                transcript.push_str(&chunk);
-                let excess = transcript.chars().count().saturating_sub(TRANSCRIPT_CHARS);
-                if excess > 0 {
-                    let cut = transcript
-                        .char_indices()
-                        .nth(excess)
-                        .map_or(transcript.len(), |(i, _)| i);
-                    transcript.drain(..cut);
-                }
+                offset += append_output(&mut transcript, &chunk);
                 let text = transcript.clone();
                 output_flow.publish(|s| {
                     if s.phase == ProviderAuthPhase::Waiting {
@@ -234,37 +253,48 @@ impl AuthFlows {
                     }
                 });
             }
+            let _ = output_done.send(());
         });
-        let flows = self.clone();
+        // The task holds the flows weakly and waits without a blocking-pool thread, so neither a
+        // dropped factory nor a runtime shutting down waits on an open sign-in.
+        let flows = Arc::downgrade(self);
+        let remove = move |instance: &str, id: &str| {
+            if let Some(flows) = flows.upgrade() {
+                flows.remove(instance, id);
+            }
+        };
         let finish_flow = flow.clone();
         tokio::spawn(async move {
-            let waiter = finish_flow.clone();
-            let exit = tokio::time::timeout(
-                FLOW_TIMEOUT,
-                tokio::task::spawn_blocking(move || waiter.terminal.wait()),
-            )
+            let exit = tokio::time::timeout(FLOW_TIMEOUT, async {
+                loop {
+                    if let Some(code) = finish_flow.terminal.try_wait() {
+                        return code;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
             .await;
             let code = match exit {
-                Ok(Ok(code)) => code,
-                Ok(Err(_)) => None,
+                Ok(code) => code,
                 Err(_) => {
                     finish_flow.terminal.kill();
                     finish_flow.publish(|s| failed(s, "Sign-in expired. Start again."));
-                    flows.remove(&instance, &finish_flow.id);
+                    remove(&instance, &finish_flow.id);
                     return;
                 }
             };
-            // The last output lands before the result.
-            let _ = tokio::task::spawn_blocking(move || output.join()).await;
+            // The last output lands before the result; something the CLI left holding the
+            // terminal does not keep the flow waiting.
+            let _ = tokio::time::timeout(Duration::from_secs(5), output_closed).await;
             if finish_flow.ended() {
-                flows.remove(&instance, &finish_flow.id);
+                remove(&instance, &finish_flow.id);
                 return;
             }
             if code != Some(0) {
                 finish_flow.publish(|s| {
                     failed(s, "The provider login command did not finish successfully.")
                 });
-                flows.remove(&instance, &finish_flow.id);
+                remove(&instance, &finish_flow.id);
                 return;
             }
             finish_flow.publish(|s| {
@@ -291,7 +321,7 @@ impl AuthFlows {
                     failed(s, "Claude could not confirm the authentication change.");
                 }
             });
-            flows.remove(&instance, &finish_flow.id);
+            remove(&instance, &finish_flow.id);
         });
         Ok(state)
     }
@@ -387,6 +417,55 @@ fn cancelled(state: &mut ProviderAuthState) {
     state.message = Some("Sign-in cancelled.".into());
 }
 
+/// Appends terminal output and keeps the last [TRANSCRIPT_CHARS] UTF-16 units (v1 slices a
+/// JavaScript string, whose length counts UTF-16 units); returns the chunk's length in those units.
+fn append_output(transcript: &mut String, chunk: &str) -> u64 {
+    transcript.push_str(chunk);
+    let excess = transcript
+        .encode_utf16()
+        .count()
+        .saturating_sub(TRANSCRIPT_CHARS);
+    if excess > 0 {
+        let mut dropped = 0;
+        let cut = transcript
+            .char_indices()
+            .find(|(_, c)| {
+                let enough = dropped >= excess;
+                dropped += c.len_utf16();
+                enough
+            })
+            .map_or(transcript.len(), |(i, _)| i);
+        transcript.drain(..cut);
+    }
+    chunk.encode_utf16().count() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn output_is_measured_in_utf16_units_like_v1() {
+        let mut transcript = String::new();
+        assert_eq!(super::append_output(&mut transcript, "a😀"), 3);
+        let filler = "x".repeat(super::TRANSCRIPT_CHARS - 1);
+        assert_eq!(
+            super::append_output(&mut transcript, &filler),
+            filler.len() as u64
+        );
+        // 3 + 16,383 units: the oldest whole characters go until 16,384 units remain.
+        assert_eq!(
+            transcript.encode_utf16().count(),
+            super::TRANSCRIPT_CHARS - 1
+        );
+        assert!(transcript.starts_with('x'));
+        let mut emoji = "😀".repeat(super::TRANSCRIPT_CHARS / 2);
+        emoji.push('z');
+        super::append_output(&mut transcript, &emoji);
+        assert!(transcript.encode_utf16().count() <= super::TRANSCRIPT_CHARS);
+        assert!(transcript.ends_with('z'));
+        assert!(!transcript.starts_with('\u{FFFD}'), "no character is split");
+    }
+}
+
 /// RFC 3339 time `after` from now (UTC).
 fn chrono_like_now_plus(after: Duration) -> String {
     crate::util::rfc3339_after(after)
@@ -402,6 +481,7 @@ mod pty {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     use crate::launch::LaunchOptions;
@@ -410,6 +490,8 @@ mod pty {
         master: Arc<File>,
         child: Mutex<Child>,
         pid: i32,
+        /// The command was reaped: its process group id may belong to someone else now.
+        reaped: Arc<AtomicBool>,
     }
 
     pub struct Reader(Arc<File>);
@@ -496,6 +578,7 @@ mod pty {
                 master: Arc::new(File::from(master)),
                 child: Mutex::new(child),
                 pid,
+                reaped: Arc::new(AtomicBool::new(false)),
             })
         }
 
@@ -523,34 +606,40 @@ mod pty {
             Ok(())
         }
 
-        /// Blocks until the command exits; its exit code (None when killed by a signal).
-        pub fn wait(&self) -> Option<i32> {
-            loop {
-                let status = {
-                    let mut child = self.child.lock().ok()?;
-                    match child.try_wait() {
-                        Ok(Some(status)) => Some(status),
-                        Ok(None) => None,
-                        Err(_) => return None,
-                    }
-                };
-                match status {
-                    Some(status) => return status.code(),
-                    None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        /// The exit code once the command exited (inner None when a signal ended it).
+        pub fn try_wait(&self) -> Option<Option<i32>> {
+            let mut child = self.child.lock().ok()?;
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.reaped.store(true, Ordering::SeqCst);
+                    Some(status.code())
+                }
+                Ok(None) => None,
+                Err(_) => {
+                    self.reaped.store(true, Ordering::SeqCst);
+                    Some(None)
                 }
             }
         }
 
         /// TERM, then KILL, to the command's whole session.
         pub fn kill(&self) {
+            // Once reaped, the group id may name another process group: nothing is sent.
+            if self.reaped.load(Ordering::SeqCst) {
+                return;
+            }
             // SAFETY: signals to the process group this terminal's command leads.
             unsafe {
                 libc::kill(-self.pid, libc::SIGTERM);
             }
             let pid = self.pid;
+            let reaped = self.reaped.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                // SAFETY: as above; a group that already exited makes this a no-op.
+                if reaped.load(Ordering::SeqCst) {
+                    return;
+                }
+                // SAFETY: as above; the command has not been reaped, so the group is still its.
                 unsafe {
                     libc::kill(-pid, libc::SIGKILL);
                 }

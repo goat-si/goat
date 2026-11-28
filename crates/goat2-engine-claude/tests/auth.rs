@@ -239,3 +239,85 @@ async fn cancel_stops_the_sign_in() {
     );
     let _ = std::fs::remove_dir_all(home);
 }
+
+/// Review P2: two sign-in starts at once for one instance leave exactly one running flow; the
+/// replaced one is cancelled (its stream ends), so no login runs that nobody can answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_starts_leave_one_answerable_flow() {
+    let factory = std::sync::Arc::new(factory());
+    for round in 0..10 {
+        let (target, home) = target(&format!("race{round}"));
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        // Two OS threads released together, so the starts really overlap.
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handle = tokio::runtime::Handle::current();
+        let start = |tx| {
+            let (factory, target, barrier, handle) = (
+                factory.clone(),
+                target.clone(),
+                barrier.clone(),
+                handle.clone(),
+            );
+            std::thread::spawn(move || {
+                barrier.wait();
+                handle.block_on(factory.auth_start(&target, None, tx))
+            })
+        };
+        let (a, b) = (start(tx_a), start(tx_b));
+        let (a, b) = tokio::task::spawn_blocking(move || (a.join().unwrap(), b.join().unwrap()))
+            .await
+            .unwrap();
+        let (a, b) = (a.unwrap().flow_id.unwrap(), b.unwrap().flow_id.unwrap());
+        let cancel_a = factory.auth_cancel(&target, &a).await;
+        let cancel_b = factory.auth_cancel(&target, &b).await;
+        assert!(
+            cancel_a.is_ok() != cancel_b.is_ok(),
+            "exactly one flow is live and cancellable (round {round})"
+        );
+        // Both streams end with Cancelled: the replaced one at the swap, the other at cancel.
+        for rx in [&mut rx_a, &mut rx_b] {
+            let mut last = None;
+            while let Ok(Some(state)) =
+                tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
+            {
+                last = Some(state.phase);
+            }
+            assert_eq!(last, Some(ProviderAuthPhase::Cancelled), "round {round}");
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+}
+
+/// Review P2: an open sign-in neither keeps a runtime from shutting down nor survives its
+/// factory; dropping the factory cancels the flow and ends its stream.
+#[test]
+fn an_open_sign_in_does_not_hold_up_shutdown() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let factory = factory();
+        let (target, home) = target("shutdown");
+        let (tx, mut updates) = mpsc::unbounded_channel();
+        runtime.block_on(async {
+            factory.auth_start(&target, None, tx).await.unwrap();
+            let mut seen = Vec::new();
+            until(&mut updates, &mut seen, |s| {
+                output(s).is_some_and(|o| o.contains("Paste code"))
+            })
+            .await;
+        });
+        drop(runtime);
+        drop(factory);
+        let mut last = None;
+        while let Ok(state) = updates.try_recv() {
+            last = Some(state.phase);
+        }
+        let _ = std::fs::remove_dir_all(home);
+        let _ = done_tx.send(last);
+    });
+    let last = done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the runtime and factory went away within 10 s");
+    assert_eq!(last, Some(ProviderAuthPhase::Cancelled));
+}
