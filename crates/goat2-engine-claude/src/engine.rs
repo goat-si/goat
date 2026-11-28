@@ -177,6 +177,9 @@ struct Turn {
     blocks: HashMap<String, u32>,
     /// Message id of the message being streamed.
     stream_message: Option<String>,
+    /// Claude's result, held while the answer to an interrupt of this turn is pending; that
+    /// answer decides whether the result is a completion or the interrupt.
+    held_for_interrupt: Option<Value>,
     saw_text: bool,
     auth_failure: bool,
     usage_limit: bool,
@@ -446,6 +449,9 @@ impl Inner {
         model: &CompiledModel,
         permission_mode: PermissionMode,
     ) -> Result<(), String> {
+        if self.state.lock().map(|s| s.shutting_down).unwrap_or(true) {
+            return Err("Claude is shutting down".into());
+        }
         let (launch, folds, effective_mode) = build_launch(
             &self.launch,
             &LaunchRequest {
@@ -505,7 +511,31 @@ impl Inner {
                 }
             }
         });
-        *self.process.lock().await = Some(Process { child, generation });
+        {
+            // Checked under the process lock: either shutdown sees this process and ends it, or
+            // this sees the shutdown and starts nothing.
+            let mut slot = self.process.lock().await;
+            let admitted = match self.state.lock() {
+                Ok(mut state) if !state.shutting_down => {
+                    state.permission_mode = effective_mode;
+                    state.pinned_mode = folds.permission_mode;
+                    state.model = model.clone();
+                    state.exited = false;
+                    state.stopping = false;
+                    state.exit_hint = None;
+                    true
+                }
+                _ => false,
+            };
+            if !admitted {
+                if let Ok(mut writer) = self.writer.lock() {
+                    writer.take();
+                }
+                child.shutdown().await;
+                return Err("Claude is shutting down".into());
+            }
+            *slot = Some(Process { child, generation });
+        }
         let reader = Arc::clone(self);
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -517,14 +547,6 @@ impl Inner {
             }
             reader.on_eof(generation).await;
         });
-        if let Ok(mut state) = self.state.lock() {
-            state.permission_mode = effective_mode;
-            state.pinned_mode = folds.permission_mode;
-            state.model = model.clone();
-            state.exited = false;
-            state.stopping = false;
-            state.exit_hint = None;
-        }
 
         let mut append: Vec<String> = Vec::new();
         append.extend(self.append_system_prompt.clone());
@@ -580,17 +602,21 @@ impl Inner {
         match frame {
             Inbound::ControlResponse { request_id, result } => {
                 // A refused interrupt is undone before any later frame is read, so the turn's own
-                // result decides its outcome.
+                // result decides its outcome; a result held for this answer is applied now.
                 if let Ok(mut state) = self.state.lock()
                     && let Some((id, turn_id)) = state.interrupt_request.take()
                 {
                     if id != request_id {
                         state.interrupt_request = Some((id, turn_id));
-                    } else if result.is_err()
-                        && let Some(turn) = state.turn.as_mut()
+                    } else if let Some(turn) = state.turn.as_mut()
                         && turn.id == turn_id
                     {
-                        turn.interrupted = false;
+                        if result.is_err() {
+                            turn.interrupted = false;
+                        }
+                        if let Some(held) = turn.held_for_interrupt.take() {
+                            self.on_result(&mut state, &held);
+                        }
                     }
                 }
                 let waiter = self
@@ -880,7 +906,19 @@ impl Inner {
             "user" if protocol::parent_tool_use_id(message).is_none() => {
                 self.on_user(state, message)
             }
-            "result" => self.on_result(state, message),
+            "result" => {
+                let awaiting_interrupt = matches!(
+                    (&state.interrupt_request, state.turn.as_ref()),
+                    (Some((_, stopping)), Some(turn)) if *stopping == turn.id
+                );
+                if awaiting_interrupt {
+                    if let Some(turn) = state.turn.as_mut() {
+                        turn.held_for_interrupt = Some(message.clone());
+                    }
+                } else {
+                    self.on_result(state, message)
+                }
+            }
             "rate_limit_event" => {
                 let rejected = message
                     .get("rate_limit_info")
@@ -924,7 +962,9 @@ impl Inner {
         };
         match phase {
             "queued" => self.mark_steer(state, uuid, SteerPhase::Queued),
-            "started" | "completed" => self.mark_steer(state, uuid, SteerPhase::Consumed),
+            // v1 markSteersAccepted (ClaudeAdapterV2.ts:5241-5249): completed alone is no proof,
+            // Claude also completes prompts it never started.
+            "started" => self.mark_steer(state, uuid, SteerPhase::Consumed),
             "cancelled" | "discarded" | "refused" => {
                 // v1 dropUnreadSteer: the steer never reached Claude.
                 let dropped = state
@@ -1762,14 +1802,8 @@ impl Inner {
             || model.settings != current_model.settings;
         if relaunch {
             // v1 reopens the query when its policy or model identity changes.
-            if let Ok(mut state) = self.state.lock() {
-                state.shutting_down = true;
-            }
             self.generation.fetch_add(1, Ordering::SeqCst);
             self.kill_process().await;
-            if let Ok(mut state) = self.state.lock() {
-                state.shutting_down = false;
-            }
             let identity = SessionIdentity::Resume(session_id);
             if let Err(error) = self.spawn(&identity, &model, mode).await {
                 self.kill_process().await;
@@ -2008,7 +2042,7 @@ impl EngineSession for ClaudeSession {
                     reason: "Claude session state is unavailable".into(),
                 };
             };
-            if state.exited {
+            if state.exited || state.shutting_down {
                 return TurnStartResult::Declined {
                     reason: "Claude is not running".into(),
                 };
@@ -2048,6 +2082,7 @@ impl EngineSession for ClaudeSession {
                 held_text: None,
                 blocks: HashMap::new(),
                 stream_message: None,
+                held_for_interrupt: None,
                 saw_text: false,
                 auth_failure: false,
                 usage_limit: false,
@@ -2198,6 +2233,15 @@ impl EngineSession for ClaudeSession {
             .await;
         if let Ok(mut state) = inner.state.lock() {
             state.interrupt_request = None;
+            // No answer came (timeout or exit): a held result settles as the interrupt.
+            let held = state
+                .turn
+                .as_mut()
+                .filter(|turn| turn.id == turn_id)
+                .and_then(|turn| turn.held_for_interrupt.take());
+            if let Some(held) = held {
+                inner.on_result(&mut state, &held);
+            }
         }
         if let Err(error) = answer {
             let exited = inner.state.lock().map(|s| s.exited).unwrap_or(true);
