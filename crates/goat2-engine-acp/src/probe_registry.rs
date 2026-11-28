@@ -14,10 +14,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use goat2_contracts::{
-    ModelSelection, ProviderInstanceId, ProviderOptionDescriptor, ProviderProbeResult,
-    ServerProviderAuthStatus, ServerProviderState,
+    ProviderOptionDescriptor, ProviderProbeResult, ServerProviderAuthStatus, ServerProviderState,
 };
-use goat2_engine_api::{EngineSession, LaunchSpec, TurnSettings};
+use goat2_engine_api::LaunchSpec;
 use serde_json::{Value, json};
 
 use super::minimax::{MiniMaxCodeQuotaReader, QuotaReading};
@@ -33,8 +32,9 @@ use super::support::{
 };
 use super::{AcpProbeFailure, ProbeConfig, checked_at_now, effective_command, probe_spec};
 use crate::engine::{AcpEngineFactory, AcpSession};
+use crate::flavor::ConfigWrite;
 use crate::registry::index::{RegistrySettings, Source};
-use crate::wire::find_model_config_option;
+use crate::wire::{config_option_id, find_model_config_option};
 
 /// v1 probe.ts:66,70-72; probeHelpers.ts:10.
 const MAX_AUTH_METHODS: usize = 32;
@@ -573,7 +573,10 @@ pub fn isolate_deepseek_probe_history(
 
 /// v1 `discoverAcpRegistryModelOptions` (modelDiscovery.ts:33-91): open each requested model once
 /// in the probe session to read the options the agent reports only for its current model, then
-/// select the original model again.
+/// select the original model again. As in v1, the model option is written directly with the
+/// agent's own values (`runtime.setConfigOption(modelOption.id, modelId)`), with none of the
+/// model-selection rules that leave `default` alone, and the original is always resent
+/// (`resendCurrentValue: true`): a switch that timed out may still land (round 7 part 8a.1).
 pub async fn discover_model_options(
     session: &AcpSession,
     original: Option<&str>,
@@ -590,15 +593,10 @@ pub async fn discover_model_options(
         .into_iter()
         .map(|c| c.value)
         .collect();
-    let mut attempted: HashSet<String> = HashSet::from([original.to_owned()]);
-    let select = |model: &str| TurnSettings {
-        model_selection: ModelSelection {
-            instance_id: ProviderInstanceId::new("probe"),
-            model: model.to_owned(),
-            options: None,
-        },
-        runtime_mode: goat2_contracts::RuntimeMode::ApprovalRequired,
+    let Some(config_id) = config_option_id(model_option).map(str::to_owned) else {
+        return learned;
     };
+    let mut attempted: HashSet<String> = HashSet::from([original.to_owned()]);
     loop {
         let batch: Vec<String> = requested
             .iter()
@@ -613,7 +611,11 @@ pub async fn discover_model_options(
         let finished = tokio::time::timeout(MODEL_DISCOVERY_BATCH_TIMEOUT, async {
             for model in &batch {
                 // A model the agent refuses keeps no options; the rest still count.
-                if session.set_config(&select(model)).await.is_err() {
+                if session
+                    .set_config_option(&ConfigWrite::new(config_id.clone(), model.clone()))
+                    .await
+                    .is_err()
+                {
                     continue;
                 }
                 let setup = session.session_setup();
@@ -637,7 +639,8 @@ pub async fn discover_model_options(
     if attempted.len() > 1 {
         let _ = tokio::time::timeout(
             MODEL_DISCOVERY_RESTORE_TIMEOUT,
-            session.set_config(&select(original)),
+            session
+                .set_config_option(&ConfigWrite::new(config_id.clone(), original).resend_current()),
         )
         .await;
     }
@@ -967,7 +970,7 @@ pub async fn check_registry_provider_status(
                                 .map(|(name, value)| super::minimax::InstanceVariable {
                                     name: name.clone(),
                                     value: value.clone(),
-                                    sensitive: false,
+                                    sensitive: config.sensitive_env.contains(name),
                                 })
                                 .collect::<Vec<_>>()
                         })

@@ -505,6 +505,12 @@ async fn minimax_quota_is_read_only_under_v1_conditions() {
     );
     let off = check_registry_provider_status(&factory, &status(false), Some(&reader)).await;
     assert_eq!(off.usage, None);
+    // Round 7 part 8a.2 (v1 minimaxCodeUsageEnrichment.ts:7-35): a profile directory the instance
+    // marks sensitive is not an explicit profile.
+    let mut sensitive = status(true);
+    sensitive.sensitive_env = vec!["MINIMAX_DATA_DIR".into()];
+    let refused = check_registry_provider_status(&factory, &sensitive, Some(&reader)).await;
+    assert_eq!(refused.usage, None);
     assert_eq!(http.0.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
@@ -573,6 +579,68 @@ async fn model_discovery_reads_per_model_options() {
         .map(|m| m["params"]["value"].as_str().unwrap_or_default().to_owned())
         .collect();
     assert_eq!(writes, ["mock-fast", "mock-default"]);
+}
+
+/// The model config writes a discovery probe sent, in order.
+fn model_writes(log: &Path) -> Vec<String> {
+    logged_messages(log)
+        .iter()
+        .filter(|m| m.get("method") == Some(&json!("session/set_config_option")))
+        .map(|m| m["params"]["value"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// Round 7 part 8a.1: v1 modelDiscovery.ts writes the model option with the agent's own value and
+/// always restores the original with `resendCurrentValue`, so an original whose id is `default`
+/// (Claude Code's list) is selected again.
+#[tokio::test]
+async fn model_discovery_restores_an_original_named_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let factory = registry_factory(
+        MOCK,
+        &[],
+        &[
+            ("GOAT_ACP_MODEL_VALUES", "default,opus"),
+            ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
+        ],
+        false,
+    );
+    probe(
+        factory,
+        ProbeConfig {
+            discover_models: vec!["opus".into()],
+            ..config(dir.path())
+        },
+    )
+    .await;
+    assert_eq!(model_writes(&log), ["opus", "default"]);
+}
+
+/// Round 7 part 8a.1: a switch the client never saw land (v1: one that timed out may still land)
+/// still gets the original resent, though the client believes it is current.
+#[tokio::test]
+async fn model_discovery_resends_the_original_after_an_unseen_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let factory = registry_factory(
+        MOCK,
+        &[],
+        &[
+            ("GOAT_ACP_SET_CONFIG_BARE", "1"),
+            ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
+        ],
+        false,
+    );
+    probe(
+        factory,
+        ProbeConfig {
+            discover_models: vec!["mock-fast".into()],
+            ..config(dir.path())
+        },
+    )
+    .await;
+    assert_eq!(model_writes(&log), ["mock-fast", "mock-default"]);
 }
 
 // ---- Grok -----------------------------------------------------------------------------------

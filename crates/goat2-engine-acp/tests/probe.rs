@@ -198,13 +198,15 @@ async fn probe_skips_eager_signin() {
 
 /// The advertisement wait shares the probe deadline (v1 probe.ts:535-569 runs the session start
 /// and both waits under one timeout; final review finding 20). Without a model option the probe
-/// would wait MODEL_ADVERTISEMENT_GRACE; the shorter deadline ends it first.
+/// would wait out the model grace, here an hour (round 7 part 8a.3: no race between a real
+/// deadline and the 5 s grace); only the deadline can end it, whichever phase it falls in.
 #[tokio::test]
 async fn advertisement_wait_counts_against_the_probe_deadline() {
     let deadline = std::time::Duration::from_secs(2);
-    assert!(goat2_engine_acp::probe::MODEL_ADVERTISEMENT_GRACE > deadline);
+    let hour = std::time::Duration::from_secs(3600);
     let dir = tempfile::tempdir().unwrap();
     match factory(&[("GOAT_ACP_NO_MODEL_OPTION", "1")])
+        .with_advertisement_graces(hour, hour)
         .open_probe_within(spec(dir.path()), deadline)
         .await
     {

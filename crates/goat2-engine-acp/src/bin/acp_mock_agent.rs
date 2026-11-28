@@ -82,6 +82,10 @@
 //! - `GOAT_ACP_LOGOUT=1`: advertise `agentCapabilities.auth.logout`.
 //! - `GOAT_ACP_SESSION_MODELS=<json>`: `models` of the `session/new` answer (ACP session models).
 //! - `GOAT_ACP_NO_MODEL_OPTION=1`: no model select among the config options.
+//! - `GOAT_ACP_MODEL_VALUES=<a,b,..>` (GOAT 2): the model select's values, the first current at
+//!   start (default `mock-default,mock-fast`).
+//! - `GOAT_ACP_SET_CONFIG_BARE=1` (GOAT 2): `session/set_config_option` applies the value and
+//!   answers `{}` without the options, as a switch that landed without the client seeing it.
 //! - `GOAT_ACP_THOUGHT_LEVEL=1`: a `thought_level` option whose levels depend on the current model.
 //! - `GOAT_ACP_LATE_MODELS=1`: answer `session/new` without config options, then send them in a
 //!   `config_option_update`.
@@ -123,6 +127,22 @@ mod antigravity_fx;
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// `GOAT_ACP_MODEL_VALUES` (GOAT 2), never empty.
+fn model_values() -> Vec<String> {
+    let values: Vec<String> = env("GOAT_ACP_MODEL_VALUES")
+        .unwrap_or_else(|| "mock-default,mock-fast".into())
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if values.is_empty() {
+        vec!["mock-default".into()]
+    } else {
+        values
+    }
 }
 
 fn flag(name: &str) -> bool {
@@ -191,10 +211,18 @@ impl Agent {
         let model = self.model.lock().unwrap().clone();
         let mut options = Vec::new();
         if !flag("GOAT_ACP_NO_MODEL_OPTION") {
+            let values: Vec<Value> = model_values()
+                .iter()
+                .map(|value| match value.as_str() {
+                    "mock-default" => json!({"value": value, "name": "Mock Default"}),
+                    "mock-fast" => json!({"value": value, "name": "Mock Fast"}),
+                    _ => json!({"value": value, "name": value}),
+                })
+                .collect();
             options.push(json!({
                 "id": "model", "name": "Model", "category": "model", "type": "select",
                 "currentValue": model,
-                "options": [{"value": "mock-default", "name": "Mock Default"}, {"value": "mock-fast", "name": "Mock Fast"}]
+                "options": values
             }));
         }
         if flag("GOAT_ACP_THOUGHT_LEVEL") {
@@ -330,7 +358,15 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                     .unwrap_or(500_000);
                 let effort =
                     env("GOAT_ACP_INITIAL_GROK_REASONING_EFFORT").unwrap_or_else(|| "high".into());
-                result["models"] = json!({"currentModelId": model, "availableModels": [
+                // v1 modelState (acp-mock-agent.ts:451-461) keeps a chosen Grok model current
+                // (round 7 part 8b.3).
+                let chosen = agent.model.lock().unwrap().clone();
+                let current = if chosen == model || chosen == "grok-mock-alt" {
+                    chosen
+                } else {
+                    model.clone()
+                };
+                result["models"] = json!({"currentModelId": current, "availableModels": [
                     {"modelId": model, "name": "Grok 4.6", "_meta": {
                         "totalContextTokens": context, "contextWindows": [256000, 500000],
                         "supportsReasoningEffort": true, "reasoningEffort": effort,
@@ -378,7 +414,11 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
             {
                 *agent.model.lock().unwrap() = value.to_owned();
             }
-            agent.respond(&id, json!({"configOptions": agent.model_options()}));
+            if flag("GOAT_ACP_SET_CONFIG_BARE") {
+                agent.respond(&id, json!({}));
+            } else {
+                agent.respond(&id, json!({"configOptions": agent.model_options()}));
+            }
         }
         "session/set_model" => {
             if flag("GOAT_ACP_REJECT_SET_MODEL_META") && params.get("_meta").is_some() {
@@ -965,7 +1005,7 @@ fn main() {
         authenticated: AtomicBool::new(false),
         cancelled: Mutex::new(HashMap::new()),
         running: Mutex::new(HashMap::new()),
-        model: Mutex::new("mock-default".into()),
+        model: Mutex::new(model_values().remove(0)),
         mode: Mutex::new("ask".into()),
     });
     if let Some(line) = env("GOAT_ACP_STDERR_LINE") {

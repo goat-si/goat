@@ -119,6 +119,9 @@ pub struct AcpEngineFactory {
     pub(crate) probe_config: Arc<crate::probe::ProbeConfig>,
     /// How long a deferred turn waits after its background work ended before it finishes.
     deferred_finalize: Duration,
+    /// How long a probe waits for the model catalog and the command list (v1 probe.ts:500-516;
+    /// [crate::probe::MODEL_ADVERTISEMENT_GRACE], [crate::probe::COMMAND_ADVERTISEMENT_GRACE]).
+    pub(crate) advertisement_graces: (Duration, Duration),
 }
 
 impl AcpEngineFactory {
@@ -132,12 +135,23 @@ impl AcpEngineFactory {
             probe: false,
             probe_config: Arc::default(),
             deferred_finalize: DEFERRED_FINALIZE_DEBOUNCE,
+            advertisement_graces: (
+                crate::probe::MODEL_ADVERTISEMENT_GRACE,
+                crate::probe::COMMAND_ADVERTISEMENT_GRACE,
+            ),
         }
     }
 
     /// Use this debounce instead of [DEFERRED_FINALIZE_DEBOUNCE] (tests).
     pub fn with_deferred_finalize(mut self, debounce: Duration) -> Self {
         self.deferred_finalize = debounce;
+        self
+    }
+
+    /// Use these advertisement waits instead of v1's (tests: a wait far longer than the probe
+    /// deadline shows the deadline bounds it, round 7 part 8a.3).
+    pub fn with_advertisement_graces(mut self, models: Duration, commands: Duration) -> Self {
+        self.advertisement_graces = (models, commands);
         self
     }
 
@@ -2016,6 +2030,16 @@ impl AcpSession {
             until(&self.shared, models_grace, has_models),
             until(&self.shared, commands_grace, has_commands)
         );
+    }
+
+    /// v1 `AcpSessionRuntime.setConfigOption` (AcpSessionRuntime.ts:1023-1075): one config write
+    /// as given, without the model-selection rules of [EngineSession::set_config] (model discovery
+    /// writes the agent's own values, `default` included, modelDiscovery.ts:33-91).
+    pub async fn set_config_option(&self, write: &ConfigWrite) -> Result<(), EngineError> {
+        self.shared
+            .write_config(write)
+            .await
+            .map_err(EngineError::Unavailable)
     }
 
     /// `session/delete` when the agent advertises it (v1 probe.ts:493-498); otherwise nothing.

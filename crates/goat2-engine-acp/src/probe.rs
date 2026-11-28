@@ -86,6 +86,11 @@ pub struct ProbeConfig {
     pub discover_models: Vec<String>,
     /// Antigravity credential settings (v1 `AntigravityAuthConfig`, without the key itself).
     pub antigravity: antigravity::AntigravityProbeSettings,
+    /// Names of launch variables the instance marks sensitive (v1 environment variables'
+    /// `sensitive`, `secret` or `valueRedacted`): the MiniMax quota gate refuses them as a
+    /// profile (minimaxCodeUsageEnrichment.ts:7-35, round 7 part 8a.2). The host sets it from the
+    /// instance settings.
+    pub sensitive_env: Vec<String>,
 }
 
 impl Default for ProbeConfig {
@@ -99,6 +104,7 @@ impl Default for ProbeConfig {
             registry_version: None,
             discover_models: Vec::new(),
             antigravity: antigravity::AntigravityProbeSettings::default(),
+            sensitive_env: Vec::new(),
         }
     }
 }
@@ -205,11 +211,12 @@ impl crate::engine::AcpEngineFactory {
             session: started.session,
             events: started.events,
         };
+        let (models_grace, commands_grace) = self.advertisement_graces;
         let advertised = tokio::time::timeout_at(
             deadline,
             probe
                 .session
-                .wait_for_advertisements(MODEL_ADVERTISEMENT_GRACE, COMMAND_ADVERTISEMENT_GRACE),
+                .wait_for_advertisements(models_grace, commands_grace),
         )
         .await;
         if advertised.is_err() {
