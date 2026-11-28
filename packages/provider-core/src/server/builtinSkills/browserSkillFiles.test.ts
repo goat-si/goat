@@ -16,6 +16,7 @@ describe("browser skill files", () => {
     const guide = files[BROWSER_SKILL_FILE]!;
     expect(guide).toMatch(/^---\nname: browser\ndescription: .+\n---\n/);
     expect(guide).toContain(BROWSER_SKILL_CORE);
+    expect(BROWSER_SKILL_CORE).toContain("occluded");
     expect(guide).toContain("references/sites.md");
     expect(Buffer.byteLength(guide, "utf8")).toBeLessThan(12_000);
     expect(files["references/sites.md"]).toContain("environment-port");

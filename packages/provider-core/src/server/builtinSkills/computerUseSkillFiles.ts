@@ -44,13 +44,13 @@ const COMPUTER_USE_APP_NOTES: Readonly<
     Preview: [
       "Preview: toolbar zoom buttons and menu shortcuts work in the background (command+plus, command+minus, command+9 fits the window). Text in a PDF page is drawn, not in the tree; use the screenshot to read it.",
     ].join("\n"),
-    Safari: [
-      "Safari: for web pages use GOAT's browser (screen.tab()); when the person wants Safari itself, open a URL with File > Open Location (`invoke_menu`), type it and press Return.",
-    ].join("\n"),
+    Safari: computerUseBrowserNote("Safari"),
     "Google Chrome": computerUseBrowserNote("Google Chrome"),
     "Brave Browser": computerUseBrowserNote("Brave Browser"),
     "Microsoft Edge": computerUseBrowserNote("Microsoft Edge"),
     Arc: computerUseBrowserNote("Arc"),
+    Firefox: computerUseBrowserNote("Firefox"),
+    Chromium: computerUseBrowserNote("Chromium"),
   },
 };
 
@@ -66,6 +66,8 @@ const COMPUTER_USE_APP_BUNDLE_IDS: Readonly<Record<string, string>> = {
   "com.brave.browser": "Brave Browser",
   "com.microsoft.edgemac": "Microsoft Edge",
   "company.thebrowser.browser": "Arc",
+  "org.mozilla.firefox": "Firefox",
+  "org.chromium.chromium": "Chromium",
 };
 
 const screenCodeBrowserNote = (name: string) =>
@@ -90,12 +92,13 @@ const SCREEN_CODE_APP_NOTES: Readonly<
       'TextEdit: a new document is saved to iCloud as soon as it exists. Close your own document with `app.press("cmd+w")`, click the save sheet Delete button (`{ id: "DontSaveButton" }`), then check the folder.',
     Preview:
       'Preview: zoom shortcuts work in the background: command-plus, command-minus, and `app.press("cmd+9")` to fit. PDF text is drawn, not in the tree; use `app.screenshot()` to read it.',
-    Safari:
-      'Safari: for web pages use GOAT\'s browser (screen.tab()); when the person wants Safari itself, use File > Open Location (`app.menu(["File", "Open Location"])`), then type the URL and press Enter on its field (`app.press("Enter", field)`).',
+    Safari: screenCodeBrowserNote("Safari"),
     "Google Chrome": screenCodeBrowserNote("Google Chrome"),
     "Brave Browser": screenCodeBrowserNote("Brave Browser"),
     "Microsoft Edge": screenCodeBrowserNote("Microsoft Edge"),
     Arc: screenCodeBrowserNote("Arc"),
+    Firefox: screenCodeBrowserNote("Firefox"),
+    Chromium: screenCodeBrowserNote("Chromium"),
   },
 };
 

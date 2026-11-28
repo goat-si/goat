@@ -43,3 +43,19 @@ it("never promises nothing was sent for codes GOAT also raises after input went 
     expect(line, code).not.toMatch(/; nothing sent for (the|that) refus/);
   }
 });
+
+it("documents browser click refusal details, tab click modifiers, and windowless app behavior accurately", () => {
+  const files = screenCodeSkillFiles();
+  const errors = files["references/errors.md"] ?? "";
+  const guide = files["SKILL.md"] ?? "";
+  const unsupportedLine =
+    errors.split("\n").find((each) => each.startsWith("- `unsupported`")) ?? "";
+  expect(unsupportedLine).toContain("occluded_refused");
+  expect(unsupportedLine).toContain("special_element_refused");
+  expect(guide).toContain(
+    'App and tab clicks accept `{modifiers: ["cmd", "shift", "alt", "ctrl"]}`',
+  );
+  expect(guide).not.toContain("tabs refuse modifiers");
+  expect(guide).toContain("a running app with no window fails with `target_missing`");
+  expect(guide).not.toContain("launches a closed or windowless app");
+});
