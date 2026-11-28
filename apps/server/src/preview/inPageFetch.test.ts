@@ -459,8 +459,8 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     await expect(
       inPageFetch(redirectPage, control, { url: "/to-file" }, undefined, validateUrl),
     ).rejects.toThrow(/Only http and https|Refused redirect without a valid Location header/);
-    const backgroundFetch = redirectPage.evaluate(() =>
-      fetch("/race-redirect", { redirect: "manual" }).then((res) => res.type),
+    const backgroundFetch = redirectPage.evaluate(
+      "fetch('/race-redirect', { redirect: 'manual' }).then((res) => res.type)",
     );
     await firstRaceArrived.promise;
     await expect(
