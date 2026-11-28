@@ -1,9 +1,9 @@
 // Synthetic OpenCode 2 HTTP + SSE double; the pinned Promise SDK decodes every frame.
 import type { OpenCode2FakeModule } from "../../src/engines/opencode2/runtime.ts";
 
-export const startFakeServer: OpenCode2FakeModule["startFakeServer"] = async ({ password }) => {
+export const startFakeServer: OpenCode2FakeModule["startFakeServer"] = async ({ password, launch }) => {
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined; let sequence = 0; let closed = false;
-  const version = process.env.GOAT2_ENGINE_HELPER_FAKE_OPENCODE2_VERSION || "2.0.28";
+  const version = launch?.env?.GOAT2_ENGINE_HELPER_FAKE_OPENCODE2_VERSION || process.env.GOAT2_ENGINE_HELPER_FAKE_OPENCODE2_VERSION || "2.0.28";
   const send = (type: string, data: Record<string, unknown>, durable = true) => {
     const n = ++sequence; const frame = { id: `event-${n}`, created: n, type, data, ...(durable ? { durable: { aggregateID: "session-v2", seq: n, version: type === "session.tool.success" ? 2 : 1 } } : {}) };
     if (!closed) stream?.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));

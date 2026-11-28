@@ -4,8 +4,8 @@ use goat2_contracts::{
     ProviderInstanceId, RuntimeMode, ThreadId, TurnItemBody,
 };
 use goat2_engine_api::{
-    EngineError, EngineEvent, EngineFactory, EngineInput, LaunchSpec, McpEndpoint, SessionSpec,
-    TurnOutcome, TurnSettings, TurnStartResult,
+    EngineError, EngineEvent, EngineFactory, EngineInput, LaunchSpec, McpEndpoint, ProviderTarget,
+    SessionSpec, TurnOutcome, TurnSettings, TurnStartResult,
 };
 use goat2_engine_sdk::{HelperFactory, HelperLaunch};
 use std::{path::PathBuf, time::Duration};
@@ -27,7 +27,12 @@ fn spec(model: &ModelSelection, launch: Option<LaunchSpec>) -> SessionSpec {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch,
+        instance: launch.map(|launch| ProviderTarget {
+            instance_id: model.instance_id.clone(),
+            launch: Some(launch),
+            home: None,
+            shared_home: None,
+        }),
     }
 }
 
@@ -148,4 +153,51 @@ async fn v2_probe_capabilities_and_turn_cross_the_helper() {
     ));
     assert_eq!(factory.capabilities(), expected);
     v1.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn instance_probe_uses_its_launch_environment() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let factory = HelperFactory::new(
+        EngineDriver::Opencode,
+        HelperLaunch::new("node", root.join("apps/engine-helper/src/main.ts")),
+    )
+    .expect("OpenCode driver");
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::from("opencode-instance"),
+        launch: Some(LaunchSpec {
+            env: [
+                (
+                    "GOAT2_ENGINE_HELPER_SDK_OPENCODE2".into(),
+                    root.join("apps/engine-helper/test/fakes/opencode2-helper.ts")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                (
+                    "GOAT2_ENGINE_HELPER_FAKE_OPENCODE2_VERSION".into(),
+                    "2.2.5".into(),
+                ),
+            ]
+            .into(),
+            ..LaunchSpec::default()
+        }),
+        home: None,
+        shared_home: None,
+    };
+    let probe = factory
+        .probe_instance(&target)
+        .await
+        .expect("instance probe");
+    assert_eq!(probe.version.as_deref(), Some("2.2.5"));
+    assert!(probe.installed);
+    assert!(
+        factory
+            .capabilities()
+            .sessions
+            .supports_runtime_mode_switch_in_session
+    );
+    assert_eq!(
+        factory.capabilities().turns.supports_native_goals,
+        Some(true)
+    );
 }
