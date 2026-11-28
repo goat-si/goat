@@ -691,7 +691,8 @@ test("each 2.x todowrite call publishes one uniquely keyed snapshot", async () =
     const items = events.flatMap((event) => event.type === "item_completed" && event.item.type === "todo_list" ? [event.item] : []);
     assert.deepEqual(items.map((entry) => entry.id), ["todo-a", "todo-b"]);
     assert.deepEqual(items.map((entry) => entry.steps[0]?.status), ["running", "completed"]);
-    assert.equal(new Set(items.map((entry) => entry.id)).size, items.length);
+    const allIds = events.flatMap((event) => event.type === "item_completed" ? [event.item.id] : []);
+    assert.equal(new Set(allIds).size, allIds.length);
   } finally { await session.shutdown(); }
 });
 
@@ -913,4 +914,22 @@ test("an external native prompt queued during an owned turn fails visibly", asyn
     assert.deepEqual(failures, ["OpenCode 2 started unowned work outside a GOAT turn"]);
     assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
   } finally { await session.shutdown(); }
+});
+
+test("a terminal queued before stale request cancellation cannot clear the resume guard", async () => {
+  for (const kind of ["form", "permission"] as const) {
+    const fake = scriptedRuntime(); const events: EngineEvent[] = [];
+    fake.suppressCancellationEvents();
+    fake.emit("session.execution.succeeded", { sessionID: "session-v2" });
+    if (kind === "form") fake.setForms("session-v2", [{ id: "stale", sessionID: "session-v2", title: "Q", fields: [{ key: "answer", type: "string" }] }]);
+    else fake.setRequests([{ id: "stale", sessionID: "session-v2", action: "shell", resources: ["*"] }]);
+    const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, resume: "session-v2" }, hostFor(events));
+    try {
+      await tick(); assert.equal((await session.startTurn(input("i", "hello"), settings)).status, "declined", kind);
+      fake.emit(kind === "form" ? "form.cancelled" : "permission.replied", kind === "form" ? { sessionID: session.engineRef, id: "stale" } : { sessionID: session.engineRef, requestID: "stale", reply: "reject" });
+      fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+      assert.equal((await session.startTurn(input("i", "hello"), settings)).status, "accepted");
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+    } finally { await session.shutdown(); }
+  }
 });

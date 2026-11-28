@@ -81,6 +81,7 @@ export class OpenCode2Session implements EngineSession {
   private recovering = false;
   private fatalReason: string | undefined;
   private awaitingCancelledForm = false;
+  private readonly cancelledRequestIds = new Set<string>();
   private cancelledFormTimer: AbortController | undefined;
   private closing: Promise<void> | undefined;
   private constructor(runtime: OpenCode2Runtime, params: InitializeParams, host: EngineHost, id: string, model: ModelRef | undefined, catalog: ModelInfo[], wait: OpenCode2Delay) {
@@ -104,17 +105,18 @@ export class OpenCode2Session implements EngineSession {
       const native = await bounded(15_000, undefined, (signal) => params.resume ? client.session.get({ sessionID: params.resume }, { signal }) : client.session.create({ location: { directory: params.cwd }, model: selected, permissions }, { signal }));
       if (!native?.id) throw new Error("session missing");
       let cancelledRequest: "form" | "permission" | undefined;
+      const cancelledRequestIds: string[] = [];
       if (params.resume) {
         const active = await bounded(5_000, undefined, (signal) => client.session.active({ signal }));
         if (native.id in active) throw new HelperError("start_failed", "OpenCode session has unowned active work");
         const pending = await bounded(5_000, undefined, (signal) => client.permission.request.list({ location: { directory: params.cwd } }, { signal }));
-        for (const request of pending.data.filter((entry) => entry.sessionID === native.id)) { await bounded(5_000, undefined, (signal) => client.permission.reply({ sessionID: native.id, requestID: request.id, decision: "reject" }, { signal })); cancelledRequest = "permission"; }
-        for (const form of await bounded(5_000, undefined, (signal) => client.session.form.list({ sessionID: native.id }, { signal }))) { await bounded(5_000, undefined, (signal) => client.session.form.cancel({ sessionID: native.id, formID: form.id }, { signal })); cancelledRequest = "form"; }
+        for (const request of pending.data.filter((entry) => entry.sessionID === native.id)) { await bounded(5_000, undefined, (signal) => client.permission.reply({ sessionID: native.id, requestID: request.id, decision: "reject" }, { signal })); cancelledRequest = "permission"; cancelledRequestIds.push(request.id); }
+        for (const form of await bounded(5_000, undefined, (signal) => client.session.form.list({ sessionID: native.id }, { signal }))) { await bounded(5_000, undefined, (signal) => client.session.form.cancel({ sessionID: native.id, formID: form.id }, { signal })); cancelledRequest = "form"; cancelledRequestIds.push(form.id); }
         await bounded(5_000, undefined, (signal) => client.session.update({ sessionID: native.id, permissions }, { signal }));
         if (native.location?.directory && native.location.directory !== params.cwd) await bounded(5_000, undefined, (signal) => client.session.move({ sessionID: native.id, directory: params.cwd }, { signal }));
       }
       const result = new OpenCode2Session(runtime, params, host, native.id, native.model ?? selected, catalog, wait);
-      if (cancelledRequest) result.waitForCancelledForm(cancelledRequest);
+      if (cancelledRequest) result.waitForCancelledForm(cancelledRequest, cancelledRequestIds);
       void runtime.failure.then((error) => { if (error && !result.closed) result.broken("OpenCode 2 server exited"); });
       void result.consume();
       return result;
@@ -274,8 +276,9 @@ export class OpenCode2Session implements EngineSession {
     void this.closeRuntime().catch(() => this.host.log("warn", "OpenCode 2 runtime cleanup failed"));
   }
   private closeRuntime() { return this.closing ??= bounded(10_000, undefined, () => this.runtime.close()).catch(() => { throw new HelperError("transport", "OpenCode 2 runtime cleanup failed"); }); }
-  private waitForCancelledForm(kind: "form" | "permission" = "form") {
+  private waitForCancelledForm(kind: "form" | "permission" = "form", ids: ReadonlyArray<string> = []) {
     this.awaitingCancelledForm = true;
+    for (const id of ids) this.cancelledRequestIds.add(id);
     this.cancelledFormTimer?.abort();
     const controller = new AbortController(); this.cancelledFormTimer = controller;
     const stop = () => controller.abort(); this.shutdownSignal.signal.addEventListener("abort", stop, { once: true });
@@ -331,7 +334,14 @@ export class OpenCode2Session implements EngineSession {
       if (event.type === "session.execution.started") this.runningChildren.add(sessionID);
       else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") this.runningChildren.delete(sessionID);
     }
-    if (sessionID === this.engineRef && this.awaitingCancelledForm && (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed")) { this.awaitingCancelledForm = false; this.cancelledFormTimer?.abort(); return; }
+    if (sessionID === this.engineRef && this.awaitingCancelledForm) {
+      if (event.type === "form.cancelled") this.cancelledRequestIds.delete(event.data.id);
+      else if (event.type === "permission.replied" && event.data.reply === "reject") this.cancelledRequestIds.delete(event.data.requestID);
+      if (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") {
+        if (!this.cancelledRequestIds.size) { this.awaitingCancelledForm = false; this.cancelledFormTimer?.abort(); }
+        return;
+      }
+    }
     const turn = this.active;
     if (!turn) {
       if (event.type === "session.execution.started" || event.type === "permission.asked" || event.type === "form.created" || (event.type === "session.inbox.enqueued" && event.data.item.type === "user")) this.broken("OpenCode 2 started unowned work outside a GOAT turn");
@@ -425,7 +435,7 @@ export class OpenCode2Session implements EngineSession {
     if ("unsupported" in mapped) {
       try { await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal })); }
       catch { this.broken("OpenCode 2 unsupported form could not be cancelled"); return; }
-      if (form.sessionID === this.engineRef) this.waitForCancelledForm();
+      if (form.sessionID === this.engineRef) this.waitForCancelledForm("form", [form.id]);
       this.finish(turn, { type: "failed", reason: `OpenCode asked for ${mapped.unsupported}, which cannot be shown` }); return;
     }
     this.requests.set(form.id, { type: "form", value: form });
