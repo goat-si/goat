@@ -1692,3 +1692,54 @@ async fn a_started_subagent_task_blocks_a_reopen_until_it_finishes() {
     assert_eq!(run.starts().len(), 2);
     handle.session.shutdown().await;
 }
+
+/// Final review 9 finding 1 (lane C contract: Completed = read, Cancelled = left unread): on a CLI
+/// without `command_lifecycle`, a steer Claude finished the turn without echoing or continuing
+/// with is Cancelled before TurnFinished, so the host requeues it.
+#[tokio::test]
+async fn an_unread_steer_on_a_cli_without_lifecycle_is_cancelled() {
+    let run = Run::new("wire/no_lifecycle_steer_unread.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    // system:init arrives first: the driver knows this CLI sends no lifecycle frames.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "Also this."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let updates = steer_updates(&events);
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert!(
+        matches!(updates[0].2, SteerStatus::Cancelled { .. }),
+        "{updates:?}"
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Final review 9 finding 2: a subagent whose notification arrives before its task_started is
+/// finished; the late start does not make it block a reopen.
+#[tokio::test]
+async fn a_subagent_finished_before_its_start_does_not_block_a_reopen() {
+    let run = Run::new("wire/subagent_finished_before_started.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    turn(
+        &handle,
+        "Spawn and stop.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    turn(&handle, "two", MODEL, RuntimeMode::FullAccess).await;
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(run.starts().len(), 2);
+    handle.session.shutdown().await;
+}
