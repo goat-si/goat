@@ -122,6 +122,29 @@ pub enum FlavorEvent {
     },
 }
 
+/// Builds the reply to an extension request from the person's answers (None: dismissed or
+/// cancelled).
+pub type ExtAnswer = Box<dyn FnOnce(Option<&Map<String, Value>>) -> Value + Send>;
+
+/// What the driver does with an agent-to-client extension request (v1 runtime `handleExtRequest`).
+pub enum ExtRequest {
+    /// Answer "method not found".
+    Unhandled,
+    /// Answer now.
+    Respond(Value),
+    /// Ask the person and keep the request open until they answer (xAI `ask_user_question`,
+    /// v1 grok `adapter.ts:200-230`). `answer` builds the reply.
+    AskUser {
+        native_id: String,
+        summary: String,
+        questions: Vec<goat2_contracts::UserInputQuestion>,
+        answer: ExtAnswer,
+    },
+    /// Record a proposed plan for the turn, then answer with `response` (xAI `exit_plan_mode`,
+    /// v1 grok `adapter.ts:171-197`).
+    CapturePlan { markdown: String, response: Value },
+}
+
 /// Client capabilities a flavor advertises in `initialize`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClientCaps {
@@ -217,6 +240,14 @@ pub trait AcpFlavor: Send + Sync + 'static {
     /// A request the shared client does not serve. None answers "method not found".
     fn ext_request(&self, _method: &str, _params: &Value) -> Option<Value> {
         None
+    }
+    /// A request the shared client does not serve, when the flavor needs more than an immediate
+    /// answer. The default answers through [Self::ext_request].
+    fn ext_request_action(&self, method: &str, params: &Value) -> ExtRequest {
+        match self.ext_request(method, params) {
+            Some(value) => ExtRequest::Respond(value),
+            None => ExtRequest::Unhandled,
+        }
     }
     /// `session/prompt._meta` for the prompt GOAT names `prompt_id` (xAI matches completions to it).
     fn prompt_meta(&self, _prompt_id: &str) -> Option<Map<String, Value>> {

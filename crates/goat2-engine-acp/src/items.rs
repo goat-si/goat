@@ -679,6 +679,26 @@ impl TurnProjector {
         out.push(self.completed(item));
     }
 
+    /// Record a proposed plan (v1 `captureProposedPlan`).
+    pub fn proposed_plan(&mut self, markdown: String, out: &mut Vec<EngineEvent>) {
+        self.close_segments(out);
+        let id = self.new_item_id("proposed-plan");
+        let plan_id = PlanId::new(id.as_str());
+        let item = self.item(
+            id,
+            None,
+            TurnItemStatus::Completed,
+            None,
+            None,
+            TurnItemBody::ProposedPlan {
+                plan_id,
+                markdown,
+                streaming: false,
+            },
+        );
+        out.push(self.completed(item));
+    }
+
     /// Close everything at the end of the prompt. Open tools take `open_tool_status`.
     pub fn finish(&mut self, open_tool_status: TurnItemStatus, out: &mut Vec<EngineEvent>) {
         self.close_segments(out);

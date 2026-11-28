@@ -45,7 +45,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
-use crate::flavor::{AcpFlavor, AuthPolicy, FlavorEvent, ModelWrite, ResumeMethod, StdoutLine};
+use crate::flavor::{
+    AcpFlavor, AuthPolicy, ExtAnswer, ExtRequest, FlavorEvent, ModelWrite, ResumeMethod, StdoutLine,
+};
 use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
@@ -152,6 +154,11 @@ enum Pending {
         form: Option<ElicitationForm>,
         /// Legacy `session/elicitation` methods answer with the response nested in `action`.
         nested: bool,
+    },
+    /// A flavor's extension request waiting for the person (see [ExtRequest::AskUser]).
+    ExtQuestion {
+        responder: ValueResponder,
+        answer: ExtAnswer,
     },
 }
 
@@ -403,14 +410,30 @@ impl Shared {
             "session/elicitation" | "_session/elicitation" => {
                 self.on_elicitation(params, responder, true)
             }
-            _ => match self.flavor.ext_request(method, &params) {
-                Some(result) => {
+            _ => match self.flavor.ext_request_action(method, &params) {
+                ExtRequest::Respond(result) => {
                     let _ = responder.respond(result);
                 }
-                None => {
+                ExtRequest::Unhandled => {
                     let _ = responder
                         .respond_with_error(agent_client_protocol::Error::method_not_found());
                 }
+                ExtRequest::CapturePlan { markdown, response } => {
+                    let mut out = Vec::new();
+                    if let Some(turn) = self.state.lock().expect("state").turn.as_mut() {
+                        turn.projector.proposed_plan(markdown, &mut out);
+                    }
+                    for event in out {
+                        emit(self, event);
+                    }
+                    let _ = responder.respond(response);
+                }
+                ExtRequest::AskUser {
+                    native_id,
+                    summary,
+                    questions,
+                    answer,
+                } => self.on_ext_question(native_id, summary, questions, answer, responder),
             },
         }
     }
@@ -534,6 +557,54 @@ impl Shared {
         }
     }
 
+    /// v1 `requestUserInput` for a flavor's extension request: open a question on the turn and keep
+    /// the agent's request until the person answers; outside a turn it is dismissed.
+    fn on_ext_question(
+        &self,
+        native_id: String,
+        summary: String,
+        questions: Vec<goat2_contracts::UserInputQuestion>,
+        answer: ExtAnswer,
+        responder: ValueResponder,
+    ) {
+        let mut out = Vec::new();
+        {
+            let mut state = self.state.lock().expect("state");
+            let Some(turn_id) = state.turn.as_ref().map(|t| t.turn_id.clone()) else {
+                drop(state);
+                let _ = responder.respond(answer(None));
+                return;
+            };
+            if let Some(turn) = state.turn.as_mut() {
+                turn.projector.close_segments(&mut out);
+            }
+            let key = format!("question:{native_id}");
+            let item = self.request_item(
+                &mut state,
+                &turn_id,
+                &key,
+                TurnItemBody::UserInputRequest {
+                    request_id: RequestId::new(key.as_str()),
+                    questions,
+                },
+            );
+            state
+                .pending
+                .insert(key.clone(), Pending::ExtQuestion { responder, answer });
+            out.push(EngineEvent::RequestOpened {
+                turn_id,
+                key,
+                item_id: None,
+                kind: RequestKind::Question,
+                summary,
+                item: Some(Box::new(item)),
+            });
+        }
+        for event in out {
+            emit(self, event);
+        }
+    }
+
     fn on_elicitation(&self, params: Value, responder: ValueResponder, nested: bool) {
         let respond = |responder: ValueResponder, response: Value| {
             let value = if nested {
@@ -652,6 +723,9 @@ impl Shared {
                     } else {
                         response
                     });
+                }
+                Pending::ExtQuestion { responder, answer } => {
+                    let _ = responder.respond(answer(None));
                 }
             }
             out.push(EngineEvent::RequestClosed { key });
@@ -1205,6 +1279,20 @@ impl EngineSession for AcpSession {
                     } else {
                         response
                     })
+                    .map_err(|e| EngineError::Transport(e.to_string()))?;
+            }
+            Pending::ExtQuestion {
+                responder,
+                answer: build,
+            } => {
+                let reply = match answer.outcome {
+                    RequestOutcome::Answered | RequestOutcome::Accept => {
+                        build(Some(&answer.answers.unwrap_or_default()))
+                    }
+                    _ => build(None),
+                };
+                responder
+                    .respond(reply)
                     .map_err(|e| EngineError::Transport(e.to_string()))?;
             }
         }

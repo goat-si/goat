@@ -2,6 +2,7 @@
 pub mod antigravity;
 pub mod fx;
 pub mod grok;
+pub mod xai_requests;
 
 #[cfg(test)]
 mod tests {

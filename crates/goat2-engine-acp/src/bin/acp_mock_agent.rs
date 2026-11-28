@@ -21,6 +21,10 @@
 //! - `GOAT_ACP_OMIT_ALLOW_ALWAYS=1`: permission options without `allow_always`.
 //! - `GOAT_ACP_EMIT_ELICITATION=1` with `GOAT_ACP_ELICITATION_SCHEMA=<json>`: `elicitation/create`;
 //!   `GOAT_ACP_ELICITATION_RESPONSE_LOG_PATH` records the answer.
+//! - `GOAT_ACP_EMIT_XAI_ASK_USER_QUESTION=1` (GOAT 2): `_x.ai/ask_user_question` (one question, Red/Blue), the
+//!   reply printed as `xai question: <json>`.
+//! - `GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE=1` (GOAT 2): `_x.ai/exit_plan_mode` with `# Plan`, the reply printed as
+//!   `xai plan: <json>`.
 //! - `GOAT_ACP_EMIT_URL_ELICITATION=1`: a url-mode elicitation.
 //! - `GOAT_ACP_EMIT_NOTICE=1`: the v1 notice list (valid, malformed and blank).
 //! - `GOAT_ACP_HANG_PROMPT_FOREVER=1`: `partial before stall`, then wait for `session/cancel`.
@@ -290,6 +294,14 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         ] {
             agent.update(&session, notice);
         }
+    }
+    if flag("GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE") {
+        let reply = agent.request("_x.ai/exit_plan_mode", json!({"sessionId": session, "toolCallId": "plan-1", "planContent": "# Plan\n\n1. Do it"}));
+        agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("xai plan: {reply}\n")}}));
+    }
+    if flag("GOAT_ACP_EMIT_XAI_ASK_USER_QUESTION") {
+        let reply = agent.request("_x.ai/ask_user_question", json!({"sessionId": session, "toolCallId": "ask-1", "questions": [{"question": "Which color?", "options": [{"label": "Red"}, {"label": "Blue"}]}]}));
+        agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("xai question: {reply}\n")}}));
     }
     if flag("GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG") {
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hello from grok"}}));

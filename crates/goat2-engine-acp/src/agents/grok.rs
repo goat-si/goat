@@ -222,6 +222,11 @@ impl AcpFlavor for Grok {
                 .clone(),
         )
     }
+    /// v1 grok adapter.ts:171-230: plan capture and questions held open for the person.
+    fn ext_request_action(&self, method: &str, params: &Value) -> crate::flavor::ExtRequest {
+        super::xai_requests::xai_request_action(method, params)
+            .unwrap_or(crate::flavor::ExtRequest::Unhandled)
+    }
     fn ext_notification(&self, method: &str, p: &Value) -> Vec<FlavorEvent> {
         // v1 xaiAcpExtension.ts:50-78,1464-1473: only identified root completions.
         if matches!(

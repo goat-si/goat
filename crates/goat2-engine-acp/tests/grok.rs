@@ -1,14 +1,24 @@
 //! Grok flavor exercised against the offline ACP mock.
-use goat2_contracts::{EngineConfig, ModelSelection, RuntimeMode};
+use goat2_contracts::{
+    EngineConfig, ModelSelection, RequestKind, RequestOutcome, RuntimeMode, TurnItemBody,
+};
 use goat2_engine_acp::{AcpEngineFactory, agents::grok::Grok};
 use goat2_engine_api::{
-    EngineEvent, EngineFactory, EngineInput, LaunchSpec, McpEndpoint, SessionSpec, TurnOutcome,
-    TurnSettings,
+    EngineEvent, EngineFactory, EngineInput, LaunchSpec, McpEndpoint, RequestAnswer, SessionSpec,
+    TurnOutcome, TurnSettings,
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 /// One Grok turn against the fake agent's xAI completion, with extra fake-agent env.
 async fn grok_turn(extra: &[(&str, &str)]) -> TurnOutcome {
+    grok_turn_events(extra, |_| None).await.1
+}
+
+/// A Grok turn that answers each opened request with `answer`; returns all events and the outcome.
+async fn grok_turn_events(
+    extra: &[(&str, &str)],
+    answer: impl Fn(&EngineEvent) -> Option<(String, RequestAnswer)>,
+) -> (Vec<EngineEvent>, TurnOutcome) {
     let dir = tempfile::tempdir().unwrap();
     let selection = ModelSelection {
         instance_id: "grok".into(),
@@ -63,17 +73,98 @@ async fn grok_turn(extra: &[(&str, &str)]) -> TurnOutcome {
             },
         )
         .await;
+    let mut events = Vec::new();
     let outcome = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Some(EngineEvent::TurnFinished { outcome, .. }) = h.events.recv().await {
+            let event = h.events.recv().await.expect("event");
+            if let Some((key, reply)) = answer(&event) {
+                h.session.answer_request(&key, reply).await.unwrap();
+            }
+            if let EngineEvent::TurnFinished { outcome, .. } = &event {
+                let outcome = outcome.clone();
+                events.push(event);
                 break outcome;
             }
+            events.push(event);
         }
     })
     .await
     .unwrap();
     h.session.shutdown().await;
-    outcome
+    (events, outcome)
+}
+
+fn answer_text(events: &[EngineEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::ItemCompleted { item, .. } => match &item.body {
+                TurnItemBody::AssistantMessage { text, .. } => Some(text.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// v1 grok adapter.ts:200-230: Grok's question stays open until the person answers, and the
+/// answer goes back in xAI's shape.
+#[tokio::test]
+async fn ask_user_question_waits_for_the_answer() {
+    let (events, outcome) = grok_turn_events(
+        &[("GOAT_ACP_EMIT_XAI_ASK_USER_QUESTION", "1")],
+        |event| match event {
+            EngineEvent::RequestOpened {
+                key, kind, item, ..
+            } => {
+                assert_eq!(*kind, RequestKind::Question);
+                let Some(TurnItemBody::UserInputRequest { questions, .. }) =
+                    item.as_ref().map(|i| i.body.clone())
+                else {
+                    panic!("question item");
+                };
+                assert_eq!(questions[0].question, "Which color?");
+                Some((
+                    key.clone(),
+                    RequestAnswer {
+                        outcome: RequestOutcome::Answered,
+                        text: None,
+                        answers: Some(
+                            serde_json::json!({"Which color?": "Blue"})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                    },
+                ))
+            }
+            _ => None,
+        },
+    )
+    .await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert!(
+        answer_text(&events).contains(
+            r#"xai question: {"outcome":"accepted","answers":{"Which color?":["Blue"]}}"#
+        ),
+        "{}",
+        answer_text(&events)
+    );
+}
+
+/// v1 grok adapter.ts:171-197: the plan becomes a proposed-plan item and Grok's own gate is
+/// abandoned so the turn does not hang.
+#[tokio::test]
+async fn exit_plan_mode_captures_the_plan() {
+    let (events, outcome) =
+        grok_turn_events(&[("GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE", "1")], |_| None).await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert!(events.iter().any(|e| matches!(e,
+        EngineEvent::ItemCompleted { item, .. }
+            if matches!(&item.body, TurnItemBody::ProposedPlan { markdown, .. } if markdown == "# Plan\n\n1. Do it"))));
+    assert!(answer_text(&events).contains("xai plan: {"));
+    assert!(answer_text(&events).contains("The client captured your proposed plan."));
+    assert!(answer_text(&events).contains(r#""outcome":"abandoned""#));
 }
 
 #[tokio::test]
