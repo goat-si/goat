@@ -1,0 +1,59 @@
+{
+  "installed": true,
+  "version": "2.1.4",
+  "cli": "present",
+  "binaryPath": "/opt/homebrew/bin/claude",
+  "status": "ready",
+  "auth": {
+    "status": "authenticated",
+    "type": "subscription",
+    "label": "Claude Max",
+    "email": "user@example.com",
+    "canLogout": true
+  },
+  "models": [
+    {
+      "slug": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "shortName": "Opus 5.5",
+      "isCustom": false,
+      "isDefault": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "type": "select",
+            "id": "effort",
+            "label": "Effort",
+            "options": [
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              }
+            ],
+            "currentValue": "high",
+            "role": "reasoning"
+          },
+          {
+            "type": "boolean",
+            "id": "fastMode",
+            "label": "Fast mode",
+            "currentValue": false
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "badge": "new",
+      "isCustom": false,
+      "capabilities": null
+    }
+  ],
+  "checkedAt": "2026-11-28T13:00:00Z"
+}
