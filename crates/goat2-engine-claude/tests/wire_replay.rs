@@ -1538,3 +1538,69 @@ async fn a_failed_set_config_rolls_the_model_back() {
     );
     run.assert_replayed(1);
 }
+
+/// Final review 6 finding 1: a result's error text goes into the failure reason the host stores;
+/// the MCP token in it is redacted.
+#[tokio::test]
+async fn result_error_reasons_never_carry_the_mcp_token() {
+    let run = Run::new("wire/result_error_with_token.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let events = until_finished(&mut handle).await;
+    let TurnOutcome::Failed { reason } = finished(&events) else {
+        panic!("not failed: {events:?}")
+    };
+    assert!(!reason.contains(MCP_TOKEN), "token leaked: {reason}");
+    assert!(
+        reason.contains("MCP error -32001"),
+        "diagnostic kept: {reason}"
+    );
+    handle.session.shutdown().await;
+}
+
+/// Final review 6 finding 1: a control error Claude returns is redacted before `set_config`
+/// hands it on.
+#[tokio::test]
+async fn control_errors_never_carry_the_mcp_token() {
+    let run = Run::new("wire/control_error_with_token.ndjson");
+    let handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let result = handle
+        .session
+        .set_config(&settings(MODEL, RuntimeMode::AutoAcceptEdits))
+        .await;
+    let Err(error) = result else {
+        panic!("refused change reported success")
+    };
+    let text = error.to_string();
+    assert!(!text.contains(MCP_TOKEN), "token leaked: {text}");
+    assert!(text.contains("refused"), "{text}");
+    handle.session.shutdown().await;
+}
+
+/// Final review 6 finding 2: Claude never confirms a permission change, so whether it took
+/// effect is unknown; the session ends (the host resumes it in a known state) instead of running
+/// later turns under a mode the driver cannot vouch for.
+#[tokio::test]
+async fn an_unconfirmed_settings_change_ends_the_session() {
+    let run = Run::new("wire/set_config_unconfirmed.ndjson");
+    let mut factory = run.factory();
+    factory.options.control_timeout = std::time::Duration::from_millis(300);
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::ApprovalRequired, None),
+    )
+    .await
+    .unwrap();
+    let result = handle
+        .session
+        .set_config(&settings(MODEL, RuntimeMode::AutoAcceptEdits))
+        .await;
+    assert!(result.is_err(), "{result:?}");
+    match next(&mut handle).await {
+        EngineEvent::Exited { reason } => {
+            assert!(reason.contains("did not confirm"), "{reason}")
+        }
+        other => panic!("the session went on after an unconfirmed change: {other:?}"),
+    }
+    handle.session.shutdown().await;
+}
