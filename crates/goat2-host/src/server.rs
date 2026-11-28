@@ -325,6 +325,8 @@ mod tests {
         recorded.engine_groups = vec![engine.id() as i32];
         write_host_json(&dir.path().join("host.json"), &recorded).unwrap();
         let second = start(cfg()).await;
+        // A SIGKILL lands asynchronously; give it time before looking.
+        std::thread::sleep(std::time::Duration::from_millis(150));
         assert!(
             matches!(&second, Err(e) if e.contains("locked")),
             "{:?}",
