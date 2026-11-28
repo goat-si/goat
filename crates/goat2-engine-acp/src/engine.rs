@@ -353,9 +353,9 @@ impl Shared {
                     }
                 }
                 _ => {
-                    if let Some(turn) = state.turn.as_mut()
-                        && !turn.interrupted
-                    {
+                    // ACP: after session/cancel the agent may still report what it was doing
+                    // until it answers the prompt; those updates belong to the turn.
+                    if let Some(turn) = state.turn.as_mut() {
                         turn.projector.apply(update, &mut out);
                     }
                 }
