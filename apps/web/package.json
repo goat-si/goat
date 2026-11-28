@@ -3,19 +3,32 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "typecheck": "tsc -p tsconfig.json" },
+  "scripts": {
+    "dev": "vite",
+    "dev:fake": "vite --open '/?fake=2R-1'",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "shots": "playwright test"
+  },
   "dependencies": {
+    "@goat2/bot-face": "workspace:*",
     "@goat2/contracts": "workspace:*",
+    "@goat2/contracts-rs": "workspace:*",
     "@goat2/provider-icons": "workspace:*",
     "@goat2/runtime-stamp": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "jsdom": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }
