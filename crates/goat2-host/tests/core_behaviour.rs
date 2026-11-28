@@ -1709,12 +1709,17 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
     let t = setup(manual()).await;
     let id = start_user_thread(&t, "auth", Some("hello")).await;
     eventually("running", || running(&t, &id)).await;
+    // A long link with a one-time code in its query, also repeated in the message.
+    let url = format!(
+        "https://auth.example.invalid/device?user_code=SECRET-CODE&pad={}",
+        "p".repeat(600)
+    );
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
             turn_id: t.fake.active_turn(&id),
-            url: Some("https://example.invalid/login".into()),
-            message: "Sign in to Codex".into(),
+            url: Some(url.clone()),
+            message: format!("Sign in to Codex at {url}"),
         },
     );
     eventually("needs you: signin", || {
@@ -1725,23 +1730,22 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
             .is_some_and(|n| n.kind == RequestKind::Signin)
     })
     .await;
-    let request_id = t
-        .host
-        .store()
-        .fold(&id)
-        .unwrap()
-        .open_requests
-        .iter()
-        .find(|r| r.kind == RequestKind::Signin)
-        .unwrap()
-        .request_id
-        .clone();
+    let opened = signins(&t, &id);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].summary, "Sign in to Codex at the sign-in link");
+    assert_eq!(opened[0].run_id.as_ref(), last_run(&t, &id).as_ref());
+    // The full link is held in memory for the providers module, never written to disk.
+    let links = t.host.signin_links();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].url, url);
+    assert_eq!(links[0].request_id, opened[0].request_id);
+    assert!(!data_contains(&t, "SECRET-CODE"));
     t.host
         .command(ClientFrame::ResolveRequest {
             req_id: "r".into(),
             client_request_id: "auth-done".into(),
             thread_id: id.clone(),
-            request_id,
+            request_id: opened[0].request_id.clone(),
             outcome: RequestOutcome::Answered,
             text: Some("signed in".into()),
             answers: None,
@@ -1750,4 +1754,132 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
         .await
         .unwrap();
     assert!(t.host.store().fold(&id).unwrap().open_requests.is_empty());
+    assert!(t.host.signin_links().is_empty());
+}
+
+#[tokio::test]
+async fn a_sign_in_for_an_ended_turn_is_dropped_and_run_end_closes_the_current_one() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "auth-turns", Some("one")).await;
+    eventually("first turn", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    t.fake.finish_turn(&id, "done");
+    eventually("first run finished", || count(&t, &id, "run.finished") == 1).await;
+    send(&t, &id, "auth-two", "two", InputMode::Followup).await;
+    eventually("second turn", || running(&t, &id)).await;
+    let second = t.fake.active_turn(&id).unwrap();
+    assert_ne!(first, second);
+    let auth =
+        |turn: &str, url: &str, message: &str| goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: Some(turn.to_owned()),
+            url: Some(url.to_owned()),
+            message: message.to_owned(),
+        };
+    t.fake
+        .emit(&id, auth(&first, "https://stale.invalid/login", "stale"));
+    t.fake
+        .emit(&id, auth(&second, "https://fresh.invalid/login", "fresh"));
+    eventually("sign-in link", || !t.host.signin_links().is_empty()).await;
+    let opened = signins(&t, &id);
+    assert_eq!(
+        opened.len(),
+        1,
+        "only the running turn's sign-in: {opened:?}"
+    );
+    assert_eq!(opened[0].summary, "fresh");
+    assert_eq!(opened[0].run_id.as_ref(), last_run(&t, &id).as_ref());
+    // A repeat in the same run refreshes the link without a second request.
+    t.fake.emit(
+        &id,
+        auth(&second, "https://fresh.invalid/again", "fresh again"),
+    );
+    eventually("refreshed link", || {
+        t.host.signin_links().first().map(|l| l.url.as_str()) == Some("https://fresh.invalid/again")
+    })
+    .await;
+    assert_eq!(signins(&t, &id).len(), 1);
+    t.fake.finish_turn(&id, "done");
+    eventually("sign-in closed with the run", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+    assert_eq!(
+        resolved_text(&t, &id, &opened[0].request_id),
+        Some("the run ended".into())
+    );
+    assert!(t.host.signin_links().is_empty());
+}
+
+#[tokio::test]
+async fn a_sign_in_outside_a_turn_lasts_until_the_engine_stops() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "auth-session", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: None,
+            url: Some("https://auth.example.invalid/login?state=SECRET-STATE".into()),
+            message: "Not logged in".into(),
+        },
+    );
+    eventually("sign-in link", || !t.host.signin_links().is_empty()).await;
+    let opened = signins(&t, &id);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].run_id, None);
+    // The run ending does not close it: it belongs to the engine session.
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(t.host.store().fold(&id).unwrap().open_requests.len(), 1);
+    t.fake.crash(&id, "gone");
+    eventually("sign-in closed with the engine", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+    assert_eq!(
+        resolved_text(&t, &id, &opened[0].request_id),
+        Some("the engine stopped".into())
+    );
+    assert!(t.host.signin_links().is_empty());
+    assert!(!data_contains(&t, "SECRET-STATE"));
+}
+
+fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
+    events(t, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            LogEvent::RequestOpened(o) if o.kind == RequestKind::Signin => Some(o),
+            _ => None,
+        })
+        .collect()
+}
+
+fn last_run(t: &T, id: &ThreadId) -> Option<goat2_contracts::RunId> {
+    events(t, id).into_iter().rev().find_map(|e| match e {
+        LogEvent::RunStarted(s) => Some(s.run_id),
+        _ => None,
+    })
+}
+
+fn resolved_text(t: &T, id: &ThreadId, request_id: &goat2_contracts::RequestId) -> Option<String> {
+    events(t, id).into_iter().find_map(|e| match e {
+        LogEvent::RequestResolved(r) if &r.request_id == request_id => r.text,
+        _ => None,
+    })
+}
+
+/// Whether any file under the host's data dir contains `needle`.
+fn data_contains(t: &T, needle: &str) -> bool {
+    fn walk(dir: &std::path::Path, needle: &[u8]) -> bool {
+        std::fs::read_dir(dir).unwrap().flatten().any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, needle)
+            } else {
+                std::fs::read(&path)
+                    .is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle))
+            }
+        })
+    }
+    walk(t._dir.as_ref().unwrap().path(), needle.as_bytes())
 }
