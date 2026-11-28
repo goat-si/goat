@@ -26,6 +26,9 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
 - Rust workspace at repo root `Cargo.toml`; crates under `crates/goat2-*`. Only touch your lane's
   crate(s) plus files the lane table lists. Shared types go through `goat2-contracts` (lane C).
 - Branch and worktree: `goat2_<lane>` at `~/Developer/goat2_<lane>`, based on `goat2`.
+- One shared Rust build cache: **kache** (global `rustc-wrapper = "kache"` in `~/.cargo/config.toml`). Never override
+  `RUSTC_WRAPPER`, never re-enable `CARGO_INCREMENTAL`. Other hosts: `cargo install kache --locked && kache init &&
+  kache doctor --probe` before building. Report `kache stats` hit rate in PRs.
 - Toolchain 1.95 (`rust-toolchain.toml`). `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test -p <crate>`.
 
 ## How to work
