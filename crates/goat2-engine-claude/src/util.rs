@@ -71,6 +71,28 @@ pub fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Diagnostic text without credentials: the GOAT MCP bearer token and any `Bearer <value>` are
+/// replaced, as Claude's errors can echo request headers.
+pub fn redact_secrets(text: &str, token: &str) -> String {
+    let mut out = if token.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(token, "[redacted]")
+    };
+    let mut from = 0;
+    while let Some(found) = out[from..].find("Bearer ") {
+        let start = from + found + "Bearer ".len();
+        let end = out[start..]
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | ',' | ';'))
+            .map_or(out.len(), |n| start + n);
+        if &out[start..end] != "[redacted]" {
+            out.replace_range(start..end, "[redacted]");
+        }
+        from = start + "[redacted]".len();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

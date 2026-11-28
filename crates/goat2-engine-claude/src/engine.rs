@@ -770,7 +770,10 @@ impl Inner {
         let reason = if last.is_empty() {
             "Claude exited".to_string()
         } else {
-            format!("Claude exited: {}", items::truncate(&last, 500))
+            format!(
+                "Claude exited: {}",
+                items::truncate(&util::redact_secrets(&last, &self.mcp_token), 500)
+            )
         };
         let exited = self.settle_exit(Some(generation), &reason);
         // Reap the leader and end its group before saying nothing more follows. A shutdown or
@@ -2748,7 +2751,9 @@ impl EngineSession for ClaudeSession {
                 "switching to or from full access needs a new Claude process".into(),
             ));
         }
-        if model.api_model_id != current_model.api_model_id && !model.api_model_id.is_empty() {
+        let model_changed =
+            model.api_model_id != current_model.api_model_id && !model.api_model_id.is_empty();
+        if model_changed {
             inner
                 .control(
                     json!({"subtype": "set_model", "model": model.api_model_id}),
@@ -2761,13 +2766,37 @@ impl EngineSession for ClaudeSession {
             }
         }
         if mode != current_mode {
-            inner
+            let changed = inner
                 .control(
                     json!({"subtype": "set_permission_mode", "mode": mode.as_str()}),
                     inner.options.control_timeout,
                 )
-                .await
-                .map_err(EngineError::Transport)?;
+                .await;
+            if let Err(error) = changed {
+                if !model_changed {
+                    return Err(EngineError::Transport(error));
+                }
+                // The change failed halfway: set the model back so the session is as it was.
+                // The stored model always names the one Claude runs.
+                let restored = inner
+                    .control(
+                        json!({"subtype": "set_model", "model": current_model.api_model_id}),
+                        inner.options.control_timeout,
+                    )
+                    .await;
+                return Err(EngineError::Transport(match restored {
+                    Ok(_) => {
+                        if let Ok(mut state) = inner.state.lock() {
+                            state.model.api_model_id = current_model.api_model_id.clone();
+                        }
+                        format!("{error}; the model was set back")
+                    }
+                    Err(_) => format!(
+                        "{error}; the model stays {} (setting it back failed)",
+                        model.api_model_id
+                    ),
+                }));
+            }
             if let Ok(mut state) = inner.state.lock() {
                 state.permission_mode = mode;
             }
