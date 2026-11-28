@@ -4,7 +4,7 @@ use crate::contract::{
     NativeRefStrength, PlanId, ThreadId, TurnItem, TurnItemBody, TurnItemStatus,
 };
 use crate::protocol::server::ThreadItem;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub struct ItemContext<'a> {
     pub thread_id: &'a ThreadId,
@@ -111,14 +111,17 @@ fn command_actions(actions: &[Value]) -> Vec<CommandAction> {
     mapped
 }
 
-// v1: apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts:318-348
-fn dynamic(name: String, input: Value, completed: bool) -> TurnItemBody {
+// v1: apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts:318-348, except the input:
+// GOAT 2 keeps a tool call as name, summary and engine locator only (docs/lanes/PART1.md fixed
+// decisions; goat2-contracts ItemCompleted). Arguments and prompts stay in Codex's own record,
+// reachable through the locator, and are never stored.
+fn dynamic(name: String, summary: Option<String>, completed: bool) -> TurnItemBody {
     TurnItemBody::DynamicTool {
         tool_name: Some(name),
-        input,
+        input: Value::Null,
         output: None,
         output_omitted: completed.then_some(true),
-        tool_summary: None,
+        tool_summary: summary,
     }
 }
 
@@ -257,19 +260,19 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
         ThreadItem::McpToolCall {
             server,
             tool,
-            arguments,
+            arguments: _,
             status: s,
             ..
         } => {
             if completed {
                 status = item_status(s.as_deref());
             }
-            dynamic(format!("{server}.{tool}"), arguments.clone(), completed)
+            dynamic(format!("{server}.{tool}"), None, completed)
         }
         ThreadItem::DynamicToolCall {
             tool,
             namespace,
-            arguments,
+            arguments: _,
             status: s,
             ..
         } => {
@@ -281,18 +284,14 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map_or_else(|| tool.clone(), |ns| format!("{ns}.{tool}"));
-            dynamic(name, arguments.clone(), completed)
+            dynamic(name, None, completed)
         }
         ThreadItem::ImageView { path, .. } if completed => {
-            dynamic("view_image".into(), json!({"path": path}), true)
+            // The viewed path is the call's one-line summary.
+            dynamic("view_image".into(), path.clone(), true)
         }
         ThreadItem::ImageGeneration {
-            status: s,
-            revised_prompt,
-            transparent_background,
-            input_images,
-            failure,
-            ..
+            status: s, failure, ..
         } => {
             title = Some("Generate image".into());
             if completed {
@@ -304,24 +303,8 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
                     TurnItemStatus::Completed
                 };
             }
-            let mut input = serde_json::Map::new();
-            if let Some(prompt) = revised_prompt {
-                input.insert("prompt".into(), json!(prompt));
-            }
-            if let Some(value) = transparent_background {
-                input.insert("transparent_background".into(), json!(value));
-            }
-            if let Some(images) = input_images {
-                let paths: Vec<_> = images
-                    .iter()
-                    .filter_map(|v| v.get("path"))
-                    .cloned()
-                    .collect();
-                if !paths.is_empty() {
-                    input.insert("inputImages".into(), json!(paths));
-                }
-            }
-            dynamic("image_gen.imagegen".into(), Value::Object(input), completed)
+            // The prompt is the call's input and is not stored (see [dynamic]).
+            dynamic("image_gen.imagegen".into(), None, completed)
         }
         ThreadItem::ContextCompaction { .. } => {
             title = Some(

@@ -80,15 +80,30 @@ fn mcp_tool() {
 #[test]
 fn dynamic_tool() {
     let v = project(
-        json!({"type":"dynamicToolCall","id":"d","namespace":" n ","tool":"t","arguments":{},"status":"completed"}),
+        json!({"type":"dynamicToolCall","id":"d","namespace":" n ","tool":"t","arguments":{"token":"secret-value","blob":"x"},"status":"completed"}),
     );
     assert_eq!(v["toolName"], "n.t");
+    // Tool calls keep name, summary and locator only: arguments are never stored.
+    assert_eq!(v["input"], Value::Null);
+    assert!(!v.to_string().contains("secret-value"));
+}
+#[test]
+fn mcp_tool_call_keeps_no_arguments() {
+    let big = "y".repeat(200_000);
+    let v = project(
+        json!({"type":"mcpToolCall","id":"m","server":"goat","tool":"thread_send","arguments":{"message":big,"apiKey":"secret-value"},"status":"completed"}),
+    );
+    assert_eq!(v["toolName"], "goat.thread_send");
+    assert_eq!(v["input"], Value::Null);
+    assert!(v.to_string().len() < 2_000, "{} bytes", v.to_string().len());
+    assert!(!v.to_string().contains("secret-value"));
 }
 #[test]
 fn image_view() {
     let v = project(json!({"type":"imageView","id":"i","path":"/tmp/a.png"}));
     assert_eq!(v["toolName"], "view_image");
-    assert_eq!(v["input"]["path"], "/tmp/a.png");
+    assert_eq!(v["input"], Value::Null);
+    assert_eq!(v["toolSummary"], "/tmp/a.png");
 }
 #[test]
 fn image_generation() {
@@ -97,7 +112,8 @@ fn image_generation() {
     );
     assert_eq!(v["title"], "Generate image");
     assert_eq!(v["status"], "failed");
-    assert_eq!(v["input"]["prompt"], "p");
+    assert_eq!(v["input"], Value::Null);
+    assert!(!v.to_string().contains("\"p\""));
     assert!(v.get("output").is_none());
 }
 #[test]
