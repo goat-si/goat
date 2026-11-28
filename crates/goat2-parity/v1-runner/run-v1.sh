@@ -27,5 +27,10 @@ dest="$root/apps/server/src/orchestration-v2/testkit/$name"
 mkdir "$dest" || { echo "refusing existing or inaccessible destination: $dest" >&2; exit 1; }
 trap 'rm -rf "$dest"' EXIT HUP INT TERM
 cp "$src"/*.ts "$dest/"
-GOAT2_PARITY_SCENARIO="$scenario" GOAT2_PARITY_OUT="$out" pnpm --dir "$root/apps/server" exec vp test run "src/orchestration-v2/testkit/$name/ParityScenarios.integration.test.ts"
+# Scenarios with more than one thread or any MCP step run through the MCP driver.
+test_file=ParityScenarios.integration.test.ts
+if node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(Object.keys(s.threads).length>1||s.steps.some(x=>x.do==="mcp"||x.do==="await_call")?0:1)' "$scenario/scenario.json"; then
+  test_file=ParityMcpScenarios.integration.test.ts
+fi
+GOAT2_PARITY_SCENARIO="$scenario" GOAT2_PARITY_OUT="$out" pnpm --dir "$root/apps/server" exec vp test run "src/orchestration-v2/testkit/$name/$test_file"
 [ -f "$out" ] || { echo 'runner did not produce output' >&2; exit 1; }

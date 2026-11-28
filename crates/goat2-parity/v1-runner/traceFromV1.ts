@@ -10,11 +10,12 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
   const emit = (event: any) => events.push({seq: events.length + 1, ...event});
   // turn/steer responses delivered by the replay driver, each paired with the outbound request it
   // answers (the driver only advances past an outbound frame the adapter actually sent).
-  const steerResponses = replayObserved.filter((o) => o.label === "turn/steer" && o.frame?.id !== undefined).map((o) => {
-    const request = [...augmented.entries.slice(0, o.cursor)].reverse().find((e: any) => e.type === "expect_outbound" && e.frame?.method === "turn/steer" && e.frame?.id === o.frame.id);
-    if (!request) throw new Error(`turn/steer response ${o.frame.id} without a matched request`);
+  // An inbound response (id, no method) to the latest matched outbound turn/steer with that id.
+  const requestFor = (o: {cursor: number; frame: any}) => [...augmented.entries.slice(0, o.cursor)].reverse().find((e: any) => e.type === "expect_outbound" && e.frame?.id === o.frame.id);
+  const steerResponses = replayObserved.filter((o) => o.frame?.id !== undefined && o.frame?.method === undefined && requestFor(o)?.frame?.method === "turn/steer").map((o) => {
+    const request = requestFor(o)!;
     const text = (request.frame.params?.input ?? []).filter((i: any) => i.type === "text").map((i: any) => i.text).join("");
-    const completed = replayObserved.find((c) => c.label === "turn/completed" && c.frame?.params?.turn?.id === request.frame.params?.expectedTurnId);
+    const completed = replayObserved.find((c) => c.frame?.method === "turn/completed" && c.frame?.params?.turn?.id === request.frame.params?.expectedTurnId);
     return {ok: o.frame.result !== undefined && o.frame.error === undefined, text, turnId: request.frame.params?.expectedTurnId, beforeCompletion: completed === undefined || o.cursor < completed.cursor};
   });
   const turnRuns = new Map<string, string>();

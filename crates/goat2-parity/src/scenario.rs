@@ -6,6 +6,9 @@ use serde_json::Value;
 
 use crate::trace::{ExpectedEvent, TraceKind};
 
+/// GOAT paths whose call puts a message into a thread; the input is aliased by the call id.
+pub const INPUT_CREATING_PATHS: &[&str] = &["task.create", "thread.send"];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Scenario {
@@ -344,6 +347,7 @@ impl LoadedScenario {
                 Step::Mcp {
                     id,
                     caller,
+                    path,
                     call,
                     wait,
                     ..
@@ -353,6 +357,10 @@ impl LoadedScenario {
                     }
                     if !*wait {
                         calls.insert(call);
+                    }
+                    // A call that puts a message in a thread names that input after itself.
+                    if INPUT_CREATING_PATHS.contains(&path.as_str()) && !inputs.insert(call) {
+                        return Err(format!("duplicate input {call}"));
                     }
                     (id, Some(caller))
                 }
