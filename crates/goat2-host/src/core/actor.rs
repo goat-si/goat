@@ -1164,7 +1164,9 @@ impl Actor {
             EngineEvent::ContinuationRequested { .. } => {
                 tracing::warn!(thread = %self.id, "an engine continuation is not handled yet: ignored");
             }
-            EngineEvent::ContinuationWithdrawn { .. } => {}
+            EngineEvent::ContinuationWithdrawn { .. } => {
+                tracing::warn!(thread = %self.id, "an engine continuation withdrawal is not handled yet: ignored");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {

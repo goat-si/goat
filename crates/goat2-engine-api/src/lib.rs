@@ -179,7 +179,7 @@ pub enum EngineEvent {
     RequestClosed { key: String },
     /// A request the engine raised outside any GOAT-started turn: a background subagent's
     /// approval (Muse, v1 `provider-muse adapter.ts:1053-1069`, `subagentOrigin`) or an extension
-    /// dialog (Pi, v1 `provider-pi adapter.ts:1712-1757`). It is explicit, so a late in-turn
+    /// dialog (Pi, v1 `provider-pi adapter.ts:1693-1700` session-scoped `extension_ui_request`, handled at `:1991-1993`). It is explicit, so a late in-turn
     /// `RequestOpened` with a stale `turn_id` never becomes one by accident.
     ///
     /// The host files it on the thread with no run (`run_id` None). It counts in
@@ -204,7 +204,8 @@ pub enum EngineEvent {
     /// shown in the timeline as a quiet system line, not as a person's message. It runs through
     /// the normal queue when the thread is free, started with [EngineSession::start_continuation].
     /// A later `ContinuationRequested` for the thread replaces a pending one (the earlier input
-    /// is cancelled while still queued), as v1's offer/take does. Sent by Muse and Pi; OpenCode
+    /// is cancelled while still queued). That is GOAT 2's rule: v1's queue keeps distinct offers
+    /// and replaces only one with the same key. Sent by Muse and Pi; OpenCode
     /// only for its background turns. Host support: as for [EngineEvent::SessionRequestOpened].
     ContinuationRequested { key: String, text: String },
     /// The engine withdrew a pending continuation (v1 clears an offer when its workflow ends):
