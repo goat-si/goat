@@ -527,17 +527,23 @@ fn text_matches_at(buffer: &str, offset: u64, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_selection() -> goat2_contracts::ModelSelection {
+        goat2_contracts::ModelSelection {
+            instance_id: "codex".into(),
+            model: "m".into(),
+            options: None,
+        }
+    }
     use crate::{
         api::{
-            BotProfile, Command, CommandErrorCode, CommandReply, CommandValue, StreamingItem,
-            command_error,
+            BotProfile, Command, CommandReply, CommandValue, Reason, StreamingItem, command_error,
         },
         store::FsStore,
     };
     use async_trait::async_trait;
     use goat2_contracts::{
-        EngineConfig, EngineDriver, FollowUpMode, LogEvent, ThreadChanged, ThreadCreated,
-        ThreadKind,
+        EngineConfig, FollowUpMode, LogEvent, ThreadChanged, ThreadCreated, ThreadKind,
     };
     use tokio::net::{TcpListener, TcpStream};
     use tokio_tungstenite::{
@@ -602,7 +608,7 @@ mod tests {
                     thread_id: Some("t".into()),
                     ..Default::default()
                 }),
-                _ => Err(command_error(CommandErrorCode::NotAllowed, "refused")),
+                _ => Err(command_error(Reason::NotAllowed, "refused")),
             }
         }
     }
@@ -614,9 +620,9 @@ mod tests {
             bot_id: None,
             parent: None,
             engine: EngineConfig {
-                driver: EngineDriver::Codex,
-                model: "m".into(),
-                runtime_mode: "r".into(),
+                provider_instance_id: "codex".into(),
+                model_selection: test_selection(),
+                runtime_mode: goat2_contracts::RuntimeMode::FullAccess,
                 cwd: "/tmp".into(),
             },
             follow_up_mode: FollowUpMode::Steer,
@@ -684,7 +690,9 @@ mod tests {
             json!({"type":"resume_queue","reqId":"2","clientRequestId":"two","threadId":"t"}),
         )
         .await;
-        assert_eq!(read(&mut ws).await["error"]["code"], "not_allowed");
+        let refused = read(&mut ws).await;
+        assert_eq!(refused["error"]["code"], "permission_denied");
+        assert_eq!(refused["error"]["reason"], "not_allowed");
         write(&mut ws, json!({"type":"garbage"})).await;
         assert_eq!(read(&mut ws).await["code"], "bad_frame");
         write(
@@ -733,12 +741,8 @@ mod tests {
                 goat: false,
             },
             role: goat2_contracts::BotRole::Member,
-            thread_id: "t".into(),
-            engine: goat2_contracts::EngineChoice {
-                driver: EngineDriver::Codex,
-                model: "m".into(),
-                runtime_mode: "r".into(),
-            },
+            session_thread_id: "t".into(),
+            default_model_selection: test_selection(),
         };
         host.cards
             .send(CardUpdate::BotChanged(Arc::new(bot)))

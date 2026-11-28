@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use goat2_contracts::{
-    BotRole, ChildResultStatus, ClientFrame, CommandErrorCode, DeliveredAs, DeliveryOutcome,
-    EngineChoice, EngineDriver, InputMode, InputSource, LogEvent, RequestKind, RequestOutcome,
-    RunOutcome, StartMode, ThreadId, ThreadKind,
+    BotRole, ChildResultStatus, ClientFrame, DeliveredAs, DeliveryOutcome, InputMode, InputSource,
+    LogEvent, ModelSelection, RequestKind, RequestOutcome, RunOutcome, StartMode, ThreadId,
+    ThreadKind,
 };
 use goat2_host::api::{Caller, McpHost, SurfaceResult, ThreadStartArgs, UserSendArgs, WsHost};
 use goat2_host::core::{Host, HostOptions};
@@ -95,11 +95,11 @@ fn count(t: &T, id: &ThreadId, tag: &str) -> usize {
     events(t, id).iter().filter(|e| e.type_tag() == tag).count()
 }
 
-fn engine() -> EngineChoice {
-    EngineChoice {
-        driver: EngineDriver::Codex,
+fn selection() -> ModelSelection {
+    ModelSelection {
+        instance_id: "codex".into(),
         model: "test-model".into(),
-        runtime_mode: "full-access".into(),
+        options: None,
     }
 }
 
@@ -113,7 +113,8 @@ async fn start_user_thread(t: &T, key: &str, text: Option<&str>) -> ThreadId {
             title: Some(key.into()),
             bot_id: None,
             parent: None,
-            engine: engine(),
+            model_selection: selection(),
+            runtime_mode: None,
             cwd: Some("/tmp".into()),
             text: text.map(str::to_owned),
             mode: None,
@@ -149,7 +150,7 @@ fn main_bot(t: &T) -> ThreadId {
         .into_iter()
         .find(|b| b.role == BotRole::Main)
         .unwrap()
-        .thread_id
+        .session_thread_id
 }
 
 fn turns(t: &T, id: &ThreadId) -> Vec<Vec<String>> {
@@ -405,7 +406,7 @@ async fn child_cap_depth_and_child_wake_order() {
         first_report < first_child_input,
         "child.reported is written before the wake input"
     );
-    assert!(ev.iter().any(|e| matches!(e, LogEvent::ChildReported(r) if r.summary == "result zero" && r.status == ChildResultStatus::Done)));
+    assert!(ev.iter().any(|e| matches!(e, LogEvent::ChildReported(r) if r.summary == "result zero" && r.status == ChildResultStatus::Completed)));
 }
 
 #[tokio::test]
@@ -636,7 +637,7 @@ async fn commands_are_deduped_by_client_request_id() {
         })
         .await
         .unwrap_err();
-    assert_eq!(conflict.code, CommandErrorCode::IdempotencyConflict);
+    assert_eq!(conflict.reason, "idempotency_conflict");
 }
 
 #[tokio::test]
@@ -700,7 +701,7 @@ async fn queue_edit_cancel_reorder_and_promote() {
     })
     .await
     .unwrap_err();
-    assert_eq!(missing.code, CommandErrorCode::NotQueued);
+    assert_eq!(missing.reason, "not_queued");
     cmd(ClientFrame::PromoteToSteer {
         req_id: "5".into(),
         client_request_id: "e5".into(),
@@ -1043,7 +1044,7 @@ async fn refused_steer_fails_closed_and_unknown_steer_asks_a_person() {
         })
         .await
         .unwrap_err();
-    assert_eq!(refused.code, CommandErrorCode::SteerRefused);
+    assert_eq!(refused.reason, "steer_refused");
     assert!(
         t.host.store().fold(&id).unwrap().queued_inputs.is_empty(),
         "refused input left the queue"

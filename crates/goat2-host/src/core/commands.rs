@@ -5,9 +5,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use goat2_contracts::limits::BLOB_THRESHOLD_BYTES;
 use goat2_contracts::{
-    BotFace, BotId, BotProfile, BotRole, ChildStarted, EngineChoice, EngineConfig, EngineDriver,
-    FollowUpMode, InputSource, ItemId, LogEvent, ParentRef, ThreadCard, ThreadChanged,
-    ThreadCreated, ThreadId, ThreadKind, ThreadStatus,
+    BotFace, BotId, BotProfile, BotRole, ChildStarted, EngineConfig, FollowUpMode, InputSource,
+    ItemId, LogEvent, ModelSelection, ParentRef, ProviderInstanceId, RuntimeMode, ThreadCard,
+    ThreadChanged, ThreadCreated, ThreadId, ThreadKind, ThreadStatus,
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, oneshot};
@@ -15,8 +15,8 @@ use tokio::sync::{broadcast, oneshot};
 use super::Host;
 use super::actor::{InputAck, Msg, NewInput, QueueEdit, Refusal, Resolution};
 use crate::api::{
-    CardUpdate, Command, CommandErrorCode, CommandReply, CommandValue, StreamingItem, ThreadLive,
-    WsHost, command_error,
+    CardUpdate, Command, CommandReply, CommandValue, Reason, StreamingItem, ThreadLive, WsHost,
+    command_error,
 };
 use crate::store::{StoreError, ThreadStore};
 use crate::util::new_id;
@@ -37,11 +37,10 @@ fn refusal(r: Refusal) -> crate::api::CommandError {
 
 fn store_error(e: StoreError) -> crate::api::CommandError {
     match e {
-        StoreError::NotFound(id) => command_error(
-            CommandErrorCode::ThreadMissing,
-            format!("thread {id} not found"),
-        ),
-        other => command_error(CommandErrorCode::Internal, other.to_string()),
+        StoreError::NotFound(id) => {
+            command_error(Reason::ThreadNotFound, format!("thread {id} not found"))
+        }
+        other => command_error(Reason::Internal, other.to_string()),
     }
 }
 
@@ -54,16 +53,12 @@ pub(crate) async fn ask<T>(
     let (tx, rx) = oneshot::channel();
     if !host.send(id, make(tx)) {
         return Err(Refusal::new(
-            CommandErrorCode::ThreadMissing,
+            Reason::ThreadNotFound,
             format!("thread {id} not found"),
         ));
     }
-    rx.await.unwrap_or_else(|_| {
-        Err(Refusal::new(
-            CommandErrorCode::Internal,
-            "the thread's actor stopped",
-        ))
-    })
+    rx.await
+        .unwrap_or_else(|_| Err(Refusal::new(Reason::Internal, "the thread's actor stopped")))
 }
 
 /// Settings for a new thread.
@@ -97,11 +92,20 @@ pub(crate) fn create_thread(host: &Host, t: NewThread) -> Result<ThreadCard, Sto
     Ok(appended.card)
 }
 
-fn engine_config(choice: &EngineChoice, cwd: String) -> EngineConfig {
+/// v1 `DEFAULT_RUNTIME_MODE` (`packages/contracts/src/providerPolicy.ts:32`).
+pub(crate) const DEFAULT_RUNTIME_MODE: RuntimeMode = RuntimeMode::FullAccess;
+/// v1 `DEFAULT_MODEL` for Codex (`packages/contracts/src/model.ts:126,143`).
+pub(crate) const DEFAULT_CODEX_MODEL: &str = "gpt-6-astra";
+
+fn engine_config(
+    selection: &ModelSelection,
+    runtime_mode: RuntimeMode,
+    cwd: String,
+) -> EngineConfig {
     EngineConfig {
-        driver: choice.driver,
-        model: choice.model.clone(),
-        runtime_mode: choice.runtime_mode.clone(),
+        provider_instance_id: selection.instance_id.clone(),
+        model_selection: selection.clone(),
+        runtime_mode,
         cwd,
     }
 }
@@ -126,14 +130,11 @@ fn args_of(frame: &Command) -> Value {
 /// Run one command with the dedupe rule.
 pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
     let Some(key) = frame.client_request_id().map(str::to_owned) else {
-        return Err(command_error(
-            CommandErrorCode::InvalidRequest,
-            "not a command frame",
-        ));
+        return Err(command_error(Reason::InvalidRequest, "not a command frame"));
     };
     if key.is_empty() {
         return Err(command_error(
-            CommandErrorCode::InvalidRequest,
+            Reason::InvalidRequest,
             "clientRequestId is empty",
         ));
     }
@@ -142,7 +143,7 @@ pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
     if let Some(entry) = host.inner.dedupe.lock().expect("dedupe").get(&key).cloned() {
         if entry.args.as_ref().is_some_and(|a| a != &args) {
             return Err(command_error(
-                CommandErrorCode::IdempotencyConflict,
+                Reason::IdempotencyConflict,
                 "clientRequestId was already used with different arguments",
             ));
         }
@@ -169,7 +170,7 @@ pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
 async fn send_input(host: &Host, thread_id: &ThreadId, input: NewInput) -> CommandReply {
     if input.text.len() > BLOB_THRESHOLD_BYTES {
         return Err(command_error(
-            CommandErrorCode::PayloadTooLarge,
+            Reason::PayloadTooLarge,
             "message is larger than 64 KB",
         ));
     }
@@ -218,7 +219,8 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             title,
             bot_id,
             parent,
-            engine,
+            model_selection,
+            runtime_mode,
             cwd,
             text,
             ..
@@ -228,19 +230,19 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             let mut reservation = None;
             let parent_ref = match (kind, parent) {
                 (ThreadKind::Worker, Some(parent)) => {
-                    let parent_card = store.card(&parent).ok_or_else(|| {
-                        command_error(CommandErrorCode::ThreadMissing, "parent not found")
-                    })?;
+                    let parent_card = store
+                        .card(&parent)
+                        .ok_or_else(|| command_error(Reason::ThreadNotFound, "parent not found"))?;
                     if parent_card.kind == ThreadKind::Worker {
                         return Err(command_error(
-                            CommandErrorCode::NotAllowed,
+                            Reason::NotAllowed,
                             "a worker cannot have children (depth 1)",
                         ));
                     }
                     reservation = host.reserve_child(&parent);
                     if reservation.is_none() {
                         return Err(command_error(
-                            CommandErrorCode::LimitReached,
+                            Reason::ChildBudget,
                             "the parent already runs 4 children",
                         ));
                     }
@@ -251,12 +253,12 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 }
                 (ThreadKind::Worker, None) => {
                     return Err(command_error(
-                        CommandErrorCode::InvalidRequest,
+                        Reason::InvalidRequest,
                         "a worker thread needs a parent",
                     ));
                 }
                 (ThreadKind::Bot, _) if bot_id.as_ref().and_then(|b| host.bot(b)).is_none() => {
-                    return Err(command_error(CommandErrorCode::BotMissing, "bot not found"));
+                    return Err(command_error(Reason::BotNotFound, "bot not found"));
                 }
                 _ => None,
             };
@@ -267,7 +269,11 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                     title,
                     bot_id,
                     parent: parent_ref.clone(),
-                    engine: engine_config(&engine, cwd),
+                    engine: engine_config(
+                        &model_selection,
+                        runtime_mode.unwrap_or(DEFAULT_RUNTIME_MODE),
+                        cwd,
+                    ),
                 },
             )
             .map_err(store_error)?;
@@ -353,7 +359,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             host,
             &thread_id,
             ThreadChanged {
-                archived: Some(archived),
+                archived_at: Some(archived.then(crate::util::now_rfc3339)),
                 ..Default::default()
             },
         ),
@@ -372,7 +378,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
         ),
         Command::ChangeThread {
             thread_id,
-            model,
+            model_selection,
             runtime_mode,
             follow_up_mode,
             ..
@@ -380,7 +386,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             host,
             &thread_id,
             ThreadChanged {
-                model,
+                model_selection,
                 runtime_mode,
                 follow_up_mode,
                 ..Default::default()
@@ -411,30 +417,24 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             name,
             purpose,
             face,
-            engine,
+            model_selection,
             ..
         } => {
-            let profile = create_bot(host, name, purpose, face, engine, BotRole::Member)
+            let profile = create_bot(host, name, purpose, face, model_selection, BotRole::Member)
                 .map_err(store_error)?;
             Ok(CommandValue {
                 bot_id: Some(profile.bot_id.clone()),
-                thread_id: Some(profile.thread_id.clone()),
+                thread_id: Some(profile.session_thread_id.clone()),
                 ..Default::default()
             })
         }
-        _ => Err(command_error(
-            CommandErrorCode::InvalidRequest,
-            "not a command frame",
-        )),
+        _ => Err(command_error(Reason::InvalidRequest, "not a command frame")),
     }
 }
 
 fn change(host: &Host, thread_id: &ThreadId, changed: ThreadChanged) -> CommandReply {
     if host.inner.store.card(thread_id).is_none() {
-        return Err(command_error(
-            CommandErrorCode::ThreadMissing,
-            "thread not found",
-        ));
+        return Err(command_error(Reason::ThreadNotFound, "thread not found"));
     }
     host.append(thread_id, vec![LogEvent::ThreadChanged(changed)])
         .map_err(store_error)?;
@@ -477,7 +477,7 @@ fn create_bot(
     name: String,
     purpose: String,
     face: BotFace,
-    engine: EngineChoice,
+    model_selection: ModelSelection,
     role: BotRole,
 ) -> Result<BotProfile, StoreError> {
     let bot_id = if role == BotRole::Main {
@@ -492,7 +492,11 @@ fn create_bot(
             title: name.clone(),
             bot_id: Some(bot_id.clone()),
             parent: None,
-            engine: engine_config(&engine, host.inner.opts.default_cwd.clone()),
+            engine: engine_config(
+                &model_selection,
+                DEFAULT_RUNTIME_MODE,
+                host.inner.opts.default_cwd.clone(),
+            ),
         },
     )?;
     let profile = BotProfile {
@@ -501,8 +505,8 @@ fn create_bot(
         purpose,
         face,
         role,
-        thread_id: card.id,
-        engine,
+        session_thread_id: card.id,
+        default_model_selection: model_selection,
     };
     save_bot(host, &profile)?;
     host.inner.bots.lock().expect("bots").push(profile.clone());
@@ -543,10 +547,10 @@ pub(crate) fn load_bots(host: &Host) -> Result<(), StoreError> {
                 color: "#0169CC".to_owned(),
                 goat: true,
             },
-            EngineChoice {
-                driver: EngineDriver::Codex,
-                model: String::new(),
-                runtime_mode: "full-access".to_owned(),
+            ModelSelection {
+                instance_id: ProviderInstanceId::new("codex"),
+                model: DEFAULT_CODEX_MODEL.to_owned(),
+                options: None,
             },
             BotRole::Main,
         )?;

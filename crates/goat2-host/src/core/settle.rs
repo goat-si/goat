@@ -33,7 +33,7 @@ pub(crate) async fn settle_and_resume(host: &Host) -> StoreResult<()> {
             if request.item_id.is_some() && request.kind != RequestKind::Resend {
                 events.push(LogEvent::RequestResolved(RequestResolved {
                     request_id: request.request_id.clone(),
-                    outcome: RequestOutcome::Cancelled,
+                    outcome: RequestOutcome::Cancel,
                     option_id: None,
                     text: Some("the host restarted".to_owned()),
                     answers: None,
@@ -99,7 +99,7 @@ pub(crate) async fn settle_and_resume(host: &Host) -> StoreResult<()> {
                 ChildResultStatus::InterruptedByRestart
             } else {
                 match child_fold.last_run_outcome {
-                    Some(RunOutcome::Done) => ChildResultStatus::Done,
+                    Some(RunOutcome::Completed) => ChildResultStatus::Completed,
                     Some(RunOutcome::Failed) => ChildResultStatus::Failed,
                     Some(RunOutcome::Interrupted) => ChildResultStatus::Interrupted,
                     _ => ChildResultStatus::Unknown,
@@ -112,7 +112,7 @@ pub(crate) async fn settle_and_resume(host: &Host) -> StoreResult<()> {
                         child_thread_id: child_id.clone(),
                         child_run_id: None,
                         status,
-                        summary: child.last_excerpt.clone(),
+                        summary: child.latest_answer_excerpt.clone(),
                         cursor: ThreadCursor {
                             epoch: child.epoch.clone(),
                             seq: store.last_seq(child_id).unwrap_or(child.applied_seq),

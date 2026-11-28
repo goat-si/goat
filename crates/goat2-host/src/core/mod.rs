@@ -17,8 +17,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use goat2_contracts::limits::{
-    CHILD_WAKE_COALESCE_MS, COLLECT_WINDOW_MS, ENGINE_IDLE_STOP_SECS, MAX_CHILDREN_PER_BOT,
-    MAX_CONCURRENT_RUNS, MAX_CONCURRENT_STARTS,
+    CHILD_WAKE_COALESCE_MS, COLLECT_WINDOW_MS, ENGINE_GROUP_MEMORY_LIMIT_BYTES,
+    ENGINE_IDLE_STOP_SECS, ENGINE_MEMORY_SAMPLE_SECS, ENGINE_MEMORY_WARN_PERCENT,
+    MAX_CHILDREN_PER_BOT, MAX_CONCURRENT_RUNS, MAX_CONCURRENT_STARTS,
 };
 use goat2_contracts::{
     BotId, BotProfile, ChildResultStatus, ItemId, LogEvent, NotifyKind, RunId, ThreadCursor,
@@ -32,11 +33,6 @@ use crate::stall::StallRecorder;
 use crate::store::{Appended, StoreResult, ThreadStore};
 use actor::Msg;
 use sched::Scheduler;
-
-/// Engine group memory limit per thread (owner 2026-11-28; to move into goat2-contracts limits).
-pub const ENGINE_GROUP_MEMORY_LIMIT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-/// How often running engine groups are sampled.
-pub const MEMORY_SAMPLE_SECS: u64 = 10;
 
 /// Tunables; [HostOptions::new] uses the Part 1 values, tests shrink the timers.
 #[derive(Debug, Clone)]
@@ -77,7 +73,7 @@ impl HostOptions {
             collect_window: Duration::from_millis(COLLECT_WINDOW_MS),
             child_coalesce: Duration::from_millis(CHILD_WAKE_COALESCE_MS),
             memory_limit_bytes: ENGINE_GROUP_MEMORY_LIMIT_BYTES,
-            memory_sample: Duration::from_secs(MEMORY_SAMPLE_SECS),
+            memory_sample: Duration::from_secs(ENGINE_MEMORY_SAMPLE_SECS),
             max_wait: Duration::from_secs(60),
         }
     }
@@ -578,7 +574,7 @@ impl Host {
             };
             if bytes > limit {
                 self.send(&id, Msg::MemoryLimit { pgen, bytes });
-            } else if bytes * 10 >= limit * 8
+            } else if bytes * 100 >= limit * u64::from(ENGINE_MEMORY_WARN_PERCENT)
                 && self
                     .inner
                     .memory_warned

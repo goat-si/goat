@@ -73,10 +73,10 @@ pub fn new_fold(id: &ThreadId, epoch: Epoch, line: &LogLine) -> Option<CardFold>
             engine_ref: None,
             status: ThreadStatus::Idle,
             needs_you: None,
-            last_excerpt: String::new(),
+            latest_answer_excerpt: String::new(),
             children: ChildCounts::default(),
             follow_up_mode: created.follow_up_mode,
-            archived: false,
+            archived_at: None,
             updated_at: line.at.clone(),
             epoch,
             applied_seq: line.seq,
@@ -102,17 +102,18 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
             if let Some(title) = &change.title {
                 card.title = clamp_chars(title, CARD_TITLE_MAX_CHARS);
             }
-            if let Some(model) = &change.model {
-                card.engine.model = model.clone();
+            if let Some(selection) = &change.model_selection {
+                card.engine.provider_instance_id = selection.instance_id.clone();
+                card.engine.model_selection = selection.clone();
             }
-            if let Some(mode) = &change.runtime_mode {
-                card.engine.runtime_mode = mode.clone();
+            if let Some(mode) = change.runtime_mode {
+                card.engine.runtime_mode = mode;
             }
             if let Some(mode) = change.follow_up_mode {
                 card.follow_up_mode = mode;
             }
-            if let Some(archived) = change.archived {
-                card.archived = archived;
+            if let Some(archived_at) = &change.archived_at {
+                card.archived_at = archived_at.clone();
             }
         }
         LogEvent::InputAccepted(input) => {
@@ -165,6 +166,13 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
                 }
             }
             // Declined: stays queued (a declined steer becomes a followup, same inputId).
+            // Refused (GOAT never owned the native turn): fails closed, leaves the queue.
+            DeliveryOutcome::Refused => {
+                fold.queued_inputs
+                    .retain(|q| q.input_id != delivered.input_id);
+                fold.active_run_input_ids
+                    .retain(|id| id != &delivered.input_id);
+            }
             DeliveryOutcome::Declined => {
                 fold.active_run_input_ids
                     .retain(|id| id != &delivered.input_id);
@@ -206,7 +214,7 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
                 && !matches!(phase, Some(AssistantMessagePhase::Commentary))
                 && !text.trim().is_empty()
             {
-                card.last_excerpt = clamp_chars(text.trim(), CARD_EXCERPT_MAX_CHARS);
+                card.latest_answer_excerpt = clamp_chars(text.trim(), CARD_EXCERPT_MAX_CHARS);
             }
         }
         LogEvent::RequestOpened(opened) => {
@@ -271,7 +279,8 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
         }
         LogEvent::UserNotified(notified) => {
             if notified.kind == NotifyKind::Result && !notified.text.trim().is_empty() {
-                card.last_excerpt = clamp_chars(notified.text.trim(), CARD_EXCERPT_MAX_CHARS);
+                card.latest_answer_excerpt =
+                    clamp_chars(notified.text.trim(), CARD_EXCERPT_MAX_CHARS);
             }
         }
     }

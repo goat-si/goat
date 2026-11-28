@@ -29,7 +29,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::sched::{Priority, RunPermit};
 use super::{ChildOutcome, Host};
-use crate::api::{CommandErrorCode, ReportOutcome};
+use crate::api::{Reason, ReportOutcome};
 use crate::engine::{
     EngineEvent, EngineHandle, EngineInput, EngineSession, McpEndpoint, RequestAnswer, SessionSpec,
     SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
@@ -50,12 +50,12 @@ pub struct NewInput {
 /// Why an actor refused a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
-    pub code: CommandErrorCode,
+    pub code: Reason,
     pub message: String,
 }
 
 impl Refusal {
-    pub fn new(code: CommandErrorCode, message: impl Into<String>) -> Self {
+    pub fn new(code: Reason, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -231,7 +231,7 @@ fn to_engine(q: &QueuedInput) -> EngineInput {
 impl Actor {
     fn store_err(&self, err: impl std::fmt::Display) -> Refusal {
         tracing::error!(thread = %self.id, %err, "store write failed");
-        Refusal::new(CommandErrorCode::Internal, err.to_string())
+        Refusal::new(Reason::Internal, err.to_string())
     }
 
     fn append(&self, events: Vec<LogEvent>) -> Option<crate::store::Appended> {
@@ -370,7 +370,7 @@ impl Actor {
             .inner
             .store
             .card(&self.id)
-            .ok_or_else(|| Refusal::new(CommandErrorCode::ThreadMissing, "thread not found"))?;
+            .ok_or_else(|| Refusal::new(Reason::ThreadNotFound, "thread not found"))?;
         let mode = input
             .mode
             .unwrap_or_else(|| input_mode_for(card.follow_up_mode));
@@ -461,16 +461,9 @@ impl Actor {
                 Ok(None)
             }
             SteerResult::RefusedUnowned { reason } => {
-                // Fails closed: the input leaves the queue and is never delivered. (Until
-                // DeliveryOutcome::refused lands in goat2-contracts this is written as a cancel.)
-                self.append(vec![LogEvent::InputChanged(InputChanged {
-                    input_id: q.input_id.clone(),
-                    text: None,
-                    mode: None,
-                    cancelled: Some(true),
-                    position: None,
-                })]);
-                Err(Refusal::new(CommandErrorCode::SteerRefused, reason))
+                // Fails closed: the input leaves the queue and is never retried.
+                self.append(vec![delivered(DeliveryOutcome::Refused)]);
+                Err(Refusal::new(Reason::SteerRefused, reason))
             }
             SteerResult::Unknown { .. } => {
                 // Maybe delivered: held for a person to resend or drop, never re-sent by itself.
@@ -710,8 +703,8 @@ impl Actor {
             return;
         };
         let settings = TurnSettings {
-            model: card.engine.model.clone(),
-            runtime_mode: card.engine.runtime_mode.clone(),
+            model_selection: card.engine.model_selection.clone(),
+            runtime_mode: card.engine.runtime_mode,
         };
         let inputs: Vec<EngineInput> = batch.iter().map(to_engine).collect();
         let delivered = |outcome| {
@@ -732,7 +725,7 @@ impl Actor {
                 let mut events = vec![LogEvent::RunAccepted(RunAccepted {
                     run_id: run_id.clone(),
                     engine_turn_ref: EngineTurnRef {
-                        driver: card.engine.driver,
+                        driver: goat2_contracts::EngineDriver::Codex,
                         id: turn_id.clone(),
                     },
                 })];
@@ -745,8 +738,26 @@ impl Actor {
                     engine_requests: Vec::new(),
                 });
             }
-            TurnStartResult::RefusedUnowned { reason } | TurnStartResult::Declined { reason } => {
-                // Fails closed: nothing ran. Inputs stay queued; hold so they are not retried.
+            TurnStartResult::RefusedUnowned { reason } => {
+                // A start onto a native turn GOAT never owned fails closed: the inputs leave the
+                // queue and are never retried (v1 CodexTurnStartGuard.ts:113-172).
+                let run_id_for_report = run_id.clone();
+                let mut events = delivered(DeliveryOutcome::Refused);
+                events.push(LogEvent::RunFinished(RunFinished {
+                    run_id,
+                    outcome: RunOutcome::Failed,
+                    reason: Some(reason),
+                }));
+                self.append(events);
+                drop(permit);
+                self.phase = Phase::Idle;
+                self.after_run(Some(run_id_for_report), ChildResultStatus::Failed)
+                    .await;
+                self.maybe_start();
+            }
+            TurnStartResult::Declined { reason } => {
+                // Declined before anything ran: inputs stay queued; hold so they are not retried
+                // in a loop. The next send or resume_queue releases it.
                 let run_id_for_report = run_id.clone();
                 let mut events = delivered(DeliveryOutcome::Declined);
                 events.push(LogEvent::RunFinished(RunFinished {
@@ -848,7 +859,7 @@ impl Actor {
                 {
                     self.append(vec![LogEvent::RequestResolved(RequestResolved {
                         request_id,
-                        outcome: RequestOutcome::Cancelled,
+                        outcome: RequestOutcome::Cancel,
                         option_id: None,
                         text: Some("closed by the engine".to_owned()),
                         answers: None,
@@ -860,7 +871,7 @@ impl Actor {
                     matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id);
                 if matches_turn {
                     let (outcome, reason) = match outcome {
-                        TurnOutcome::Done => (RunOutcome::Done, None),
+                        TurnOutcome::Done => (RunOutcome::Completed, None),
                         TurnOutcome::Failed { reason } => (RunOutcome::Failed, Some(reason)),
                         TurnOutcome::Interrupted => (RunOutcome::Interrupted, None),
                     };
@@ -895,7 +906,7 @@ impl Actor {
             if self.is_open(request_id) {
                 events.push(LogEvent::RequestResolved(RequestResolved {
                     request_id: request_id.clone(),
-                    outcome: RequestOutcome::Cancelled,
+                    outcome: RequestOutcome::Cancel,
                     option_id: None,
                     text: Some("the run ended".to_owned()),
                     answers: None,
@@ -931,7 +942,7 @@ impl Actor {
         let run_id = run.run_id.clone();
         drop(run);
         let status = match outcome {
-            RunOutcome::Done => ChildResultStatus::Done,
+            RunOutcome::Completed => ChildResultStatus::Completed,
             RunOutcome::Failed => ChildResultStatus::Failed,
             RunOutcome::Interrupted => ChildResultStatus::Interrupted,
             RunOutcome::Unknown => ChildResultStatus::Unknown,
@@ -966,7 +977,7 @@ impl Actor {
                 ReportOutcome::Cancelled => format!("cancelled: {text}"),
             };
             status = match outcome {
-                ReportOutcome::Succeeded => ChildResultStatus::Done,
+                ReportOutcome::Succeeded => ChildResultStatus::Completed,
                 ReportOutcome::Failed | ReportOutcome::Blocked => ChildResultStatus::Failed,
                 ReportOutcome::Cancelled => ChildResultStatus::Interrupted,
             };
@@ -1115,38 +1126,37 @@ impl Actor {
             .inner
             .store
             .fold(&self.id)
-            .ok_or_else(|| Refusal::new(CommandErrorCode::ThreadMissing, "thread not found"))?;
+            .ok_or_else(|| Refusal::new(Reason::ThreadNotFound, "thread not found"))?;
         let request = fold
             .open_requests
             .iter()
             .find(|q| q.request_id == r.request_id)
             .cloned()
-            .ok_or_else(|| Refusal::new(CommandErrorCode::RequestMissing, "request is not open"))?;
+            .ok_or_else(|| Refusal::new(Reason::RequestNotFound, "request is not open"))?;
         let allowed = match request.kind {
             RequestKind::Resend => {
                 matches!(r.outcome, RequestOutcome::Resend | RequestOutcome::Dropped)
             }
-            RequestKind::Decision => matches!(
-                r.outcome,
-                RequestOutcome::Decided | RequestOutcome::Cancelled
-            ),
+            RequestKind::Decision => {
+                matches!(r.outcome, RequestOutcome::Decided | RequestOutcome::Cancel)
+            }
             RequestKind::Approval => matches!(
                 r.outcome,
-                RequestOutcome::Approved
-                    | RequestOutcome::ApprovedForSession
-                    | RequestOutcome::Declined
-                    | RequestOutcome::Cancelled
+                RequestOutcome::Accept
+                    | RequestOutcome::AcceptForSession
+                    | RequestOutcome::Decline
+                    | RequestOutcome::Cancel
             ),
             RequestKind::Question | RequestKind::Signin => {
                 matches!(
                     r.outcome,
-                    RequestOutcome::Answered | RequestOutcome::Cancelled | RequestOutcome::Declined
+                    RequestOutcome::Answered | RequestOutcome::Cancel | RequestOutcome::Decline
                 )
             }
         };
         if !allowed {
             return Err(Refusal::new(
-                CommandErrorCode::InvalidRequest,
+                Reason::InvalidRequest,
                 format!(
                     "outcome {:?} does not fit a {:?} request",
                     r.outcome, request.kind
@@ -1158,10 +1168,7 @@ impl Actor {
                 let options = request.options.clone().unwrap_or_default();
                 let id = r.option_id.clone().unwrap_or_default();
                 Some(options.into_iter().find(|o| o.id == id).ok_or_else(|| {
-                    Refusal::new(
-                        CommandErrorCode::InvalidRequest,
-                        "optionId is not one of the options",
-                    )
+                    Refusal::new(Reason::InvalidRequest, "optionId is not one of the options")
                 })?)
             } else {
                 None
@@ -1187,16 +1194,16 @@ impl Actor {
                     },
                 )
                 .await
-                .map_err(|e| Refusal::new(CommandErrorCode::Internal, e.to_string()))?;
+                .map_err(|e| Refusal::new(Reason::Internal, e.to_string()))?;
             if let Phase::Running(run) = &mut self.phase {
                 run.engine_requests.retain(|(k, _)| k != key);
             }
         } else if request.item_id.is_some()
             && request.kind != RequestKind::Resend
-            && r.outcome != RequestOutcome::Cancelled
+            && r.outcome != RequestOutcome::Cancel
         {
             return Err(Refusal::new(
-                CommandErrorCode::NotAllowed,
+                Reason::NotAllowed,
                 "the engine that asked has stopped; the request can only be cancelled",
             ));
         }
@@ -1215,7 +1222,7 @@ impl Actor {
         // An agent's own question (MCP request.ask): the answer comes back as an input.
         if request.item_id.is_none()
             && request.kind != RequestKind::Resend
-            && r.outcome != RequestOutcome::Cancelled
+            && r.outcome != RequestOutcome::Cancel
         {
             let answer = match (&chosen, &r.text) {
                 (Some(option), _) => format!("chose \"{}\" ({})", option.label, option.id),
@@ -1238,8 +1245,7 @@ impl Actor {
     async fn edit_queue(&mut self, edit: QueueEdit) -> Result<(), Refusal> {
         let pending = self.pending();
         let is_queued = |id: &InputId| pending.iter().any(|q| &q.input_id == id);
-        let not_queued =
-            || Refusal::new(CommandErrorCode::NotQueued, "the input is no longer queued");
+        let not_queued = || Refusal::new(Reason::NotQueued, "the input is no longer queued");
         let change = |input_id: InputId| InputChanged {
             input_id,
             text: None,
@@ -1289,10 +1295,7 @@ impl Actor {
                     return Err(not_queued());
                 };
                 if !matches!(self.phase, Phase::Running(_)) {
-                    return Err(Refusal::new(
-                        CommandErrorCode::SteerRefused,
-                        "no run to steer into",
-                    ));
+                    return Err(Refusal::new(Reason::SteerRefused, "no run to steer into"));
                 }
                 self.host
                     .append(

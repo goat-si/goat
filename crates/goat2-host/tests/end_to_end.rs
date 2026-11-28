@@ -94,7 +94,7 @@ async fn ui_and_agent_paths_through_the_real_server() {
 
     ws.send(Message::text(json!({
         "type":"start_thread","reqId":"r1","clientRequestId":"c1","kind":"user","title":"hello",
-        "engine":{"driver":"codex","model":"m","runtimeMode":"full-access"},"cwd":"/tmp","text":"hi there"
+        "modelSelection":{"instanceId":"codex","model":"m"},"runtimeMode":"full-access","cwd":"/tmp","text":"hi there"
     }).to_string())).await.unwrap();
     let (result, _) = until(&mut ws, |f| {
         f["type"] == "command_result" && f["reqId"] == "r1"

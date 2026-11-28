@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 pub use commands::{
-    BotProfile, Command, CommandError, CommandErrorCode, CommandReply, CommandValue, command_error,
-    is_command,
+    AgentSurfaceErrorCode, BotProfile, Command, CommandError, CommandReply, CommandValue, Reason,
+    command_error, is_command,
 };
 pub use envelope::{ErrorCode, Handoff, NextCall, SurfaceError, SurfaceResult};
 

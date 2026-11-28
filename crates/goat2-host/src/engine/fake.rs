@@ -326,7 +326,7 @@ impl EngineSession for FakeSession {
                     thread_id: self.thread_id.clone(),
                     turn_id: turn_id.clone(),
                     input_ids: ids(&inputs),
-                    model: settings.model.clone(),
+                    model: settings.model_selection.model.clone(),
                 });
                 shared
                     .active_turn

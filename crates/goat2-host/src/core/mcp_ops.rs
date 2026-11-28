@@ -46,7 +46,7 @@ fn card_json(card: &ThreadCard) -> serde_json::Value {
         "threadId": card.id,
         "title": card.title,
         "status": card.status,
-        "lastExcerpt": card.last_excerpt,
+        "lastExcerpt": card.latest_answer_excerpt,
         "needsYou": card.needs_you,
         "updatedAt": card.updated_at,
         "link": format!("[{}](goat-thread://v1/{})", card.title, card.id),
@@ -235,12 +235,15 @@ impl McpHost for Host {
                     by_item_id: by_item_id.clone(),
                 }),
                 engine: EngineConfig {
-                    driver: parent.engine.driver,
-                    model: args
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| parent.engine.model.clone()),
-                    runtime_mode: parent.engine.runtime_mode.clone(),
+                    provider_instance_id: parent.engine.provider_instance_id.clone(),
+                    model_selection: goat2_contracts::ModelSelection {
+                        model: args
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| parent.engine.model_selection.model.clone()),
+                        ..parent.engine.model_selection.clone()
+                    },
+                    runtime_mode: parent.engine.runtime_mode,
                     cwd: args
                         .cwd
                         .clone()

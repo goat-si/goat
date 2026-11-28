@@ -4,24 +4,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// v1 `AgentSurfaceErrorCode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorCode {
-    InvalidRequest,
-    Unauthenticated,
-    PermissionDenied,
-    NotFound,
-    Conflict,
-    Unavailable,
-    Timeout,
-    Expired,
-    Cancelled,
-    Internal,
-    ResourceExhausted,
-    FailedPrecondition,
-    UnknownOutcome,
-}
+/// v1 `AgentSurfaceErrorCode` (from goat2-contracts).
+pub use goat2_contracts::AgentSurfaceErrorCode as ErrorCode;
 
 /// v1 `AgentSurfaceError`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
