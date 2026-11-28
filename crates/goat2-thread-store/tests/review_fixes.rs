@@ -96,15 +96,18 @@ fn flush_reports_a_failed_log_sync() {
             vec![input("i1", "x"), started("r1", &["i1"]), accepted("r1")],
         )
         .unwrap();
-    store
-        .append(&t, vec![answer("r1", "a1", "partial")])
-        .unwrap();
+    // In-run lines are synced by append itself; a failed sync poisons the thread there.
     testing::set_faults(
         &store,
         Faults {
             fail_log_syncs: true,
             ..Default::default()
         },
+    );
+    assert!(
+        store
+            .append(&t, vec![answer("r1", "a1", "partial")])
+            .is_err()
     );
     assert!(store.flush().is_err());
 }
@@ -532,15 +535,18 @@ fn repeated_flush_and_close_keep_reporting_a_failed_sync() {
             vec![input("i1", "x"), started("r1", &["i1"]), accepted("r1")],
         )
         .unwrap();
-    store
-        .append(&t, vec![answer("r1", "a1", "partial")])
-        .unwrap();
+    // In-run lines are synced by append itself; a failed sync poisons the thread there.
     testing::set_faults(
         &store,
         Faults {
             fail_log_syncs: true,
             ..Default::default()
         },
+    );
+    assert!(
+        store
+            .append(&t, vec![answer("r1", "a1", "partial")])
+            .is_err()
     );
     assert!(store.flush().is_err());
     testing::set_faults(&store, Faults::default());
@@ -1026,4 +1032,97 @@ fn abandoning_a_create_syncs_the_threads_directory_before_dropping_the_row() {
     assert_eq!(report.abandoned_creates, vec!["t"]);
     assert!(store.find(&Default::default()).is_empty());
     assert!(trash_dirs(dir.path()).is_empty());
+}
+
+// Review round 10.
+#[test]
+fn an_in_run_line_is_synced_before_any_reader_sees_it() {
+    // A reader holding a cursor past lines a power loss later drops would resume with no reset
+    // (startup settlement reuses those seqs). So every line is durable before it is published.
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("s", "/w"))
+        .unwrap();
+    store
+        .append(&t, vec![input("i1", "x"), started("r1", &["i1"])])
+        .unwrap();
+    let (_, rx) = store.subscribe_thread(&t, None).unwrap();
+    while rx.try_recv().is_ok() {}
+    testing::set_faults(
+        &store,
+        Faults {
+            fail_log_syncs: true,
+            ..Default::default()
+        },
+    );
+    let out = store.append(&t, vec![answer("r1", "a", "partial")]);
+    assert!(matches!(out, Err(StoreError::Io(_))), "{out:?}");
+    assert!(rx.try_recv().is_err(), "an unsynced line was published");
+}
+
+#[test]
+fn startup_clears_trash_left_by_a_delete_whose_id_was_recreated() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(tid("t")), created("old", "/w"))
+            .unwrap();
+        testing::set_faults(
+            &store,
+            Faults {
+                fail_delete_dir_sync: true,
+                ..Default::default()
+            },
+        );
+        assert!(store.delete_thread(&tid("t")).is_err());
+        testing::set_faults(&store, Faults::default());
+        store
+            .create_thread(Some(tid("t")), created("new", "/w"))
+            .unwrap();
+        store.close().unwrap();
+    }
+    assert_eq!(trash_dirs(dir.path()).len(), 1);
+    let (store, _) = open(dir.path());
+    assert!(
+        trash_dirs(dir.path()).is_empty(),
+        "old trash outlived a clean start"
+    );
+    assert_eq!(store.card(&tid("t")).unwrap().unwrap().title, "new");
+}
+
+#[test]
+fn racing_creates_of_one_id_lose_with_thread_exists_and_keep_the_cached_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let store = std::sync::Arc::new(store);
+    for n in 0..40 {
+        let id = format!("race{n}");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let (store, barrier, id) = (store.clone(), barrier.clone(), id.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.create_thread(Some(tid(&id)), created("r", "/w"))
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "{results:?}"
+        );
+        for r in results.iter().filter(|r| r.is_err()) {
+            assert!(matches!(r, Err(StoreError::ThreadExists(_))), "{r:?}");
+        }
+    }
+    let store = std::sync::Arc::into_inner(store).unwrap();
+    store.close().unwrap();
+    // Every winner's row keeps its cached card: a clean start refolds nothing.
+    let (_, report) = open(dir.path());
+    assert!(report.refolded.is_empty(), "{:?}", report.refolded);
 }

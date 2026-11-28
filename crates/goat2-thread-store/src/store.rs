@@ -1,6 +1,6 @@
 //! The store: thread folders, card index, reads and startup.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -349,6 +349,9 @@ pub struct Store {
     /// Test hook: `delete_thread` waits on barriers 0,1 after taking the thread lock and on 2,3
     /// after removing the thread from the map, still holding the lock.
     delete_pause: Mutex<Option<[Arc<std::sync::Barrier>; 4]>>,
+    /// Ids with a `create_thread` in progress: a second create of the same id loses at once with
+    /// ThreadExists instead of racing the first one's creation intent and folder.
+    creating: Mutex<HashSet<ThreadId>>,
 }
 
 fn ms(since: Instant) -> f64 {
@@ -456,6 +459,7 @@ impl Store {
             index_complete: std::sync::atomic::AtomicBool::new(true),
             create_pause: Mutex::new(None),
             delete_pause: Mutex::new(None),
+            creating: Mutex::new(HashSet::new()),
         };
         let mut report = StartupReport {
             threads: 0,
@@ -587,6 +591,8 @@ impl Store {
             });
         }
         timings.settle_ms = ms(t);
+
+        store.sweep_trash()?;
 
         report.threads = lock(&store.shared).cards.len();
         report.logs_opened = store.logs_opened.load(std::sync::atomic::Ordering::Relaxed);
@@ -762,6 +768,30 @@ impl Store {
         }
         if self.opts.fsync {
             sync_dir(&self.threads_dir())?;
+        }
+        Ok(())
+    }
+
+    /// Remove every leftover `.trash-*` folder once the renames that made them are durable. A
+    /// crash after a delete dropped its row, or a same-id create after a delete whose rename sync
+    /// failed, leaves trash no row points at. A failed sync keeps the trash for a later start.
+    fn sweep_trash(&self) -> Result<()> {
+        let mut trash = Vec::new();
+        for entry in fs::read_dir(self.threads_dir())? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(".trash-"))
+            {
+                trash.push(entry.path());
+            }
+        }
+        if trash.is_empty() || self.sync_threads_dir().is_err() {
+            return Ok(());
+        }
+        for path in trash {
+            let _ = fs::remove_dir_all(path);
         }
         Ok(())
     }
@@ -1307,11 +1337,25 @@ impl Store {
     ) -> Result<ThreadCard> {
         let id = id.unwrap_or_else(|| ThreadId::new(new_uuid()));
         validate_thread_id(id.as_str())?;
+        if !lock(&self.creating).insert(id.clone()) {
+            return Err(StoreError::ThreadExists(id.to_string()));
+        }
+        let result = self.create_reserved(id.clone(), created, stop_after);
+        lock(&self.creating).remove(&id);
+        result
+    }
+
+    fn create_reserved(
+        &self,
+        id: ThreadId,
+        created: ThreadCreated,
+        stop_after: u8,
+    ) -> Result<ThreadCard> {
         if self.slot(&id).is_some() {
             return Err(StoreError::ThreadExists(id.to_string()));
         }
         let dir = self.thread_dir(&id);
-        if dir.exists() {
+        if self.probe(&dir)?.is_some() {
             return Err(StoreError::ThreadExists(id.to_string()));
         }
         let mut created = created;
@@ -1328,7 +1372,13 @@ impl Store {
             return Err(StoreError::InvalidEvent("test stop after step 1".into()));
         }
         // 2. folder
-        fs::create_dir(&dir)?;
+        match fs::create_dir(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StoreError::ThreadExists(id.to_string()));
+            }
+            Err(e) => return Err(e.into()),
+        }
         if stop_after == 2 {
             return Err(StoreError::InvalidEvent("test stop after step 2".into()));
         }
@@ -1495,21 +1545,10 @@ impl Store {
         let old_status = card.status;
         let mut lines: Vec<LogLine> = Vec::new();
         let mut pending_blobs: Vec<(usize, String, String)> = Vec::new();
-        let mut needs_sync = false;
         let mut finished = false;
         let at = now_rfc3339();
         for mut event in events {
             let blob_text = self.validate(slot, &card, &fold_state, &mut event)?;
-            needs_sync |= matches!(
-                event,
-                LogEvent::InputAccepted(_)
-                    | LogEvent::InputChanged(_)
-                    | LogEvent::InputDelivered(_)
-                    | LogEvent::RunStarted(_)
-                    | LogEvent::RunAccepted(_)
-                    | LogEvent::RequestResolved(_)
-                    | LogEvent::RunFinished(_)
-            );
             if !matches!(event, LogEvent::ItemCompleted(_)) {
                 let size = serde_json::to_vec(&event)?.len();
                 if size > BLOB_THRESHOLD_BYTES {
@@ -1569,18 +1608,19 @@ impl Store {
         for line in &lines {
             bytes.extend_from_slice(&line::encode(line)?);
         }
-        if let Err(e) = self.write_log(slot, &bytes, needs_sync) {
+        // Every batch is synced before it is published or returned. A reader's cursor must never
+        // pass lines a power loss could drop: startup settlement would reuse those seqs under the
+        // same epoch, and the reader would resume with no reset. A failure poisons the thread and
+        // nothing is published.
+        if let Err(e) = self.write_log(slot, &bytes, true) {
             slot.health = Health::Poisoned(e.to_string());
             slot.writer = None;
             return Err(e);
         }
-        // Written through (outside a run, status change, run end): the log must be durable before
-        // anything is published. A failure poisons the thread and nothing is published.
+        // Card writes go through outside a run, on a status change and at run end; in a run they
+        // are batched until `flush`.
         let write_through =
             fold_state.active_run_id.is_none() || old_status != card.status || finished;
-        if write_through {
-            self.sync_log(slot)?;
-        }
         let card_changed = {
             let mut a = card.clone();
             a.card_seq = slot.card.card_seq;

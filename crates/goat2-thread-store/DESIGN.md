@@ -56,14 +56,15 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
 
 1. Before any append, the thread's index row is committed with `dirty=1` (synchronous=FULL) unless it
    already is durably.
-2. The batch is written with one `write_all`. Batches with `input.accepted`, `input.changed`,
-   `input.delivered`, `run.started`, `run.accepted`, `request.resolved` or `run.finished` are
-   `sync_data`ed before `append` returns. `run.started` is the send boundary: the host sends to the
-   engine only after `append` returns.
-3. Not in a run, or when the status changes, or when a run ends, the batch is written through: the log
-   is synced first, and only then is the card published, subscribers notified and card.json / the
-   index row written. A failed log sync (here or at a boundary event) returns the error and poisons the
-   thread: nothing is published, and the outcome stays uncertain until a reopen checks the actual tail. Otherwise they are batched until `flush`. Before a row is stored clean the log is synced
+2. The batch is written with one `write_all` and `sync_data`ed before anything is published or
+   `append` returns, in a run too. A reader's cursor must never pass a line a power loss could drop:
+   startup settlement would reuse those seqs under the same epoch and the reader would resume with no
+   reset. `run.started` is the send boundary: the host sends to the engine only after `append`
+   returns. Cost: about 4 ms per in-run append on Apple (F_FULLFSYNC; `examples/append_bench.rs`).
+3. Not in a run, or when the status changes, or when a run ends, card.json and the index row are
+   written through after the card is published and subscribers notified. A failed log sync returns the
+   error and poisons the thread: nothing is published, and the outcome stays uncertain until a reopen
+   checks the actual tail. In-run card writes are batched until `flush`. Before a row is stored clean the log is synced
    through the card's `appliedSeq`; the row stays `dirty=1` while a run is active. card.json is
    replaced atomically but not synced: startup trusts the index row and refolds a bad card.json on
    rebuild. A failed cache write keeps the row dirty, does not fail the append, and shows in
@@ -78,8 +79,11 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    delete is returned afterwards. The row is removed only after the rename is synced; otherwise the dirty
    row stays so the next start decides from what is on disk (folder gone: finish the delete; folder back
    after a power loss: keep the thread). The trash contents are removed only after the rename is synced;
-   startup syncs the threads directory before it finishes a delete or clears leftover trash. Marking a create clears any cached card left on the row, and a
-   `creating` row is never loaded from a cached card.
+   startup syncs the threads directory before it finishes a delete or clears leftover trash, and at the
+   end of every start sweeps any `.trash-*` left over (a crash after the row delete, or a same-id
+   create after a delete whose rename sync failed); a failed sync keeps the trash. Marking a create clears any cached card left on the row, and a
+   `creating` row is never loaded from a cached card. Only one create per id runs at a time: a second
+   one returns ThreadExists at once, and so does a folder that appears under it.
 
 Lock order: a thread's lock, then the thread map, then the shared lock (card set, index); the thread
 map is never held while a thread lock is taken.
