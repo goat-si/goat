@@ -24,7 +24,7 @@ export const selectedRuntime = {
   cli: "Codex CLI 0.142.0",
   model: "gpt-6.1-sol · high",
   machine: "Wicked server · local",
-  account: "ChatGPT Pro · j***@lidgeai.com",
+  account: "ChatGPT Pro · you@example.com",
   permissions: "Full access",
   workspace: "opencodex · codex/pr-7712",
 };
@@ -63,11 +63,11 @@ export const initialRuntimes: Record<string, BotRuntime> = Object.fromEntries(
 
 /** Placeholder: the signed-in account per CLI. Real data: ServerProviderAuth.label + masked email. */
 export const accountFor: Record<string, string> = {
-  codex: "ChatGPT Pro · j***@lidgeai.com",
-  claudeAgent: "Claude Max · j***@lidgeai.com",
-  antigravity: "Google AI Ultra · b***7@gmail.com",
+  codex: "ChatGPT Pro · you@example.com",
+  claudeAgent: "Claude Max · you@example.com",
+  antigravity: "Google AI Ultra · you@example.com",
   opencode: "OpenCodex · local",
-  pi: "Kimi · j***@lidgeai.com",
+  pi: "Kimi · you@example.com",
 };
 
 for (const r of Object.values(initialRuntimes)) r.account = accountFor[r.driver] ?? "";
