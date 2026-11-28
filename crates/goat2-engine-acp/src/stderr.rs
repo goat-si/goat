@@ -170,12 +170,60 @@ impl StderrTail {
     }
 }
 
-/// The home directories v1 strips (`HOME`, `USERPROFILE`).
+/// The home directories v1 strips: `HOME`, `USERPROFILE` and `os.homedir()` (v1 stderr.ts:22,
+/// whose callers pass `os.homedir()`). `os.homedir()` falls back to the account record, which
+/// can differ from a changed `HOME`.
 pub fn home_directories() -> Vec<String> {
-    ["HOME", "USERPROFILE"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .collect()
+    home_directories_from(
+        ["HOME", "USERPROFILE"].map(|name| std::env::var(name).ok()),
+        account_home(),
+    )
+}
+
+/// [home_directories] from the variables' values and the account's home, each once.
+fn home_directories_from(
+    variables: impl IntoIterator<Item = Option<String>>,
+    account: Option<String>,
+) -> Vec<String> {
+    let mut homes: Vec<String> = Vec::new();
+    for home in variables.into_iter().chain([account]).flatten() {
+        if !homes.contains(&home) {
+            homes.push(home);
+        }
+    }
+    homes
+}
+
+/// The current account's home directory from the password database (`getpwuid_r`, as libuv's
+/// `os.homedir()` reads it when `HOME` is unset).
+#[cfg(unix)]
+pub fn account_home() -> Option<String> {
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: zeroed passwd is a valid out parameter; the buffer outlives every read of it.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut found,
+        )
+    };
+    if status != 0 || found.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    // SAFETY: getpwuid_r succeeded, so pw_dir points to a NUL-terminated string in `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    let dir = dir.to_str().ok()?;
+    (!dir.is_empty()).then(|| dir.to_owned())
+}
+
+/// Windows: `os.homedir()` is `USERPROFILE`, already in [home_directories].
+#[cfg(not(unix))]
+pub fn account_home() -> Option<String> {
+    None
 }
 
 /// v1 `appendAcpStderrTail`: the last [STDERR_TAIL_MAX_CHARS] characters.
@@ -244,6 +292,32 @@ mod tests {
             sanitize_stderr_excerpt(text, &["/home/me".into(), "/".into()]),
             "at ~/proj x-api-key: [redacted] Authorization: Basic [redacted] [redacted] [redacted] [redacted] [sign-in-url] [pairing-url]"
         );
+    }
+
+    /// v1 stderr.ts:22 strips `os.homedir()` too: the account's home stays a home directory when
+    /// `HOME` points elsewhere (round 7 part 2.5).
+    #[test]
+    fn the_account_home_is_a_home_directory() {
+        assert_eq!(
+            home_directories_from(
+                [Some("/tmp/other".to_owned()), None],
+                Some("/Users/alice".to_owned())
+            ),
+            vec!["/tmp/other".to_owned(), "/Users/alice".to_owned()]
+        );
+        assert_eq!(
+            home_directories_from(
+                [Some("/Users/alice".to_owned())],
+                Some("/Users/alice".into())
+            ),
+            vec!["/Users/alice".to_owned()]
+        );
+        #[cfg(unix)]
+        {
+            let account = account_home().expect("the test account has a home directory");
+            assert!(account.starts_with('/'));
+            assert!(home_directories().contains(&account));
+        }
     }
 
     #[test]

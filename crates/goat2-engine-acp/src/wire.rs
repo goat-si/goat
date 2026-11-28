@@ -150,23 +150,51 @@ pub struct SessionSetup {
     pub raw: Value,
 }
 
-/// v1 `parseSessionModeState` (runtimeModel.ts:466-...).
+/// v1 `parseSessionModeState` (runtimeModel.ts:478-517): the `modes` field, or else the
+/// `category: "mode"` select option; a mode without an id or a name is skipped, and a state with
+/// no usable mode is none.
 pub fn parse_modes(value: &Value) -> Option<ModeState> {
-    let modes = value.get("modes")?;
-    let current = text_field(modes, "currentModeId")?;
-    let available = modes
-        .get("availableModes")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(|mode| {
-                    let id = text_field(mode, "id")?;
-                    let name = text_field(mode, "name").unwrap_or_else(|| id.clone());
-                    Some((id, name))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let (current, available): (String, Vec<(String, String)>) =
+        match value.get("modes").filter(|v| !v.is_null()) {
+            Some(modes) => (
+                text_field(modes, "currentModeId")?,
+                modes
+                    .get("availableModes")
+                    .and_then(Value::as_array)
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|mode| {
+                                Some((text_field(mode, "id")?, text_field(mode, "name")?))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+            None => {
+                let option = value
+                    .get("configOptions")
+                    .and_then(Value::as_array)?
+                    .iter()
+                    .find(|option| {
+                        str_field(option, "category") == Some("mode")
+                            && str_field(option, "type") == Some("select")
+                    })?;
+                (
+                    text_field(option, "currentValue")?,
+                    select_values(option)
+                        .into_iter()
+                        .filter_map(|(id, name)| {
+                            let (id, name) = (id.trim(), name.trim());
+                            (!id.is_empty() && !name.is_empty())
+                                .then(|| (id.to_owned(), name.to_owned()))
+                        })
+                        .collect(),
+                )
+            }
+        };
+    if available.is_empty() {
+        return None;
+    }
     Some(ModeState {
         current_mode_id: current,
         available,
@@ -211,16 +239,14 @@ impl SessionSetup {
     }
 }
 
-/// v1 `findModelConfigOption` (runtimeModel.ts:428-435): the select option for the model.
+/// v1 `findModelConfigOption` (runtimeModel.ts:428-435): the first `category: "model"` select
+/// option with a non-empty id.
 pub fn find_model_config_option(options: &[Value]) -> Option<&Value> {
-    options
-        .iter()
-        .find(|option| str_field(option, "category") == Some("model"))
-        .or_else(|| {
-            options
-                .iter()
-                .find(|option| str_field(option, "id") == Some("model"))
-        })
+    options.iter().find(|option| {
+        str_field(option, "category") == Some("model")
+            && str_field(option, "type") == Some("select")
+            && config_option_id(option).is_some_and(|id| !id.trim().is_empty())
+    })
 }
 
 /// A config option's id (`id`; ACP v2 drafts and v1 effect-acp fixtures say `configId`).
@@ -282,7 +308,7 @@ mod tests {
             &json!({
                 "sessionId": "s1",
                 "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}, {"id": "yolo", "name": "Yolo"}]},
-                "configOptions": [{"id": "model", "type": "select", "currentValue": "a", "options": [{"value": "a", "name": "A"}, {"group": "g", "options": [{"value": "b", "name": "B"}]}]}]
+                "configOptions": [{"id": "model", "category": "model", "type": "select", "currentValue": "a", "options": [{"value": "a", "name": "A"}, {"group": "g", "options": [{"value": "b", "name": "B"}]}]}]
             }),
             None,
         )
@@ -290,5 +316,45 @@ mod tests {
         assert!(setup.modes.as_ref().unwrap().has("yolo"));
         let option = find_model_config_option(&setup.config_options).unwrap();
         assert_eq!(select_values(option).len(), 2);
+    }
+
+    /// v1 runtimeModel.ts:428-435: only a `category: "model"` select option with an id is the
+    /// model option (round 7 part 2.3).
+    #[test]
+    fn the_model_option_is_a_model_select_with_an_id() {
+        let options = [
+            json!({"id": "model", "type": "select", "options": []}),
+            json!({"id": "m1", "category": "model", "type": "boolean"}),
+            json!({"id": " ", "category": "model", "type": "select", "options": []}),
+        ];
+        assert!(find_model_config_option(&options).is_none());
+        let options = [
+            options[0].clone(),
+            json!({"id": "m2", "category": "model", "type": "select", "options": []}),
+        ];
+        assert_eq!(
+            find_model_config_option(&options).and_then(config_option_id),
+            Some("m2")
+        );
+    }
+
+    /// v1 runtimeModel.ts:478-517: a mode without a name is skipped, no usable mode is no state,
+    /// and the mode select option stands in for a missing `modes` (round 7 part 2.3).
+    #[test]
+    fn modes_follow_v1() {
+        let modes = parse_modes(&json!({"modes": {"currentModeId": "a", "availableModes": [
+            {"id": "a", "name": "A"}, {"id": "b"}, {"id": "", "name": "C"}
+        ]}}))
+        .unwrap();
+        assert_eq!(modes.available, vec![("a".to_owned(), "A".to_owned())]);
+        assert!(
+            parse_modes(&json!({"modes": {"currentModeId": "a", "availableModes": []}})).is_none()
+        );
+        let modes = parse_modes(&json!({"configOptions": [{"id": "mode", "category": "mode",
+            "type": "select", "currentValue": "ask", "options": [{"value": "ask", "name": "Ask"},
+            {"group": "g", "name": "G", "options": [{"value": "code", "name": "Code"}]}]}]}))
+        .unwrap();
+        assert_eq!(modes.current_mode_id, "ask");
+        assert!(modes.has("code"));
     }
 }

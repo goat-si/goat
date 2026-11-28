@@ -105,48 +105,6 @@ impl HttpRelay {
         }
         request
     }
-    /// Send a JSON-RPC message and collect HTTP response payloads.
-    pub async fn send(&self, message: &Value) -> Result<Vec<Value>, BridgeError> {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        let relay = self.clone();
-        let line = message.to_string();
-        let task = tokio::spawn(async move {
-            relay
-                .send_raw(&line, |payload| {
-                    let _ = sender.send(payload);
-                })
-                .await
-        });
-        let mut entries = Vec::new();
-        let mut total = 0usize;
-        while let Some(payload) = receiver.recv().await {
-            // Bounded like [Self::send_collect]: stop reading once the payloads pass the cap.
-            total += payload.to_string().len();
-            if total > MAX_RESPONSE_BYTES {
-                task.abort();
-                return Err(BridgeError::new(
-                    ErrorKind::Protocol,
-                    format!("GOAT MCP endpoint response exceeds {MAX_RESPONSE_BYTES} bytes."),
-                ));
-            }
-            if payload.get("id").is_some()
-                && payload.get("method").and_then(Value::as_str).is_some()
-            {
-                let id = payload["id"].clone();
-                let reply = if payload["method"] == "ping" {
-                    json!({"jsonrpc":"2.0","id":id,"result":{}})
-                } else {
-                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}})
-                };
-                Box::pin(self.send(&reply)).await?;
-            } else {
-                entries.push(payload);
-            }
-        }
-        task.await
-            .map_err(|e| BridgeError::new(ErrorKind::Transport, e.to_string()))??;
-        Ok(entries)
-    }
     /// Send a raw JSON line, delivering SSE events as they arrive.
     pub async fn send_raw<F: FnMut(Value)>(
         &self,
@@ -351,25 +309,6 @@ impl HttpRelay {
         );
         error.status = Some(status.as_u16());
         Err(error)
-    }
-    /// Initialize a reusable tool session. v1 AcpMcpStdioBridge.ts:208-230.
-    pub async fn initialize(&self, client_name: &str) -> Result<(), BridgeError> {
-        let id = "t3-acp-cli-initialize";
-        let responses = self.send(&json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":client_name,"version":"0.0.0"}}})).await?;
-        if !responses
-            .iter()
-            .any(|v| v.get("id") == Some(&json!(id)) && v.get("error").is_none())
-        {
-            let mut err = BridgeError::new(
-                ErrorKind::Protocol,
-                "GOAT MCP endpoint rejected initialization.",
-            );
-            err.stage = Some("initialize");
-            return Err(err);
-        }
-        self.send(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
-            .await?;
-        Ok(())
     }
 }
 /// Extract the matching result. v1 AcpMcpStdioBridge.ts:259-285.

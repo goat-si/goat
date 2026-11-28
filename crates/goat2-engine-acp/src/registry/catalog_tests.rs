@@ -15,6 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::archive::tests::{tar_gz, zip_bytes};
 use super::catalog::{
     AcpRegistryCatalog, CatalogOptions, HostContext, Inspection, LaunchKind, ResolveOptions,
+    SpawnSpec, launch_command,
 };
 use super::command_path::Environment;
 use super::contracts::{
@@ -1573,6 +1574,31 @@ async fn launch_gives_antigravity_a_run_temp_directory_and_claude_its_v2_flag() 
         "1".to_owned()
     )));
     assert!(launch.flavor.command.env.iter().any(|(k, _)| k == "PATH"));
+}
+
+/// The host's UI bearer token (GOAT2_HOST_TOKEN) carried over from the host snapshot does not reach
+/// a registry agent's environment, as lane B's driver keeps it out (round 7 part 2.1).
+#[test]
+fn a_base_environment_holding_the_host_token_does_not_pass_it_to_the_agent() {
+    let base: Environment = [
+        ("GOAT2_HOST_TOKEN".to_owned(), "ui-secret".to_owned()),
+        ("PATH".to_owned(), "/usr/bin".to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    let spawn = SpawnSpec {
+        command: PathBuf::from("/usr/bin/agent"),
+        args: Vec::new(),
+        cwd: PathBuf::from("/w"),
+        env: base.clone(),
+    };
+    let command = launch_command(&spawn, &base);
+    assert!(
+        !command.env.iter().any(|(k, _)| k == "GOAT2_HOST_TOKEN"),
+        "the agent inherited the host's UI token: {:?}",
+        command.env
+    );
+    assert!(command.env.iter().any(|(k, _)| k == "PATH"));
 }
 
 /// The agent process gets exactly the environment the registry resolved: a variable the GOAT

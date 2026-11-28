@@ -86,6 +86,9 @@ impl Launch {
                 "CODEX_SESSION_ID",
                 "CODEX_TOOL_CALL_ID",
                 "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+                // The GOAT 2 host's UI bearer token: agent commands must never see it (lane B,
+                // goat2-engine-codex/src/process.rs:65; v1 has no such token).
+                "GOAT2_HOST_TOKEN",
             ]
             .map(OsString::from),
         );
@@ -472,5 +475,35 @@ mod unix {
             }
         }
         Ok(total_kib * 1024)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncBufReadExt;
+
+    /// Ported from lane B's goat2-engine-codex/tests/process.rs:152-155 (80fc24dbd9): the host's
+    /// UI bearer token is GOAT2_, which the GOAT_ prefix rule does not catch (round 7 part 2.1).
+    #[tokio::test]
+    async fn the_host_ui_token_is_not_inherited_but_other_host_settings_are() {
+        // SAFETY: test-only environment mutation before spawning; no other test reads these.
+        unsafe {
+            std::env::set_var("GOAT2_HOST_TOKEN", "ui-secret");
+            std::env::set_var("GOAT2_ACP_PROCESS_TEST_SETTING", "/tmp/parity");
+        }
+        let launch = Launch::new("/bin/sh")
+            .arg("-c")
+            .arg("echo \"[$GOAT2_HOST_TOKEN][$GOAT2_ACP_PROCESS_TEST_SETTING]\"")
+            .without_host_identity();
+        let mut child = ChildProcess::spawn(&launch).unwrap();
+        let stdout = child.take_stdout().unwrap();
+        let mut line = String::new();
+        tokio::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        assert_eq!(line.trim_end(), "[][/tmp/parity]");
+        child.shutdown().await;
     }
 }

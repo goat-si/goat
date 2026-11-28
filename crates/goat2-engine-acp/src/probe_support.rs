@@ -758,6 +758,7 @@ pub fn is_host_identity(name: &str) -> bool {
                 | "CODEX_SESSION_ID"
                 | "CODEX_TOOL_CALL_ID"
                 | "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
+                | "GOAT2_HOST_TOKEN"
         )
 }
 

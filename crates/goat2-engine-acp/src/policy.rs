@@ -76,26 +76,50 @@ fn checkable_path(value: Option<&Value>) -> Option<String> {
     Some(value.to_owned())
 }
 
-/// v1 `acpChangedPathsOfToolCall` (clientPolicy.ts:139-209).
-pub fn changed_paths_of_tool_call(tool_call: &Value) -> ChangedPaths {
-    let mut paths: Vec<String> = Vec::new();
-    let mut complete = true;
-    let mut require = |value: Option<&Value>, paths: &mut Vec<String>| match checkable_path(value) {
-        Some(path) => {
-            if !paths.contains(&path) {
-                paths.push(path);
+/// The paths a tool call names so far, in first-seen order, de-duplicated through a set as v1's
+/// `Set` (clientPolicy.ts:122-128).
+#[derive(Default)]
+struct PathSet {
+    order: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl PathSet {
+    /// Add a checkable path. None makes the whole reading unknown: the value is not checkable,
+    /// or the call names more than [MAX_ACP_CHANGED_PATHS] paths. Stopping there keeps a frame of
+    /// many locations linear (round 7 part 2.2; v1 only checks the cap at the end, :209).
+    fn require(&mut self, value: Option<&Value>) -> Option<()> {
+        let path = checkable_path(value)?;
+        if self.seen.insert(path.clone()) {
+            self.order.push(path);
+            if self.order.len() > MAX_ACP_CHANGED_PATHS {
+                return None;
             }
         }
-        None => complete = false,
-    };
+        Some(())
+    }
+}
+
+/// v1 `acpChangedPathsOfToolCall` (clientPolicy.ts:139-209).
+pub fn changed_paths_of_tool_call(tool_call: &Value) -> ChangedPaths {
+    match known_changed_paths(tool_call) {
+        Some(paths) => ChangedPaths::Known(paths),
+        None => ChangedPaths::Unknown,
+    }
+}
+
+/// [changed_paths_of_tool_call]; None is unknown. v1 keeps reading after a part makes the call
+/// unknown, which cannot change the answer, so this returns at the first one.
+fn known_changed_paths(tool_call: &Value) -> Option<Vec<String>> {
+    let mut paths = PathSet::default();
     match tool_call.get("locations") {
         Some(Value::Array(locations)) => {
             for location in locations {
-                require(location.get("path"), &mut paths);
+                paths.require(location.get("path"))?;
             }
         }
         None | Some(Value::Null) => {}
-        Some(_) => require(None, &mut paths),
+        Some(_) => return None,
     }
     match tool_call.get("content") {
         Some(Value::Array(content)) => {
@@ -103,49 +127,42 @@ pub fn changed_paths_of_tool_call(tool_call: &Value) -> ChangedPaths {
                 match entry.get("type").and_then(Value::as_str) {
                     Some("content") | Some("terminal") => continue,
                     Some("diff") => {}
-                    _ => {
-                        require(None, &mut paths);
-                        continue;
-                    }
+                    _ => return None,
                 }
                 match entry.get("changes") {
-                    None | Some(Value::Null) => require(entry.get("path"), &mut paths),
+                    None | Some(Value::Null) => paths.require(entry.get("path"))?,
                     Some(Value::Array(changes)) => {
                         if entry.get("path").is_some_and(|p| !p.is_null()) {
-                            require(entry.get("path"), &mut paths);
+                            paths.require(entry.get("path"))?;
                         }
                         for change in changes {
                             match change.get("operation").and_then(Value::as_str) {
                                 Some("move") => {
-                                    require(change.get("oldPath"), &mut paths);
-                                    require(change.get("path"), &mut paths);
+                                    paths.require(change.get("oldPath"))?;
+                                    paths.require(change.get("path"))?;
                                 }
                                 Some("add" | "delete" | "modify" | "copy") => {
-                                    require(change.get("path"), &mut paths)
+                                    paths.require(change.get("path"))?
                                 }
-                                _ => require(None, &mut paths),
+                                _ => return None,
                             }
                         }
                     }
-                    Some(_) => require(None, &mut paths),
+                    Some(_) => return None,
                 }
             }
         }
         None | Some(Value::Null) => {}
-        Some(_) => require(None, &mut paths),
+        Some(_) => return None,
     }
     if let Some(input) = tool_call.get("rawInput").and_then(Value::as_object) {
         for key in ACP_RAW_INPUT_PATH_KEYS {
             if let Some(value) = input.get(key).filter(|v| !v.is_null()) {
-                require(Some(value), &mut paths);
+                paths.require(Some(value))?;
             }
         }
     }
-    if complete && paths.len() <= MAX_ACP_CHANGED_PATHS {
-        ChangedPaths::Known(paths)
-    } else {
-        ChangedPaths::Unknown
-    }
+    Some(paths.order)
 }
 
 /// v1 `mergeAcpChangedPaths` (clientPolicy.ts:98-107) and `changedPathsField` (runtimeModel.ts:936-938):
@@ -573,6 +590,25 @@ mod tests {
             permission_disposition(&p, &json!({"kind": "execute"})),
             Disposition::Ask
         );
+    }
+
+    /// A call naming more distinct paths than the cap is unknown, and the reading stops at the cap
+    /// (v1 clientPolicy.ts:122-128 collects into a Set). Without the stop, a 16 MiB frame of
+    /// locations made the de-duplication quadratic (round 7 part 2.2). The channel bounds a hang.
+    #[test]
+    fn many_distinct_locations_are_unknown_quickly() {
+        let locations: Vec<Value> = (0..200_000)
+            .map(|i| json!({ "path": format!("/w/f{i}.txt") }))
+            .collect();
+        let call = json!({ "locations": locations });
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(changed_paths_of_tool_call(&call));
+        });
+        let paths = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("reading 200,000 locations did not stop at the cap");
+        assert_eq!(paths, ChangedPaths::Unknown);
     }
 
     #[test]
