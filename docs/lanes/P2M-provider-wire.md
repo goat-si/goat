@@ -59,3 +59,10 @@ AcpRegistryPrepareResult, ServerProviderEntry; frames above. All additive.
    resolves the refresh on the next providers frame.
 - The UI shows v1's cloud defaults (Claude/Cursor/Devin Cloud) as switched off locally; the host never reports them.
 - Fake-host reference: apps/web/src/host/fakeProviders.ts on origin/goat2_providers_ui.
+
+3. refresh_providers ordering (P2-M review, origin/goat2_providers_ui a38f1d6): send the refresh's providers frame
+   BEFORE its command_result, on the same socket. The UI resolves the refresh with the latest list when the
+   command_result arrives if a providers frame came after the request; otherwise it waits up to 15 s and then reports
+   "The host did not send its provider list after the refresh." Host plan: refresh completes the probe, pushes the
+   providers frame to every subscription on the requesting socket, then answers command_result (WS module sends both
+   through the same per-socket queue, so the order holds).
