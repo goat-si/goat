@@ -388,19 +388,27 @@ Global names (audit-3 residual): v1's @keyframes (fleet-*, goat-arrive, goat-mob
 
 ### GOAT 2 provider surfaces (lane P2-M, 2026-11-29)
 
-New GOAT 2 code around the lifted v1 provider screens; no v1 counterpart unless named.
+The provider screens are GOAT 2 code drawn from the redesigned boards (design/paper/part2, goat2 2ca4a19 / cb1749f:
+README brief and 9 principles, providers-inventory.md for the 35 v1 features). v1 is the source for features, facts
+and the data layer, not for the look. The lifted v1 provider screens (ProviderSettingsPanel, AddProviderInstanceDialog,
+ProviderModelPicker and their seam wrappers) stay in apps/web/src/v1 byte-identical but are no longer mounted.
 
 | GOAT 2 path | v1 source @916b5ccc | How / why |
 |---|---|---|
 | docs/part2/provider-wire.md | packages/contracts/src/{rpc,server,providerSetup,acpRegistry}.ts (names and shapes) | owner-approved provider wire; lane C implements the frames, lane E the host module |
-| apps/web/src/providers/wire.ts | the same v1 shapes, via lane C's generated TS (goat2_contracts_step2 1a1b123) | field-for-field mirror until contracts step 2 reaches goat2 |
-| apps/web/src/providers/hostProviderPort.ts | v1 WS method names (rpc.ts WS_METHODS) | answers the v1 methods the screens call with provider frames; v1 methods GOAT 2 does not serve (provider self-update, credential sign-in steps, install removal) are refused with a sentence |
+| apps/web/src/providers/wire.ts | the same v1 shapes, via lane C's generated TS (@goat2/contracts-rs) | narrows the generated unions for the provider code |
+| apps/web/src/providers/hostProviderPort.ts | v1 WS method names (rpc.ts WS_METHODS) | answers v1 method names with provider frames for the GOAT 2 screens and the v1 seam; refresh resolves only from frames between request and result; v1 methods GOAT 2 does not serve are refused with a sentence |
+| apps/web/src/providers/context.tsx | - | one port per host client; the live provider list for the screens |
+| apps/web/src/providers/view.ts | components/settings/ProviderSettingsPanel.tsx, ProviderInstanceCard.tsx (states), AddProviderInstanceDialog.tsx (setup badges), providerInstances.ts | which providers are added, state word / dot / next step, catalog sections and actions, first-run list; pure, unit-tested |
+| apps/web/src/providers/catalogMeta.ts | components/settings/providerDriverMeta.ts (kinds, cloud counterparts), packages/provider-acp-registry/src/localPresets.ts (read from the lifted file) | names, catalog lines, cloud counterparts, presets |
+| apps/web/src/providers/{ProvidersMode,ProviderDetail,Catalog,FirstRun,BotSettings,ModelChip,ui}.tsx | features of ProviderSettingsPanel, ProviderInstanceCard, ProviderAuthenticationSection, AddProviderInstanceDialog, AcpRegistrySearchStep, ProviderModelPicker, GoatBotModelPicker | boards 1PBB-2, 1Q0P-2, 1QAN-2, 2LET-2, 2LEU-2, 2LEV-2, 1QM8-2, 1QYE-2; style values copied from the board exports; every action is a provider command or change_thread |
+| apps/web/src/providers/favorites.ts | v1 favourite models (settings favorites) | kept on this device until the host stores settings |
+| apps/web/src/providers/navigation.ts, App.tsx settings routes, scenes.ts | routes/_chat.settings.providers.tsx | Providers opens from the rail's settings item; ?instanceId= and the picker's Open Providers select a provider |
+| packages/provider-icons/src/providerIconDefs.ts (fxIcon, omoIcon, devinCloudIcon) | packages/provider-fx/src/client.ts, packages/provider-pi/src/omoClient.ts, packages/provider-devin-cloud/src/client.ts | icon objects verbatim |
 | apps/web/src/host/client.ts (watchProviders, providerCommand) | - | providers subscription (resubscribe on reconnect, stale subIds dropped) and provider commands |
-| apps/web/src/host/fakeProviders.ts + fakeHost.ts delegation + HostProvider scenes | Paper boards 1PBB-2 / 1QAN-2 (drawn from v1), v1 model defaults (contracts model.ts:126-160), live ACP registry index | demo provider world for scenes and the prototype; flows step through v1's phases; never signs in or installs for real |
-| apps/web/src/settings/SettingsMode.tsx, App.tsx settings mode, ui-state settingsPath | routes/_chat.settings.providers.tsx | GOAT 2 frame (rail + v1 settings nav + page); Providers and GOAT Bot pages live, other sections Planned |
-| apps/web/src/App.tsx BotModelPicker / BotSettingsPage / useThreadModelChange | components/goatBot/GoatBotModelPicker.tsx | composer chip and bot settings use v1's picker; the choice is change_thread on the bot's thread |
-| apps/web/e2e/providers.spec.ts, src/providers/hostProviderPort.test.ts, src/v1/seam/goat2/providerPort.test.ts | - | the 11 local kinds listed with state, sign-in, registry add, pickers, nav; adapter frames; fake data through v1 schemas |
-| apps/web/e2e/baseline.spec.ts-snapshots (2026-11-29) | - | recaptured after the composer chip became v1's picker trigger (v1 shows the short model name, e.g. "6.1 Sol") |
+| apps/web/src/host/fakeProviders.ts + fakeHost.ts delegation + HostProvider scenes | Paper boards (part2), v1 model defaults (contracts model.ts), live ACP registry index | demo provider world for scenes and the prototype (first-run scene 2LEV-2); flows step through v1's phases; never signs in or installs for real |
+| apps/web/e2e/providers.spec.ts, src/providers/{view,hostProviderPort}.test.ts, src/v1/seam/goat2/providerPort.test.ts | - | list states, on/off, sign-in, URL auth, catalog add / install / 2 registry agents, another account, repair, first run, pickers (change_thread, reasoning, favourites), bot settings |
+| apps/web/e2e/baseline.spec.ts-snapshots (2026-11-29, recaptured on mac-studio) | - | the composer chip is the board 1QM8-2 trigger, and the bot panel's edit button works (no longer dimmed as planned) |
 
 ## Provider and bot runtime contracts (lane C)
 

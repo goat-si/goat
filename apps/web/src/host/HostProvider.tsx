@@ -6,7 +6,7 @@ import { HostClient, localStorageCache, type HostSnapshot } from "./client.ts";
 import { localStorageOutbox, memoryStorage } from "./outbox.ts";
 import { OfflineTransport, WebSocketTransport } from "./transport.ts";
 import { FakeHost } from "./fakeHost.ts";
-import { FakeProviders, demoProviderEntries } from "./fakeProviders.ts";
+import { FakeProviders, demoProviderEntries, firstRunProviderEntries } from "./fakeProviders.ts";
 import { DEMO_NOW, demoWorld, withQueue } from "./demoWorld.ts";
 import { deriveThread, type DerivedThread, type ThreadView } from "./store.ts";
 
@@ -44,7 +44,7 @@ export function createHostFromLocation(loc: Location = window.location): HostCon
   const frozen = fakeScene !== null;
   // Providers of Paper board 1PBB-2 (fakeProviders.ts); demo flows only, never a real provider.
   const nowIso = () => (frozen ? DEMO_NOW : new Date()).toISOString();
-  world.providers = new FakeProviders(demoProviderEntries(nowIso()), undefined, { now: nowIso });
+  world.providers = new FakeProviders(scene === "2LEV-2" ? firstRunProviderEntries(nowIso()) : demoProviderEntries(nowIso()), undefined, { now: nowIso });
   if (frozen && typeof window !== "undefined") (window as unknown as { __goat2FakeProviders?: FakeProviders }).__goat2FakeProviders = world.providers; // tests finish demo sign-ins
   const latency = Number(params.get("latency") ?? 0) || 0; // verification only: slow host replies
   const fake = new FakeHost(world, { connect: scene === "12P-1" || scene === "1N65-1" ? "never" : "open", latency, now: () => (frozen ? DEMO_NOW : new Date()).toISOString() });

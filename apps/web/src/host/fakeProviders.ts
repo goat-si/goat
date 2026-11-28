@@ -21,6 +21,13 @@ export type ProviderCommandOutcome =
 const model = (slug: string, name: string, isDefault = false): ServerProviderModel =>
   ({ slug, name, isCustom: false, ...(isDefault ? { isDefault: true } : {}), capabilities: null });
 
+/** Codex models offer reasoning effort (v1 codex option descriptors). */
+const codexModel = (slug: string, name: string, isDefault = false): ServerProviderModel => ({
+  ...model(slug, name, isDefault),
+  capabilities: { optionDescriptors: [{ type: "select", id: "reasoningEffort", label: "Reasoning", currentValue: "high",
+    options: [{ id: "low", label: "Low" }, { id: "medium", label: "Medium" }, { id: "high", label: "High", isDefault: true }] }] },
+});
+
 const probe = (at: string, p: Partial<ProviderProbeResult> & Pick<ProviderProbeResult, "installed" | "status">): ProviderProbeResult =>
   ({ version: null, auth: { status: "unknown" }, models: [], checkedAt: at, ...p });
 
@@ -33,21 +40,29 @@ const agentAuth = (instanceId: string): ProviderAuthState => ({
   methods: [{ id: "agent-login", name: "Sign in with the agent", description: null, type: "agent" }],
 });
 
-/** Board 1PBB-2: every local v1 driver kind (providerDriverMeta.ts) with the state the board shows. */
+/** Boards 1PBB-2 / 1QAN-2: every local v1 driver kind (providerDriverMeta.ts) with the state the boards show. Grok and
+ * fx are installed but not added (catalog "On this Mac"); Muse is off and not installed (catalog "1-click install"). */
 export function demoProviderEntries(at: string): ServerProviderEntry[] {
   const e = (instanceId: string, driver: string, p: ProviderProbeResult, extra: Partial<ServerProviderEntry> = {}): ServerProviderEntry =>
     ({ instanceId, driver, enabled: true, capabilities: CAPABILITIES as ProviderCapabilities, probe: p, ...extra });
+  const codexModels = [codexModel("gpt-6.1-sol", "GPT-6.1 Sol", true), codexModel("gpt-6.1-terra", "GPT-6.1 Terra"), codexModel("gpt-6-luna", "GPT-6 Luna"), codexModel("gpt-6-astra", "GPT-6 Astra")];
   return [
-    e("codex", "codex", probe(at, { installed: true, version: "0.167.0", cli: "present", status: "ready",
+    e("codex", "codex", probe(at, { installed: true, version: "0.167.0", cli: "present", status: "ready", binaryPath: "/Users/you/.local/bin/codex",
       auth: { status: "authenticated", type: "chatgpt", label: "ChatGPT Pro", email: "you@example.com", canLogout: true },
-      models: [model("gpt-6-astra", "GPT-6 Astra", true), model("gpt-6.1-sol", "GPT-6.1 Sol"), model("gpt-6.1-terra", "GPT-6.1 Terra"), model("gpt-6-luna", "GPT-6 Luna")] }),
-      { setup: setup(true, true) }),
+      models: codexModels }),
+      { displayName: "Personal", setup: setup(true, true) }),
+    e("codex-2", "codex", probe(at, { installed: true, version: "0.167.0", cli: "present", status: "ready", binaryPath: "/Users/you/.local/bin/codex",
+      auth: { status: "authenticated", type: "chatgpt", label: "ChatGPT Team", email: "you@example.com", canLogout: true },
+      models: codexModels }),
+      { displayName: "Work", setup: setup(true, true) }),
     e("claudeAgent", "claudeAgent", probe(at, { installed: true, version: "2.1.332", cli: "present", status: "warning",
       auth: { status: "unauthenticated" }, message: "Not signed in",
       models: [model("claude-opus-5-5", "Claude Opus 5.5", true), model("claude-sonnet-5-5", "Claude Sonnet 5.5"), model("claude-haiku-5-5", "Claude Haiku 5.5")] }),
       { setup: setup(true, true) }),
-    e("grok", "grok", probe(at, { installed: false, cli: "missing", status: "error", message: "grok was not found on PATH" }), { setup: setup(true, true) }),
-    e("fx", "fx", probe(at, { installed: false, cli: "missing", status: "error", message: "fx was not found on PATH" }), { setup: setup(true, true) }),
+    e("grok", "grok", probe(at, { installed: true, version: "0.9.1", cli: "present", status: "ready", auth: { status: "authenticated", label: "SuperGrok" },
+      models: [model("grok-code", "Grok Code", true)] }), { enabled: false, setup: setup(true, true) }),
+    e("fx", "fx", probe(at, { installed: true, version: "1.2.0", cli: "present", status: "ready", auth: { status: "unknown" },
+      models: [model("default", "fx default", true)] }), { enabled: false, setup: setup(false, true) }),
     e("antigravity", "antigravity", probe(at, { installed: true, version: "1.4.2", cli: "present", status: "warning",
       auth: { status: "unauthenticated", action: { elicitationId: "agy-signin-1", url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=antigravity-demo", message: "Sign in with Google to see Antigravity limits." } },
       message: "Sign in with Google to see Antigravity limits.", models: [model("antigravity-default", "Antigravity default", true)] }),
@@ -56,7 +71,7 @@ export function demoProviderEntries(at: string): ServerProviderEntry[] {
       models: [model("openai/gpt-5", "GPT-5 (OpenAI)", true), model("opencode/big-pickle", "Big Pickle")] }), { setup: setup(true, true) }),
     e("cursor", "cursor", probe(at, { installed: true, version: null, status: "ready", auth: { status: "authenticated", label: "Cursor account", email: "you@example.com" },
       models: [model("auto", "Auto", true), model("composer-2", "Composer 2")] }), { setup: setup(true, false) }),
-    e("muse", "muse", probe(at, { installed: false, cli: "missing", status: "error", message: "Muse is not installed" }), { setup: setup(true, true) }),
+    e("muse", "muse", probe(at, { installed: false, cli: "missing", status: "error", message: "Muse is not installed" }), { enabled: false, setup: setup(true, true) }),
     e("pi", "pi", probe(at, { installed: true, version: "0.42.0", cli: "present", status: "ready", auth: { status: "authenticated" },
       models: [model("default", "Pi settings model", true)] }), { setup: setup(false, true) }),
     e("omo", "omo", probe(at, { installed: true, version: "0.42.0", cli: "present", status: "error", auth: { status: "unknown" },
@@ -68,6 +83,17 @@ export function demoProviderEntries(at: string): ServerProviderEntry[] {
       { displayName: "Kilo", acpAgentId: "kilo", setup: setup(true, true), authFlow: agentAuth("acp-kilo"),
         install: { driver: "acpRegistry", operationId: "install-kilo", phase: "downloading", downloadedBytes: 31_000_000, totalBytes: 50_000_000, version: "7.8.32", installedVersion: "7.8.31", canRemove: false, message: null } }),
   ];
+}
+
+
+/** Board 2LEV-2 (first run): nothing added yet; Codex, Claude and Cursor are on this Mac, the rest is not installed. */
+export function firstRunProviderEntries(at: string): ServerProviderEntry[] {
+  const found = new Set(["codex", "claudeAgent", "cursor"]);
+  return demoProviderEntries(at).filter((e) => e.driver !== "acpRegistry" && e.instanceId === e.driver).map((e) => {
+    const { displayName: _name, install: _install, ...rest } = e;
+    return found.has(e.driver) ? { ...rest, enabled: false }
+      : { ...rest, enabled: false, probe: { ...rest.probe, installed: false, cli: "missing" as const, status: "error" as const, version: null, auth: { status: "unknown" as const }, models: [] } };
+  });
 }
 
 const agent = (id: string, name: string, version: string, description: string, distribution: "binary" | "npx" | "uvx"): AcpRegistrySearchAgent =>

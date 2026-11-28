@@ -7,6 +7,8 @@ import { DEMO_REGISTRY, FakeProviders, demoProviderEntries } from "../../../host
 import { toServerProvider, unservedPlaceholders, withHostInstances, type Goat2ProviderEntry } from "./providerPort";
 
 const AT = "2026-11-29T00:00:00.000Z";
+/** The demo scene with Codex as its implicit default slot (no account label), as a fresh host reports it. */
+const plainDemo = () => demoProviderEntries(AT).map((e) => { if (e.instanceId !== "codex") return e; const { displayName: _name, ...rest } = e; return rest; }) as unknown as Goat2ProviderEntry[];
 
 describe("provider seam: fake host data through v1 schemas", () => {
   it("every demo entry decodes as a v1 ServerProvider with the probe's state", () => {
@@ -27,13 +29,13 @@ describe("provider seam: fake host data through v1 schemas", () => {
     expect(Schema.decodeUnknownSync(ProviderInstallState)(install?.ok ? install.value.installState : null).phase).toBe("downloading");
   });
   it("host instances fold into v1 settings: registry agents and named instances get rows, plain defaults stay implicit", () => {
-    const s = withHostInstances(DEFAULT_SERVER_SETTINGS, demoProviderEntries(AT) as unknown as Goat2ProviderEntry[]);
+    const s = withHostInstances(DEFAULT_SERVER_SETTINGS, plainDemo());
     expect(s.providerInstances["acp-kimi-code" as never]).toMatchObject({ driver: "acpRegistry", enabled: true, displayName: "Kimi Code", config: { agentId: "kimi-code" } });
     expect(s.providerInstances["codex" as never]).toBeUndefined();
-    expect(withHostInstances(s, demoProviderEntries(AT) as unknown as Goat2ProviderEntry[])).toBe(s);
+    expect(withHostInstances(s, plainDemo())).toBe(s);
   });
   it("each host list replaces the instances: removed ones go, a cleared name clears, a plain default turns implicit again", () => {
-    const entries = demoProviderEntries(AT) as unknown as Goat2ProviderEntry[];
+    const entries = plainDemo();
     const named = entries.map((e) => (e.instanceId === "codex" ? { ...e, displayName: "Work Codex" } : e));
     const s = withHostInstances(DEFAULT_SERVER_SETTINGS, named);
     expect(s.providerInstances["codex" as never]).toMatchObject({ displayName: "Work Codex" });
@@ -49,7 +51,7 @@ describe("provider seam: fake host data through v1 schemas", () => {
     expect(kimiAfter.config).toEqual({ env: "x", agentId: "kimi-code" });
   });
   it("a default slot with config of its own stays configured when its name is cleared (review 4)", () => {
-    const entries = demoProviderEntries(AT) as unknown as Goat2ProviderEntry[];
+    const entries = plainDemo();
     const named = withHostInstances(DEFAULT_SERVER_SETTINGS, entries.map((e) => (e.instanceId === "codex" ? { ...e, displayName: "Work Codex" } : e)));
     const codex = named.providerInstances["codex" as never] as Record<string, unknown>;
     const withConfig = { ...named, providerInstances: { ...named.providerInstances, ["codex" as never]: { ...codex, config: { binaryPath: "/opt/bin/codex" } } } };

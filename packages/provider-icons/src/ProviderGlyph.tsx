@@ -5,8 +5,11 @@ import { useId, type CSSProperties } from "react";
 import { AntigravityIcon, ClaudeAI, OpenAI } from "./Icons.tsx";
 import {
   cursorIcon,
+  devinCloudIcon,
+  fxIcon,
   grokIcon,
   museIcon,
+  omoIcon,
   opencodeIcon,
   piIcon,
   type ProviderIcon,
@@ -19,6 +22,9 @@ const DEF_BY_DRIVER: Record<string, ProviderIcon> = {
   muse: museIcon,
   cursor: cursorIcon,
   cursorCloud: cursorIcon,
+  fx: fxIcon,
+  omo: omoIcon,
+  devinCloud: devinCloudIcon,
 };
 
 function DefIcon(props: { def: ProviderIcon; size: number; dark: boolean }) {
@@ -70,6 +76,7 @@ export function ProviderGlyph(props: {
       return <OpenAI width={size} height={size} fill={dark ? "#fff" : "#000"} aria-hidden="true" />;
     case "claudeAgent":
     case "claude":
+    case "claudeCloud":
       return <ClaudeAI width={size} height={size} fill="#d97757" aria-hidden="true" />;
     case "antigravity":
       return <AntigravityIcon width={size} height={size} aria-hidden="true" />;

@@ -28,7 +28,7 @@ describe("hostProviderPort + fake host", () => {
     const list = lists.at(-1)!;
     expect(new Set(list.map((e) => e.driver))).toEqual(new Set(LOCAL_KINDS));
     expect(list.find((e) => e.instanceId === "codex")!.probe).toMatchObject({ installed: true, version: "0.167.0", auth: { status: "authenticated" } });
-    expect(list.find((e) => e.instanceId === "grok")!.probe).toMatchObject({ installed: false, status: "error" });
+    expect(list.find((e) => e.instanceId === "muse")!.probe).toMatchObject({ installed: false, status: "error" });
     stop();
   });
 

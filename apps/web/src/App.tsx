@@ -14,10 +14,14 @@ import { BotFace, FaceGallery, faceFromId } from "@goat2/bot-face";
 import { NewBotDialog } from "./bot-home/NewBot.tsx";
 import { ThreadMode } from "./threads/ThreadMode.tsx";
 import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
-import { SettingsMode } from "./settings/SettingsMode.tsx";
-import { BotModelSettings, SettingsSidebarNav, V1Boundary, installProviderPort, setV1Navigator } from "@v1/surfaces";
+import { SETTINGS_GOAT_BOT_PATH, SETTINGS_PROVIDERS_PATH } from "./settings/SettingsMode.tsx";
+import { installProviderPort, setV1Navigator } from "@v1/surfaces";
 import { DEFAULT_SELECTION, ModelChip, useThreadModelChange } from "./providers/ModelChip.tsx";
-import { hostProviderPort } from "./providers/hostProviderPort.ts";
+import { hostProviderPort, type HostProviderPort } from "./providers/hostProviderPort.ts";
+import { ProvidersProvider } from "./providers/context.tsx";
+import { ProvidersMode } from "./providers/ProvidersMode.tsx";
+import { setProvidersOpener } from "./providers/navigation.ts";
+import { BotSettingsMain } from "./providers/BotSettings.tsx";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -30,7 +34,21 @@ function sortBots(rows: BotRowData[]) {
 
 export function App({ ui: store, scene }: { ui: UiStore; scene: string | null }) {
   if (scene === "2D0-1") return <div style={{ height: "100%", overflow: "auto" }}><FaceGallery /></div>;
-  return <Workspace ui={store} scene={scene} />;
+  return <WithProviders><Workspace ui={store} scene={scene} /></WithProviders>;
+}
+
+/** One provider port per host client: the GOAT 2 provider screens read it from context, the lifted v1 seam from
+ * installProviderPort (docs/part2/provider-wire.md). */
+function WithProviders({ children }: { children: ReactNode }) {
+  const client = useClient();
+  const [port, setPort] = useState<HostProviderPort | null>(null);
+  useEffect(() => {
+    const p = hostProviderPort(client);
+    installProviderPort(p);
+    setPort(p);
+    return () => { installProviderPort(null); setPort(null); p.dispose(); };
+  }, [client]);
+  return <ProvidersProvider port={port}>{children}</ProvidersProvider>;
 }
 
 function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) {
@@ -38,12 +56,12 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   const snap = useHost();
   const client = useClient();
   const { desktop, build } = useHostContext();
-  // The lifted v1 provider screens read providers through this port (docs/part2/provider-wire.md).
+  // The model picker's "Open Providers" and "+" (providers/navigation.ts).
   useEffect(() => {
-    const port = hostProviderPort(client);
-    installProviderPort(port);
-    return () => { installProviderPort(null); port.dispose(); };
-  }, [client]);
+    setProvidersOpener((target) => setUi({ mode: "settings", settingsPath: SETTINGS_PROVIDERS_PATH,
+      settingsSearch: target.view ? { view: target.view } : target.instanceId ? { instanceId: target.instanceId } : {} }));
+    return () => setProvidersOpener(null);
+  }, [setUi]);
   // Where lifted v1 code navigates (v1 useNavigate / Link): settings paths open Settings, v1's thread route
   // "/<environmentId>/<threadId>" opens the thread in thread mode.
   useEffect(() => {
@@ -59,6 +77,8 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   const rows = useMemo(() => botRows(snap.state), [snap.state]);
   const main = rows.find((r) => r.role === "main") ?? null;
   const bot = rows.find((r) => r.botId === ui.botId) ?? main;
+  /** The bot whose settings page is open (?botId=, else the main bot). */
+  const settingsBot = rows.find((r) => r.botId === ui.settingsSearch?.botId) ?? main;
   const needsCount = rows.filter((r) => r.state === "needs-you").length;
   const [railSearch, setRailSearch] = useState(false);
   const [newBot, setNewBot] = useState(scene === "2PU-1");
@@ -89,7 +109,9 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   const topRight = (
     <P.TopRight>
       {ui.mode === "settings"
-        ? (main ? <P.TopTitle face={<Face bot={main} size={20} />} name="Settings" button={{}} /> : <span />)
+        ? ui.settingsPath === SETTINGS_GOAT_BOT_PATH
+          ? (settingsBot ? <P.TopTitle face={<Face bot={settingsBot} size={20} />} name={settingsBot.name} button={{}} /> : <span />)
+          : (main ? <P.TopTitle face={<Face bot={main} size={20} />} name="Providers" button={{}} /> : <span />)
         : bot ? <P.TopTitle face={<Face bot={bot} size={20} />} name={bot.name} button={{}} /> : <span />}
       <P.TopActions split={plannedProps("multiplexer")} share={plannedProps("share")} stamp={stamp}
         panel={btn("Toggle right panel", () => setUi((s) => ({ panelOpen: !s.panelOpen })), { "aria-pressed": ui.panelOpen, "data-active": ui.panelOpen })} />
@@ -125,7 +147,7 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
 
   const sidebar = ui.sidebarOpen ? <BotSidebar rows={rows} ui={ui} setUi={setUi} onNewBot={() => setNewBot(true)} /> : null;
   const mainArea = bot
-    ? <P.Main chat={<BotChat bot={bot} onOpenTask={(id) => setUi({ panelThreadId: id, panelOpen: true })} />} panel={!ui.panelOpen ? null : ui.panelThreadId ? <WorkerPanel threadId={ui.panelThreadId} onBack={() => setUi({ panelThreadId: null })} onOpen={() => setUi((s) => ({ mode: "threads", threadId: s.panelThreadId, panelThreadId: null }))} /> : <Overview bot={bot} scene={scene} onOpenTask={(id) => setUi({ panelThreadId: id })} />} />
+    ? <P.Main chat={<BotChat bot={bot} onOpenTask={(id) => setUi({ panelThreadId: id, panelOpen: true })} />} panel={!ui.panelOpen ? null : ui.panelThreadId ? <WorkerPanel threadId={ui.panelThreadId} onBack={() => setUi({ panelThreadId: null })} onOpen={() => setUi((s) => ({ mode: "threads", threadId: s.panelThreadId, panelThreadId: null }))} /> : <Overview bot={bot} scene={scene} onOpenTask={(id) => setUi({ panelThreadId: id })} onEdit={() => setUi({ mode: "settings", settingsPath: SETTINGS_GOAT_BOT_PATH, settingsSearch: { botId: bot.botId } })} />} />
     : <P.Main chat={<Disconnected />} panel={null} />;
   if (ui.mode === "threads") {
     return (
@@ -135,13 +157,12 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
     );
   }
   if (ui.mode === "settings") {
+    const top = <P.TopBar>{topLeft}{topRight}</P.TopBar>;
     return (
       <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
-        <SettingsMode ui={ui} setUi={setUi} top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail}
-          nav={<V1Boundary data-settings-nav="" style={{ width: 256, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto", background: "var(--sidebar)" }}>
-            <SettingsSidebarNav pathname={ui.settingsPath ?? "/settings/providers"} placement="page" />
-          </V1Boundary>}
-          botPage={(botId) => <BotSettingsPage bot={rows.find((r) => r.botId === botId) ?? main} />} />
+        {ui.settingsPath === SETTINGS_GOAT_BOT_PATH
+          ? <P.Frame top={top} rail={rail} sidebar={sidebar} main={<BotSettingsPage bot={settingsBot} />} />
+          : <ProvidersMode ui={ui} setUi={setUi} top={top} rail={rail} />}
       </div>
     );
   }
@@ -275,8 +296,7 @@ function RailSearchPopover({ rows, railBots, onAdd, onClose }: { rows: BotRowDat
 function BotSettingsPage({ bot }: { bot: BotRowData | null }) {
   const { change, error } = useThreadModelChange(bot?.threadId ?? null);
   if (!bot) return <div style={{ padding: 32, color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13 }}>Loading bots…</div>;
-  const selection = bot.card?.engine.modelSelection ?? DEFAULT_SELECTION;
-  return <BotModelSettings botName={bot.name} instanceId={selection.instanceId} model={selection.model} onChange={change} error={error} />;
+  return <BotSettingsMain name={bot.name} purpose={bot.purpose || null} selection={bot.card?.engine.modelSelection ?? DEFAULT_SELECTION} onChange={change} error={error} />;
 }
 
 function BotModelPicker({ bot }: { bot: BotRowData }) {
@@ -434,7 +454,7 @@ export function RequestCard({ threadId, request, item, onHide, onLoadDetails }: 
 
 // ---------------------------------------------------------------- right panel
 
-function Overview({ bot, scene, onOpenTask }: { bot: BotRowData; scene: string | null; onOpenTask: (id: string) => void }) {
+function Overview({ bot, scene, onOpenTask, onEdit }: { bot: BotRowData; scene: string | null; onOpenTask: (id: string) => void; onEdit: () => void }) {
   const snap = useHost();
   const { now } = useHostContext();
   const parent = useThread(bot.threadId);
@@ -443,7 +463,7 @@ function Overview({ bot, scene, onOpenTask }: { bot: BotRowData; scene: string |
   for (const e of parent.entries) if (e.kind === "child" && e.reported) childTimes.set(e.childThreadId, duration(e.at, e.reported.at));
   return (
     <P.Panel>
-      <P.PanelHeader face={<Face bot={bot} size={44} live />} name={bot.name} purpose={bot.purpose} edit={plannedProps("bot-settings")} editIcon={<P.PanelEditIcon />} />
+      <P.PanelHeader face={<Face bot={bot} size={44} live />} name={bot.name} purpose={bot.purpose} edit={btn(`${bot.name} settings`, onEdit, { title: `${bot.name} settings` })} editIcon={<P.PanelEditIcon />} />
       <P.PanelTabs home={{ "aria-selected": true, role: "tab" }} library={plannedProps("library-memory")} />
       {scene === "U8-1" && <P.AsleepCard wake={plannedProps("machines")} other={plannedProps("machines")} />}
       <P.PanelSection label="Machines" extra={<Planned id="machines" style={{ marginLeft: 6 }} />}>{null}</P.PanelSection>

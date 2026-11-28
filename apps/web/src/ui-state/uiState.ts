@@ -18,6 +18,8 @@ export interface UiState {
   /** Settings page path in settings mode (v1 SettingsPath, e.g. "/settings/providers") and its search (?instanceId=). */
   settingsPath?: string;
   settingsSearch?: Record<string, string>;
+  /** Providers switched off from their detail page; they stay in the Providers list (providers/view.ts isAdded). */
+  providersKeptOff?: string[];
 }
 
 export const DEFAULT_UI: UiState = {
