@@ -140,6 +140,21 @@ test("stop() during the restart wait does not start another host", async () => {
   assert.equal(h.supervisor.state.phase, "stopped");
 });
 
+test("start() while a crashed host's group is being cleaned does not start a second host", async () => {
+  // The agent ignores SIGTERM, so cleanup of the crashed group takes the full grace period.
+  const h = await harness("grandchild,crash-after-ready", { stopGraceMs: 600, maxRestarts: 1 });
+  h.supervisor.start();
+  await until(() => h.supervisor.state.lastExit === "code=1");
+  h.supervisor.start();
+  h.supervisor.start();
+  await until(() => h.pids("host").length === 2);
+  // Outlast the crashed group's cleanup (600 ms grace) plus the 50 ms restart delay.
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  assert.equal(h.pids("host").length, 2, "manual start raced recovery into an extra host");
+  await h.supervisor.stop();
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+});
+
 test("a missing binary is a crash, not a thrown error", async () => {
   const supervisor = new HostSupervisor({
     command: "/nonexistent/goat2-host",
@@ -152,4 +167,26 @@ test("a missing binary is a crash, not a thrown error", async () => {
   await until(() => supervisor.state.phase === "crash-loop");
   assert.match(supervisor.state.lastExit ?? "", /ENOENT/);
   await supervisor.stop();
+});
+
+test("a host that exits 0 before it was ever ready (the empty stub) is not restarted", async () => {
+  const h = await harness("exit-clean");
+  h.supervisor.start();
+  await h.reached("exited");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(h.pids("host").length, 1);
+  assert.equal(h.supervisor.state.lastExit, "code=0");
+  assert.ok(!h.phases().includes("restarting"));
+  h.supervisor.start();
+  await until(() => h.pids("host").length === 2);
+  await h.reached("exited");
+  await h.supervisor.stop();
+});
+
+test("a host that was ready and then exits 0 is still restarted", async () => {
+  const h = await harness("exit-clean-after-ready", { maxRestarts: 1 });
+  h.supervisor.start();
+  await until(() => h.pids("host").length === 2);
+  assert.equal(h.states.find((state) => state.lastExit === "code=0")?.phase, "restarting");
+  await h.supervisor.stop();
 });

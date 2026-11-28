@@ -8,12 +8,14 @@
 // - A host that exits on its own is a crash: its leftover group is killed, then it is restarted
 //   with GOAT v1's backoff (apps/desktop/src/backend/DesktopBackendRecoveryPolicy.ts:1-7:
 //   jittered 1 s .. 30 s, at most 5 restarts per 10 minutes, then a crash-loop pause).
+//   Exception: a host that exits with code 0 before it ever got ready chose to exit (an empty stub
+//   binary does this); restarting it cannot help, so it is left "exited" until Start Host.
 // - stdin stays an open pipe the shell never writes. If the shell dies without running stop(),
 //   the host sees EOF and exits (host-side rule, lane E).
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
 
-export type HostPhase = "starting" | "ready" | "restarting" | "crash-loop" | "stopping" | "stopped";
+export type HostPhase = "starting" | "ready" | "restarting" | "crash-loop" | "exited" | "stopping" | "stopped";
 
 export interface HostState {
   readonly phase: HostPhase;
@@ -138,9 +140,10 @@ export class HostSupervisor {
     return this.#state;
   }
 
-  /** Starts the host; also ends a crash-loop pause (the "Restart Host" menu item). */
+  /** Starts the host; also ends a crash-loop pause (the "Start Host" menu item). */
   start(): void {
-    if (this.#stopping || this.#child !== null) return;
+    // While a crashed host's group is still being cleaned, recovery owns the next spawn.
+    if (this.#stopping || this.#child !== null || this.#recoveryActive) return;
     if (this.#restartTimer !== null) {
       clearTimeout(this.#restartTimer);
       this.#restartTimer = null;
@@ -175,6 +178,7 @@ export class HostSupervisor {
   }
 
   #recovering: Promise<void> = Promise.resolve();
+  #recoveryActive = false;
 
   #spawn(): void {
     const generation = ++this.#generation;
@@ -259,21 +263,36 @@ export class HostSupervisor {
 
   #onExit(generation: number, reason: string, pid: number | null): void {
     if (generation !== this.#generation) return;
+    const wasUp = this.#state.phase === "ready" || this.#state.announce !== null;
     this.#child = null;
     this.#log(`host exited ${reason}`);
     if (this.#stopping) {
       this.#set({ lastExit: reason, pid: null });
       return;
     }
+    if (reason === "code=0" && !wasUp) {
+      this.#log("host exited cleanly before it was ready; not restarting");
+      this.#set({ phase: "exited", lastExit: reason, pid: null });
+      this.#recoveryActive = true;
+      this.#recovering = (pid === null ? Promise.resolve(true) : killGroup(pid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs))
+        .then(() => undefined)
+        .finally(() => {
+          this.#recoveryActive = false;
+        });
+      return;
+    }
     // Show the host as down right away; cleaning its leftover group can take the grace period.
     this.#set({ phase: "restarting", lastExit: reason, pid: null });
-    this.#recovering = this.#recover(pid);
+    this.#recoveryActive = true;
+    this.#recovering = this.#recover(pid, generation).finally(() => {
+      this.#recoveryActive = false;
+    });
   }
 
-  async #recover(pid: number | null): Promise<void> {
+  async #recover(pid: number | null, generation: number): Promise<void> {
     // Agents the dead host started are still in its group; the host ending ends that work.
     if (pid !== null) await killGroup(pid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
-    if (this.#stopping) return;
+    if (this.#stopping || generation !== this.#generation) return;
     const now = (this.#opts.now ?? Date.now)();
     const windowMs = this.#opts.recoveryWindowMs ?? RECOVERY_WINDOW_MS;
     this.#crashTimes = this.#crashTimes.filter((at) => now - at < windowMs);

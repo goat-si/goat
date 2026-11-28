@@ -80,14 +80,20 @@ const supervisor = new HostSupervisor({
   log,
   onState: (state) => {
     updateTitles(state);
-    if (state.announce !== null || state.phase === "crash-loop") loadWindows();
+    if (state.announce !== null || hostGaveUp(state)) loadWindows();
+    if (state.announce !== null) reloadStaleWindows(state.announce.wsUrl);
   },
 });
+
+function hostGaveUp(state: HostState): boolean {
+  return state.phase === "crash-loop" || state.phase === "exited";
+}
 
 const HOST_SUFFIX: Partial<Record<HostState["phase"], string>> = {
   starting: "host starting",
   restarting: "host restarting",
   "crash-loop": "host stopped",
+  exited: "host not running",
   stopping: "quitting",
 };
 
@@ -101,16 +107,48 @@ function updateTitles(state: HostState): void {
 }
 
 // The page loads once the host has printed its start line (so the preload can hand over wsUrl),
-// or after a short wait if it never does; the title bar shows the host state either way.
+// or after a short wait if it never does; the title bar shows the host state either way. A window
+// that loaded without the current wsUrl reloads when the host announces it, so the preload's
+// frozen {wsUrl, token} is never null or stale for long.
 const LOAD_WAIT_MS = 3_000;
-const loaded = new WeakSet<BrowserWindow>();
+const loadedWith = new WeakMap<BrowserWindow, string | null>();
 function loadWindows(): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || loaded.has(win)) continue;
-    loaded.add(win);
+    if (win.isDestroyed() || loadedWith.has(win)) continue;
+    loadedWith.set(win, supervisor.state.announce?.wsUrl ?? null);
     void win.loadURL(webUrl);
   }
 }
+
+function reloadStaleWindows(wsUrl: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || !loadedWith.has(win) || loadedWith.get(win) === wsUrl) continue;
+    log(`reload window: host wsUrl ${loadedWith.get(win) ?? "none"} -> ${wsUrl}`);
+    loadedWith.set(win, wsUrl);
+    win.webContents.reload();
+  }
+}
+
+// Only the app's own pages may run in the window: the preload hands them the host token.
+const trustedOrigin = (() => {
+  const url = new URL(webUrl);
+  return `${url.protocol}//${url.host}`;
+})();
+function isTrusted(url: string | undefined): boolean {
+  if (url === undefined) return false;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}` === trustedOrigin;
+  } catch {
+    return false;
+  }
+}
+
+// The UI draws a 40px top bar (Paper boards, docs/DECISIONS.md "Top bar 40px"); the native title bar
+// is hidden and the window buttons sit inside that bar. Same placement rule as GOAT v1
+// (apps/desktop/src/window/DesktopWindowAppearance.ts:28-34: x 16, y = bar / 2 - button radius 7).
+const TOP_BAR_HEIGHT = 40;
+const WINDOW_BUTTON_RADIUS = 7;
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -118,6 +156,12 @@ function createWindow(): void {
     height: 900,
     title: windowTitle(supervisor.state),
     backgroundColor: "#FFFFFF",
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset" as const,
+          trafficLightPosition: { x: 16, y: TOP_BAR_HEIGHT / 2 - WINDOW_BUTTON_RADIUS },
+        }
+      : {}),
     webPreferences: {
       preload: join(HERE, "preload.cjs"),
       contextIsolation: true,
@@ -131,7 +175,14 @@ function createWindow(): void {
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
-  if (supervisor.state.announce !== null || supervisor.state.phase === "crash-loop") loadWindows();
+  const guard = (event: Electron.Event, url: string) => {
+    if (isTrusted(url)) return;
+    event.preventDefault();
+    if (/^https?:/.test(url)) void shell.openExternal(url);
+  };
+  win.webContents.on("will-navigate", guard);
+  win.webContents.on("will-redirect", guard);
+  if (supervisor.state.announce !== null || hostGaveUp(supervisor.state)) loadWindows();
   else setTimeout(loadWindows, LOAD_WAIT_MS);
 }
 
@@ -172,6 +223,12 @@ function buildMenu(): void {
 }
 
 ipcMain.on("goat2:host-info", (event) => {
+  const frame = event.senderFrame;
+  if (frame === null || frame.parent !== null || !isTrusted(frame.url)) {
+    log(`refused host info to ${frame?.url ?? "unknown frame"}`);
+    event.returnValue = { wsUrl: null, token: null };
+    return;
+  }
   event.returnValue = { wsUrl: supervisor.state.announce?.wsUrl ?? null, token: HOST_TOKEN };
 });
 
