@@ -97,4 +97,18 @@ describe("client + fake host", () => {
     const r = await client.command({ type: "rename_thread", threadId: "t-main", title: "B" }, "fixed-id");
     expect(r.error?.reason).toBe("idempotency_conflict");
   });
+  it("an auth response is refused and its secrets never reach the received log", async () => {
+    const { client, fake } = setup();
+    await tick(5);
+    const secret = "SECRET_SENTINEL_web";
+    const cred = await client.command({ type: "provider_auth_respond", instanceId: "codex", flowId: "f", interactionId: "i", response: { type: "credentials", values: { apiKey: secret } } });
+    expect(cred.ok).toBe(false);
+    expect(cred.error?.reason).toBe("not_available");
+    const term = await client.command({ type: "provider_auth_respond", instanceId: "codex", flowId: "f", interactionId: "i", response: { type: "terminal", data: secret } });
+    expect(term.ok).toBe(false);
+    const recorded = fake.received.filter((f) => f.type === "provider_auth_respond");
+    expect(recorded).toHaveLength(2);
+    expect(JSON.stringify(fake.received)).not.toContain(secret);
+    expect(JSON.stringify(recorded[0])).toContain("apiKey");
+  });
 });
