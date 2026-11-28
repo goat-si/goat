@@ -19,3 +19,7 @@ body { overflow: hidden; }
 [data-desktop] [data-topbar] [data-planned], [data-desktop] [data-topbar] [data-no-drag] { -webkit-app-region: no-drag; }
 textarea.goat2-input { all: unset; display: block; width: 100%; box-sizing: border-box; resize: none; white-space: pre-wrap; }
 textarea.goat2-input::placeholder { color: #5D5D5D; opacity: 1; }
+/* Pinned tiles: three per row, more wrap to the next row (1FKW-0 note). */
+[data-pinned-grid] { flex-wrap: wrap; }
+/* New bot dialog backdrop fills the window (2PU-1 draws it at 1440x900). */
+[data-new-bot] [data-backdrop] { width: 100% !important; height: 100% !important; }

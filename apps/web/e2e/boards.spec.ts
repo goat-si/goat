@@ -84,3 +84,31 @@ test("1KL4-1 rail search adds a bot", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Reviewer", exact: true }).first()).toBeVisible();
 });
+
+test("2PU-1 new bot: create_bot adds the bot", async ({ page }) => {
+  await open(page, "2PU-1");
+  await expect(page.getByRole("dialog", { name: "New bot" })).toBeVisible();
+  await sideBySide(page, "2PU-1");
+  await page.getByLabel("Name", { exact: true }).fill("Triage");
+  await page.locator("[data-shape=tri]").click();
+  await page.locator("[data-color=moss]").click();
+  await page.getByLabel("Create bot").click();
+  await expect(page.getByRole("dialog", { name: "New bot" })).toHaveCount(0);
+  await expect(page.getByLabel("Message Triage")).toBeVisible();
+});
+
+test("2D0-1 faces", async ({ page }) => {
+  await open(page, "2D0-1");
+  await expect(page.getByText("Every bot is a GOAT.")).toBeVisible();
+  await sideBySide(page, "2D0-1");
+});
+
+test("1FKW-0 drag a row onto the tiles pins it; right-click unpins", async ({ page }) => {
+  await open(page, "1FKW-0");
+  await page.locator("[data-bot-row=standup]").dragTo(page.locator("[data-pinned-grid]"));
+  await expect(page.locator("[data-tile=standup]")).toBeVisible();
+  await expect(page.locator("[data-bot-row=standup]")).toHaveCount(0);
+  await sideBySide(page, "1FKW-0");
+  await page.locator("[data-tile=standup]").click({ button: "right" });
+  await expect(page.locator("[data-bot-row=standup]")).toBeVisible();
+});
