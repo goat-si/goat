@@ -171,6 +171,9 @@ export function createThreadTriageOutbox<R, E>(input: {
           forgetEffect(registry, commandId),
         ).then(() => undefined);
 
+  const isCompensatingAction = (action: PendingThreadTriage["action"]) =>
+    action.type === "unsettle" || action.type === "unsnooze";
+
   // The live shell is the server's state: it wins over a change made against an older one.
   const replay = Effect.fn("ThreadTriageOutbox.replay")(function* (
     registry: AtomRegistry.AtomRegistry,
@@ -185,19 +188,31 @@ export function createThreadTriageOutbox<R, E>(input: {
             // Read again under the per-thread lock: undo or another tab may have cancelled or
             // replaced this entry while an earlier change was being sent.
             const stored = yield* read(registry);
-            if (!stored.some((current) => current.commandId === entry.commandId)) return false;
+            const current = stored.find((candidate) => candidate.commandId === entry.commandId);
+            if (current === undefined) return false;
             const thread = registry
               .get(input.sourceSnapshotAtom(environmentId))
-              ?.threads.find((candidate) => candidate.id === entry.threadId);
-            if (
+              ?.threads.find((candidate) => candidate.id === current.threadId);
+            const matchesThread =
               thread !== undefined &&
-              seenState(thread) === entry.seen &&
-              input.apply(thread, entry.action, DateTime.nowUnsafe()) !== thread
-            ) {
-              const sent = yield* Effect.promise(() => input.send(registry, entry));
+              (isCompensatingAction(current.action) || seenState(thread) === current.seen) &&
+              input.apply(thread, current.action, DateTime.nowUnsafe()) !== thread;
+            if (matchesThread) {
+              // Mark attempted in storage before sending so an offline undo after a lost reply
+              // knows the server may have committed this action and queues a compensating undo.
+              if (!isCompensatingAction(current.action) && current.attempted !== true) {
+                yield* update(registry, (list) =>
+                  list.map((item) =>
+                    item.commandId === current.commandId
+                      ? { ...item, attempted: true as const }
+                      : item,
+                  ),
+                );
+              }
+              const sent = yield* Effect.promise(() => input.send(registry, current));
               if (sent._tag === "Failure" && isTransient(sent.cause)) return true;
             }
-            yield* forgetEffect(registry, entry.commandId);
+            yield* forgetEffect(registry, current.commandId);
             return false;
           }),
         );
@@ -339,15 +354,41 @@ export function createThreadTriageOutbox<R, E>(input: {
     };
   }
 
+  const queueCompensation = Effect.fn("ThreadTriageOutbox.queueCompensation")(function* (
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    action: Extract<PendingThreadTriage["action"], { readonly type: "unsettle" | "unsnooze" }>,
+  ) {
+    const random = yield* SecureRandom.SecureRandom;
+    const commandId = CommandId.make(yield* random.uuidV4());
+    const queuedAt = DateTime.nowUnsafe();
+    yield* update(registry, (current) => [
+      ...current.filter(
+        (entry) => entry.environmentId !== environmentId || entry.threadId !== threadId,
+      ),
+      {
+        environmentId,
+        threadId,
+        commandId,
+        action,
+        queuedAt,
+        seen: "",
+      },
+    ]);
+    triggerReplayIfLive(registry, environmentId);
+  });
+
   /**
-   * Undo of a queued change removes it from storage first, so a replay that has not reached it
-   * skips it; storage decides, so the change removed is the one stored now, also by another tab.
-   * Offline that is the whole undo, reported as `cancelledOnDevice`. While the shell is
-   * synchronized the environment is asked too, after any send already in its lane.
+   * Removes a queued change from storage first. Offline this returns `cancelledOnDevice`, unless
+   * replay already attempted the change — in which case a compensating undo is persisted for sync.
    */
   function cancelQueued<I extends { readonly threadId: ThreadId }, CE>(
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
-    cancels: PendingThreadTriage["action"]["type"],
+    cancels: "settle" | "snooze",
+    toCompensate: (
+      input: I,
+    ) => Extract<PendingThreadTriage["action"], { readonly type: "unsettle" | "unsnooze" }>,
   ): AtomCommand<
     Target<I>,
     { readonly sequence: number; readonly cancelledOnDevice?: true },
@@ -366,20 +407,37 @@ export function createThreadTriageOutbox<R, E>(input: {
           threadLock(environmentId, threadId).withPermit(
             Effect.gen(function* () {
               let removed = false;
+              let wasAttempted = false;
               yield* update(registry, (stored) => {
-                const kept = stored.filter(
-                  (entry) =>
-                    entry.environmentId !== environmentId ||
-                    entry.threadId !== threadId ||
-                    entry.action.type !== cancels,
-                );
-                removed = kept.length !== stored.length;
+                const kept: PendingThreadTriage[] = [];
+                for (const entry of stored) {
+                  if (
+                    entry.environmentId === environmentId &&
+                    entry.threadId === threadId &&
+                    entry.action.type === cancels
+                  ) {
+                    removed = true;
+                    if (entry.attempted === true) wasAttempted = true;
+                    continue;
+                  }
+                  kept.push(entry);
+                }
                 return removed ? kept : stored;
               });
               // Re-read shell status under the per-thread lock after removal so a reconnect/replay
               // that raced with this undo never leaves the server with the original action applied.
               const live = registry.get(input.shellStatusAtom(environmentId)) === "live";
               if (removed && !live) {
+                if (wasAttempted) {
+                  yield* queueCompensation(
+                    registry,
+                    environmentId,
+                    threadId,
+                    toCompensate(target.input),
+                  );
+                  const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
+                  return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
+                }
                 return AsyncResult.success(cancelled);
               }
               const result = yield* Effect.promise(() => command.run(registry, target));
@@ -390,8 +448,18 @@ export function createThreadTriageOutbox<R, E>(input: {
                 );
                 return result;
               }
-              // The connection dropped before the shell noticed, so nothing was sent.
+              // The connection dropped before the shell noticed.
               if (removed && hasUnavailableReason(result.cause)) {
+                if (wasAttempted) {
+                  yield* queueCompensation(
+                    registry,
+                    environmentId,
+                    threadId,
+                    toCompensate(target.input),
+                  );
+                  const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
+                  return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
+                }
                 return AsyncResult.success(cancelled);
               }
               return result;

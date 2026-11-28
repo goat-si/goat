@@ -12,10 +12,17 @@ export const PendingThreadTriage = Schema.Struct({
   action: Schema.Union([
     Schema.Struct({ type: Schema.Literal("settle") }),
     Schema.Struct({ type: Schema.Literal("snooze"), snoozedUntil: Schema.String }),
+    Schema.Struct({
+      type: Schema.Literal("unsettle"),
+      reason: Schema.Literals(["user", "automatic"]),
+    }),
+    Schema.Struct({ type: Schema.Literal("unsnooze") }),
   ]),
   queuedAt: Schema.DateTimeUtcFromString,
   /** The thread as the user saw it; if it shows otherwise on reconnect, the change is dropped. */
   seen: Schema.String,
+  /** Set before replay sends over the wire so offline undo knows the server may have committed it. */
+  attempted: Schema.optionalKey(Schema.Literal(true)),
 });
 export type PendingThreadTriage = typeof PendingThreadTriage.Type;
 export type PendingThreadTriages = ReadonlyArray<PendingThreadTriage>;
