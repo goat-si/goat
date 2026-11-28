@@ -14,9 +14,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 async fn replay_raw(name: &str, corrupt: bool) -> (Option<i32>, String) {
     let transcript = load(&format!("codex-0.167.0/{name}.json"));
     let path = support::fake::write_temp(&transcript);
-    let mut child =
-        goat2_engine_codex::process::ChildProcess::spawn(&support::fake::fake_launch(&path, false))
-            .unwrap();
+    let mut launch = support::fake::fake_launch(&path, false);
+    // The exit code is the assertion: give a busy machine time to let the (niced) fake exit.
+    launch.kill_grace = std::time::Duration::from_secs(10);
+    let mut child = goat2_engine_codex::process::ChildProcess::spawn(&launch).unwrap();
     let mut stdin = child.take_stdin().unwrap();
     let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
     let mut next_id = 100;

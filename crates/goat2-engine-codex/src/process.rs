@@ -116,6 +116,8 @@ pub struct ChildProcess {
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
     stderr_tail: Arc<Mutex<StderrTail>>,
+    /// The stderr reader; awaited (bounded) on stop so the last lines reach the exit reason.
+    stderr_reader: Option<tokio::task::JoinHandle<()>>,
     kill_grace: Duration,
     reaped: Option<ExitStatus>,
     group_gone: bool,
@@ -171,7 +173,7 @@ impl ChildProcess {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
-        if let Some(mut stderr) = child.stderr.take() {
+        let stderr_reader = child.stderr.take().map(|mut stderr| {
             let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
                 let mut buffer = [0u8; 4096];
@@ -185,14 +187,15 @@ impl ChildProcess {
                         }
                     }
                 }
-            });
-        }
+            })
+        });
         Ok(Self {
             pid,
             child,
             stdin,
             stdout,
             stderr_tail,
+            stderr_reader,
             kill_grace: launch.kill_grace,
             reaped: None,
             group_gone: false,
@@ -314,6 +317,11 @@ impl ChildProcess {
         let gone_by = tokio::time::Instant::now() + Duration::from_secs(1);
         while signalled && self.group_alive() && tokio::time::Instant::now() < gone_by {
             tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // With the group gone its stderr pipe closes; let the reader take the last bytes so the
+        // exit reason carries them (bounded: a stray holder of the pipe must not stall a stop).
+        if let Some(reader) = self.stderr_reader.take() {
+            let _ = tokio::time::timeout(Duration::from_millis(500), reader).await;
         }
         ExitSummary {
             status: self.reaped,

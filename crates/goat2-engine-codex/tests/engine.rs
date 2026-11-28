@@ -1055,6 +1055,97 @@ async fn a_late_session_answer_across_a_mode_round_trip_records_nothing() {
     finish(h).await;
 }
 
+fn emit_after(frame: Value, ms: u64) -> Entry {
+    Entry::EmitInbound {
+        label: None,
+        frame,
+        after_ms: Some(ms),
+    }
+}
+
+fn realtime(o: &mut CodexEngineOptions) {
+    o.env_set
+        .push(("GOAT2_FAKE_CODEX_REALTIME".into(), "1".into()));
+}
+
+#[tokio::test]
+async fn a_stop_while_the_guard_checks_cancels_the_start_and_kills_nothing() {
+    // Nothing was sent, so the stop only cancels the start; no stop timer may end the process
+    // (a foreign turn may be running in it).
+    let (mut entries, thread) = busy_resume_prefix();
+    entries.push(turns_list(50, &thread));
+    entries.push(emit_after(
+        json!({"id": 50, "result": {"data": [
+            {"id": "foreign-turn", "items": [], "status": "inProgress", "error": null}]}}),
+        800,
+    ));
+    let t = synthetic("stop-while-guarding", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |o| {
+        realtime(o);
+        o.stop_grace = Duration::from_millis(300);
+    })
+    .await;
+    let approval = settings(RuntimeMode::ApprovalRequired);
+    let (result, stopped) = tokio::join!(
+        h.session.start_turn(input("goat-input-1", "hi"), &approval),
+        async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            h.session.interrupt("any").await
+        }
+    );
+    stopped.unwrap();
+    assert!(
+        matches!(result, TurnStartResult::Declined { .. }),
+        "{result:?}"
+    );
+    let quiet = tokio::time::timeout(Duration::from_millis(1500), h.events.recv()).await;
+    assert!(quiet.is_err(), "no stop-timer exit: {quiet:?}");
+    // The listed foreign turn still guards the next start.
+    refused_start(&h, "goat-input-2").await;
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn a_stop_while_codex_declines_the_start_clears_the_stop_timer() {
+    let t = load("codex-0.167.0/basic.json");
+    let mut entries = entries_until(&t, |e| method_of(e) == Some("turn/start"));
+    let rpc = match entries.last() {
+        Some(Entry::ExpectOutbound { frame, .. }) => frame["id"].clone(),
+        _ => unreachable!(),
+    };
+    entries.push(emit_after(
+        json!({"id": rpc, "error": {"code": -32600, "message": "not now"}}),
+        300,
+    ));
+    let t = synthetic("stop-while-declined", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |o| {
+        realtime(o);
+        o.stop_grace = Duration::from_millis(600);
+    })
+    .await;
+    let approval = settings(RuntimeMode::ApprovalRequired);
+    let (result, stopped) = tokio::join!(
+        h.session.start_turn(
+            input("goat-input-1", "Reply with exactly: GOAT2-OK"),
+            &approval
+        ),
+        async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            h.session.interrupt("any").await
+        }
+    );
+    stopped.unwrap();
+    assert_eq!(
+        result,
+        TurnStartResult::Declined {
+            reason: "not now".into()
+        }
+    );
+    let quiet = tokio::time::timeout(Duration::from_millis(1200), h.events.recv()).await;
+    assert!(quiet.is_err(), "no stop-timer exit: {quiet:?}");
+    finish(h).await;
+}
+
 fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {
     goat2_contracts::ChatAttachment {
         kind: goat2_contracts::ChatAttachmentType::Image,

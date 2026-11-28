@@ -117,18 +117,17 @@ async fn drop_kills_the_group() {
 #[tokio::test]
 async fn shutdown_ends_within_one_kill_grace() {
     // The leader ignores both a closed stdin and TERM. One deadline covers the stdin grace and
-    // TERM (v1 forces a kill 5 s after asking to stop), so this ends near one kill_grace
-    // (300 ms), well before two.
-    let mut child = ChildProcess::spawn(&sh(
-        "trap '' TERM; echo ready; while true; do sleep 1; done",
-    ))
-    .unwrap();
+    // TERM (v1 forces a kill 5 s after asking to stop), so this ends near one kill_grace.
+    // Two separate waits would take at least 2 x 1.5 s; the bound leaves slack for a busy machine.
+    let mut launch = sh("trap '' TERM; echo ready; while true; do sleep 1; done");
+    launch.kill_grace = Duration::from_millis(1500);
+    let mut child = ChildProcess::spawn(&launch).unwrap();
     first_line(&mut child).await;
     let started = Instant::now();
     let summary = child.shutdown().await;
     assert!(summary.signalled);
     assert!(
-        started.elapsed() < Duration::from_millis(560),
+        started.elapsed() < Duration::from_millis(2900),
         "took {:?}",
         started.elapsed()
     );

@@ -746,6 +746,16 @@ impl Actor {
     }
 
     fn finish_dispatch(&mut self, result: TurnStartResult) {
+        // A start that ran nothing (refused or declined) leaves no turn for a pending stop.
+        if std::mem::take(&mut self.interrupt_pending)
+            && self.owned.is_none()
+            && matches!(
+                result,
+                TurnStartResult::Declined { .. } | TurnStartResult::RefusedUnowned { .. }
+            )
+        {
+            self.stop_deadline = None;
+        }
         if let Some(mut dispatch) = self.dispatch.take()
             && let Some(reply) = dispatch.reply.take()
         {
@@ -900,9 +910,20 @@ impl Actor {
             self.spawn_interrupt(&turn);
             return Ok(());
         }
-        if self.dispatch.is_some() {
-            self.interrupt_pending = true;
-            self.stop_deadline = Some(Instant::now() + self.options.stop_grace);
+        match self.dispatch.as_ref().map(|d| &d.phase) {
+            // Nothing was sent yet: the stop cancels the start; there is nothing to kill.
+            Some(DispatchPhase::Guarding { .. }) => {
+                self.finish_dispatch(TurnStartResult::Declined {
+                    reason: "GOAT stopped this before it was sent to Codex".into(),
+                });
+            }
+            // turn/start is out: stop the turn once Codex answers, or end the process if it
+            // does not answer within the stop grace (the turn may be running).
+            Some(_) => {
+                self.interrupt_pending = true;
+                self.stop_deadline = Some(Instant::now() + self.options.stop_grace);
+            }
+            None => {}
         }
         Ok(())
     }
