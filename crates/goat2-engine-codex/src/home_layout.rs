@@ -56,8 +56,15 @@ const KNOWN_SHARED_DIRECTORIES: [&str; 11] = [
     "mcp-oauth-locks",
     "thread-writer-locks",
 ];
-/// v1 `PRIVATE_ENTRY_NAMES`: the account's own files (auth.lock guards the private auth.json).
-const PRIVATE_ENTRY_NAMES: [&str; 3] = ["auth.json", "auth.lock", "models_cache.json"];
+/// v1 `PRIVATE_ENTRY_NAMES`: the account's own files (auth.lock guards the private auth.json),
+/// plus auth.json.lock, which codex 0.167.0 keeps beside auth.json (written difference: v1's
+/// list predates it, and sharing it would guard one account's auth.json with another's lock).
+const PRIVATE_ENTRY_NAMES: [&str; 4] = [
+    "auth.json",
+    "auth.lock",
+    "auth.json.lock",
+    "models_cache.json",
+];
 /// v1 `SHADOW_LOCAL_ENTRY_NAMES` (Finder keeps .DS_Store per folder).
 const SHADOW_LOCAL_ENTRY_NAMES: [&str; 4] = ["log", "memories", "tmp", ".DS_Store"];
 /// v1 `REPLACEABLE_SHARED_RUNTIME_ENTRIES`: Codex may create these locally first; they guard shared

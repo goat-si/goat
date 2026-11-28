@@ -88,6 +88,7 @@ fn an_instance_overlay_shares_everything_but_the_account_files() {
     fs::write(shared.join("config.toml"), "model = \"x\"").unwrap();
     fs::write(shared.join("auth.json"), "{\"person\": 1}").unwrap();
     fs::write(shared.join("models_cache.json"), "{}").unwrap();
+    fs::write(shared.join("auth.json.lock"), "").unwrap();
     fs::write(shared.join(".DS_Store"), "").unwrap();
     let layout = overlay(dir.path());
     let instance = dir.path().join("instance");
@@ -114,6 +115,7 @@ fn an_instance_overlay_shares_everything_but_the_account_files() {
         "auth.json",
         "models_cache.json",
         "auth.lock",
+        "auth.json.lock",
         "log",
         ".DS_Store",
     ] {
@@ -161,6 +163,11 @@ fn stale_links_and_local_runtime_folders_are_repaired() {
     )
     .unwrap();
     symlink(shared.join("auth.lock"), instance.join("auth.lock")).unwrap();
+    symlink(
+        shared.join("auth.json.lock"),
+        instance.join("auth.json.lock"),
+    )
+    .unwrap();
 
     overlay(dir.path()).materialize().unwrap();
     assert_eq!(
@@ -177,6 +184,7 @@ fn stale_links_and_local_runtime_folders_are_repaired() {
     );
     assert!(fs::symlink_metadata(instance.join("models_cache.json")).is_err());
     assert!(fs::symlink_metadata(instance.join("auth.lock")).is_err());
+    assert!(fs::symlink_metadata(instance.join("auth.json.lock")).is_err());
 }
 
 #[test]
