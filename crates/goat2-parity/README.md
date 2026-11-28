@@ -58,3 +58,17 @@ trace incomplete. The harness registers request and child aliases and binds each
 child input to its observed report with `AliasMap::bind_child_input`; absent
 correlation is an error. GOAT 2 logs do not prove enqueue, queued wake or
 cancelled wake, so the mapper never emits those transitions.
+
+## GOAT 2 target
+
+`cargo run -p goat2-parity -- run --target goat2` runs `goat2-parity-goat2-runner` per scenario. It starts a
+real `goat2-host` (`GOAT2_HOST_BIN`, default next to the runner) on a temporary data dir with
+`GOAT2_ENGINE=codex` and `GOAT2_CODEX_BIN` pointing at `goat2-parity-fake-codex`, drives the steps over the
+host WebSocket (start_thread, send_input, queue commands, stop), reads the thread log (the lines before the
+replayed checkpoint through read_page) and maps it with `AliasMap`. The fake replays the scenario's v1
+recording method by method (GOAT 2 frames differ from v1's): each process claims one native thread, answers
+each request from the next recorded exchange of that method, skips v1 setup reads, never skips a thread or
+turn request, compares turn/start and turn/steer text, and reports per claim in `GOAT2_PARITY_FAKE_DIR`.
+GOAT 2 logs a thread's first input as steer; a requested start observed as steer with no active run maps to
+start. Single-thread scenarios without MCP or restart steps only, so far; others report unsupported.
+REQUIRED.json gates the v1 target only.
