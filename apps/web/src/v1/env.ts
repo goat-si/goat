@@ -1,2 +1,5 @@
-// Bridge: v1 apps/web/src/env.ts is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table).
-export * from "./seam/env.ts";
+// Preload installs desktopBridge before web code runs, so module-load detection is reliable.
+export const isElectron = typeof window !== "undefined" && window.desktopBridge !== undefined;
+export const isSecretsFeatureEnabled = ["1", "true"].includes(
+  import.meta.env.GOAT_FEATURE_SECRETS?.trim().toLowerCase() ?? "",
+);
