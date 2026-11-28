@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import { layerTest, makeTmpDir, git, initRepoWithCommit } from "../vcs/testing/gitFixture.ts";
@@ -248,6 +249,28 @@ it.effect("a changed shared stamp keeps later lookups out of a flight that read 
     const before = state.lookupGeneration(cwd);
     // Only the default branch's target moves: no file of this branch's own fingerprint changes.
     yield* git(cwd, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    yield* state.validate(cwd, "feature", false);
+    assert.notEqual(state.lookupGeneration(cwd), before);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("a cwd whose stamp becomes shareable keeps later lookups out of an older flight", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    const fs = yield* FileSystem.FileSystem;
+    const userConfig = `${yield* makeTmpDir()}/gitconfig`;
+    yield* fs.writeFileString(userConfig, '[includeIf "gitdir:/elsewhere/"]\n\tpath = work\n');
+    const state = yield* makePrLookupGitState({
+      normalizeCwd: Effect.succeed,
+      capacity: 16,
+      userConfigFiles: [userConfig],
+    });
+    yield* state.validate(cwd, "feature", false);
+    const before = state.lookupGeneration(cwd);
+    // Only the user config changes; nothing in the repository's own fingerprint moves.
+    yield* fs.writeFileString(userConfig, "[user]\n\tname = Someone\n");
     yield* state.validate(cwd, "feature", false);
     assert.notEqual(state.lookupGeneration(cwd), before);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),

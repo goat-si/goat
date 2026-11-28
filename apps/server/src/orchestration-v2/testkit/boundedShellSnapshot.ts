@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import type { ShellSnapshotOptions } from "../ProjectionStore.ts";
 
 /** True when a shell read names the threads, project, worktree or family it needs. */
-export const isBoundedShellRead = (options: ShellSnapshotOptions | undefined) =>
+const isBoundedShellRead = (options: ShellSnapshotOptions | undefined) =>
   options?.threadIds !== undefined ||
   options?.projectId !== undefined ||
   options?.worktreePath !== undefined ||

@@ -20,8 +20,14 @@ const CONFIG_MTIME_GRANULARITY_MS = 2_000;
 /** Git's reading of a boolean environment variable that is set. */
 const gitEnvTrue = (value: string) => /^(?:true|yes|on|1)$/i.test(value.trim());
 
-/** Config files git reads besides the repository's own, as far as the environment shows them. */
-export function userGitConfigFiles(path: Path.Path, env: NodeJS.ProcessEnv): ReadonlyArray<string> {
+/**
+ * Config files git reads besides the repository's own, as far as the environment shows them.
+ * Null when one is relative: git resolves it against each worktree, so worktrees can differ.
+ */
+export function userGitConfigFiles(
+  path: Path.Path,
+  env: NodeJS.ProcessEnv,
+): ReadonlyArray<string> | null {
   const home = env.HOME ?? env.USERPROFILE ?? "";
   const global =
     env.GIT_CONFIG_GLOBAL !== undefined
@@ -42,7 +48,8 @@ export function userGitConfigFiles(path: Path.Path, env: NodeJS.ProcessEnv): Rea
             "/usr/local/etc/gitconfig",
             ...(env.ProgramFiles ? [path.join(env.ProgramFiles, "Git", "etc", "gitconfig")] : []),
           ];
-  return [...system, ...global].filter((file) => file.length > 0 && path.isAbsolute(file));
+  const files = [...system, ...global];
+  return files.every((file) => path.isAbsolute(file)) ? files : null;
 }
 
 /**
@@ -84,7 +91,7 @@ export function splitBranchSections(
 // A branch-scoped read leaves other branches' config sections out: a repository with many
 // worktrees rewrites its shared config whenever any of them publishes a branch.
 export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make")(function* (
-  options: { readonly userConfigFiles?: ReadonlyArray<string> } = {},
+  options: { readonly userConfigFiles?: ReadonlyArray<string> | null } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -208,7 +215,10 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
         exit._tag === "Success" && exit.value !== null ? "1 second" : "0 seconds",
     },
   );
-  const userConfigFiles = options.userConfigFiles ?? userGitConfigFiles(path, process.env);
+  const userConfigFiles =
+    options.userConfigFiles !== undefined
+      ? options.userConfigFiles
+      : userGitConfigFiles(path, process.env);
   /**
    * Everything outside the repository's config and one worktree's HEAD and branch that remote
    * list, remote URL and remote HEAD reads depend on; null when a user config has includes.
@@ -217,6 +227,7 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
     commonDir: string,
     remotes: ReadonlyArray<string>,
   ) {
+    if (userConfigFiles === null) return null;
     const heads = remotes
       .toSorted()
       .map((remote) => path.join(commonDir, "refs", "remotes", remote, "HEAD"));

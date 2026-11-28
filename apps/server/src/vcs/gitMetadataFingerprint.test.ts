@@ -372,14 +372,17 @@ it.effect("legacy remote files turn sharing off, since they change in place", ()
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
-it.effect("system config is skipped only when GIT_CONFIG_NOSYSTEM reads as true", () =>
+it.effect("user config files follow git's environment, and relative ones share nothing", () =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
     const files = (nosystem: string) =>
-      userGitConfigFiles(path, { HOME: "/home/someone", GIT_CONFIG_NOSYSTEM: nosystem });
+      userGitConfigFiles(path, { HOME: "/home/someone", GIT_CONFIG_NOSYSTEM: nosystem }) ?? [];
     assert.include(files("0"), "/etc/gitconfig");
     assert.include(files("false"), "/etc/gitconfig");
     assert.notInclude(files("1"), "/etc/gitconfig");
     assert.notInclude(files("yes"), "/etc/gitconfig");
+    // Git resolves a relative config path against each worktree.
+    assert.isNull(userGitConfigFiles(path, { HOME: "/home/someone", GIT_CONFIG_GLOBAL: "conf" }));
+    assert.isNull(userGitConfigFiles(path, { HOME: "/home/someone", GIT_CONFIG_SYSTEM: "conf" }));
   }).pipe(Effect.provide(layerTest)),
 );

@@ -25,12 +25,16 @@ export function prLookupFailureTtl(consecutiveFailures: number): Duration.Durati
 export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function* (options: {
   readonly normalizeCwd: (cwd: string) => Effect.Effect<string>;
   readonly capacity: number;
+  /** Overrides the user and system git config files the environment names. */
+  readonly userConfigFiles?: ReadonlyArray<string> | null;
 }) {
-  const fingerprint = yield* makeGitMetadataFingerprint();
+  const fingerprint = yield* makeGitMetadataFingerprint(
+    options.userConfigFiles === undefined ? {} : { userConfigFiles: options.userConfigFiles },
+  );
   const epochs = new Map<string, number>();
   const fingerprints = new Map<string, string>();
   // Each cwd's last validated repository stamp; linked worktrees with equal stamps share reads.
-  const sharedStamps = new Map<string, string>();
+  const sharedStamps = new Map<string, string | null>();
   // Explicit refreshes and GOAT mutations cover state the stamps cannot see, so they restart
   // every shared read.
   let sharedGeneration = 0;
@@ -134,13 +138,11 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     const previousShared = sharedStamps.get(cwd);
     if (previousShared !== undefined && previousShared !== metadata.shared) restartReads(cwd);
     sharedStamps.delete(cwd);
-    if (metadata.shared !== null) {
-      if (sharedStamps.size >= options.capacity) {
-        const oldest = sharedStamps.keys().next().value;
-        if (oldest !== undefined) sharedStamps.delete(oldest);
-      }
-      sharedStamps.set(cwd, metadata.shared);
+    if (sharedStamps.size >= options.capacity) {
+      const oldest = sharedStamps.keys().next().value;
+      if (oldest !== undefined) sharedStamps.delete(oldest);
     }
+    sharedStamps.set(cwd, metadata.shared);
   });
   // Untraced: each lookup asks for several keys, mostly from memory, every sweep minute; a read
   // that misses has its own git span under lookupBranchPullRequest.
@@ -150,7 +152,7 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     fresh: boolean,
     read: Effect.Effect<string | null, GitCommandError>,
   ) {
-    const stamp = REPOSITORY_READ.test(key) ? sharedStamps.get(cwd) : undefined;
+    const stamp = REPOSITORY_READ.test(key) ? (sharedStamps.get(cwd) ?? undefined) : undefined;
     const scope = stamp === undefined ? cwd : `shared\u0000${sharedGeneration}\u0000${stamp}`;
     const entryKey = `${scope}\u0000${key}`;
     const startedAtMs = yield* Clock.currentTimeMillis;
