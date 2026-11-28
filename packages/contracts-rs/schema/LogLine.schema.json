@@ -1291,6 +1291,17 @@
             "null"
           ]
         },
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnItem"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The waiting approval/question item itself, for a request with no run (`runId` null,\nfrom `EngineEvent::SessionRequestOpened`): it cannot be an `item.completed` line, which\nneeds a run, so the request carries its own card, including a question's choices. A request\ninside a run references its item through `itemId` instead and leaves this unset."
+        },
         "itemId": {
           "anyOf": [
             {

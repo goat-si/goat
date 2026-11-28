@@ -1534,3 +1534,198 @@ async fn an_image_attachment_is_sent_as_a_data_url_with_its_path_in_the_text() {
     finish(h).await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- per-instance homes (v1 CodexHomeLayout) ----
+
+#[cfg(unix)]
+fn instance_target(
+    home: &std::path::Path,
+    shared: &std::path::Path,
+) -> goat2_engine_api::ProviderTarget {
+    goat2_engine_api::ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: None,
+        home: Some(home.to_path_buf()),
+        shared_home: Some(shared.to_path_buf()),
+    }
+}
+
+#[cfg(unix)]
+fn instance_root(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("goat2-engine-home-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("shared")).unwrap();
+    std::fs::create_dir_all(dir.join("instance")).unwrap();
+    std::fs::write(dir.join("shared/config.toml"), "").unwrap();
+    dir.canonicalize().unwrap()
+}
+
+/// A session for a second instance starts Codex in that instance's overlay home.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_session_for_an_instance_starts_in_its_own_home() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = instance_root("start");
+    let record = root.join("record");
+    let wrapper = root.join("codex");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\" > '{}'\nexec '{}' \"$@\"\n",
+            record.display(),
+            env!("CARGO_BIN_EXE_goat2-fake-codex")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let t = load("codex-0.167.0/basic.json");
+    let mut o = options(&t);
+    o.program = wrapper;
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(
+        &root.join("instance"),
+        &root.join("shared"),
+    ));
+    let h = CodexEngineFactory::new(o).start(s).await.expect("start");
+    assert_eq!(h.engine_ref.id, recorded_thread(&t));
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap().trim_end(),
+        root.join("instance").display().to_string()
+    );
+    assert_eq!(
+        std::fs::read_link(root.join("instance/config.toml")).unwrap(),
+        root.join("shared/config.toml")
+    );
+    h.session.shutdown().await;
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// v1: a home that cannot be laid out stops the start; the error names no path.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_session_whose_home_cannot_be_laid_out_does_not_start() {
+    let root = instance_root("conflict");
+    std::fs::write(root.join("instance/config.toml"), "mine").unwrap();
+    let t = load("codex-0.167.0/basic.json");
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(
+        &root.join("instance"),
+        &root.join("shared"),
+    ));
+    let error = match CodexEngineFactory::new(options(&t)).start(s).await {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("started with a conflicting home"),
+    };
+    assert!(
+        error.contains("Failed to materialize the Codex shadow home"),
+        "{error}"
+    );
+    assert!(!error.contains(root.to_str().unwrap()), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r1: Codex's stderr naming the private home is redacted in the start error.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_instance_start_redacts_its_home_from_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = instance_root("stderr");
+    let wrapper = root.join("codex");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\necho \"cannot open $CODEX_HOME/auth.json\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let t = load("codex-0.167.0/basic.json");
+    let mut o = options(&t);
+    o.program = wrapper;
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(
+        &root.join("instance"),
+        &root.join("shared"),
+    ));
+    let error = match CodexEngineFactory::new(o).start(s).await {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("started"),
+    };
+    assert!(error.contains("<instance home>/auth.json"), "{error}");
+    assert!(
+        !error.contains(root.join("instance").to_str().unwrap()),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r2: every event reaching the host has the private home replaced: the approval's
+/// summary and waiting item, the completed command item and the rest, as Codex names it.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_session_redacts_its_home_from_every_event() {
+    let root = instance_root("events");
+    let instance = root.join("instance");
+    let named = format!("touch {}/approved.txt", instance.display());
+    // The recorded approval session, with Codex naming the private home in what it sends.
+    let mut t = load("codex-0.167.0/approval.json");
+    for entry in &mut t.entries {
+        if let Entry::EmitInbound { frame, .. } = entry {
+            let text = serde_json::to_string(frame).unwrap();
+            *frame = serde_json::from_str(&text.replace("touch approved.txt", &named)).unwrap();
+        }
+    }
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(&instance, &root.join("shared")));
+    let mut h = CodexEngineFactory::new(options(&t))
+        .start(s)
+        .await
+        .expect("start");
+    let _turn = accepted(
+        h.session
+            .start_turn(
+                input(
+                    "goat-input-1",
+                    "Run exactly this shell command once: touch approved.txt  Then reply with exactly: DONE",
+                ),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    let mut events = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened {
+        key, summary, item, ..
+    }) = events.last().cloned()
+    else {
+        unreachable!()
+    };
+    assert!(
+        summary.contains("<instance home>/approved.txt"),
+        "{summary}"
+    );
+    assert!(
+        format!("{item:?}").contains("<instance home>/approved.txt"),
+        "{item:?}"
+    );
+    h.session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Accept,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    events.extend(until(&mut h, is_finished).await);
+    let shown = format!("{events:?}");
+    assert!(!shown.contains(instance.to_str().unwrap()), "{shown}");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::ItemCompleted { item, .. }
+            if format!("{item:?}").contains("<instance home>/approved.txt"))),
+        "{shown}"
+    );
+    h.session.shutdown().await;
+    std::fs::remove_dir_all(&root).unwrap();
+}
