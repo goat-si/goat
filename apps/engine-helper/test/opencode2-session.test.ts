@@ -838,7 +838,7 @@ test("interrupt rescans children restarted while recovery events are buffered", 
         childB.release(); await stopping;
         assert.equal(fake.calls.filter((call) => call.method === "session.interrupt" && (call.input as { sessionID: string }).sessionID === "a").length, 2);
         history.release(); await tick(); await tick();
-        assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 1);
+        assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 1, JSON.stringify({ events, failures }));
         assert.deepEqual(failures, []);
       } finally { childB.release(); }
     } finally { root.release(); history.release(); }
@@ -854,5 +854,53 @@ test("a still-running native child prevents a successful parent terminal", async
     fake.emit("session.execution.succeeded", { sessionID: session.engineRef }); await tick();
     assert.deepEqual(failures, ["OpenCode 2 background subagent work cannot continue outside a GOAT turn"]);
     assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "done").length, 0);
+  } finally { await session.shutdown(); }
+});
+
+test("resume waits for a stale form cancellation terminal before a new turn", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [];
+  fake.setForms("session-v2", [{ id: "old-form", sessionID: "session-v2", title: "Q", fields: [{ key: "answer", type: "string" }] }]);
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, resume: "session-v2" }, hostFor(events));
+  try {
+    assert.ok(fake.calls.some((call) => call.method === "session.form.cancel"));
+    assert.equal((await session.startTurn(input("i", "hello"), settings)).status, "declined");
+    fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+    assert.equal((await session.startTurn(input("i", "hello"), settings)).status, "accepted");
+    assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+  } finally { await session.shutdown(); }
+});
+
+test("a stale form without a native terminal fails visibly after a bounded wait", async () => {
+  const fake = scriptedRuntime(); const failures: string[] = []; const reached = Promise.withResolvers<void>(), gate = Promise.withResolvers<void>();
+  fake.setForms("session-v2", [{ id: "old-form", sessionID: "session-v2", title: "Q", fields: [{ key: "answer", type: "string" }] }]);
+  const wait = async (_ms: number, signal: AbortSignal) => { reached.resolve(); await Promise.race([gate.promise, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }))]); };
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, resume: "session-v2" }, hostFor([], failures), wait);
+  try { await reached.promise; gate.resolve(); await tick(); assert.deepEqual(failures, ["OpenCode 2 cancelled form did not settle"]); }
+  finally { gate.resolve(); await session.shutdown(); }
+});
+
+test("resume waits for a stale permission rejection terminal before a new turn", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [];
+  fake.setRequests([{ id: "old-permission", sessionID: "session-v2", action: "shell", resources: ["*"] }]);
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, resume: "session-v2" }, hostFor(events));
+  try {
+    assert.ok(fake.calls.some((call) => call.method === "permission.reply"));
+    assert.equal((await session.startTurn(input("i", "hello"), settings)).status, "declined");
+    fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+    assert.equal((await session.startTurn(input("i", "hello"), settings)).status, "accepted");
+    assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+  } finally { await session.shutdown(); }
+});
+
+test("a child that starts after interrupt confirmation prevents a false interrupted terminal", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures));
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); await tick(); await session.interrupt(turn.turnId);
+    fake.setActive({ child: { type: "running" } }); fake.emit("session.execution.started", { sessionID: "child" });
+    fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+    assert.deepEqual(failures, ["OpenCode 2 background subagent work cannot continue outside a GOAT turn"]);
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 0);
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
   } finally { await session.shutdown(); }
 });

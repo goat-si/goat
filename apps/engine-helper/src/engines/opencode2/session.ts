@@ -81,6 +81,7 @@ export class OpenCode2Session implements EngineSession {
   private recovering = false;
   private fatalReason: string | undefined;
   private awaitingCancelledForm = false;
+  private cancelledFormTimer: AbortController | undefined;
   private closing: Promise<void> | undefined;
   private constructor(runtime: OpenCode2Runtime, params: InitializeParams, host: EngineHost, id: string, model: ModelRef | undefined, catalog: ModelInfo[], wait: OpenCode2Delay) {
     this.runtime = runtime; this.params = params; this.host = safeHost(host, params, runtime.redactionSecrets ?? []); this.engineRef = id; this.nativeModel = model; this.timer = wait;
@@ -102,16 +103,18 @@ export class OpenCode2Session implements EngineSession {
       const permissions = sessionRules({ runtimeMode: params.runtimeMode }, [], [], names, false);
       const native = await bounded(15_000, undefined, (signal) => params.resume ? client.session.get({ sessionID: params.resume }, { signal }) : client.session.create({ location: { directory: params.cwd }, model: selected, permissions }, { signal }));
       if (!native?.id) throw new Error("session missing");
+      let cancelledRequest: "form" | "permission" | undefined;
       if (params.resume) {
         const active = await bounded(5_000, undefined, (signal) => client.session.active({ signal }));
         if (native.id in active) throw new HelperError("start_failed", "OpenCode session has unowned active work");
         const pending = await bounded(5_000, undefined, (signal) => client.permission.request.list({ location: { directory: params.cwd } }, { signal }));
-        for (const request of pending.data.filter((entry) => entry.sessionID === native.id)) await bounded(5_000, undefined, (signal) => client.permission.reply({ sessionID: native.id, requestID: request.id, decision: "reject" }, { signal }));
-        for (const form of await bounded(5_000, undefined, (signal) => client.session.form.list({ sessionID: native.id }, { signal }))) await bounded(5_000, undefined, (signal) => client.session.form.cancel({ sessionID: native.id, formID: form.id }, { signal }));
+        for (const request of pending.data.filter((entry) => entry.sessionID === native.id)) { await bounded(5_000, undefined, (signal) => client.permission.reply({ sessionID: native.id, requestID: request.id, decision: "reject" }, { signal })); cancelledRequest = "permission"; }
+        for (const form of await bounded(5_000, undefined, (signal) => client.session.form.list({ sessionID: native.id }, { signal }))) { await bounded(5_000, undefined, (signal) => client.session.form.cancel({ sessionID: native.id, formID: form.id }, { signal })); cancelledRequest = "form"; }
         await bounded(5_000, undefined, (signal) => client.session.update({ sessionID: native.id, permissions }, { signal }));
         if (native.location?.directory && native.location.directory !== params.cwd) await bounded(5_000, undefined, (signal) => client.session.move({ sessionID: native.id, directory: params.cwd }, { signal }));
       }
       const result = new OpenCode2Session(runtime, params, host, native.id, native.model ?? selected, catalog, wait);
+      if (cancelledRequest) result.waitForCancelledForm(cancelledRequest);
       void runtime.failure.then((error) => { if (error && !result.closed) result.broken("OpenCode 2 server exited"); });
       void result.consume();
       return result;
@@ -151,7 +154,15 @@ export class OpenCode2Session implements EngineSession {
             bounded(15_000, this.shutdownSignal.signal, (signal) => this.reconcile(signal, true)),
             pump.then(() => { throw new Error("reconnected stream ended during recovery"); }),
           ]);
-          while (recoveryBuffer.length && !this.closed) await this.route(recoveryBuffer.shift()!);
+          for (let passes = 0; !this.closed; passes++) {
+            if (passes >= 128) throw new Error("recovery activity did not settle");
+            while (recoveryBuffer.length && !this.closed) await this.route(recoveryBuffer.shift()!);
+            if (!this.active?.held || !this.runningChildren.size) break;
+            const active = await bounded(5_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.active({ signal }));
+            if (recoveryBuffer.length) continue;
+            for (const id of this.runningChildren) if (!(id in active)) this.runningChildren.delete(id);
+            break;
+          }
           if (pumpEnded) throw new Error("reconnected stream ended during recovery");
           recoveryBuffer = undefined; this.recovering = false;
           const turn = this.active;
@@ -231,7 +242,7 @@ export class OpenCode2Session implements EngineSession {
     const queued = new Set(inbox.map((entry) => entry.id));
     for (const [id, steer] of turn.steers) if (!steer.outcome && !queued.has(id)) throw new Error("steer state unavailable");
     if (this.engineRef in active) { delete turn.held; turn.running = true; return; }
-    if ([...this.children].some((id) => id in active) || [...turn.tools.values()].some((tool) => tool.background)) { this.broken("OpenCode 2 background subagent work cannot continue outside a GOAT turn"); return; }
+    if (!deferTerminal && ([...this.children].some((id) => id in active) || [...turn.tools.values()].some((tool) => tool.background))) { this.broken("OpenCode 2 background subagent work cannot continue outside a GOAT turn"); return; }
     const outcome: TurnOutcome = idle?.outcome === "succeeded" ? (turn.interrupted ? { type: "interrupted" } : { type: "done" }) : idle?.outcome === "failed" ? { type: "failed", reason: "OpenCode 2 turn failed while reconnecting" } : { type: "interrupted" };
     if (deferTerminal || turn.steers.size || turn.awaitingStart) turn.held = outcome; else this.finish(turn, outcome);
   }
@@ -263,6 +274,15 @@ export class OpenCode2Session implements EngineSession {
     void this.closeRuntime().catch(() => this.host.log("warn", "OpenCode 2 runtime cleanup failed"));
   }
   private closeRuntime() { return this.closing ??= bounded(10_000, undefined, () => this.runtime.close()).catch(() => { throw new HelperError("transport", "OpenCode 2 runtime cleanup failed"); }); }
+  private waitForCancelledForm(kind: "form" | "permission" = "form") {
+    this.awaitingCancelledForm = true;
+    this.cancelledFormTimer?.abort();
+    const controller = new AbortController(); this.cancelledFormTimer = controller;
+    const stop = () => controller.abort(); this.shutdownSignal.signal.addEventListener("abort", stop, { once: true });
+    void this.timer(5_000, controller.signal).then(() => { if (this.awaitingCancelledForm && !this.closed) this.broken(`OpenCode 2 cancelled ${kind} did not settle`); })
+      .catch(() => { if (!controller.signal.aborted && !this.closed) this.broken("OpenCode 2 cancelled form recovery failed"); })
+      .finally(() => { this.shutdownSignal.signal.removeEventListener("abort", stop); if (this.cancelledFormTimer === controller) this.cancelledFormTimer = undefined; });
+  }
   private emitSteer(turn: Turn, id: string) {
     const steer = turn.steers.get(id);
     if (!steer?.accepted || !steer.ready || !steer.outcome) return;
@@ -274,6 +294,7 @@ export class OpenCode2Session implements EngineSession {
     if (!turn.admitted) { turn.held = outcome; return; }
     if (this.recovering && !this.closed) { if (turn.held?.type !== "failed" || outcome.type === "failed") turn.held = outcome; return; }
     if (turn.stopping) { if (turn.held?.type !== "failed" || outcome.type === "failed") turn.held = outcome; return; }
+    if (!this.closed && (this.runningChildren.size > 0 || [...turn.tools.values()].some((tool) => tool.background))) { this.broken("OpenCode 2 background subagent work cannot continue outside a GOAT turn"); return; }
     if (outcome.type !== "done") {
       for (const [id, steer] of turn.steers) if (!steer.accepted) { turn.steers.delete(id); if (steer.sent && !steer.outcome) this.stranded.add(id); steer.invalidated.resolve(); }
     }
@@ -310,7 +331,7 @@ export class OpenCode2Session implements EngineSession {
       if (event.type === "session.execution.started") this.runningChildren.add(sessionID);
       else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") this.runningChildren.delete(sessionID);
     }
-    if (sessionID === this.engineRef && this.awaitingCancelledForm && (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed")) { this.awaitingCancelledForm = false; return; }
+    if (sessionID === this.engineRef && this.awaitingCancelledForm && (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed")) { this.awaitingCancelledForm = false; this.cancelledFormTimer?.abort(); return; }
     const turn = this.active;
     if (!turn) {
       if (event.type === "session.execution.started" || event.type === "permission.asked" || event.type === "form.created" || (event.type === "session.inbox.enqueued" && event.data.item.type === "user")) this.broken("OpenCode 2 started unowned work outside a GOAT turn");
@@ -357,7 +378,7 @@ export class OpenCode2Session implements EngineSession {
     if (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") {
       turn.running = false;
       const outcome: TurnOutcome = event.type === "session.execution.failed" ? { type: "failed", reason: "OpenCode 2 turn failed" } : event.type === "session.execution.interrupted" || turn.interrupted ? { type: "interrupted" } : { type: "done" };
-      if (!turn.stopping && !turn.interrupted && (this.runningChildren.size > 0 || [...turn.tools.values()].some((tool) => tool.background))) { this.broken("OpenCode 2 background subagent work cannot continue outside a GOAT turn"); return; }
+      if (!this.recovering && !turn.stopping && (this.runningChildren.size > 0 || [...turn.tools.values()].some((tool) => tool.background))) { this.broken("OpenCode 2 background subagent work cannot continue outside a GOAT turn"); return; }
       if (outcome.type === "failed") { this.finish(turn, outcome); return; }
       if (turn.steers.size || turn.awaitingStart) { turn.held = outcome; this.scheduleSettlement(turn); return; }
       this.finish(turn, outcome); return;
@@ -399,9 +420,9 @@ export class OpenCode2Session implements EngineSession {
     if (this.requests.has(form.id)) return;
     const mapped = formQuestions(form);
     if ("unsupported" in mapped) {
-      if (form.sessionID === this.engineRef) this.awaitingCancelledForm = true;
       try { await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal })); }
       catch { this.broken("OpenCode 2 unsupported form could not be cancelled"); return; }
+      if (form.sessionID === this.engineRef) this.waitForCancelledForm();
       this.finish(turn, { type: "failed", reason: `OpenCode asked for ${mapped.unsupported}, which cannot be shown` }); return;
     }
     this.requests.set(form.id, { type: "form", value: form });
@@ -507,7 +528,7 @@ export class OpenCode2Session implements EngineSession {
             await bounded(10_000, this.shutdownSignal.signal, async (signal) => {
               for (;;) {
                 const current = await this.runtime.client.session.active({ signal });
-                if (!(sessionID in current)) return;
+                if (!(sessionID in current)) { this.runningChildren.delete(sessionID); return; }
                 if (!result.interrupted) throw new Error("child still running");
                 await this.timer(250, signal);
               }
