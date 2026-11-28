@@ -291,7 +291,7 @@ describe("resolveMarkdownFileLinkTarget", () => {
   });
 
   it("keeps a backslash in a relative link that already names a file", () => {
-    expect(resolveMarkdownFileLinkTarget("./foo%5Cbar.ts", "/repo")).toBe("/repo/./foo\\bar.ts");
+    expect(resolveMarkdownFileLinkTarget("./foo%5Cbar.ts", "/repo")).toBe("/repo/foo\\bar.ts");
   });
 
   // A POSIX file name may contain a backslash, so only a Windows cwd treats it as a separator.

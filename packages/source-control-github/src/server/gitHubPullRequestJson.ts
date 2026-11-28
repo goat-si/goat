@@ -227,8 +227,6 @@ export function toPullRequestNodeId(result: {
   return result.repository?.pullRequest?.id ?? null;
 }
 
-export { isSubjectOfPullRequest } from "./gitHubReviewThreadScope.ts";
-
 const ReviewSubmissionSchema = Schema.Struct({
   event: Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
   body: Schema.String,

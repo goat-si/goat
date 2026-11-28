@@ -1,5 +1,5 @@
 import * as limits from "./gitHubPullRequestLimits.ts";
-import { requireThreadOfPullRequest } from "./gitHubReviewThreadScope.ts";
+import { isSubjectOfPullRequest, requireThreadOfPullRequest } from "./gitHubReviewThreadScope.ts";
 import { collectGitHubPages } from "./gitHubPullRequestPageCollector.ts";
 import { isGraphQlClientError } from "./gitHubGraphQlClientError.ts";
 import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
@@ -110,7 +110,6 @@ import {
   type GitHubPullRequestCore,
   type GitHubPullRequestFileStat,
   type GitHubPullRequestWatchFingerprint,
-  isSubjectOfPullRequest,
   LenientPullRequestList,
   LenientPullRequestSearch,
   pageRows,

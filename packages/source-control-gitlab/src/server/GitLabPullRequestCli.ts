@@ -1596,23 +1596,23 @@ export const make = Effect.gen(function* () {
     submitReview: Effect.fn("GitLabPullRequestCli.submitReview")(function* (input) {
       const project = projectPath(input.repository);
       const mergeRequest = `projects/${project}/merge_requests/${input.number}`;
-      const refs = input.comments.length > 0 ? yield* getDiffRefs(input) : undefined;
-      if (
-        refs !== undefined &&
-        input.expectedHeadSha !== undefined &&
-        refs.headSha !== input.expectedHeadSha
-      ) {
-        return yield* new GitLabMutationRefusedError({
-          command: "glab",
-          cwd: input.cwd,
-          operation: "submitReview",
-          reasons: [`the head is now ${refs.headSha}, not ${input.expectedHeadSha}`],
-        });
+      let prefetchedRefs: Effect.Success<ReturnType<typeof getDiffRefs>> | undefined;
+      if (input.comments.length > 0 && input.expectedHeadSha !== undefined) {
+        prefetchedRefs = yield* getDiffRefs(input);
+        if (prefetchedRefs.headSha !== input.expectedHeadSha) {
+          return yield* new GitLabMutationRefusedError({
+            command: "glab",
+            cwd: input.cwd,
+            operation: "submitReview",
+            reasons: [`the head is now ${prefetchedRefs.headSha}, not ${input.expectedHeadSha}`],
+          });
+        }
       }
       if (input.verdict === "request-changes") {
         yield* requestChanges(input);
       }
-      if (refs !== undefined) {
+      if (input.comments.length > 0) {
+        const refs = prefetchedRefs ?? (yield* getDiffRefs(input));
         // Line codes only steer GitLab's highlight of a range, so an unreadable diff falls back
         // to codes without the other side's counter rather than blocking the review.
         const patch = yield* gitLabPatchCovering(
