@@ -21,7 +21,7 @@ describe("cards", () => {
   it("drops frames from a stale subscription", () => {
     const s = run(withSub(), { type: "card_changed", subId: "old", card: card("a", 1) });
     expect(s.cards).toEqual({});
-    const s2 = run(s, { type: "thread_event", subId: "stale", threadId: "t", line: line(1, "t", { type: "run.finished", runId: "r", outcome: "done" }) });
+    const s2 = run(s, { type: "thread_event", subId: "stale", threadId: "t", line: line(1, "t", { type: "run.finished", runId: "r", outcome: "completed" }) });
     expect(s2.threads.t!.lines).toHaveLength(0);
   });
 });
@@ -33,7 +33,7 @@ describe("thread fold", () => {
       ev(accepted(1, "i1", "hello")),
       ev(line(2, "t", { type: "run.started", runId: "r1", inputIds: ["i1"], generation: 1, engineRef: null })),
       ev(line(3, "t", { type: "item.completed", runId: "r1", engineLocator: null, item: item("t", "r1", "a1", "t", { type: "assistant_message", messageId: "m", text: "hi", streaming: false }) })),
-      ev(line(4, "t", { type: "run.finished", runId: "r1", outcome: "done" })));
+      ev(line(4, "t", { type: "run.finished", runId: "r1", outcome: "completed" })));
     const d = deriveThread(s.threads.t);
     expect(d.entries.map((e) => e.kind)).toEqual(["user", "bot"]);
     expect(d.activeRunId).toBeNull();
@@ -49,7 +49,7 @@ describe("thread fold", () => {
     expect(deriveThread(s.threads.t).queued.map((q) => [q.inputId, q.text])).toEqual([["q3", "three"], ["q1", "one!"]]);
   });
   it("opens and resolves requests; checkpoint restores open requests and queue", () => {
-    const opened = line(1, "t", { type: "request.opened", requestId: "rq", runId: null, itemId: null, kind: "decision", summary: "Merge?", options: [{ id: "merge", label: "Merge" }] });
+    const opened = line(1, "t", { type: "request.opened", requestId: "rq", runId: null, itemId: null, kind: "decision", summary: "Merge?", options: [{ id: "merge", label: "Merge", consequence: "Merges it" }] });
     let s = run(withSub(), ev(opened));
     expect(deriveThread(s.threads.t).openRequests[0]!.options![0]!.label).toBe("Merge");
     s = run(s, ev(line(2, "t", { type: "request.resolved", requestId: "rq", outcome: "answered", optionId: "merge" })));

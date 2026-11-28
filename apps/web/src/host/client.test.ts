@@ -83,7 +83,7 @@ describe("client + fake host", () => {
     await tick(5);
     expect(deriveThread(client.getSnapshot().state.threads["t-perf6"]).queued.map((q) => q.text)).toEqual(["Then open a PR against dev and link the stall report", "edited"]);
     const bad = await client.command({ type: "cancel_queued", threadId: "t-perf6", inputId: "nope" });
-    expect(bad.error?.code).toBe("not_queued");
+    expect(bad.error?.reason).toBe("not_queued");
     expect(fake.received.some((f) => f.type === "edit_queued")).toBe(true);
     stop();
   });
@@ -92,6 +92,6 @@ describe("client + fake host", () => {
     await tick(5);
     await client.command({ type: "rename_thread", threadId: "t-main", title: "A" }, "fixed-id");
     const r = await client.command({ type: "rename_thread", threadId: "t-main", title: "B" }, "fixed-id");
-    expect(r.error?.code).toBe("idempotency_conflict");
+    expect(r.error?.reason).toBe("idempotency_conflict");
   });
 });

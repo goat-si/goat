@@ -260,7 +260,7 @@ function BotChat({ bot }: { bot: BotRowData }) {
           onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
           style={{ color: "#0D0D0D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 14, lineHeight: "20px" }} />}
         plus={plannedProps("attachments")}
-        picker={<P.ModelChip glyph={<ProviderGlyph driver="codex" size={16} />} model={bot.card?.engine.model ?? "gpt-6.1-sol"} button={plannedProps("runtime-picker-change")} />} />}
+        picker={<P.ModelChip glyph={<ProviderGlyph driver="codex" size={16} />} model={bot.card?.engine.modelSelection.model ?? "gpt-6.1-sol"} button={plannedProps("runtime-picker-change")} />} />}
     />
   );
 }

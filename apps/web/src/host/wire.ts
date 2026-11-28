@@ -2,7 +2,7 @@
 // crates/goat2-contracts, structure/30_wire.md); this file only narrows the unions for local use.
 export type {
   BotFace, BotProfile, CardCursor, ChatAttachment, ClientFrame, CommandError, CommandValue, DecisionOption,
-  EngineChoice, Fold, HostFrame, InputId, InputMode, ItemId, LogLine, QueuedInput, RequestId, RequestKind,
+  Fold, ModelSelection, HostFrame, InputId, InputMode, ItemId, LogLine, QueuedInput, RequestId, RequestKind,
   RequestOpened, RequestOutcome, RunOutcome, ThreadCard, ThreadCursor, ThreadId, ThreadStatus, TurnItem,
 } from "@goat2/contracts-rs";
 import type { ClientFrame, HostFrame, LogLine } from "@goat2/contracts-rs";

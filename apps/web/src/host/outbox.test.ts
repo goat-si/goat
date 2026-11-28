@@ -48,7 +48,7 @@ describe("outbox", () => {
     const e = box.add({ threadId: "t1" }, "a", "followup");
     const s = sentFrames();
     box.flush(toThread, s.send);
-    box.onResult({ type: "command_result", reqId: (s.out[0] as { reqId: string }).reqId, ok: false, error: { code: "steer_refused", message: "Refused", retryable: true } });
+    box.onResult({ type: "command_result", reqId: (s.out[0] as { reqId: string }).reqId, ok: false, error: { code: "failed_precondition", reason: "steer_refused", message: "Refused", retryable: true } });
     expect(box.list()[0]).toMatchObject({ status: "failed", error: "Refused" });
     box.resend(e.clientRequestId, true, toThread, s.send);
     expect(s.out).toHaveLength(2);

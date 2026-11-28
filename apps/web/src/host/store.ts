@@ -328,17 +328,17 @@ export function botRows(state: HostState): BotRowData[] {
   const rows: BotRowData[] = [];
   for (const botId of ids) {
     const bot = state.bots[botId];
-    const card = (bot ? state.cards[bot.threadId] : undefined) ?? cardsByBot.get(botId) ?? null;
+    const card = (bot ? state.cards[bot.sessionThreadId] : undefined) ?? cardsByBot.get(botId) ?? null;
     const st: BotState = card?.status === "needs_you" ? "needs-you" : card?.status === "running" || card?.status === "queued" ? "working" : "idle";
     rows.push({
       botId,
-      threadId: bot?.threadId ?? card?.id ?? null,
+      threadId: bot?.sessionThreadId ?? card?.id ?? null,
       name: bot?.name ?? card?.title ?? botId,
       purpose: bot?.purpose ?? "",
       face: bot?.face ?? null,
       role: bot?.role ?? (botId === "main" ? "main" : "member"),
       state: st,
-      line: card?.needsYou?.summary ?? card?.lastExcerpt ?? "",
+      line: card?.needsYou?.summary ?? card?.latestAnswerExcerpt ?? "",
       updatedAt: card?.updatedAt ?? null,
       card,
     });
@@ -349,6 +349,6 @@ export function botRows(state: HostState): BotRowData[] {
 /** Worker threads started by a thread (cards whose parent is that thread), newest first. */
 export function workerThreads(state: HostState, parentThreadId: string): ThreadCard[] {
   return Object.values(state.cards)
-    .filter((c) => c.parent?.threadId === parentThreadId && !c.archived)
+    .filter((c) => c.parent?.threadId === parentThreadId && !c.archivedAt)
     .sort((a, b) => (a.status === "running" ? -1 : 0) - (b.status === "running" ? -1 : 0) || b.updatedAt.localeCompare(a.updatedAt));
 }
