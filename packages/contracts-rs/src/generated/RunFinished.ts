@@ -6,4 +6,10 @@ import type { ThreadTokenUsageSnapshot } from "./ThreadTokenUsageSnapshot.ts";
 /**
  * `run.finished`.
  */
-export type RunFinished = { runId: RunId, outcome: RunOutcome, reason?: string, tokenUsage?: ThreadTokenUsageSnapshot, };
+export type RunFinished = { runId: RunId, outcome: RunOutcome, reason?: string,
+/**
+ * The run's last token usage snapshot (v1 run `tokenUsage`), when the engine reported one.
+ * Usage is never stored while a run is going (no progress lines), so a run the store
+ * settles after a host restart has none, and the card keeps its previous `contextUsage`.
+ */
+tokenUsage?: ThreadTokenUsageSnapshot, };

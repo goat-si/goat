@@ -1459,7 +1459,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "The run's last token usage snapshot (v1 run `tokenUsage`), when the engine reported one.\nUsage is never stored while a run is going (no progress lines), so a run the store\nsettles after a host restart has none, and the card keeps its previous `contextUsage`."
         }
       },
       "required": [
@@ -1594,7 +1595,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "The last finished run's token usage (v1 provider thread `contextUsage`), folded from\n`run.finished.tokenUsage`; a run without one keeps the previous value. Live numbers during a\nrun arrive as the non-stored `thread_usage` frame."
         },
         "engine": {
           "$ref": "#/$defs/EngineConfig"

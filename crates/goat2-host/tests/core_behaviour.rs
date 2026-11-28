@@ -2003,14 +2003,14 @@ async fn usage_is_live_and_only_finished_snapshot_is_durable() {
         &id,
         goat2_host::engine::EngineEvent::TokenUsage {
             turn_id: Some("stale".into()),
-            usage: usage(111),
+            usage: usage(31_415_926),
         },
     );
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::TokenUsage {
             turn_id: None,
-            usage: usage(222),
+            usage: usage(27_182_818),
         },
     );
     let live = tokio::time::timeout(Duration::from_secs(5), async {
@@ -2024,7 +2024,7 @@ async fn usage_is_live_and_only_finished_snapshot_is_durable() {
     })
     .await
     .unwrap();
-    assert_eq!(live.0.used_tokens, 222);
+    assert_eq!(live.0.used_tokens, 27_182_818);
     assert!(chrono::DateTime::parse_from_rfc3339(&live.1).is_ok());
     t.fake.finish_turn(&id, "done");
     eventually("finished", || count(&t, &id, "run.finished") == 1).await;
@@ -2035,7 +2035,7 @@ async fn usage_is_live_and_only_finished_snapshot_is_durable() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(finished.token_usage.unwrap().used_tokens, 222);
+    assert_eq!(finished.token_usage.unwrap().used_tokens, 27_182_818);
     assert_eq!(
         t.host
             .store()
@@ -2044,10 +2044,10 @@ async fn usage_is_live_and_only_finished_snapshot_is_durable() {
             .context_usage
             .unwrap()
             .used_tokens,
-        222
+        27_182_818
     );
     assert!(!data_contains(&t, "thread_usage"));
-    assert!(!data_contains(&t, "111"));
+    assert!(!data_contains(&t, "31415926"));
 }
 
 #[tokio::test]
@@ -2104,4 +2104,47 @@ async fn keyed_signin_answers_engine_and_declines_at_run_end() {
     eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
     assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-END")));
     assert!(!data_contains(&t, "KEY-END"));
+}
+
+#[tokio::test]
+async fn a_repeated_keyed_signin_declines_the_replaced_key_and_errors_never_show_a_key() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-repeat", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    t.fake.emit(&id, auth("KEY-FIRST-7731"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.emit(&id, auth("KEY-SECOND-7732"));
+    eventually("first key declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-FIRST-7731"))
+    })
+    .await;
+    assert_eq!(signins(&t, &id).len(), 1, "one request per scope");
+    // The engine fails the answer with an error naming the key: the reply carries no key.
+    t.fake.fail_answers(true);
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    let reply = t
+        .host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-fail".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await;
+    let shown = format!("{reply:?}");
+    assert!(reply.is_err(), "{shown}");
+    assert!(!shown.contains("KEY-SECOND-7732"), "{shown}");
+    assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Accept, .. } if key == "KEY-SECOND-7732")));
+    assert!(!data_contains(&t, "KEY-FIRST-7731"));
+    assert!(!data_contains(&t, "KEY-SECOND-7732"));
 }

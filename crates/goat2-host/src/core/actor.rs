@@ -936,7 +936,7 @@ impl Actor {
                 turn_id,
                 url,
                 message,
-            } => self.on_auth_required(turn_id, key, url, message),
+            } => self.on_auth_required(turn_id, key, url, message).await,
             EngineEvent::SubagentUpdate { subagent_id, .. } => {
                 // Progress of an unfinished native subagent: not stored (PRD storage.md: no
                 // progress updates in the log). The finished subagent arrives as an item. There
@@ -974,7 +974,7 @@ impl Actor {
     /// sign-in naming a turn belongs to that run and only while it runs; one naming a turn that
     /// is no longer running is dropped (the next turn asks again). One without a turn belongs to
     /// the engine session. Each scope keeps at most one open sign-in; a repeat refreshes its link.
-    fn on_auth_required(
+    async fn on_auth_required(
         &mut self,
         turn_id: Option<String>,
         key: Option<String>,
@@ -1016,7 +1016,19 @@ impl Actor {
             }
         };
         if let Some(key) = key {
-            self.signin_keys.retain(|(id, _)| id != &request_id);
+            // A repeat with a new key replaces the earlier engine request: decline that one so it
+            // does not wait forever.
+            if let Some(index) = self
+                .signin_keys
+                .iter()
+                .position(|(id, _)| id == &request_id)
+            {
+                let (_, old) = self.signin_keys.remove(index);
+                if old != key {
+                    self.decline_signin_key(&old, "a newer sign-in request replaced it")
+                        .await;
+                }
+            }
             self.signin_keys.push((request_id.clone(), key));
         }
         match url.filter(|u| !u.trim().is_empty()) {
@@ -1075,21 +1087,8 @@ impl Actor {
         for request_id in &run.signins {
             if let Some(index) = self.signin_keys.iter().position(|(id, _)| id == request_id) {
                 let (_, key) = self.signin_keys.remove(index);
-                if self.is_open(request_id)
-                    && let Some(session) = &self.session
-                    && let Err(error) = session
-                        .session
-                        .answer_request(
-                            &key,
-                            RequestAnswer {
-                                outcome: RequestOutcome::Decline,
-                                text: None,
-                                answers: None,
-                            },
-                        )
-                        .await
-                {
-                    tracing::warn!(%error, "failed to decline sign-in at run end");
+                if self.is_open(request_id) {
+                    self.decline_signin_key(&key, "the run ended").await;
                 }
             }
         }
@@ -1360,7 +1359,14 @@ impl Actor {
                     },
                 )
                 .await
-                .map_err(|e| Refusal::new(Reason::Internal, e.to_string()))?;
+                // The engine's error text can name the key; neither the reply nor the log carries it.
+                .map_err(|_| {
+                    tracing::warn!(thread = %self.id, "the engine did not take the sign-in answer");
+                    Refusal::new(
+                        Reason::Internal,
+                        "the engine did not take the sign-in answer",
+                    )
+                })?;
             self.signin_keys.remove(index);
         }
         // Engine request of the running turn: answer the engine first.
@@ -1528,6 +1534,20 @@ impl Actor {
         });
     }
 
+    /// Decline one engine sign-in request while the session lives. The engine's error text can
+    /// name the key, so only the reason is logged.
+    async fn decline_signin_key(&self, key: &str, why: &str) {
+        let Some(session) = &self.session else { return };
+        let answer = RequestAnswer {
+            outcome: RequestOutcome::Decline,
+            text: None,
+            answers: None,
+        };
+        if session.session.answer_request(key, answer).await.is_err() {
+            tracing::warn!(thread = %self.id, why, "failed to decline a sign-in");
+        }
+    }
+
     fn drop_session(&mut self) {
         self.signin_keys.clear();
         let signins = std::mem::take(&mut self.session_signins);
@@ -1549,9 +1569,9 @@ impl Actor {
     async fn stop_session(&mut self, why: &str) {
         if let Some(s) = &self.session {
             for (id, key) in &self.signin_keys {
+                // The engine's error text can name the key, so it is not logged.
                 if self.is_open(id)
-                    && let Err(error) = s
-                        .session
+                    && s.session
                         .answer_request(
                             key,
                             RequestAnswer {
@@ -1561,8 +1581,9 @@ impl Actor {
                             },
                         )
                         .await
+                        .is_err()
                 {
-                    tracing::warn!(%error, "failed to decline sign-in before stopping engine");
+                    tracing::warn!(thread = %self.id, "failed to decline a sign-in before stopping the engine");
                 }
             }
             tracing::info!(thread = %self.id, why, "stopping engine process");
