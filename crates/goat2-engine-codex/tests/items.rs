@@ -51,6 +51,26 @@ fn command_execution() {
     assert!(v.get("output").is_none());
 }
 #[test]
+fn command_execution_keeps_a_bounded_one_line_summary() {
+    // A long script with a secret further down: only the first line, cut to 200 characters,
+    // is stored; the rest stays in Codex's record (name/summary/locator rule).
+    let script = format!(
+        "python3 - <<'EOF' {}\nAPI_KEY=secret-value\nprint(1)\nEOF",
+        "x".repeat(5_000)
+    );
+    let v = project(
+        json!({"type":"commandExecution","id":"c","command":script,"status":"completed",
+        "commandActions":[{"type":"search","command":"rg","query":format!("{}\nsecret-value", "q".repeat(500)),"path":"src"}]}),
+    );
+    let input = v["input"].as_str().unwrap();
+    assert!(input.starts_with("python3 - <<'EOF' xxx"), "{input}");
+    assert!(input.ends_with('…'));
+    assert_eq!(input.chars().count(), 201);
+    let query = v["commandActions"][0]["query"].as_str().unwrap();
+    assert_eq!(query.chars().count(), 201);
+    assert!(!v.to_string().contains("secret-value"));
+}
+#[test]
 fn file_change() {
     let v = project(
         json!({"type":"fileChange","id":"f","status":"completed","changes":[{"path":"old","kind":{"type":"update","move_path":"new"},"diff":"secret"}]}),

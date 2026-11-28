@@ -72,12 +72,32 @@ pub fn web_search_patterns(query: &str, action: Option<&Value>) -> Vec<String> {
     values.push(query);
     let mut result = Vec::new();
     for value in values {
-        let value = value.trim();
-        if !value.is_empty() && !result.iter().any(|v| v == value) {
-            result.push(value.to_owned());
+        let value = summary_line(value);
+        if !value.is_empty() && !result.contains(&value) {
+            result.push(value);
         }
     }
     result
+}
+
+/// Longest summary string a stored tool item keeps (characters).
+pub const SUMMARY_MAX_CHARS: usize = 200;
+
+/// A tool call is stored as name, summary and engine locator only (docs/lanes/PART1.md fixed
+/// decisions; goat2-contracts ItemCompleted): every string that describes a call is cut to its
+/// first non-empty line and [SUMMARY_MAX_CHARS], with "…" when anything was dropped. The full
+/// text stays in Codex's own record, reachable through the locator.
+pub fn summary_line(text: &str) -> String {
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let more_lines = lines.next().is_some();
+    let mut out: String = first.chars().take(SUMMARY_MAX_CHARS).collect();
+    if more_lines || first.chars().count() > SUMMARY_MAX_CHARS {
+        out.push('…');
+    }
+    out
 }
 
 // v1: apps/server/src/provider/CodexCommandActions.ts:17-59
@@ -87,10 +107,7 @@ fn command_actions(actions: &[Value]) -> Vec<CommandAction> {
     }
     let mut mapped = Vec::new();
     for action in actions {
-        let path = action
-            .get("path")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_owned());
+        let path = action.get("path").and_then(Value::as_str).map(summary_line);
         let entry = match action.get("type").and_then(Value::as_str) {
             Some("read") => match path {
                 Some(path) if !path.is_empty() => CommandAction::Read { path },
@@ -101,7 +118,7 @@ fn command_actions(actions: &[Value]) -> Vec<CommandAction> {
                 query: action
                     .get("query")
                     .and_then(Value::as_str)
-                    .map(|s| s.trim().to_owned()),
+                    .map(summary_line),
                 path,
             },
             _ => return vec![],
@@ -194,7 +211,8 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
                 status = item_status(s.as_deref());
             }
             TurnItemBody::CommandExecution {
-                input: command.clone(),
+                // The command line is the call's summary, bounded (see [summary_line]).
+                input: summary_line(command),
                 command_actions: Some(command_actions(actions)),
                 output: None,
                 output_omitted: completed.then_some(true),
@@ -288,7 +306,7 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
         }
         ThreadItem::ImageView { path, .. } if completed => {
             // The viewed path is the call's one-line summary.
-            dynamic("view_image".into(), path.clone(), true)
+            dynamic("view_image".into(), path.as_deref().map(summary_line), true)
         }
         ThreadItem::ImageGeneration {
             status: s, failure, ..
