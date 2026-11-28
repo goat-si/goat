@@ -1703,3 +1703,51 @@ async fn the_newest_engine_group_snapshot_is_the_live_set() {
     seqs.dedup();
     assert_eq!(seqs.len(), seen.len());
 }
+
+#[tokio::test]
+async fn an_engine_sign_in_need_becomes_a_signin_request() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "auth", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            url: Some("https://example.invalid/login".into()),
+            message: "Sign in to Codex".into(),
+        },
+    );
+    eventually("needs you: signin", || {
+        t.host
+            .store()
+            .card(&id)
+            .and_then(|c| c.needs_you)
+            .is_some_and(|n| n.kind == RequestKind::Signin)
+    })
+    .await;
+    let request_id = t
+        .host
+        .store()
+        .fold(&id)
+        .unwrap()
+        .open_requests
+        .iter()
+        .find(|r| r.kind == RequestKind::Signin)
+        .unwrap()
+        .request_id
+        .clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "auth-done".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: Some("signed in".into()),
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert!(t.host.store().fold(&id).unwrap().open_requests.is_empty());
+}
