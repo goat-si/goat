@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { useGT, useLocale } from "gt-react";
 import { type DesktopUpdateChannel } from "@goat/contracts";
 import { useState } from "react";
 
@@ -32,6 +32,7 @@ import { ensureLocalApi } from "../../localApi";
 export function AboutVersionSection() {
   const setting = useTranslatedSearchableSetting();
   const gt = useGT();
+  const locale = useLocale();
   const updateState = useDesktopUpdateState();
   const [isChangingUpdatePolicy, setIsChangingUpdatePolicy] = useState(false);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
@@ -149,7 +150,7 @@ export function AboutVersionSection() {
       });
   };
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState, gt) : null;
+  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState, gt, locale) : null;
   const buttonDisabled =
     action === "none"
       ? !canCheckForUpdate(updateState)

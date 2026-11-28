@@ -82,6 +82,21 @@ function publish(update: DesktopUpdateState | null) {
 const releaseNotes = () => document.querySelector('[aria-label="Update release notes"]');
 
 describe("SidebarUpdatePill release notes", () => {
+  it("shows a measured rate while downloading and drops it when the sample is missing", async () => {
+    sessionStorage.removeItem("desktop-update-notice");
+    const update = { ...nightlyUpdate([]), status: "downloading" as const, downloadPercent: 40 };
+    setup({ ...update, downloadBytesPerSecond: 2_500_000 });
+    await using _screen = await render(<SidebarUpdatePill />);
+    const card = () => document.querySelector('aside[aria-label="Update available"]')?.textContent;
+    expect(card()).toContain("40%");
+    expect(card()).toContain(
+      new Intl.NumberFormat("en", { style: "unit", unit: "megabyte-per-second" }).format(2.5),
+    );
+    await publish(update);
+    expect(card()).toContain("40%");
+    expect(card()).not.toContain("2.5");
+  });
+
   it("keeps a dismissed offer quiet and surfaces a subsequent download failure", async () => {
     sessionStorage.removeItem("desktop-update-notice");
     const update = nightlyUpdate([]);

@@ -9,12 +9,18 @@ import * as Stream from "effect/Stream";
 
 import type * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import type * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import {
+  reduceDesktopUpdateStateOnDownloadProgress,
+  shouldBroadcastDownloadProgress,
+} from "./updateMachine.ts";
 import { DesktopUpdateCheckTimeoutError, UPDATE_CHECK_TIMEOUT } from "./updateFailures.ts";
 import { reduceDesktopUpdateStateOnDownloadLost } from "./updateMachine.ts";
 
-export const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(
-  Schema.Struct({ percent: Schema.Number }),
-);
+const DownloadProgressInfo = Schema.Struct({
+  percent: Schema.Number,
+  bytesPerSecond: Schema.optional(Schema.Unknown),
+});
+export const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(DownloadProgressInfo);
 
 export const checkDesktopUpdateFeed = (
   updater: ElectronUpdater.ElectronUpdater["Service"],
@@ -99,6 +105,7 @@ type DownloadAttempt = {
   readonly channel: DesktopUpdateChannel;
   readonly version: string;
   claimed: boolean;
+  lastProgressAt: number | null;
 };
 
 export function makeUpdateDownloadAttempts() {
@@ -107,11 +114,35 @@ export function makeUpdateDownloadAttempts() {
   return {
     start(channel: DesktopUpdateChannel, version: string) {
       started = true;
-      current = { channel, version, claimed: false };
+      current = { channel, version, claimed: false, lastProgressAt: null };
       return current;
     },
     finish(attempt: DownloadAttempt) {
       if (current === attempt) current = null;
+    },
+    applyProgress(
+      attempt: DownloadAttempt,
+      state: DesktopUpdateState,
+      progress: typeof DownloadProgressInfo.Type,
+      now: number,
+    ) {
+      if (current !== attempt || state.status !== "downloading") return state;
+      const sample = progress.bytesPerSecond;
+      const rate =
+        typeof sample === "number" && Number.isFinite(sample) && sample >= 0 ? sample : null;
+      // Differential downloads also emit at range boundaries. Limit rate-only changes to
+      // one per second while keeping percentage milestones and clearing missing samples.
+      const rateChanged =
+        rate !== state.downloadBytesPerSecond &&
+        (rate === null || attempt.lastProgressAt === null || now - attempt.lastProgressAt >= 1_000);
+      if (
+        !rateChanged &&
+        !shouldBroadcastDownloadProgress(state, progress.percent) &&
+        state.message === null
+      )
+        return state;
+      attempt.lastProgressAt = now;
+      return reduceDesktopUpdateStateOnDownloadProgress(state, progress.percent, rate);
     },
     capture: () => current,
     claim(attempt: DownloadAttempt | null, channel: DesktopUpdateChannel, version: string) {

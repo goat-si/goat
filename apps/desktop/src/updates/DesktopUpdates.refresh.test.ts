@@ -449,17 +449,29 @@ it.effect("admits a check and retry after cancellation and late native download 
       yield* updates.check("manual");
       const download = yield* updates.download.pipe(Effect.forkScoped);
       yield* Deferred.await(firstDownloadStarted);
-      harness.emit("download-progress", { percent: 20 });
+      harness.emit("download-progress", { percent: 4, bytesPerSecond: 2_500_000 });
+      yield* TestClock.adjust("100 millis");
+      harness.emit("download-progress", { percent: 4.5, bytesPerSecond: 3_000_000 });
+      yield* TestClock.adjust("100 millis");
+      assert.equal((yield* updates.getState).downloadPercent, 4);
+      assert.equal((yield* updates.getState).downloadBytesPerSecond, 2_500_000);
+      harness.emit("download-progress", { percent: 5, bytesPerSecond: -1 });
       yield* TestClock.adjust("1 second");
-      assert.equal((yield* updates.getState).downloadPercent, 20);
+      assert.equal((yield* updates.getState).downloadPercent, 5);
+      assert.isNull((yield* updates.getState).downloadBytesPerSecond);
 
+      harness.emit("download-progress", { percent: 6, bytesPerSecond: 400_000 });
+      yield* TestClock.adjust("1 second");
+      assert.equal((yield* updates.getState).downloadBytesPerSecond, 400_000);
       yield* Fiber.interrupt(download);
       assert.equal((yield* updates.getState).status, "available");
-      harness.emit("download-progress", { percent: 80 });
+      assert.isNull((yield* updates.getState).downloadBytesPerSecond);
+      harness.emit("download-progress", { percent: 80, bytesPerSecond: 9_000_000 });
       harness.emit("update-downloaded", { version: "1.2.4" });
       yield* TestClock.adjust("1 second");
 
       assert.isFalse(yield* updates.isActionActive);
+      assert.isNull((yield* updates.getState).downloadBytesPerSecond);
       assert.isTrue((yield* updates.check("manual")).checked);
       assert.isNull((yield* updates.getState).downloadedVersion);
       assert.isTrue((yield* updates.download).completed);

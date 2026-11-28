@@ -39,6 +39,11 @@ describe("DesktopUpdateStateSchema", () => {
     expect(state.pendingUpdate).toBeNull();
     expect(state.recoveryStatus).toBeNull();
     expect(state.installationNotice).toBeUndefined();
+    expect(state.downloadBytesPerSecond).toBeUndefined();
+    expect(
+      decodeDesktopUpdateState({ ...legacy, downloadBytesPerSecond: 250_000 })
+        .downloadBytesPerSecond,
+    ).toBe(250_000);
     expect(
       decodeDesktopUpdateState({ ...legacy, installationNotice: "Ask an administrator." })
         .installationNotice,

@@ -24,6 +24,7 @@ import {
   type DesktopUpdateState,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -85,12 +86,10 @@ import {
   reduceDesktopUpdateStateOnCheckStart,
   reduceDesktopUpdateStateOnDownloadComplete,
   reduceDesktopUpdateStateOnDownloadFailure,
-  reduceDesktopUpdateStateOnDownloadProgress,
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
-  shouldBroadcastDownloadProgress,
 } from "./updateMachine.ts";
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
@@ -1111,6 +1110,7 @@ export const make = Effect.gen(function* () {
         message: `${error.message} ${describeUpdateErrorCause(error.cause)}`,
         checkedAt,
         downloadPercent: null,
+        downloadBytesPerSecond: null,
         errorContext: current.errorContext,
         recoveryStatus:
           current.pendingUpdate && !current.downloadedVersion
@@ -1135,12 +1135,9 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(
         Effect.fn("desktop.updates.applyDownloadProgress")(function* (progress) {
           const percent = Math.floor(progress.percent);
-          const state = yield* updateState((state) =>
-            downloadAttempts.isCurrent(attempt) &&
-            state.status === "downloading" &&
-            (shouldBroadcastDownloadProgress(state, progress.percent) || state.message !== null)
-              ? reduceDesktopUpdateStateOnDownloadProgress(state, progress.percent)
-              : state,
+          const now = yield* Clock.currentTimeMillis;
+          const state = yield* updateState((current) =>
+            downloadAttempts.applyProgress(attempt, current, progress, now),
           );
           if (!downloadAttempts.isCurrent(attempt) || state.status !== "downloading") return;
           const milestone = percent - (percent % 10);
