@@ -601,8 +601,6 @@ const makeEventStore = Effect.gen(function* () {
         );
       },
     ).pipe(
-      // Query the next page on the reader while this one decodes.
-      Stream.bufferArray({ capacity: 1 }),
       input?.skipUnknownEventTypes === true ? Stream.filterEffect(keepKnownEventTypeRow) : identity,
       Stream.mapEffect((row) =>
         rowToV2StoredEvent(row).pipe(
@@ -730,8 +728,6 @@ const makeEventStore = Effect.gen(function* () {
         }),
       ),
     ).pipe(
-      // Query the next page on the reader while this one decodes.
-      Stream.bufferArray({ capacity: 1 }),
       input.skipUnknownEventTypes === true ? Stream.filterEffect(keepKnownEventTypeRow) : identity,
       Stream.mapEffect((row) =>
         rowToApplicationStoredEvent(row).pipe(
