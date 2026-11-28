@@ -758,7 +758,7 @@ export default function DiffPanel({
                   </div>
                 </div>
                 <ComboboxEmpty>No matching refs.</ComboboxEmpty>
-                <ComboboxList className="max-h-64 min-w-0 overflow-x-hidden">
+                <ComboboxList className="min-w-0 overflow-x-hidden" scrollAreaClassName="max-h-64">
                   <ComboboxItem
                     className="w-full min-w-0 grid-cols-[1rem_minmax(0,1fr)]"
                     value={AUTOMATIC_BASE_REF}

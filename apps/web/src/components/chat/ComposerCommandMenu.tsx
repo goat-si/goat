@@ -164,7 +164,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
           <CommandList
             id={props.listId}
             aria-label={props.triggerKind ? LISTBOX_LABEL_BY_TRIGGER[props.triggerKind] : undefined}
-            className="max-h-72 min-h-0 scroll-pb-6"
+            className="min-h-0 scroll-pb-6"
+            scrollAreaClassName="max-h-72"
           >
             <CommandGroup>
               {props.items.map((item) => (
