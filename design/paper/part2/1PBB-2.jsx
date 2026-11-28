@@ -192,8 +192,14 @@
         <div style={{ backgroundColor: '#FFFFFF', borderBottomLeftRadius: '14px', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
           <div style={{ backgroundColor: '#F7F7F7', borderRightColor: '#ECECEC', borderRightStyle: 'solid', borderRightWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', paddingBlock: '10px', paddingInline: '8px', width: '256px' }}>
             <div style={{ boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '30px' }}>
-                Settings
+              <div style={{ alignItems: 'center', backgroundColor: '#EDEDED', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                  <circle cx="11" cy="11" r="7" fill="none" stroke="#8F8F8F" strokeWidth="1.8" />
+                  <path d="m20 20-3.5-3.5" fill="#000000" stroke="#8F8F8F" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                  Search
+                </div>
               </div>
             </div>
             <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '1px', paddingBottom: '10px' }}>
@@ -203,28 +209,53 @@
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  General
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    General
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Appearance
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Appearance
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Keybindings
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M4 7h16v10H4zM7 10h1M10 10h1M13 10h1M8 14h8" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Keybindings
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  SnapShots
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M4 7h3l2-2h6l2 2h3v12H4zM12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    SnapShots
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Beta
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Beta
+                  </div>
                 </div>
               </div>
             </div>
@@ -235,23 +266,33 @@
                 </div>
               </div>
               <div style={{ backgroundColor: '#E9E9E9', borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '30px' }}>
-                  Providers
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Providers
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Memory
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M9 7V3M15 7V3M6 7h12v4a6 6 0 0 1-12 0zM12 17v4" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Integrations
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Integrations
-                </div>
-              </div>
-              <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Source control
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6M18 9a9 9 0 0 1-9 9" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Source control
+                  </div>
                 </div>
               </div>
             </div>
@@ -262,18 +303,23 @@
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Project
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3v12c0 1.7-3.6 3-8 3s-8-1.3-8-3zM4 6c0 1.7 3.6 3 8 3s8-1.3 8-3" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Storage
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Storage
-                </div>
-              </div>
-              <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Archived Threads
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M4 4h16v4H4zM5 8v12h14V8M10 12h4" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Archived Threads
+                  </div>
                 </div>
               </div>
             </div>
@@ -284,18 +330,33 @@
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  GOAT Bot
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M12 8V4H8M4 8h16v12H4zM9 13h.01M15 13h.01" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    GOAT Bot
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Decision Inbox
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13L22 12v7H2v-7z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Decision Inbox
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Scheduled tasks
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Scheduled tasks
+                  </div>
                 </div>
               </div>
             </div>
@@ -306,375 +367,418 @@
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Hub
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0M12 3v6M12 15v6M3 12h6M15 12h6" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Hub
+                  </div>
                 </div>
               </div>
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '30px' }}>
-                  Connections
+                <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                    <path d="M4 5h16v10H4zM8 19h8M12 15v4" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                    Connections
+                  </div>
                 </div>
               </div>
             </div>
           </div>
           <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', justifyContent: 'center', minWidth: '0px', overflow: 'clip' }}>
-            <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, gap: '16px', paddingBlock: '28px', width: '720px' }}>
-              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#000000', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '20px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '26px' }}>
-                  Providers
-                </div>
-                <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                  <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '15px', lineHeight: '28px' }}>
-                    ↻
+            <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '860px', width: '1140px' }}>
+              <div style={{ borderRightColor: '#ECECEC', borderRightStyle: 'solid', borderRightWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '10px', paddingBottom: '12px', paddingInline: '12px', paddingTop: '20px', width: '360px' }}>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingInline: '6px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
+                    Providers
+                  </div>
+                  <div style={{ boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+                    <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                        <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="#5D5D5D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+                    <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                        <path d="M12 5v14M5 12h14" fill="none" stroke="#5D5D5D" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    </div>
                   </div>
                 </div>
-                <div style={{ borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                  <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                    Add provider
+                <div style={{ boxSizing: 'border-box', paddingInline: '6px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+                    Checked just now
                   </div>
                 </div>
-              </div>
-              <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
-                This Mac · 12 providers · checked just now
-              </div>
-              <div style={{ borderRadius: '12px', boxShadow: '#ECECEC 0px 0px 0px 1px inset', boxSizing: 'border-box', overflow: 'clip' }}>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="100 100 411 411" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path fillRule="evenodd" clipRule="evenodd" d="M252.794 108.802C289.191 99.048 326.265 110.305 351.148 135.135C385.113 126.072 422.85 134.862 449.492 161.505C476.136 188.149 484.925 225.888 475.862 259.85V259.854C500.696 284.735 511.95 321.81 502.198 358.207C492.447 394.602 464.161 421.084 430.215 430.217C421.083 464.162 394.603 492.448 358.206 502.199C321.812 511.951 284.734 500.693 259.852 475.864C225.887 484.927 188.15 476.137 161.507 449.495C134.864 422.851 126.073 385.111 135.136 351.149C110.304 326.266 99.05 289.192 108.801 252.795C118.552 216.4 146.84 189.918 180.784 180.785C189.917 146.841 216.396 118.553 252.794 108.802ZM374.292 407.145C374.292 411.271 372.092 415.086 368.517 417.148L283.723 466.102C302.487 480.585 327.555 486.459 352.217 479.852C386.997 470.532 410.068 439.312 410.555 405.006V317.717C410.555 315.08 409.125 312.621 406.843 311.303L374.292 292.509V407.145ZM251.868 415.897C248.296 417.959 243.893 417.959 240.317 415.897L155.526 366.942C152.366 390.436 159.811 415.08 177.866 433.136H177.863C203.325 458.594 241.896 462.962 271.85 446.232L347.449 402.586C349.735 401.268 351.148 398.8 351.148 396.163V358.579L251.868 415.897ZM368.602 220.628C366.319 219.309 363.474 219.318 361.191 220.637L328.641 239.431L427.921 296.749C431.496 298.811 433.697 302.627 433.697 306.752V404.661C455.622 395.654 473.244 376.881 479.851 352.218C489.169 317.442 473.668 281.85 444.201 264.274L368.602 220.628ZM177.303 206.34C155.377 215.348 137.756 234.122 131.148 258.783C121.832 293.561 137.331 329.153 166.799 346.727L242.398 390.373C244.68 391.692 247.525 391.684 249.807 390.366L282.357 371.572L183.078 314.253C179.504 312.189 177.303 308.375 177.303 304.251V206.34ZM259.849 279.145V331.858L305.5 358.213L351.15 331.858V279.145L305.5 252.789L259.849 279.145ZM327.276 144.9C308.512 130.418 283.445 124.543 258.782 131.15C224.002 140.471 200.931 171.691 200.445 205.995V293.286C200.445 295.923 201.875 298.381 204.158 299.7L236.707 318.493V203.856C236.707 199.731 238.909 195.916 242.483 193.853L327.276 144.9ZM433.137 177.867C407.675 152.407 369.103 148.038 339.149 164.769L263.55 208.415C261.265 209.734 259.852 212.202 259.852 214.838V252.423L359.132 195.105C362.703 193.041 367.108 193.041 370.682 195.105L455.473 244.06C458.635 220.567 451.189 195.922 433.135 177.867H433.137Z" fill="#000000" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="100 100 411 411" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path fillRule="evenodd" clipRule="evenodd" d="M252.794 108.802C289.191 99.048 326.265 110.305 351.148 135.135C385.113 126.072 422.85 134.862 449.492 161.505C476.136 188.149 484.925 225.888 475.862 259.85V259.854C500.696 284.735 511.95 321.81 502.198 358.207C492.447 394.602 464.161 421.084 430.215 430.217C421.083 464.162 394.603 492.448 358.206 502.199C321.812 511.951 284.734 500.693 259.852 475.864C225.887 484.927 188.15 476.137 161.507 449.495C134.864 422.851 126.073 385.111 135.136 351.149C110.304 326.266 99.05 289.192 108.801 252.795C118.552 216.4 146.84 189.918 180.784 180.785C189.917 146.841 216.396 118.553 252.794 108.802ZM374.292 407.145C374.292 411.271 372.092 415.086 368.517 417.148L283.723 466.102C302.487 480.585 327.555 486.459 352.217 479.852C386.997 470.532 410.068 439.312 410.555 405.006V317.717C410.555 315.08 409.125 312.621 406.843 311.303L374.292 292.509V407.145ZM251.868 415.897C248.296 417.959 243.893 417.959 240.317 415.897L155.526 366.942C152.366 390.436 159.811 415.08 177.866 433.136H177.863C203.325 458.594 241.896 462.962 271.85 446.232L347.449 402.586C349.735 401.268 351.148 398.8 351.148 396.163V358.579L251.868 415.897ZM368.602 220.628C366.319 219.309 363.474 219.318 361.191 220.637L328.641 239.431L427.921 296.749C431.496 298.811 433.697 302.627 433.697 306.752V404.661C455.622 395.654 473.244 376.881 479.851 352.218C489.169 317.442 473.668 281.85 444.201 264.274L368.602 220.628ZM177.303 206.34C155.377 215.348 137.756 234.122 131.148 258.783C121.832 293.561 137.331 329.153 166.799 346.727L242.398 390.373C244.68 391.692 247.525 391.684 249.807 390.366L282.357 371.572L183.078 314.253C179.504 312.189 177.303 308.375 177.303 304.251V206.34ZM259.849 279.145V331.858L305.5 358.213L351.15 331.858V279.145L305.5 252.789L259.849 279.145ZM327.276 144.9C308.512 130.418 283.445 124.543 258.782 131.15C224.002 140.471 200.931 171.691 200.445 205.995V293.286C200.445 295.923 201.875 298.381 204.158 299.7L236.707 318.493V203.856C236.707 199.731 238.909 195.916 242.483 193.853L327.276 144.9ZM433.137 177.867C407.675 152.407 369.103 148.038 339.149 164.769L263.55 208.415C261.265 209.734 259.852 212.202 259.852 214.838V252.423L359.132 195.105C362.703 193.041 367.108 193.041 370.682 195.105L455.473 244.06C458.635 220.567 451.189 195.922 433.135 177.867H433.137Z" fill="#000000" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
                         Codex
                       </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        codex 0.167.0
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Authenticated · ChatGPT Pro
                       </div>
                     </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Signed in as you@example.com · ChatGPT Pro
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
                     </div>
                   </div>
-                  <div style={{ backgroundColor: '#E8F5EC', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#1A7F37', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Ready
+                  <div style={{ alignItems: 'center', backgroundColor: '#F0F0F0', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="0 0 256 257" preserveAspectRatio="xMidYMid" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" fill="#D97757" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Claude
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Unauthenticated · Not signed in
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
                     </div>
                   </div>
-                  <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '28px' }}>
-                      ⋯
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="0 0 466.73 532.09" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" fill="#26251E" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Cursor
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Authenticated · you@example.com
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', opacity: '0.45' }}>
+                      <svg width="20" height="20" viewBox="0 0 466.73 532.09" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" fill="#26251E" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Cursor Cloud
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Cloud providers come in a later GOAT 2 release.
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#D9D9D9', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', opacity: '0.5', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', opacity: '0.45' }}>
+                      <svg width="20" height="20" viewBox="0 0 256 257" preserveAspectRatio="xMidYMid" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" fill="#D97757" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Claude Cloud
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Cloud providers come in a later GOAT 2 release.
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#D9D9D9', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', opacity: '0.5', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M9.269 15.284L17.248 9.361C17.639 9.07 18.198 9.184 18.384 9.635C19.366 12.014 18.927 14.872 16.976 16.835C15.024 18.798 12.308 19.228 9.826 18.248L7.115 19.51C11.004 22.183 15.726 21.522 18.677 18.552C21.018 16.198 21.743 12.99 21.065 10.096L21.071 10.102C20.088 5.851 21.313 4.152 23.822 0.678C23.881 0.596 23.941 0.513 24 0.429L20.699 3.749V3.738L9.267 15.286" fill="#0F0F0F" />
+                        <path d="M7.622 16.724C4.831 14.042 5.312 9.892 7.694 7.499C9.455 5.728 12.341 5.005 14.86 6.068L17.565 4.811C17.078 4.457 16.453 4.076 15.736 3.808C12.497 2.468 8.618 3.135 5.984 5.781C3.451 8.329 2.654 12.246 4.022 15.589C5.044 18.087 3.369 19.854 1.681 21.638C1.083 22.27 0.483 22.902 0 23.572L7.62 16.726" fill="#0F0F0F" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Grok
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Not found · grok was not found on PATH
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="166.241 0 155.861 156" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M237.89 0C243.18 0 249.38 1.42 253.03 3.07L255.09 4.01L250.08 18.63L247.68 17.75C244.9 16.72 241.94 15.8 238.49 15.8C234.98 15.8 232.79 16.56 231.08 18.32C229.23 20.23 227.63 23.64 226.23 29.76L226.23 29.76L226.23 29.76L225.14 34.85H241.67L260.43 34.95L260.69 34.95L260.84 35.17L278.85 61.63L296.74 34.95H320.87L291.68 76.74L322.1 119.75H299.33L299.18 119.55L241.14 40.48L239.35 49.4H222.07L205.69 127.21C203.93 135.71 201.19 142.84 196.78 147.87C192.27 153.01 186.2 155.75 178.34 155.75C174.18 155.75 170.75 155.11 167.91 154.11L166.24 153.52V137.18L166.9 137.4L169.53 138.28C172.18 139.16 174.41 139.8 177.14 139.8C178.53 139.8 179.7 139.53 180.73 138.98C181.76 138.43 182.68 137.6 183.52 136.44C185.3 133.99 186.72 130.13 187.9 124.67L203.76 49.4H189.87L191.76 39.44L192.04 39.35L206.82 34.47L208.15 28.64C210.52 18.21 213.77 10.94 218.71 6.32C223.74 1.61 230.13 0 237.89 0ZM273.99 99.08L260.07 120.25H234.54L261 82.02L273.99 99.08Z" fill="#0F0F0F" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        fx
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Not found · fx was not found on PATH
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M24 32H8V16H24V32Z" fill="#CFCECD" />
+                        <path d="M24 8H8V32H24V8ZM32 40H0V0H32V40Z" fill="#211E1E" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        OpenCode
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Authenticated · 3 providers
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <div style={{ backgroundImage: 'url(https://app.paper.design/file-assets/01M8GDWPDQSBBWW8RMTG12PGCC/0ACFGAK9NZKKJR4EWR87Z5EN2X.png)', backgroundPosition: '50%', backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', boxSizing: 'border-box', flexShrink: '0', height: '20px', width: '20px' }} />
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Antigravity
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Unauthenticated · Sign in with Google
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="0 0 287.56 191" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <defs><linearGradient id="_1UW0-1__ptcvxd0" x1="61" y1="117" x2="259" y2="127" gradientUnits="userSpaceOnUse"><stop offset="0" stopColor="#0064e1" /><stop offset="0.4" stopColor="#0064e1" /><stop offset="0.83" stopColor="#0073ee" /><stop offset="1" stopColor="#0082fb" /></linearGradient><linearGradient id="_1UW0-1__ptcvxd1" x1="45" y1="139" x2="45" y2="66" gradientUnits="userSpaceOnUse"><stop offset="0" stopColor="#0082fb" /><stop offset="1" stopColor="#0064e0" /></linearGradient></defs>
+                        <path d="m31.06,125.96c0,10.98 2.41,19.41 5.56,24.51 4.13,6.68 10.29,9.51 16.57,9.51 8.1,0 15.51-2.01 29.79-21.76 11.44-15.83 24.92-38.05 33.99-51.98l15.36-23.6c10.67-16.39 23.02-34.61 37.18-46.96 11.56-10.08 24.03-15.68 36.58-15.68 21.07,0 41.14,12.21 56.5,35.11 16.81,25.08 24.97,56.67 24.97,89.27 0,19.38-3.82,33.62-10.32,44.87-6.28,10.88-18.52,21.75-39.11,21.75l0-31.02c17.63,0 22.03-16.2 22.03-34.74 0-26.42-6.16-55.74-19.73-76.69-9.63-14.86-22.11-23.94-35.84-23.94-14.85,0-26.8,11.2-40.23,31.17-7.14,10.61-14.47,23.54-22.7,38.13l-9.06,16.05c-18.2,32.27-22.81,39.62-31.91,51.75-15.95,21.24-29.57,29.29-47.5,29.29-21.27,0-34.72-9.21-43.05-23.09-6.8-11.31-10.14-26.15-10.14-43.06z" fill="#0081FB" />
+                        <path d="m24.49,37.3c14.24-21.95 34.79-37.3 58.36-37.3 13.65,0 27.22,4.04 41.39,15.61 15.5,12.65 32.02,33.48 52.63,67.81l7.39,12.32c17.84,29.72 27.99,45.01 33.93,52.22 7.64,9.26 12.99,12.02 19.94,12.02 17.63,0 22.03-16.2 22.03-34.74l27.4-.86c0,19.38-3.82,33.62-10.32,44.87-6.28,10.88-18.52,21.75-39.11,21.75-12.8,0-24.14-2.78-36.68-14.61-9.64-9.08-20.91-25.21-29.58-39.71l-25.79-43.08c-12.94-21.62-24.81-37.74-31.68-45.04-7.39-7.85-16.89-17.33-32.05-17.33-12.27,0-22.69,8.61-31.41,21.78z" fill="url(#_1UW0-1__ptcvxd0)" />
+                        <path d="m82.35,31.23c-12.27,0-22.69,8.61-31.41,21.78-12.33,18.61-19.88,46.33-19.88,72.95 0,10.98 2.41,19.41 5.56,24.51l-26.48,17.44c-6.8-11.31-10.14-26.15-10.14-43.06 0-30.75 8.44-62.8 24.49-87.55 14.24-21.95 34.79-37.3 58.36-37.3z" fill="url(#_1UW0-1__ptcvxd1)" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Muse Code
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Not found · muse was not found on PATH
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="165.29 165.29 469.43 469.43" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z" fillRule="evenodd" fill="#0F0F0F" />
+                        <path d="M517.36 400H634.72V634.72H517.36Z" fill="#0F0F0F" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Pi
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Authenticated
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M2 12a5 5 0 1 1 10 0 5 5 0 0 1-10 0Zm10 0a5 5 0 1 1 10 0 5 5 0 0 1-10 0ZM7 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" fillRule="evenodd" fill="#0F0F0F" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        OmO
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Unavailable · Runtime target missing
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M19.514 7.342C19.711 7.862 19.814 8.413 19.816 8.969C19.816 12.494 15.998 14.697 12.946 12.934C11.529 12.116 10.657 10.605 10.657 8.969C10.657 5.646 14.085 3.431 17.115 4.793C15.26 3.373 12.99 2.607 10.655 2.612C4.772 2.614 0.005 7.381 0 13.265C0.002 19.148 4.772 23.918 10.655 23.92C16.538 23.916 21.306 19.147 21.31 13.265C21.312 11.155 20.687 9.095 19.514 7.342ZM14.841 4.666C14.841 8.191 18.657 10.395 21.709 8.632C23.127 7.814 24 6.302 24 4.666C24 1.14 20.184-1.061 17.13 0.699C15.714 1.519 14.841 3.03 14.841 4.666" fill="#0D0D0D" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Kimi Code
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Authenticated · ACP Registry
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex' }}>
+                      <svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M28,34.667h6.667v5.333h-8.381l-3.619-3.619v-8.381h5.333v6.667ZM40,26.286l-3.619-3.619h-8.381v5.333h6.667v6.667h5.333v-8.381ZM17.333,22.667h-5.333v5.333h5.333v-5.333ZM0,36.381l3.619,3.619h13.714v-5.333H5.333v-12H0v13.714ZM33.96,12V3.619L30.341-.0000056h-7.675v5.333h5.96v6.667h-5.96v5.333h17.333v-5.333h-6.04ZM5.333,0H0v17.333h5.333v-6h6.667v6h5.333v-6l-5.333-5.333h-6.667V0ZM17.333,0h-5.333v6h5.333V0Z" fill="#0D0D0D" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Kilo
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Checking…
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
+                    </div>
+                  </div>
+                  <div style={{ alignItems: 'center', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '10px', height: '48px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', opacity: '0.45' }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                        <path d="M2.033 9.867l2.554 1.483a.589.589 0 00.592 0l2.554-1.483.01-.008a.608.608 0 00.11-.084l.013-.015a.631.631 0 00.076-.1c.003-.005.008-.01.01-.016a.558.558 0 00.052-.125l.007-.028a.611.611 0 00.019-.14V7.868c0-.572.307-1.105.8-1.392a1.595 1.595 0 011.598 0l1.277.742a.54.54 0 00.129.053l.028.01c.044.01.088.015.133.016h.006l.013-.002a.587.587 0 00.27-.074l.011-.004 2.554-1.483a.596.596 0 00.297-.516V2.253a.595.595 0 00-.297-.516L12.293.257a.587.587 0 00-.591 0L9.148 1.737l-.01.01a.609.609 0 00-.109.083l-.014.015a.632.632 0 00-.076.1c-.003.005-.008.01-.01.016a.57.57 0 00-.052.124l-.007.028a.612.612 0 00-.018.14v1.483c0 .572-.307 1.105-.8 1.393a1.597 1.597 0 01-1.599 0l-1.276-.742a.603.603 0 00-.13-.053l-.028-.008a.658.658 0 00-.133-.018h-.02a.57.57 0 00-.269.074c-.003.002-.008.002-.012.005L2.033 5.872a.596.596 0 00-.297.515v2.966c0 .213.113.41.297.515z" fill="#3969CA" />
+                        <path d="M15.943 10.607a1.596 1.596 0 011.599 0l1.276.74c.041.025.085.04.13.055l.028.008c.043.01.088.016.133.018h.005c.005 0 .01-.002.014-.003a.474.474 0 00.122-.016l.021-.005a.616.616 0 00.126-.052c.004-.002.009-.002.013-.005l2.554-1.482a.597.597 0 00.297-.516V6.383a.596.596 0 00-.297-.515l-2.552-1.483a.587.587 0 00-.592 0l-2.553 1.482-.011.008a.61.61 0 00-.108.084l-.014.016a.637.637 0 00-.076.1c-.003.005-.008.01-.01.016a.57.57 0 00-.052.124l-.007.029a.612.612 0 00-.018.14v1.482c0 .572-.307 1.105-.8 1.393a1.597 1.597 0 01-1.599 0l-1.276-.742a.584.584 0 00-.13-.053l-.028-.008a.62.62 0 00-.133-.018h-.02a.587.587 0 00-.269.074l-.012.004L9.15 10a.596.596 0 00-.296.516v2.966c0 .212.112.409.296.515l2.554 1.483s.008.002.012.005c.04.022.082.04.126.052l.02.004a.57.57 0 00.123.017l.014.002h.006c.054 0 .108-.01.16-.025a.587.587 0 00.13-.054l1.277-.741a1.597 1.597 0 012.398 1.392v1.482c0 .049.007.095.019.14l.007.028a.619.619 0 00.051.125c.004.006.008.01.01.016a.6.6 0 00.076.1l.014.015c.033.032.069.06.108.084.004.002.006.006.011.008l2.554 1.483a.59.59 0 00.593 0l2.554-1.483a.597.597 0 00.296-.516v-2.965a.595.595 0 00-.296-.516l-2.554-1.483s-.008-.002-.012-.005a.54.54 0 00-.126-.051c-.007-.003-.013-.003-.02-.005a.635.635 0 00-.125-.017h-.018a.557.557 0 00-.16.026.588.588 0 00-.13.053l-1.276.742a1.595 1.595 0 01-1.598 0 1.615 1.615 0 010-2.785l-.005-.001z" fill="#21C19A" />
+                        <path d="M14.848 18.265l-2.554-1.482-.012-.005a.526.526 0 00-.126-.052c-.007-.002-.014-.002-.02-.005a.64.64 0 00-.124-.017h-.02a.56.56 0 00-.16.026.588.588 0 00-.13.053l-1.276.742a1.594 1.594 0 01-1.598 0c-.493-.286-.8-.82-.8-1.393V14.65a.563.563 0 00-.018-.14l-.008-.028a.604.604 0 00-.051-.124l-.01-.017a.603.603 0 00-.076-.1l-.014-.015a.596.596 0 00-.109-.084c-.003-.002-.005-.006-.01-.008L5.178 12.65a.587.587 0 00-.591 0l-2.554 1.483a.596.596 0 00-.297.516v2.965c0 .213.113.41.297.516l2.554 1.483.012.004a.618.618 0 00.267.074l.016.002h.007a.55.55 0 00.16-.026.584.584 0 00.129-.053l1.277-.742a1.597 1.597 0 012.398 1.393v1.482c0 .05.007.095.019.14l.007.028c.013.044.03.085.051.125l.01.016c.022.036.047.07.076.1l.014.015c.032.032.069.06.109.084l.01.008 2.554 1.483a.587.587 0 00.593 0l2.554-1.483a.596.596 0 00.296-.515v-2.966a.596.596 0 00-.296-.516h-.002z" fill="#0294DE" />
+                      </svg>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', whiteSpace: 'pre' }}>
+                        Devin Cloud
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                        Cloud providers come in a later GOAT 2 release.
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#D9D9D9', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', opacity: '0.5', padding: '2px', width: '28px' }}>
+                      <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
                     </div>
                   </div>
                 </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
+              </div>
+              <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '20px', minWidth: '0px', paddingBlock: '24px', paddingInline: '32px' }}>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '12px' }}>
                   <svg width="20" height="20" viewBox="0 0 256 257" preserveAspectRatio="xMidYMid" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
                     <path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" fill="#D97757" />
                   </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Claude
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        claude 2.1.332
-                      </div>
+                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '17px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '22px' }}>
+                      Claude
                     </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Not signed in
+                    <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+                      claudeAgent · 2.1.332
                     </div>
                   </div>
-                  <div style={{ backgroundColor: '#FFF4E5', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#9A6700', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Signed out
-                    </div>
+                  <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'end', padding: '2px', width: '28px' }}>
+                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '999px', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />
                   </div>
-                  <div style={{ backgroundColor: '#0D0D0D', borderRadius: '8px', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                      Sign in
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+                    Status
+                  </div>
+                  <div style={{ borderRadius: '12px', boxShadow: '#ECECEC 0px 0px 0px 1px inset', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBlock: '14px', paddingInline: '16px' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                      Unauthenticated
+                    </div>
+                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+                      Claude Code is installed but not signed in on this device.
                     </div>
                   </div>
                 </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M9.269 15.284L17.248 9.361C17.639 9.07 18.198 9.184 18.384 9.635C19.366 12.014 18.927 14.872 16.976 16.835C15.024 18.798 12.308 19.228 9.826 18.248L7.115 19.51C11.004 22.183 15.726 21.522 18.677 18.552C21.018 16.198 21.743 12.99 21.065 10.096L21.071 10.102C20.088 5.851 21.313 4.152 23.822 0.678C23.881 0.596 23.941 0.513 24 0.429L20.699 3.749V3.738L9.267 15.286" fill="#0F0F0F" />
-                    <path d="M7.622 16.724C4.831 14.042 5.312 9.892 7.694 7.499C9.455 5.728 12.341 5.005 14.86 6.068L17.565 4.811C17.078 4.457 16.453 4.076 15.736 3.808C12.497 2.468 8.618 3.135 5.984 5.781C3.451 8.329 2.654 12.246 4.022 15.589C5.044 18.087 3.369 19.854 1.681 21.638C1.083 22.27 0.483 22.902 0 23.572L7.62 16.726" fill="#0F0F0F" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Grok
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        ACP · grok agent stdio
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      grok was not found on PATH
-                    </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+                    Account
                   </div>
-                  <div style={{ backgroundColor: '#F3F3F3', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Not installed
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                      Install
+                  <div style={{ borderRadius: '12px', boxShadow: '#ECECEC 0px 0px 0px 1px inset', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBlock: '14px', paddingInline: '16px' }}>
+                    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                        Not signed in
+                      </div>
+                      <div style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', height: '30px', paddingInline: '12px' }}>
+                        <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+                          Sign in
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="166.241 0 155.861 156" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M237.89 0C243.18 0 249.38 1.42 253.03 3.07L255.09 4.01L250.08 18.63L247.68 17.75C244.9 16.72 241.94 15.8 238.49 15.8C234.98 15.8 232.79 16.56 231.08 18.32C229.23 20.23 227.63 23.64 226.23 29.76L226.23 29.76L226.23 29.76L225.14 34.85H241.67L260.43 34.95L260.69 34.95L260.84 35.17L278.85 61.63L296.74 34.95H320.87L291.68 76.74L322.1 119.75H299.33L299.18 119.55L241.14 40.48L239.35 49.4H222.07L205.69 127.21C203.93 135.71 201.19 142.84 196.78 147.87C192.27 153.01 186.2 155.75 178.34 155.75C174.18 155.75 170.75 155.11 167.91 154.11L166.24 153.52V137.18L166.9 137.4L169.53 138.28C172.18 139.16 174.41 139.8 177.14 139.8C178.53 139.8 179.7 139.53 180.73 138.98C181.76 138.43 182.68 137.6 183.52 136.44C185.3 133.99 186.72 130.13 187.9 124.67L203.76 49.4H189.87L191.76 39.44L192.04 39.35L206.82 34.47L208.15 28.64C210.52 18.21 213.77 10.94 218.71 6.32C223.74 1.61 230.13 0 237.89 0ZM273.99 99.08L260.07 120.25H234.54L261 82.02L273.99 99.08Z" fill="#0F0F0F" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        fx
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        ACP · fx acp
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      fx was not found on PATH
-                    </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#8F8F8F', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+                    Installation
                   </div>
-                  <div style={{ backgroundColor: '#F3F3F3', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Not installed
+                  <div style={{ borderRadius: '12px', boxShadow: '#ECECEC 0px 0px 0px 1px inset', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBlock: '14px', paddingInline: '16px' }}>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', flexShrink: 0, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px', width: '120px' }}>
+                        Binary
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                        ~/.local/bin/claude
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                      Install
+                    <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', flexShrink: 0, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px', width: '120px' }}>
+                        Version
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                        2.1.332
+                      </div>
+                    </div>
+                    <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#8F8F8F', flexShrink: 0, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px', width: '120px' }}>
+                        Config home
+                      </div>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+                        GOAT 2 data folder
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <div style={{ backgroundImage: 'url(https://app.paper.design/file-assets/01M8GDWPDQSBBWW8RMTG12PGCC/0ACFGAK9NZKKJR4EWR87Z5EN2X.png)', backgroundPosition: '50%', backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', boxSizing: 'border-box', flexShrink: '0', height: '20px', width: '20px' }} />
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Antigravity
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        ACP · agy_acp_server
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Sign in with Google to see Antigravity limits.
+                <div style={{ boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
+                  <div style={{ alignItems: 'center', borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', display: 'flex', height: '30px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+                      Reset to defaults
                     </div>
                   </div>
-                  <div style={{ backgroundColor: '#FFF4E5', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#9A6700', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Signed out
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#0D0D0D', borderRadius: '8px', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                      Sign in
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M24 32H8V16H24V32Z" fill="#CFCECD" />
-                    <path d="M24 8H8V32H24V8ZM32 40H0V0H32V40Z" fill="#211E1E" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        OpenCode
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        opencode 1.19.4
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Signed in · 3 providers
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#E8F5EC', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#1A7F37', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Ready
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '28px' }}>
-                      ⋯
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="0 0 466.73 532.09" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" fill="#26251E" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Cursor
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        @cursor/sdk
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Cursor account · you@example.com
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#E8F5EC', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#1A7F37', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Ready
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '28px' }}>
-                      ⋯
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="0 0 287.56 191" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <defs><linearGradient id="_1R6F-1__ptcvxd0" x1="61" y1="117" x2="259" y2="127" gradientUnits="userSpaceOnUse"><stop offset="0" stopColor="#0064e1" /><stop offset="0.4" stopColor="#0064e1" /><stop offset="0.83" stopColor="#0073ee" /><stop offset="1" stopColor="#0082fb" /></linearGradient><linearGradient id="_1R6F-1__ptcvxd1" x1="45" y1="139" x2="45" y2="66" gradientUnits="userSpaceOnUse"><stop offset="0" stopColor="#0082fb" /><stop offset="1" stopColor="#0064e0" /></linearGradient></defs>
-                    <path d="m31.06,125.96c0,10.98 2.41,19.41 5.56,24.51 4.13,6.68 10.29,9.51 16.57,9.51 8.1,0 15.51-2.01 29.79-21.76 11.44-15.83 24.92-38.05 33.99-51.98l15.36-23.6c10.67-16.39 23.02-34.61 37.18-46.96 11.56-10.08 24.03-15.68 36.58-15.68 21.07,0 41.14,12.21 56.5,35.11 16.81,25.08 24.97,56.67 24.97,89.27 0,19.38-3.82,33.62-10.32,44.87-6.28,10.88-18.52,21.75-39.11,21.75l0-31.02c17.63,0 22.03-16.2 22.03-34.74 0-26.42-6.16-55.74-19.73-76.69-9.63-14.86-22.11-23.94-35.84-23.94-14.85,0-26.8,11.2-40.23,31.17-7.14,10.61-14.47,23.54-22.7,38.13l-9.06,16.05c-18.2,32.27-22.81,39.62-31.91,51.75-15.95,21.24-29.57,29.29-47.5,29.29-21.27,0-34.72-9.21-43.05-23.09-6.8-11.31-10.14-26.15-10.14-43.06z" fill="#0081FB" />
-                    <path d="m24.49,37.3c14.24-21.95 34.79-37.3 58.36-37.3 13.65,0 27.22,4.04 41.39,15.61 15.5,12.65 32.02,33.48 52.63,67.81l7.39,12.32c17.84,29.72 27.99,45.01 33.93,52.22 7.64,9.26 12.99,12.02 19.94,12.02 17.63,0 22.03-16.2 22.03-34.74l27.4-.86c0,19.38-3.82,33.62-10.32,44.87-6.28,10.88-18.52,21.75-39.11,21.75-12.8,0-24.14-2.78-36.68-14.61-9.64-9.08-20.91-25.21-29.58-39.71l-25.79-43.08c-12.94-21.62-24.81-37.74-31.68-45.04-7.39-7.85-16.89-17.33-32.05-17.33-12.27,0-22.69,8.61-31.41,21.78z" fill="url(#_1R6F-1__ptcvxd0)" />
-                    <path d="m82.35,31.23c-12.27,0-22.69,8.61-31.41,21.78-12.33,18.61-19.88,46.33-19.88,72.95 0,10.98 2.41,19.41 5.56,24.51l-26.48,17.44c-6.8-11.31-10.14-26.15-10.14-43.06 0-30.75 8.44-62.8 24.49-87.55 14.24-21.95 34.79-37.3 58.36-37.3z" fill="url(#_1R6F-1__ptcvxd1)" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Muse
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        @muse-code/sdk
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Muse is not installed
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#F3F3F3', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Not installed
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                      Install
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="165.29 165.29 469.43 469.43" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z" fillRule="evenodd" fill="#0F0F0F" />
-                    <path d="M517.36 400H634.72V634.72H517.36Z" fill="#0F0F0F" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Pi
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        pi --mode rpc
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Signed in
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#E8F5EC', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#1A7F37', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Ready
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '28px' }}>
-                      ⋯
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M2 12a5 5 0 1 1 10 0 5 5 0 0 1-10 0Zm10 0a5 5 0 1 1 10 0 5 5 0 0 1-10 0ZM7 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" fillRule="evenodd" fill="#0F0F0F" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        OmO
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        Pi profile · omo
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Runtime target missing. Reinstall to repair.
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#FFF4E5', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#9A6700', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Needs repair
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', height: '28px', paddingInline: '12px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '28px' }}>
-                      Reinstall
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M19.514 7.342C19.711 7.862 19.814 8.413 19.816 8.969C19.816 12.494 15.998 14.697 12.946 12.934C11.529 12.116 10.657 10.605 10.657 8.969C10.657 5.646 14.085 3.431 17.115 4.793C15.26 3.373 12.99 2.607 10.655 2.612C4.772 2.614 0.005 7.381 0 13.265C0.002 19.148 4.772 23.918 10.655 23.92C16.538 23.916 21.306 19.147 21.31 13.265C21.312 11.155 20.687 9.095 19.514 7.342ZM14.841 4.666C14.841 8.191 18.657 10.395 21.709 8.632C23.127 7.814 24 6.302 24 4.666C24 1.14 20.184-1.061 17.13 0.699C15.714 1.519 14.841 3.03 14.841 4.666" fill="#0D0D0D" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Kimi Code
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        ACP Registry · kimi-code 2.8.1
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Signed in
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#E8F5EC', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#1A7F37', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Ready
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '28px' }}>
-                      ⋯
-                    </div>
-                  </div>
-                </div>
-                <div style={{ alignItems: 'center', borderBottomColor: '#ECECEC80', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', minHeight: '44px', paddingBlock: '8px', paddingInline: '16px' }}>
-                  <svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M28,34.667h6.667v5.333h-8.381l-3.619-3.619v-8.381h5.333v6.667ZM40,26.286l-3.619-3.619h-8.381v5.333h6.667v6.667h5.333v-8.381ZM17.333,22.667h-5.333v5.333h5.333v-5.333ZM0,36.381l3.619,3.619h13.714v-5.333H5.333v-12H0v13.714ZM33.96,12V3.619L30.341-.0000056h-7.675v5.333h5.96v6.667h-5.96v5.333h17.333v-5.333h-6.04ZM5.333,0H0v17.333h5.333v-6h6.667v6h5.333v-6l-5.333-5.333h-6.667V0ZM17.333,0h-5.333v6h5.333V0Z" fill="#0D0D0D" />
-                  </svg>
-                  <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
-                    <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '18px' }}>
-                        Kilo
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        ACP Registry · kilo 7.8.32
-                      </div>
-                    </div>
-                    <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                      Downloading 62%
-                    </div>
-                  </div>
-                  <div style={{ backgroundColor: '#E8F0FE', borderRadius: '999px', boxSizing: 'border-box', height: '20px', paddingInline: '7px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#1F6FEB', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px' }}>
-                      Updating
-                    </div>
-                  </div>
-                  <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }}>
-                    <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '28px' }}>
-                      ⋯
+                  <div style={{ alignItems: 'center', borderRadius: '8px', boxShadow: '#DFDFDF 0px 0px 0px 1px inset', boxSizing: 'border-box', display: 'flex', height: '30px', paddingInline: '12px' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+                      Remove
                     </div>
                   </div>
                 </div>

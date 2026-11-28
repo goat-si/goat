@@ -718,9 +718,6 @@
                       <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px' }}>
                         Kimi Code
                       </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        2.8.1
-                      </div>
                     </div>
                     <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', marginTop: '2px' }}>
                       Moonshot AI's next-gen coding agent
@@ -745,9 +742,6 @@
                       <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px' }}>
                         Kilo
                       </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        7.8.32
-                      </div>
                     </div>
                     <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', marginTop: '2px' }}>
                       The open source coding agent
@@ -756,7 +750,7 @@
                 </div>
                 <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', gap: '6px' }}>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                    Downloading 62%
+                    Add
                   </div>
                   <div style={{ backgroundColor: '#ECECEC', borderRadius: '2px', boxSizing: 'border-box', flexShrink: 0, height: '4px', overflow: 'clip', width: '64px' }}>
                     <div style={{ backgroundColor: '#0D0D0D', boxSizing: 'border-box', height: '4px', width: '40px' }} />
@@ -772,9 +766,6 @@
                     <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
                       <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px' }}>
                         Kiro CLI
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        3.6.2
                       </div>
                     </div>
                     <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', marginTop: '2px' }}>
@@ -799,9 +790,6 @@
                     <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
                       <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px' }}>
                         Qwen Code
-                      </div>
-                      <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                        0.28.7
                       </div>
                     </div>
                     <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', marginTop: '2px' }}>

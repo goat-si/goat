@@ -25,3 +25,18 @@ currentColor drawn as #0d0d0d). Registry names/versions/descriptions match the l
 
 Remaining: model names and account states are placeholder data. P2-M lifts v1 components directly; these boards are
 the visual check.
+
+## Matched to v1 per P2-M report (2026-11-29)
+Lane P2-M lifted the real v1 components and listed where these boards differed; v1 code wins.
+- P1 1PBB-2: rebuilt as v1's list + detail split (ProviderSettingsPanel): rows = logo, name, v1 state line
+  ("Authenticated · ChatGPT Pro", "Not found · grok was not found on PATH", "Unavailable · Runtime target missing"),
+  enable toggle; actions (Sign in, Reset, Remove) in the detail pane. v1 order incl. Cursor Cloud, Claude Cloud, Devin
+  Cloud shown off with "Cloud providers come in a later GOAT 2 release." Label "Muse Code". Settings nav: v1 icons,
+  Search on top, no "Settings" title, Memory and Project hidden (v1 availability rules). Devin logo from
+  packages/provider-devin-cloud/src/client.ts.
+- P3 1QAN-2: registry rows show Added/Add only (no versions, no progress bar).
+- P4 1QM8-2 / P5 1QYE-2: trigger "6.1 Sol" (no "gpt-", no chevron); model rows show names (GPT-6.1 Sol, GPT-6.1 Terra,
+  GPT-6 Luna) without description; GOAT Bot page keeps only the Model row.
+Still differs from v1 (not redrawn yet): P2's URL inside v1's Status card with "Continue authentication"; P3's 4-step
+wizard header (Provider / Identity / Config / Set up), built-in provider grid and local presets (Oh My Pi, MiniMax Code),
+"Search agents…" copy and Kiro id "kiro"; P4/P5 favorites tab on the rail and greyed-out unsigned providers.
