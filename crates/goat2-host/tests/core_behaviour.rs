@@ -2357,3 +2357,79 @@ async fn one_engine_key_has_one_signin_and_one_answer() {
         assert_eq!(answers(), 1, "the shared key is answered once");
     }
 }
+
+#[tokio::test]
+async fn a_settled_signin_key_is_never_answered_again() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-settled", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    let auth = |key: &str, turn_id: Option<String>| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id,
+        url: None,
+        message: "signin".into(),
+    };
+    let answered = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, .. } if k == key))
+            .count()
+    };
+    let probe = |n: &'static str| async move {
+        eventually("probe", || answered(n) == 1).await;
+    };
+    // The person accepts K.
+    t.fake.emit(&id, auth("KEY-K-7701", Some(turn.clone())));
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-k".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(answered("KEY-K-7701"), 1);
+    // K again for the live turn, at session level, and for a turn that ended: all ignored.
+    t.fake.emit(&id, auth("KEY-K-7701", Some(turn.clone())));
+    t.fake.emit(&id, auth("KEY-K-7701", None));
+    t.fake
+        .emit(&id, auth("KEY-K-7701", Some("turn-gone".into())));
+    t.fake
+        .emit(&id, auth("KEY-PROBE-7702", Some("turn-gone".into())));
+    probe("KEY-PROBE-7702").await;
+    assert_eq!(answered("KEY-K-7701"), 1, "K is answered once");
+    assert_eq!(
+        signins(&t, &id).len(),
+        1,
+        "no new request for a settled key"
+    );
+
+    // L: the first decline fails, a later one succeeds; the run end does not answer it again.
+    t.fake.fail_answers(true);
+    t.fake
+        .emit(&id, auth("KEY-L-7703", Some("turn-gone".into())));
+    eventually("failed decline", || answered("KEY-L-7703") == 1).await;
+    t.fake.fail_answers(false);
+    t.fake
+        .emit(&id, auth("KEY-L-7703", Some("turn-gone".into())));
+    eventually("successful decline", || answered("KEY-L-7703") == 2).await;
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake
+        .emit(&id, auth("KEY-PROBE-7704", Some("turn-gone".into())));
+    probe("KEY-PROBE-7704").await;
+    assert_eq!(
+        answered("KEY-L-7703"),
+        2,
+        "no retry after a successful decline"
+    );
+}

@@ -175,6 +175,9 @@ pub enum EngineEvent {
     AuthRequired {
         /// Engine handle answered through `answer_request` with Accept or Decline when the
         /// person resolves sign-in (v1 ACP URL elicitation: provider-acp/src/server/adapter.ts:5329-5362).
+        /// Unique per engine request within a session: the host answers each key at most once,
+        /// gives a key at most one sign-in request, and ignores later events naming a key it
+        /// already answered.
         key: Option<String>,
         turn_id: Option<String>,
         url: Option<String>,
