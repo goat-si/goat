@@ -821,6 +821,7 @@ impl Actor {
                 item_id,
                 kind,
                 summary,
+                item,
                 ..
             } => {
                 let Phase::Running(run) = &mut self.phase else {
@@ -829,14 +830,29 @@ impl Actor {
                 let request_id = RequestId::new(new_id("req"));
                 run.engine_requests.push((key, request_id.clone()));
                 let run_id = run.run_id.clone();
-                self.append(vec![LogEvent::RequestOpened(RequestOpened {
+                let item_id = item
+                    .as_ref()
+                    .map(|i| i.id.clone())
+                    .or(item_id)
+                    .unwrap_or_else(|| goat2_contracts::ItemId::new(new_id("engine-request")));
+                // The waiting item (approval_request / user_input_request) goes into the timeline
+                // first, so the UI renders the choices; the request points at it.
+                let mut events = Vec::new();
+                if let Some(item) = item {
+                    let mut item = *item;
+                    item.run_id = Some(run_id.clone());
+                    item.thread_id = self.id.clone();
+                    events.push(LogEvent::ItemCompleted(ItemCompleted {
+                        run_id: run_id.clone(),
+                        item,
+                        engine_locator: None,
+                        blob: None,
+                    }));
+                }
+                events.push(LogEvent::RequestOpened(RequestOpened {
                     request_id,
                     run_id: Some(run_id),
-                    item_id: Some(
-                        item_id.unwrap_or_else(|| {
-                            goat2_contracts::ItemId::new(new_id("engine-request"))
-                        }),
-                    ),
+                    item_id: Some(item_id),
                     kind,
                     summary: goat2_contracts::text::clamp_chars(
                         &summary,
@@ -844,7 +860,8 @@ impl Actor {
                     ),
                     options: None,
                     recommended: None,
-                })]);
+                }));
+                self.append(events);
             }
             EngineEvent::RequestClosed { key } => {
                 let request = match &mut self.phase {
