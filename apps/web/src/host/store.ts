@@ -135,6 +135,9 @@ export function apply(state: HostState, frame: HostFrame): ApplyResult {
       }
       return none(withThread(state, frame.threadId, (v) => ({ ...v, streaming: { ...v.streaming, [frame.itemId]: have + frame.text } })));
     }
+    case "providers":
+      // Provider instances belong to the providers UI (goat2_providers_ui); the thread store ignores them.
+      return none(state);
     case "ping":
       return { state, outgoing: [{ type: "pong", at: frame.at }] };
     case "error":
