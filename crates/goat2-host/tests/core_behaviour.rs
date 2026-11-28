@@ -2029,6 +2029,8 @@ async fn a_driver_that_cannot_probe_is_listed_with_that_reason() {
         codex.probe.message.as_deref(),
         Some("This driver cannot report its status yet.")
     );
+    // Not "not found": the row does not know whether the provider is installed.
+    assert!(codex.probe.installed);
 }
 
 #[tokio::test]
@@ -2334,6 +2336,103 @@ async fn start_thread_on(t: &T, key: &str, instance: &str) -> ThreadId {
         .unwrap()
         .thread_id
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_slow_probe_never_holds_other_commands() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.fake.set_probe_delay(Duration::from_secs(2));
+    let started = Instant::now();
+    t.host
+        .command(refresh("slow-1", Some("codex")))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "refresh answers at once"
+    );
+    // Another command completes while the probe still runs.
+    let other = Instant::now();
+    start_user_thread(&t, "slow-other", None).await;
+    assert!(
+        other.elapsed() < Duration::from_millis(500),
+        "not held behind the probe"
+    );
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+}
+
+#[tokio::test]
+async fn a_slow_probe_never_overwrites_a_newer_setting() {
+    // The startup probe is slow; the provider is turned off while it runs.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    fake.set_probe(Ok(ready_probe("0.167.0")));
+    fake.set_probe_delay(Duration::from_millis(400));
+    let t = open_at(&path, Some(dir), fake, 1).await;
+    // Let the startup probe start (it reads the settings, then waits on the slow probe).
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    t.host
+        .command(set_instance("over-2", "codex", "codex", false))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert!(!codex.enabled);
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_sign_in_link_is_not_attached() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    let id = start_user_thread(&t, "bad-link", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            key: None,
+            url: Some(" https://auth.example.invalid/x".into()),
+            message: "Sign in".into(),
+        },
+    );
+    eventually("sign-in request", || signins(&t, &id).len() == 1).await;
+    // A later change publishes the list; the bad link is left off, so the list still serializes.
+    t.fake.set_probe(Ok(ready_probe("0.170.0")));
+    t.host.command(refresh("bad-link-r", None)).await.unwrap();
+    let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.170.0")).await;
+    assert!(codex.probe.auth.action.is_none());
+    serde_json::to_value(&codex).expect("the entry serializes");
+}
+
+#[tokio::test]
+async fn a_failed_settings_save_changes_nothing() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    // The temporary file cannot be created: a folder is in its place.
+    std::fs::create_dir(
+        t._dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("provider-instances.json.tmp"),
+    )
+    .unwrap();
+    let refused = t
+        .host
+        .command(set_instance("save-fail", "codex", "codex", false))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "internal");
+    t.host.command(refresh("save-fail-r", None)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(eventually_provider(&t, |_| true).await.enabled, "still on");
 }
 
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {

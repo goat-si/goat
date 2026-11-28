@@ -124,6 +124,9 @@ impl std::fmt::Debug for SigninLink {
     }
 }
 
+/// Last sequence number given out, and each open link with the number it was set with.
+type SigninLinks = (u64, HashMap<RequestId, (u64, SigninLink)>);
+
 /// A finished child run, as delivered to waiters and the parent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildOutcome {
@@ -174,7 +177,8 @@ pub(crate) struct Inner {
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
     /// Sign-in links of open `signin` requests, by request. Memory only (see [SigninLink]).
-    signin_links: Mutex<HashMap<RequestId, SigninLink>>,
+    /// With the order each link was set in (a refreshed link counts as new).
+    signin_links: Mutex<SigninLinks>,
     /// Provider instances, probes and the `providers` list (docs/part2/provider-wire.md).
     pub providers: crate::providers::Providers,
     engine_groups_hook: Mutex<EngineGroupsNotifier>,
@@ -247,7 +251,7 @@ impl Host {
                 dedupe: Mutex::new(HashMap::new()),
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
-                signin_links: Mutex::new(HashMap::new()),
+                signin_links: Mutex::new((0, HashMap::new())),
                 providers,
                 engine_groups_hook: Mutex::new(EngineGroupsNotifier { hook: None, seq: 0 }),
                 tasks: Mutex::new(Vec::new()),
@@ -490,20 +494,21 @@ impl Host {
         self.inner.runtime.lock().expect("runtime").get(id).cloned()
     }
 
-    /// Sign-in links of the open `signin` requests, oldest request id first.
+    /// Sign-in links of the open `signin` requests, oldest first (the order they were set in).
     pub fn signin_links(&self) -> Vec<SigninLink> {
         let links = self.inner.signin_links.lock().expect("signin links");
-        let mut out: Vec<SigninLink> = links.values().cloned().collect();
-        out.sort_by(|a, b| a.request_id.as_str().cmp(b.request_id.as_str()));
-        out
+        let mut out: Vec<&(u64, SigninLink)> = links.1.values().collect();
+        out.sort_by_key(|(seq, _)| *seq);
+        out.into_iter().map(|(_, link)| link.clone()).collect()
     }
 
     pub(crate) fn set_signin_link(&self, link: SigninLink) {
-        self.inner
-            .signin_links
-            .lock()
-            .expect("signin links")
-            .insert(link.request_id.clone(), link);
+        {
+            let mut links = self.inner.signin_links.lock().expect("signin links");
+            links.0 += 1;
+            let seq = links.0;
+            links.1.insert(link.request_id.clone(), (seq, link));
+        }
         self.inner.providers.publish(self);
     }
 
@@ -513,6 +518,7 @@ impl Host {
             .signin_links
             .lock()
             .expect("signin links")
+            .1
             .remove(request_id)
             .is_some();
         if removed {

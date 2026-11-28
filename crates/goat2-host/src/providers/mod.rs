@@ -62,6 +62,11 @@ struct State {
     auth: HashMap<String, ProviderAuthState>,
     /// Latest install state per driver kind.
     installs: HashMap<String, ProviderInstallState>,
+    /// Per-instance generation, bumped by a settings change and by the start of each refresh: a
+    /// probe result is applied only if its instance's generation did not move meanwhile.
+    gens: HashMap<String, u64>,
+    /// Set after the startup probes: before that nothing is published (no partial first list).
+    ready: bool,
 }
 
 pub struct Providers {
@@ -75,15 +80,25 @@ impl Providers {
     /// `factories`: driver kind (v1 `ProviderDriverKind` slug) -> its factory.
     pub fn open(data_dir: &Path, factories: BTreeMap<String, Arc<dyn EngineFactory>>) -> Self {
         let path = data_dir.join(FILE);
+        // An unreadable file is kept aside under a timestamped name, never overwritten.
+        let set_aside = |why: &dyn std::fmt::Display| {
+            let aside = path.with_extension(format!(
+                "json.unreadable-{}",
+                crate::util::now_rfc3339().replace(':', "-")
+            ));
+            tracing::error!(%why, aside = %aside.display(), "provider instances unreadable; using defaults");
+            let _ = std::fs::rename(&path, &aside);
+        };
         let mut instances: Vec<ProviderInstance> = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|err| {
-                // Kept aside, not overwritten: the person can still recover it.
-                let aside = path.with_extension("json.unreadable");
-                tracing::error!(%err, aside = %aside.display(), "provider instances unreadable; using defaults");
-                let _ = std::fs::rename(&path, &aside);
+                set_aside(&err);
                 Vec::new()
             }),
-            Err(_) => Vec::new(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(err) => {
+                set_aside(&err);
+                Vec::new()
+            }
         };
         for driver in factories.keys() {
             if !instances.iter().any(|i| &i.instance_id == driver) {
@@ -104,6 +119,8 @@ impl Providers {
                 probes: HashMap::new(),
                 auth: HashMap::new(),
                 installs: HashMap::new(),
+                gens: HashMap::new(),
+                ready: false,
             }),
             list: watch::channel(None).0,
         }
@@ -138,15 +155,33 @@ impl Providers {
             .ok_or_else(|| format!("this host has no {} driver", instance.driver))
     }
 
-    /// Probe one instance (or every listed one) again, then publish.
+    /// Refuse an instance id no listed instance has (before any probe starts).
+    pub fn check_listed(&self, instance_id: &str) -> Result<(), ProviderRefusal> {
+        let state = self.state.lock().expect("providers");
+        if state
+            .instances
+            .iter()
+            .any(|i| i.instance_id == instance_id && self.factories.contains_key(&i.driver))
+        {
+            Ok(())
+        } else {
+            Err(ProviderRefusal::NotFound(format!(
+                "No provider instance {instance_id}."
+            )))
+        }
+    }
+
+    /// Probe one instance (or every listed one) again, then publish. Slow: callers that answer
+    /// a command run it in a task (it must never hold the command lock).
     pub async fn refresh(&self, host: &Host, only: Option<&str>) -> Result<(), ProviderRefusal> {
-        let targets: Vec<ProviderInstance> = {
-            let state = self.state.lock().expect("providers");
+        let targets: Vec<(ProviderInstance, u64)> = {
+            let mut guard = self.state.lock().expect("providers");
+            let state = &mut *guard;
             let listed = state
                 .instances
                 .iter()
                 .filter(|i| self.factories.contains_key(&i.driver));
-            match only {
+            let picked: Vec<ProviderInstance> = match only {
                 Some(id) => {
                     let found: Vec<_> = listed.filter(|i| i.instance_id == id).cloned().collect();
                     if found.is_empty() {
@@ -157,27 +192,41 @@ impl Providers {
                     found
                 }
                 None => listed.cloned().collect(),
-            }
+            };
+            picked
+                .into_iter()
+                .map(|i| {
+                    let generation = state.gens.entry(i.instance_id.clone()).or_default();
+                    *generation += 1;
+                    let generation = *generation;
+                    (i, generation)
+                })
+                .collect()
         };
-        let probes = futures_util::future::join_all(targets.iter().map(|i| async move {
-            let factory = self.factories[&i.driver].as_ref();
-            let probe = if i.enabled {
-                probe(factory).await
-            } else {
-                status_only(ServerProviderState::Disabled, "Turned off in settings.")
-            };
-            // Sign-in methods for an instance with no flow yet (v1 lists them idle).
-            let methods = if i.enabled && factory.setup().can_authenticate {
-                factory.auth_methods(&target_of(i)).await.ok()
-            } else {
-                None
-            };
-            (i.instance_id.clone(), probe, methods)
-        }))
-        .await;
+        let probes =
+            futures_util::future::join_all(targets.iter().map(|(i, generation)| async move {
+                let factory = self.factories[&i.driver].as_ref();
+                let probe = if i.enabled {
+                    probe(factory).await
+                } else {
+                    status_only(ServerProviderState::Disabled, "Turned off in settings.")
+                };
+                // Sign-in methods for an instance with no flow yet (v1 lists them idle).
+                let methods = if i.enabled && factory.setup().can_authenticate {
+                    factory.auth_methods(&target_of(i)).await.ok()
+                } else {
+                    None
+                };
+                (i.instance_id.clone(), *generation, probe, methods)
+            }))
+            .await;
         {
             let mut state = self.state.lock().expect("providers");
-            for (id, probe, methods) in probes {
+            for (id, generation, probe, methods) in probes {
+                // A settings change or a newer refresh since this probe started wins.
+                if state.gens.get(&id) != Some(&generation) {
+                    continue;
+                }
                 state.probes.insert(id.clone(), probe);
                 if let Some(methods) = methods
                     && state
@@ -187,6 +236,9 @@ impl Providers {
                 {
                     state.auth.insert(id.clone(), idle_auth(&id, methods));
                 }
+            }
+            if only.is_none() {
+                state.ready = true;
             }
         }
         self.publish(host);
@@ -252,7 +304,13 @@ impl Providers {
             .await
             .map_err(engine_refusal)?;
         self.record_auth(host, instance_id, state.clone())?;
-        let _ = self.refresh(host, Some(instance_id)).await;
+        // Re-probed in a task: this answers a command and must not wait on a probe.
+        let probing = host.clone();
+        let id = instance_id.to_owned();
+        let task = tokio::spawn(async move {
+            let _ = probing.inner.providers.refresh(&probing, Some(&id)).await;
+        });
+        host.track(&task);
         Ok(state)
     }
 
@@ -376,16 +434,22 @@ impl Providers {
                 next.driver
             )));
         }
-        let saved = {
+        {
             let mut state = self.state.lock().expect("providers");
-            match state
-                .instances
+            // Saved first: a failed save changes nothing.
+            let mut instances = state.instances.clone();
+            match instances
                 .iter_mut()
                 .find(|i| i.instance_id == next.instance_id)
             {
                 Some(existing) => *existing = next.clone(),
-                None => state.instances.push(next.clone()),
+                None => instances.push(next.clone()),
             }
+            save(&self.path, &instances).map_err(|e| {
+                ProviderRefusal::Internal(format!("provider instances not saved: {e}"))
+            })?;
+            state.instances = instances;
+            *state.gens.entry(next.instance_id.clone()).or_default() += 1;
             if !next.enabled {
                 state.probes.insert(
                     next.instance_id.clone(),
@@ -399,20 +463,20 @@ impl Providers {
                 // Turned back on: probed again below before it is listed as ready.
                 state.probes.remove(&next.instance_id);
             }
-            save(&self.path, &state.instances)
-        };
-        saved
-            .map_err(|e| ProviderRefusal::Internal(format!("provider instances not saved: {e}")))?;
+        }
         self.publish(host);
         Ok(())
     }
 
-    /// Rebuild the list and push it when it changed. Waits for the first probe of every
-    /// enabled instance.
+    /// Rebuild the list and push it when it changed. Built and sent under the state lock, so
+    /// an older list never replaces a newer one. Nothing is published before the startup probes.
     pub fn publish(&self, host: &Host) {
-        let Some(entries) = self.entries(host) else {
+        let links = host.signin_links();
+        let state = self.state.lock().expect("providers");
+        if !state.ready {
             return;
-        };
+        }
+        let entries = self.entries(host, &state, &links);
         self.list.send_if_modified(|current| {
             if current.as_ref() == Some(&entries) {
                 false
@@ -423,20 +487,31 @@ impl Providers {
         });
     }
 
-    fn entries(&self, host: &Host) -> Option<Vec<ServerProviderEntry>> {
-        let links = host.signin_links();
-        let state = self.state.lock().expect("providers");
+    /// Rows of listed instances that have a probe result; one still waiting for its first probe
+    /// is left out (no placeholder row).
+    fn entries(
+        &self,
+        host: &Host,
+        state: &State,
+        links: &[crate::core::SigninLink],
+    ) -> Vec<ServerProviderEntry> {
         let mut out = Vec::new();
         for instance in &state.instances {
             let Some(factory) = self.factories.get(&instance.driver) else {
                 continue; // A driver this build does not have: kept in the file, not listed.
             };
-            let mut probe = state.probes.get(&instance.instance_id)?.clone();
+            let Some(probe) = state.probes.get(&instance.instance_id) else {
+                continue;
+            };
+            let mut probe = probe.clone();
             if probe.auth.action.is_none()
+                // Newest link first; one that is not a usable sign-in URL is never attached (it
+                // would not serialize and would stop the whole frame).
                 && let Some(link) = links.iter().rev().find(|l| {
-                    host.store().card(&l.thread_id).is_some_and(|c| {
-                        c.engine.provider_instance_id.as_str() == instance.instance_id
-                    })
+                    goat2_contracts::serde_util::sign_in_url::check(&l.url).is_ok()
+                        && host.store().card(&l.thread_id).is_some_and(|c| {
+                            c.engine.provider_instance_id.as_str() == instance.instance_id
+                        })
                 })
             {
                 probe.auth.action = Some(AcpRegistryUrlAuthAction {
@@ -460,7 +535,7 @@ impl Providers {
                 install: state.installs.get(&instance.driver).cloned(),
             });
         }
-        Some(out)
+        out
     }
 }
 
@@ -477,9 +552,11 @@ async fn probe(factory: &dyn EngineFactory) -> ProviderProbeResult {
 }
 
 /// A row with only a state and a reason: nothing about install, sign-in or models is known.
+/// `installed` stays true because v1's UI reads `installed:false` as "not found", which such a
+/// row does not know (v1 shows these as "needs attention").
 fn status_only(status: ServerProviderState, message: &str) -> ProviderProbeResult {
     ProviderProbeResult {
-        installed: false,
+        installed: true,
         version: None,
         installed_version: None,
         cli: None,
@@ -498,10 +575,19 @@ fn unknown_auth() -> ServerProviderAuth {
 }
 
 fn save(path: &Path, instances: &[ProviderInstance]) -> std::io::Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_vec_pretty(instances).map_err(std::io::Error::other)?;
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(tmp, path)
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(&body)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)?;
+    // The rename itself survives a crash only once the folder is synced.
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    Ok(())
 }
 
 /// Later phases of one sign-in flow; an update of an older flow or another instance is dropped.

@@ -86,8 +86,12 @@ async fn upgrade(
 }
 type Tx = mpsc::UnboundedSender<Value>;
 fn send(tx: &Tx, frame: impl serde::Serialize) {
-    if let Ok(v) = serde_json::to_value(frame) {
-        let _ = tx.send(v);
+    match serde_json::to_value(frame) {
+        Ok(v) => {
+            let _ = tx.send(v);
+        }
+        // Never the frame content (it can hold sign-in links): only that it was dropped.
+        Err(_) => tracing::error!("a frame failed to serialize and was not sent"),
     }
 }
 fn error(

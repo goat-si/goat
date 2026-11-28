@@ -435,12 +435,25 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             })
         }
         Command::RefreshProviders { instance_id, .. } => {
-            // A probe always reads the model list, so `refreshModels` needs no separate path.
-            host.inner
-                .providers
-                .refresh(host, instance_id.as_ref().map(|i| i.as_str()))
-                .await
-                .map_err(provider_refusal)?;
+            // Probes can take long: they run in a task, never under the command lock; the
+            // subscription carries the new list (wire: refresh answers nothing). A probe always
+            // reads the model list, so `refreshModels` needs no separate path.
+            let only = instance_id.map(|i| i.to_string());
+            if let Some(id) = &only {
+                host.inner
+                    .providers
+                    .check_listed(id)
+                    .map_err(provider_refusal)?;
+            }
+            let probing = host.clone();
+            let task = tokio::spawn(async move {
+                let _ = probing
+                    .inner
+                    .providers
+                    .refresh(&probing, only.as_deref())
+                    .await;
+            });
+            host.track(&task);
             Ok(CommandValue::default())
         }
         Command::SetProviderInstance {

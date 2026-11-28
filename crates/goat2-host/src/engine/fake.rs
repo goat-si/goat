@@ -93,6 +93,8 @@ struct Shared {
     fail_answers: bool,
     /// What [EngineFactory::probe] answers; `None` = Unsupported (the trait default).
     probe: Option<Result<goat2_contracts::ProviderProbeResult, EngineError>>,
+    /// How long a probe takes.
+    probe_delay: Duration,
     /// Provider sign-in/install: `None` = Unsupported (the trait defaults).
     setup: Option<goat2_contracts::ProviderSetup>,
     auth: Option<(
@@ -176,6 +178,11 @@ impl FakeEngine {
     /// What the next probes answer.
     pub fn set_probe(&self, probe: Result<goat2_contracts::ProviderProbeResult, EngineError>) {
         self.shared.lock().expect("fake").probe = Some(probe);
+    }
+
+    /// Make every probe take `delay`.
+    pub fn set_probe_delay(&self, delay: Duration) {
+        self.shared.lock().expect("fake").probe_delay = delay;
     }
 
     /// Offer sign-in (`methods`, answering a start with `start`) and install (answering with
@@ -338,12 +345,12 @@ impl EngineFactory for FakeEngine {
     }
 
     async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
-        self.shared
-            .lock()
-            .expect("fake")
-            .probe
-            .clone()
-            .unwrap_or_else(|| Err(EngineError::Unsupported("probe".into())))
+        let (probe, delay) = {
+            let shared = self.shared.lock().expect("fake");
+            (shared.probe.clone(), shared.probe_delay)
+        };
+        tokio::time::sleep(delay).await;
+        probe.unwrap_or_else(|| Err(EngineError::Unsupported("probe".into())))
     }
 
     fn setup(&self) -> goat2_contracts::ProviderSetup {
