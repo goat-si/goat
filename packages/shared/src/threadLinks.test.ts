@@ -205,6 +205,12 @@ describe("thread links", () => {
       ["1. Stray ` tick", `    > ${after} and \`code\``],
       ["1. Intro", "", "    Stray ` tick", `    > ${after} and \`code\``],
       ["- Intro", "", "Use `example", `    > ${hidden} end\``, after],
+      ...["- - -", "* \t* *", "___", "===", "-"].flatMap((boundary) => [
+        ["Stray ` tick", boundary, `${after} and \`code\``],
+        ["> Stray ` tick", `> ${boundary}`, `> ${after} and \`code\``],
+      ]),
+      ["Stray ` tick\r", "  ---\r", `${after} and \`code\``],
+      ["> Stray ` tick", "---", `${after} and \`code\``],
       ["Use `example", "```" + hidden + "`", after],
       ["\\\\``" + after + "`"],
     ]) {
@@ -224,6 +230,18 @@ describe("thread links", () => {
       expect(relabelThreadLinks(input, () => "Task")).toBe(
         `${text}${eol}[Task](goat-thread://v1/after)`,
       );
+    }
+  });
+
+  it("keeps multiline code literal when a line only resembles a block boundary", () => {
+    for (const markdown of [
+      ...["--- text", "== =", "-_*", "    ==="].map((line) => ["Use `example", line]),
+      ["> Use `example", ">     ---"],
+      ["> Use `example", "==="],
+    ]) {
+      const source = [...markdown, "[old](goat-thread://v1/t1) end`"].join("\n");
+      expect(threadLinkIds(source)).toEqual([]);
+      expect(relabelThreadLinks(source, () => "New")).toBe(source);
     }
   });
 
