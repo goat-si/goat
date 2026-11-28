@@ -233,6 +233,18 @@ importers:
         specifier: 'catalog:'
         version: 5.9.3
 
+  apps/engine-helper:
+    devDependencies:
+      '@goat2/contracts-rs':
+        specifier: workspace:*
+        version: link:../../packages/contracts-rs
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+
   apps/web:
     dependencies:
       '@goat2/bot-face':
