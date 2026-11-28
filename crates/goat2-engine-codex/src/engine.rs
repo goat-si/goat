@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -40,6 +41,9 @@ use crate::protocol::server::{Notification, ServerRequest};
 use crate::protocol::{INTERNAL_ERROR, RpcError, RpcId, methods};
 use crate::runtime;
 use crate::transport::{CallError, Connection, Inbound, Tap, TransportConfig};
+
+/// The AuthRequired message when Codex refuses an instance's credentials on a turn.
+const CREDENTIALS_REJECTED: &str = "Codex rejected this provider's credentials. Enter a new key or sign in again in provider settings.";
 
 /// Settings for every session a [CodexEngineFactory] starts.
 #[derive(Clone)]
@@ -114,7 +118,7 @@ impl CodexEngineFactory {
 #[async_trait]
 impl EngineFactory for CodexEngineFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
-        start_session(self.options.clone(), spec).await
+        start_session(self.options.clone(), spec, Arc::clone(&self.auth.rejected)).await
     }
 
     /// v1 `CodexProviderCapabilitiesV2` (src/capabilities.rs, compared whole by a test).
@@ -134,7 +138,11 @@ impl EngineFactory for CodexEngineFactory {
         &self,
         target: &goat2_engine_api::ProviderTarget,
     ) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
-        Ok(crate::probe::probe_instance(&self.options, target).await)
+        let mut result = crate::probe::probe_instance(&self.options, target).await;
+        if self.auth.rejected.contains(target.instance_id.as_str()) {
+            crate::probe::mark_rejected(&mut result);
+        }
+        Ok(result)
     }
 
     /// GOAT signs in to Codex through Codex's own login (src/auth.rs); install comes later.
@@ -470,9 +478,10 @@ fn developer_instructions(spec: &SessionSpec) -> Option<String> {
 async fn start_session(
     options: CodexEngineOptions,
     spec: SessionSpec,
+    rejected: Arc<crate::auth::Rejections>,
 ) -> Result<EngineHandle, EngineError> {
     let (launch, redact) = launch_for(&options, &spec)?;
-    start_launched(options, spec, launch, redact.clone())
+    start_launched(options, spec, launch, redact.clone(), rejected)
         .await
         .map_err(|e| redact_error(&redact, e))
 }
@@ -482,6 +491,7 @@ async fn start_launched(
     spec: SessionSpec,
     launch: Launch,
     redact: Redactor,
+    rejected: Arc<crate::auth::Rejections>,
 ) -> Result<EngineHandle, EngineError> {
     let mut child = ChildProcess::spawn(&launch).map_err(|error| {
         EngineError::StartFailed(format!("spawn {}: {error}", launch.program.display()))
@@ -514,7 +524,15 @@ async fn start_launched(
     let (commands, command_rx) = mpsc::unbounded_channel();
     let (events, event_rx) = mpsc::unbounded_channel();
     let (internal, internal_rx) = mpsc::unbounded_channel();
+    // The provider instance the session runs as (its target, else the thread's instance).
+    let instance = spec
+        .instance
+        .as_ref()
+        .map(|t| t.instance_id.as_str().to_string())
+        .unwrap_or_else(|| spec.engine.provider_instance_id.as_str().to_string());
     let actor = Actor {
+        rejected,
+        instance,
         redact: redact.clone(),
         options,
         spec_thread: spec.thread_id.clone(),
@@ -860,6 +878,9 @@ struct Pending {
 const SETTLED_RING: usize = 64;
 
 struct Actor {
+    /// Marks the instance when Codex refuses its credentials on a turn.
+    rejected: Arc<crate::auth::Rejections>,
+    instance: String,
     /// The instance's private home never leaves in an event reason.
     redact: Redactor,
     options: CodexEngineOptions,
@@ -1551,8 +1572,33 @@ impl Actor {
                         Some(TurnStatusWire::Completed) if owned.interrupting => {
                             TurnOutcome::Interrupted
                         }
-                        Some(TurnStatusWire::Completed) => TurnOutcome::Done,
+                        Some(TurnStatusWire::Completed) => {
+                            // A turn that ran proves the instance's credentials work again.
+                            self.rejected.clear(&self.instance);
+                            TurnOutcome::Done
+                        }
                         Some(TurnStatusWire::Interrupted) => TurnOutcome::Interrupted,
+                        Some(TurnStatusWire::Failed)
+                            if n.turn.error.as_ref().is_some_and(|e| e.is_unauthorized()) =>
+                        {
+                            // Owner decision: refused credentials (a wrong API key) show on the
+                            // provider, not only as a failed turn.
+                            self.rejected.mark(&self.instance);
+                            self.emit(EngineEvent::AuthRequired {
+                                key: None,
+                                turn_id: Some(n.turn.id.clone()),
+                                url: None,
+                                message: CREDENTIALS_REJECTED.into(),
+                            });
+                            TurnOutcome::Failed {
+                                reason: n
+                                    .turn
+                                    .error
+                                    .as_ref()
+                                    .map(|e| e.message.clone())
+                                    .unwrap_or_else(|| "the turn failed".into()),
+                            }
+                        }
                         Some(TurnStatusWire::Failed) => TurnOutcome::Failed {
                             reason: n
                                 .turn

@@ -737,6 +737,178 @@ async fn an_api_key_is_handed_to_codex_and_never_shown() {
         seen.push(state);
     }
     assert_eq!(seen.last().unwrap().phase, ProviderAuthPhase::Succeeded);
+    // Owner decision: Codex does not check a key it saves, and the copy says so.
+    assert_eq!(
+        seen.last().unwrap().message.as_deref(),
+        Some("Codex saved this API key. It is checked the first time Codex uses it.")
+    );
     let shown = serde_json::to_string(&seen).unwrap() + &serde_json::to_string(&verifying).unwrap();
     assert!(!shown.contains(key), "the key never appears in a state");
+}
+
+// ---- owner decision: a wrong API key does not stay silent ----
+
+/// The probe handshake (codex 0.167.0 identity) plus the cwd route read, as in tests/probe.rs.
+#[cfg(unix)]
+fn probe_api_key_ready() -> Vec<Entry> {
+    let mut e = session(Vec::new());
+    if let Entry::EmitInbound { frame, .. } = &mut e[1] {
+        frame["result"]["userAgent"] = json!("T3 Code/0.167.0 (Mac OS 26.1.0; arm64) vscode/0.0.0");
+    }
+    e.push(Entry::ExpectOutbound {
+        label: None,
+        frame: json!({"id": 90, "method": "config/read", "params": {"cwd": "<cwd>", "includeLayers": false}}),
+        wildcards: vec!["/params/cwd".into()],
+    });
+    e.push(emit(
+        json!({"id": 90, "result": {"config": {}, "origins": {}}}),
+    ));
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+    ));
+    e.push(expect(
+        json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
+    ));
+    e.push(emit(
+        json!({"id": 3, "result": {"config": {}, "origins": {}}}),
+    ));
+    e.push(expect(
+        json!({"id": 4, "method": "model/list", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 4, "result": {"nextCursor": null, "data": [
+        {"id": "gpt-6-luna", "model": "gpt-6-luna", "displayName": "gpt-6-luna", "description": "",
+         "hidden": false, "isDefault": true, "defaultReasoningEffort": "low",
+         "supportedReasoningEfforts": [{"reasoningEffort": "low", "description": ""}]}]}}),
+    ));
+    e
+}
+
+/// The recorded basic session up to turn/started, then Codex fails the turn because the API
+/// key was refused (CodexErrorInfo "unauthorized").
+#[cfg(unix)]
+fn session_with_refused_key() -> (Vec<Entry>, Value) {
+    let t = load("codex-0.167.0/basic.json");
+    let mut entries: Vec<Entry> = t.entries[..12].to_vec();
+    let Entry::EmitInbound { frame: done, .. } = t.entries[22].clone() else {
+        panic!("entry 22 is turn/completed")
+    };
+    let mut done = done;
+    done["params"]["turn"]["status"] = json!("failed");
+    done["params"]["turn"]["error"] = json!({"message": "unexpected status 401 Unauthorized: Incorrect API key provided",
+        "codexErrorInfo": "unauthorized", "additionalDetails": null});
+    entries.push(emit(done.clone()));
+    (entries, done)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_key_on_a_turn_shows_on_the_provider_until_sign_out() {
+    use goat2_contracts::{
+        EngineConfig, InputId, ModelSelection, RuntimeMode, ServerProviderAuthStatus,
+        ServerProviderState, ThreadId,
+    };
+    use goat2_engine_api::{
+        EngineEvent, EngineInput, McpEndpoint, SessionSpec, TurnOutcome, TurnSettings,
+        TurnStartResult,
+    };
+    let (turn, done) = session_with_refused_key();
+    let logout = session(vec![
+        expect(json!({"id": 2, "method": "account/logout", "params": {}})),
+        emit(json!({"id": 2, "result": {}})),
+    ]);
+    let (_multi, options) = Multi::new(
+        "refused-key",
+        vec![turn, probe_api_key_ready(), logout, probe_api_key_ready()],
+    );
+    let f = CodexEngineFactory::new(options);
+    let selection: ModelSelection = serde_json::from_value(json!({"instanceId": "codex",
+        "model": "gpt-6-luna", "options": [{"id": "reasoningEffort", "value": "low"}]}))
+    .unwrap();
+    let spec = SessionSpec {
+        thread_id: ThreadId::new("goat-thread-1"),
+        engine: EngineConfig {
+            provider_instance_id: ProviderInstanceId::new("codex"),
+            model_selection: selection.clone(),
+            runtime_mode: RuntimeMode::ApprovalRequired,
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+        },
+        resume: None,
+        mcp: McpEndpoint {
+            url: "http://127.0.0.1:3873/mcp".into(),
+            bearer_token: "test-token-0123456789abcdef".into(),
+        },
+        host_generation: 1,
+        process_generation: 1,
+        instructions: None,
+        instance: None,
+    };
+    let mut h = f.start(spec).await.expect("session");
+    let started = h
+        .session
+        .start_turn(
+            vec![EngineInput {
+                input_id: InputId::new("goat-input-1"),
+                text: "Reply with exactly: GOAT2-OK".into(),
+                attachments: Vec::new(),
+            }],
+            &TurnSettings {
+                model_selection: selection,
+                runtime_mode: RuntimeMode::ApprovalRequired,
+            },
+        )
+        .await;
+    assert!(
+        matches!(started, TurnStartResult::Accepted { .. }),
+        "{started:?}"
+    );
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), h.events.recv())
+            .await
+            .expect("an event in time")
+            .expect("events open");
+        let finished = matches!(event, EngineEvent::TurnFinished { .. });
+        seen.push(event);
+        if finished {
+            break;
+        }
+    }
+    let turn_id = done["params"]["turn"]["id"].as_str().unwrap().to_string();
+    // The person is asked to fix the credentials (the host's sign-in path), then the turn fails
+    // with Codex's own reason.
+    assert!(
+        seen.iter().any(
+            |e| matches!(e, EngineEvent::AuthRequired { key: None, url: None,
+        turn_id: Some(t), message } if *t == turn_id && message.contains("Enter a new key"))
+        ),
+        "{seen:#?}"
+    );
+    assert!(
+        matches!(seen.last(), Some(EngineEvent::TurnFinished { outcome: TurnOutcome::Failed { reason }, .. })
+        if reason.contains("401"))
+    );
+    h.session.shutdown().await;
+
+    let target = default_target();
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error, "{:?}", p.message);
+    assert_eq!(p.auth.status, ServerProviderAuthStatus::Unauthenticated);
+    assert_eq!(p.auth.label.as_deref(), Some("Key rejected"));
+    assert_eq!(
+        p.message.as_deref(),
+        Some("Codex rejected this API key. Enter a new key.")
+    );
+
+    // Signing out (or a new sign-in) clears it.
+    assert_eq!(
+        f.auth_logout(&target).await.unwrap().phase,
+        ProviderAuthPhase::Idle
+    );
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.auth.status, ServerProviderAuthStatus::Authenticated);
 }

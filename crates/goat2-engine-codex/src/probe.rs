@@ -125,6 +125,35 @@ pub async fn probe_instance_with(
     without_private_home(result, &redact)
 }
 
+/// Owner decision: credentials Codex refused on a turn show on the provider. An API key is
+/// "Key rejected" (enter a new key); a ChatGPT sign-in is "Sign-in rejected" (sign in again).
+pub(crate) fn mark_rejected(result: &mut ProviderProbeResult) {
+    if result.auth.status != ServerProviderAuthStatus::Authenticated
+        && result.auth.status != ServerProviderAuthStatus::Unknown
+    {
+        return;
+    }
+    let api_key = result.auth.auth_type.as_deref() == Some("apiKey");
+    result.status = ServerProviderState::Error;
+    result.auth.status = ServerProviderAuthStatus::Unauthenticated;
+    result.auth.label = Some(
+        if api_key {
+            "Key rejected"
+        } else {
+            "Sign-in rejected"
+        }
+        .into(),
+    );
+    result.message = Some(
+        if api_key {
+            "Codex rejected this API key. Enter a new key."
+        } else {
+            "Codex rejected this sign-in. Sign in again."
+        }
+        .into(),
+    );
+}
+
 /// A probe result with no trace of the instance's private home (never shown): every text,
 /// including the catalog's names and option labels, is redacted. A model whose id names the
 /// home cannot be redacted (the id is what a turn sends back to Codex), so it is left out and

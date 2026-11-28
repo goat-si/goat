@@ -70,6 +70,8 @@ const NOT_ACTIVE: &str = "This sign-in is no longer active in this client.";
 const SIGNED_OUT: &str = "Signed out.";
 const SIGN_OUT_FAILED: &str = "Could not sign out. Try again.";
 const ENTER_KEY: &str = "Enter an API key to continue.";
+/// Codex never checks a key it saves (owner decision: no check here).
+const KEY_SAVED: &str = "Codex saved this API key. It is checked the first time Codex uses it.";
 const KEY_REFUSED: &str = "Codex did not accept this API key. Check it and try again.";
 const INTERACTION_GONE: &str = "This sign-in interaction is no longer available.";
 const RESPONSE_IN_PROGRESS: &str = "A sign-in response is already in progress.";
@@ -84,6 +86,29 @@ const RESPONSE_IN_PROGRESS: &str = "A sign-in response is already in progress.";
 #[derive(Default)]
 pub struct AuthFlows {
     slots: Mutex<HashMap<String, Arc<Slot>>>,
+    /// Instances whose credentials Codex refused on a turn (shared with the sessions).
+    pub(crate) rejected: Arc<Rejections>,
+}
+
+/// Instances whose saved credentials Codex refused on a turn (owner decision: a wrong API key
+/// must not stay silent). A session marks its instance; the instance probe then reports the
+/// key rejected until a sign-in completes or the instance signs out. Kept in memory: after a
+/// host restart the next refused turn marks it again.
+#[derive(Default)]
+pub struct Rejections(Mutex<std::collections::HashSet<String>>);
+
+impl Rejections {
+    pub fn mark(&self, instance: &str) {
+        lock(&self.0).insert(instance.to_string());
+    }
+
+    pub fn clear(&self, instance: &str) {
+        lock(&self.0).remove(instance);
+    }
+
+    pub fn contains(&self, instance: &str) -> bool {
+        lock(&self.0).contains(instance)
+    }
 }
 
 #[derive(Default)]
@@ -509,6 +534,7 @@ impl AuthFlows {
         }
         let task = {
             let slot = Arc::clone(&slot);
+            let rejected = Arc::clone(&self.rejected);
             let options = options.clone();
             let target = target.clone();
             let id = id.clone();
@@ -618,6 +644,9 @@ impl AuthFlows {
                 // still write credentials once a new flow or a logout may run.
                 codex.close().await;
                 if let Some(end) = end {
+                    if end.phase == ProviderAuthPhase::Succeeded {
+                        rejected.clear(instance.as_str());
+                    }
                     slot.finish(&id, end);
                 }
             })
@@ -756,6 +785,9 @@ impl AuthFlows {
         .ok()
         .flatten()
         .unwrap_or(false);
+        if signed_out {
+            self.rejected.clear(instance.as_str());
+        }
         let (phase, message) = if signed_out {
             (ProviderAuthPhase::Idle, SIGNED_OUT)
         } else {
@@ -862,7 +894,7 @@ async fn run_api_key(
         .and_then(Value::as_str)
         == Some("apiKey");
     if accepted && codex.signed_in().await {
-        end(ProviderAuthPhase::Succeeded, SUCCEEDED)
+        end(ProviderAuthPhase::Succeeded, KEY_SAVED)
     } else {
         end(ProviderAuthPhase::Failed, KEY_REFUSED)
     }

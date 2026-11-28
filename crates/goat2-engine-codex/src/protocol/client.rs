@@ -294,6 +294,26 @@ pub struct TurnError {
     pub message: String,
     #[serde(default)]
     pub additional_details: Option<String>,
+    /// Pinned CodexErrorInfo (a string code or a tagged object with an HTTP status).
+    #[serde(default)]
+    pub codex_error_info: Option<serde_json::Value>,
+}
+
+impl TurnError {
+    /// Codex says its credentials were refused: CodexErrorInfo "unauthorized", or an HTTP
+    /// failure with status 401.
+    pub fn is_unauthorized(&self) -> bool {
+        match &self.codex_error_info {
+            Some(serde_json::Value::String(code)) => code == "unauthorized",
+            Some(serde_json::Value::Object(tagged)) => tagged.values().any(|inner| {
+                inner
+                    .get("httpStatusCode")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(401)
+            }),
+            _ => false,
+        }
+    }
 }
 
 /// Build the dotted config override that gives Codex the GOAT MCP server
