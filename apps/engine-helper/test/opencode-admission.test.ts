@@ -197,6 +197,27 @@ test("turn usage uses the last owned step and ignores malformed or unrelated usa
   } finally { await session.shutdown(); }
 });
 
+test("compaction emits one completed OpenCode item before the turn ends", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); await new Promise<void>((resolve) => setImmediate(resolve));
+    await fake.sendEvent("session.compacted", { sessionID: session.engineRef });
+    await fake.sendEvent("session.compacted", { sessionID: session.engineRef });
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+    const items = events.filter((event) => event.type === "item_completed" && event.item.type === "compaction");
+    assert.equal(items.length, 1); const compacted = items[0]; assert.equal(compacted?.type, "item_completed");
+    if (compacted?.type === "item_completed" && compacted.item.type === "compaction") {
+      assert.equal(compacted.item.status, "completed"); assert.equal(compacted.item.driver, "opencode");
+      assert.equal(compacted.item.summary, "Context compacted");
+      assert.equal(compacted.item.beforeTokenCount, undefined); assert.equal(compacted.item.afterTokenCount, undefined);
+      assert.ok(events.indexOf(compacted) < events.findIndex((event) => event.type === "turn_finished"));
+    }
+  } finally { await session.shutdown(); }
+});
+
 test("usage respects native step order, unresolved ownership, and compaction", async () => {
   for (const scenario of ["delayed-owner", "unresolved-owner", "compaction"] as const) {
     fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();

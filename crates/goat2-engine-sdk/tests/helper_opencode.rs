@@ -94,3 +94,83 @@ async fn opencode_turn_projects_valid_items() {
     assert!(text && tool, "validated message and tool items received");
     handle.session.shutdown().await;
 }
+
+#[tokio::test]
+async fn compaction_item_crosses_helper_before_turn_completion() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let launch = HelperLaunch::new("node", root.join("apps/engine-helper/src/main.ts")).with_env(
+        "GOAT2_ENGINE_HELPER_SDK_OPENCODE",
+        root.join("apps/engine-helper/test/fakes/opencode-sdk.ts"),
+    );
+    let factory = HelperFactory::new(EngineDriver::Opencode, launch).expect("OpenCode driver");
+    let model = ModelSelection {
+        instance_id: ProviderInstanceId::from("opencode"),
+        model: "test/model".into(),
+        options: None,
+    };
+    let spec = SessionSpec {
+        thread_id: ThreadId::from("opencode-compaction"),
+        engine: EngineConfig {
+            provider_instance_id: ProviderInstanceId::from("opencode"),
+            model_selection: model.clone(),
+            runtime_mode: RuntimeMode::FullAccess,
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+        },
+        resume: None,
+        mcp: McpEndpoint {
+            url: "http://127.0.0.1:1/mcp".into(),
+            bearer_token: "synthetic".into(),
+        },
+        host_generation: 1,
+        process_generation: 1,
+        instructions: None,
+        launch: None,
+    };
+    let mut handle = factory.start(spec).await.expect("session starts");
+    let result = handle
+        .session
+        .start_turn(
+            vec![EngineInput {
+                input_id: InputId::from("input"),
+                text: "compact-turn".into(),
+                attachments: vec![],
+            }],
+            &TurnSettings {
+                model_selection: model,
+                runtime_mode: RuntimeMode::FullAccess,
+            },
+        )
+        .await;
+    assert!(matches!(result, TurnStartResult::Accepted { .. }));
+    let mut compacted = false;
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), handle.events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event stream closed");
+        match event {
+            EngineEvent::ItemCompleted { item, .. } => {
+                if let TurnItemBody::Compaction {
+                    driver,
+                    summary,
+                    before_token_count,
+                    after_token_count,
+                } = item.body
+                {
+                    assert_eq!(driver.as_deref(), Some("opencode"));
+                    assert_eq!(summary.as_deref(), Some("Context compacted"));
+                    assert_eq!((before_token_count, after_token_count), (None, None));
+                    compacted = true;
+                }
+            }
+            EngineEvent::TurnFinished { outcome, .. } => {
+                assert!(matches!(outcome, TurnOutcome::Done));
+                assert!(compacted);
+                break;
+            }
+            EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
+            _ => {}
+        }
+    }
+    handle.session.shutdown().await;
+}

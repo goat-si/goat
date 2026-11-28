@@ -411,7 +411,14 @@ export class OpenCodeSession implements EngineSession {
       case "session.idle":
         if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
-      case "session.compacted": turn.overflow = false; delete turn.lastUsage; turn.usagePending.clear(); return;
+      case "session.compacted": {
+        turn.overflow = false;
+        const id = `${turn.id}:compaction`;
+        if (turn.emitted.has(id)) return;
+        delete turn.lastUsage; turn.usagePending.clear();
+        this.completed(turn, id, item({ ...this.base(id, turn), strength: "weak", title: "Context compacted" }, "compaction", { driver: "opencode", summary: "Context compacted" }));
+        return;
+      }
       case "session.error": {
         if (event.properties.error?.name === "ContextOverflowError") { turn.overflow = true; return; }
         const auth = event.properties.error?.name === "ProviderAuthError";

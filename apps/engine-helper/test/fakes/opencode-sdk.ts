@@ -125,7 +125,10 @@ export function createOpencodeClient() {
             push("message.part.updated", { sessionID, part: { id: `ready-${messageID}`, sessionID, messageID: assistant, type: "text", text: "ready" } });
             push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: { completed: 1 } } });
           }
-          else if (!text.includes("hold")) emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}\nMODEL:${args.model?.providerID}/${args.model?.modelID}` : undefined);
+          else if (!text.includes("hold")) {
+            if (text.includes("compact-turn")) push("session.compacted", { sessionID });
+            emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}\nMODEL:${args.model?.providerID}/${args.model?.modelID}` : undefined);
+          }
         });
         return data(undefined);
       },
