@@ -308,9 +308,14 @@ export class OpenCodeSession implements EngineSession {
     const options = turn.settings.modelSelection.options ?? [];
     const agent = options.find((o) => o.id === "agent")?.value;
     const variant = options.find((o) => o.id === "variant")?.value;
-    await this.api.session.promptAsync({ sessionID: this.engineRef, messageID: turn.admission.id, model, parts,
+    const result = await this.api.session.promptAsync({ sessionID: this.engineRef, messageID: turn.admission.id, model, parts,
       ...(this.params.instructions?.appendSystemPrompt ? { system: this.params.instructions.appendSystemPrompt } : {}),
-      ...(typeof agent === "string" ? { agent } : {}), ...(typeof variant === "string" && variant !== "goat:default" ? { variant } : {}) }, { throwOnError: true, signal: turn.controller.signal });
+      ...(typeof agent === "string" ? { agent } : {}), ...(typeof variant === "string" && variant !== "goat:default" ? { variant } : {}) }, { throwOnError: false, signal: turn.controller.signal });
+    if (result.error !== undefined) {
+      if (result.response) throw new Error("OpenCode rejected the request", { cause: { status: result.response.status } });
+      if (result.error instanceof Error) throw result.error;
+      throw new Error("OpenCode transport outcome is unknown");
+    }
     await this.admission(turn, "accepted");
   }
   async startTurn(inputs: ReadonlyArray<EngineInput>, settings: TurnSettings) {
@@ -369,7 +374,7 @@ export class OpenCodeSession implements EngineSession {
     turn.admission = { id: messageId(), accepted: false, observed: false, idle: false, pending: true };
     this.ownedMessages.add(turn.admission.id);
     try { await this.submit(turn, inputs, false); return { status: "accepted" as const }; }
-    catch (error) { if (promptRejected(error)) { turn.admission = previous; return { status: "declined" as const, reason: "OpenCode declined steering" }; } return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" }; }
+    catch (error) { if (promptRejected(error)) { turn.admission = previous; return { status: "declined" as const, reason: "OpenCode declined steering" }; } this.uncertain = true; return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" }; }
   }
   async interrupt(turnId: string) {
     const turn = this.active; if (!turn || turn.id !== turnId) return;

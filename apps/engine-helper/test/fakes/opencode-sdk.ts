@@ -58,12 +58,12 @@ export function createOpencodeClient() {
       async messages() { calls.push({ method: "messages", args: {} }); return data(history); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
       async status() { statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" } }); },
-      async promptAsync(args: { sessionID: string; messageID: string; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal }) {
+      async promptAsync(args: { sessionID: string; messageID: string; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
         calls.push({ method: "prompt", args }); promptReached?.resolve(); if (promptGate) await promptGate.promise;
         if (options?.signal?.aborted) throw new Error("fake prompt aborted");
         const { sessionID, messageID } = args; const text = args.parts[0]?.text ?? "";
-        if (text.includes("reject-prompt")) throw new Error("fake rejection", { cause: { status: 400 } });
-        if (text.includes("fail-prompt")) throw new Error("fake error");
+        if (text.includes("reject-prompt")) return { error: { name: "BadRequestError" }, response: new Response(null, { status: 400 }) };
+        if (text.includes("fail-prompt")) return { error: new TypeError("fake reset", { cause: { code: "ECONNRESET" } }), response: undefined };
         active = true;
         if (text.includes("inline-events")) { emitFinish(sessionID, messageID); return data(undefined); }
         setImmediate(() => {

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { opencodeEngine } from "../src/engines/opencode/index.ts";
 import type { EngineEvent, InitializeParams, TurnSettings } from "../src/protocol.ts";
 import * as fake from "./fakes/opencode-sdk.ts";
@@ -35,6 +36,31 @@ test("a definite prompt rejection is declined and permits a later turn", async (
     assert.equal((await session.startTurn([{ inputId: "i", text: "reject-prompt", attachments: [] }], settings)).status, "declined");
     assert.equal((await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings)).status, "accepted");
   } finally { await session.shutdown(); }
+});
+
+test("an uncertain steer cannot be silently resent as a later turn", async () => {
+  fake.reset(); const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal((await session.steer(turn.turnId, [{ inputId: "s", text: "fail-prompt", attachments: [] }])).status, "unknown");
+    await session.interrupt(turn.turnId); await finished.promise;
+    assert.equal((await session.startTurn([{ inputId: "n", text: "hold again", attachments: [] }], settings)).status, "declined");
+  } finally { await session.shutdown(); }
+});
+
+test("the pinned SDK exposes HTTP rejection and transport failure separately", async () => {
+  const input = { sessionID: "session-test", parts: [{ type: "text" as const, text: "hello" }] };
+  const rejected = createOpencodeClient({ baseUrl: "http://example.invalid", fetch: async () => new Response('{"name":"BadRequestError"}', { status: 400, headers: { "content-type": "application/json" } }) });
+  const reply = await rejected.session.promptAsync(input, { throwOnError: false });
+  assert.equal(reply.response?.status, 400); assert.ok(reply.error);
+  const disconnected = createOpencodeClient({ baseUrl: "http://example.invalid", fetch: async () => { throw new TypeError("synthetic reset", { cause: { code: "ECONNRESET" } }); } });
+  const failed = await disconnected.session.promptAsync(input, { throwOnError: false });
+  assert.equal(failed.response, undefined); assert.ok(failed.error instanceof TypeError);
 });
 
 test("resolved and unavailable attachments are delivered using v1 prompt parts", async () => {
