@@ -79,13 +79,22 @@ export const makeClaudeCloudFolderTrust = Effect.fn("ClaudeCloudFolderTrust.make
           .filter((row) => row.deletedAt === null)
           .map((row) => row.projectId),
       );
+      const owns = (thread: { readonly projectId: string; readonly worktreePath: string | null }) =>
+        thread.worktreePath !== null &&
+        live.has(thread.projectId) &&
+        path.resolve(thread.worktreePath) === folder;
       const shell = yield* input.projection.getShellSnapshot({ worktreePath: folder });
-      return [...shell.threads, ...shell.archivedThreads].some(
-        (thread) =>
-          thread.worktreePath !== null &&
-          live.has(thread.projectId) &&
-          path.resolve(thread.worktreePath) === folder,
-      );
+      if ([...shell.threads, ...shell.archivedThreads].some(owns)) return true;
+      // A stored path spelled another way, such as through "..", misses the index; read only paths.
+      const bound = yield* sql<{ readonly projectId: string; readonly worktreePath: string }>`
+        SELECT project_id AS "projectId",
+          CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.worktreePath') END
+            AS "worktreePath"
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL
+          AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.worktreePath') END
+            IS NOT NULL`;
+      return bound.some(owns);
     });
     /**
      * Claude records trust for a Git folder at its main checkout, which then covers every folder

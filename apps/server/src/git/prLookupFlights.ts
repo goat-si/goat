@@ -11,11 +11,11 @@ interface PrLookupRequest {
 
 /**
  * Concurrent identical lookups against the same validated git state share one run; nothing is
- * kept after it settles. A caller that sees a newer epoch or read generation starts its own.
+ * kept after it settles. A caller that sees a newer lookup generation starts its own.
  */
 export const makePrLookupFlights = Effect.fn("PrLookupFlights.make")(function* <A, E>(
   run: (request: PrLookupRequest) => Effect.Effect<A, E>,
-  state: (cwd: string) => { readonly epoch: number; readonly reads: number },
+  generation: (cwd: string) => string,
 ) {
   // Paths and branch names cannot hold NUL, so the key carries the whole request.
   const flights = yield* Cache.make({
@@ -34,10 +34,10 @@ export const makePrLookupFlights = Effect.fn("PrLookupFlights.make")(function* <
   });
   return (request: PrLookupRequest) => {
     if (request.refresh) return run(request);
-    const { epoch, reads } = state(request.cwd);
     const flags = [request.freshGitState, request.confirmTerminal].map((flag) =>
       flag ? "1" : "0",
     );
-    return Cache.get(flights, [request.cwd, request.branch, ...flags, epoch, reads].join("\u0000"));
+    const key = [request.cwd, request.branch, ...flags, generation(request.cwd)];
+    return Cache.get(flights, key.join("\u0000"));
   };
 });

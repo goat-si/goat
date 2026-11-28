@@ -6,11 +6,32 @@ import { layerGitManagerTest, makeManager } from "./GitManagerTestHarness.ts";
 
 const BRANCHES = ["feature/a", "feature/b", "feature/c"] as const;
 
+// Sharing stops when a user git config has includes; keep the developer's own out of the test.
+const isolateUserGitConfig = Effect.acquireRelease(
+  Effect.sync(() => {
+    const previous = {
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+    };
+    process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    return previous;
+  }),
+  (previous) =>
+    Effect.sync(() => {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }),
+);
+
 it.layer(layerGitManagerTest)("GitManager lookups across linked worktrees", (it) => {
   it.effect(
     "linked worktrees share remote reads until the remote changes, a refresh, or invalidation",
     () =>
       Effect.gen(function* () {
+        yield* isolateUserGitConfig;
         const repo = yield* makeTempDir("goat-shared-reads-");
         yield* initRepo(repo);
         yield* runGit(repo, ["remote", "add", "origin", "https://github.com/example/project.git"]);
@@ -58,6 +79,6 @@ it.layer(layerGitManagerTest)("GitManager lookups across linked worktrees", (it)
         yield* manager.invalidateStatus(worktrees[0]!);
         yield* lookup(2);
         assert.deepEqual(sharedReads(), { remotes: 1, remoteHead: 1 });
-      }),
+      }).pipe(Effect.scoped),
   );
 });

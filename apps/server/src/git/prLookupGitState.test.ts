@@ -222,3 +222,16 @@ it.effect("a merged answer confirmed while its fingerprint was forgotten is chec
     assert.equal(rechecks, 2);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect("invalidating any worktree moves every cwd's lookup generation", () =>
+  Effect.gen(function* () {
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 16 });
+    // Shared reads span worktrees, so a lookup here must not join one from before.
+    const before = state.lookupGeneration("/repo/a");
+    yield* state.forget("/repo/b");
+    const afterForget = state.lookupGeneration("/repo/a");
+    assert.notEqual(afterForget, before);
+    yield* state.bumpEpoch("/repo/b");
+    assert.notEqual(state.lookupGeneration("/repo/a"), afterForget);
+  }).pipe(Effect.provide(layerTest)),
+);

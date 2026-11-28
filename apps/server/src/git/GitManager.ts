@@ -825,7 +825,7 @@ export const make = Effect.gen(function* () {
     );
   const {
     epoch: prLookupEpoch,
-    readGeneration: prLookupReadGeneration,
+    lookupGeneration: prLookupGeneration,
     bumpEpoch: bumpPrLookupEpoch,
     remember: rememberPrLookupGitState,
     forget: forgetPrLookupGitState,
@@ -2377,7 +2377,7 @@ export const make = Effect.gen(function* () {
       const verify = lookupBranchPullRequest(cacheCwd, branch, recheck);
       return yield* verifyTerminalPrLookup(cacheCwd, branch, pullRequest, verify);
     }, branchPrLookups.withPermits(1)),
-    (cwd) => ({ epoch: prLookupEpoch(cwd), reads: prLookupReadGeneration(cwd) }),
+    prLookupGeneration,
   );
   const branchPullRequest: GitManager["Service"]["branchPullRequest"] = Effect.fn(
     "branchPullRequest",

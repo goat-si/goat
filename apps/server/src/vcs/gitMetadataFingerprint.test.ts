@@ -323,9 +323,13 @@ it.effect("#2462: non-UTF-8 config values fingerprint and same-stamp byte change
 it.effect("linked worktrees share a remote-read stamp until the remote or an include changes", () =>
   Effect.gen(function* () {
     const { cwd, append } = yield* setup;
-    const read = yield* makeGitMetadataFingerprint();
+    const fs = yield* FileSystem.FileSystem;
+    const userConfig = `${yield* makeTmpDir()}/gitconfig`;
+    const read = yield* makeGitMetadataFingerprint({ userConfigFiles: [userConfig] });
     const worktree = `${yield* makeTmpDir()}/linked`;
     yield* git(cwd, ["worktree", "add", "-b", "linked", worktree]);
+    yield* git(cwd, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    yield* git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
     const shared = (dir: string, branch: string) =>
       read(dir, branch).pipe(Effect.map((value) => value?.shared ?? null));
     const before = yield* shared(cwd, "main");
@@ -334,9 +338,19 @@ it.effect("linked worktrees share a remote-read stamp until the remote or an inc
     // Work in one worktree moves only its own HEAD and branch.
     yield* git(worktree, ["commit", "--allow-empty", "-m", "work"]);
     assert.equal(yield* shared(cwd, "main"), before);
+    // The default branch read follows origin/HEAD to a ref that can vanish on its own.
+    yield* git(cwd, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    const withoutTarget = yield* shared(worktree, "linked");
+    assert.notEqual(withoutTarget, before);
     yield* git(cwd, ["remote", "set-url", "origin", "https://github.com/example/moved.git"]);
-    assert.notEqual(yield* shared(worktree, "linked"), before);
-    // An included file can differ per worktree, so nothing is shared.
+    const moved = yield* shared(worktree, "linked");
+    assert.notEqual(moved, withoutTarget);
+    // An included file can differ per worktree, so nothing is shared, from user config either.
+    yield* fs.writeFileString(userConfig, '[includeIf "gitdir:/elsewhere/"]\n\tpath = work\n');
+    assert.isNull(yield* shared(worktree, "linked"));
+    yield* fs.writeFileString(userConfig, "[user]\n\tname = Someone\n");
+    assert.isNotNull(yield* shared(worktree, "linked"));
+    assert.notEqual(yield* shared(worktree, "linked"), moved);
     yield* append("[include]\n\tpath = extra.config\n");
     assert.isNull(yield* shared(worktree, "linked"));
   }).pipe(Effect.scoped, Effect.provide(layerTest)),

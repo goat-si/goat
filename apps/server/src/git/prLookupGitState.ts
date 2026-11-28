@@ -230,7 +230,8 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
   });
   return {
     epoch,
-    readGeneration,
+    /** Moves whenever a lookup for the cwd must not join one that started before. */
+    lookupGeneration: (cwd: string) => `${epoch(cwd)}:${readGeneration(cwd)}:${sharedGeneration}`,
     bumpEpoch,
     remember,
     forget,

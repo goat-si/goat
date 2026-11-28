@@ -150,12 +150,17 @@ const layer = Layer.mergeAll(SqlitePersistence.layerMemory, NodeServices.layer);
 
 it.effect("trusts only live project folders and their GOAT worktrees", () =>
   Effect.gen(function* () {
-    const { trust } = yield* harness();
+    const { trust, sql } = yield* harness();
+    // Stored before paths were resolved; the indexed lookup cannot match this spelling.
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES ('spelled', ${live}, 'spelled', 'codex', 'full-access', 'default', '', '', ${JSON.stringify({ worktreePath: "/fixture/worktrees/goat/../goat/spelled" })})`;
     assert.deepEqual(
       yield* Effect.forEach(
         [
           ROOT,
           WORKTREE,
+          "/fixture/worktrees/goat/spelled",
           "/fixture/worktrees/gone",
           "/tmp/elsewhere",
           STRAY_WORKTREE,
@@ -165,7 +170,7 @@ it.effect("trusts only live project folders and their GOAT worktrees", () =>
         trust.policy.allowed,
       ),
       // Claude would record the next two at unregistered checkouts; the last root is unknown.
-      [true, true, false, false, false, false, false],
+      [true, true, true, false, false, false, false, false],
     );
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
