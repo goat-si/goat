@@ -200,7 +200,7 @@
               </svg>
             </div>
           </div>
-          <div style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
+          <div style={{ backgroundColor: '#FFFFFF', borderBottomLeftRadius: '14px', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
             <div style={{ backgroundColor: '#F7F7F7', borderRightColor: '#ECECEC', borderRightStyle: 'solid', borderRightWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', minWidth: '0px', overflow: 'clip', paddingInline: '8px', paddingTop: '6px', width: '256px' }}>
               <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '2px', paddingBottom: '6px' }}>
                 <div style={{ alignItems: 'center', backgroundColor: '#EDEDED', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '8px', height: '30px', paddingInline: '10px' }}>

@@ -173,7 +173,7 @@
               </svg>
             </div>
           </div>
-          <div style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
+          <div style={{ backgroundColor: '#FFFFFF', borderBottomLeftRadius: '14px', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
             <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', minWidth: '0px' }}>
               <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px' }}>
                 <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>

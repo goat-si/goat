@@ -46,6 +46,7 @@ code-derived spec of v1 `origin/dev` 916b5ccc (`components/Sidebar.tsx` Activity
 v1 component, v1 code wins.
 
 **Workspace reaches the window bottom (owner, 2026-11-28 ~22:35 KST).** The sidebar and main pane run flush to the
-bottom and right edges of the window: no 8px bottom/right inset, only the top-left corner of the workspace is rounded
-(like v1's `workspace-content-frame`: border top + left, `rounded-tl`). All desktop boards were changed and the bot home
+bottom and right edges of the window: no 8px bottom/right inset; the workspace keeps its rounded **left** corners (top-left and bottom-left, 14px)
+and has **no bottom or right border line**: borders are top + left only, so the bottom-left curve ends cleanly at the
+window's bottom edge (owner correction ~22:35 KST). All desktop boards were changed and the bot home
 boards re-exported.
