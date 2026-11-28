@@ -1,10 +1,5 @@
 {
   "clientRequestId": "example",
-  "engine": {
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
-  },
   "face": {
     "color": "example",
     "goat": true,
@@ -13,5 +8,9 @@
   "name": "example",
   "purpose": "example",
   "reqId": "example",
-  "type": "create_bot"
+  "type": "create_bot",
+  "modelSelection": {
+    "instanceId": "codex",
+    "model": "example"
+  }
 }

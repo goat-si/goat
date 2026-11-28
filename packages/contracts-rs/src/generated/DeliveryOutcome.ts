@@ -3,4 +3,4 @@
 /**
  * What the engine answered for a delivery.
  */
-export type DeliveryOutcome = "accepted" | "declined" | "unknown";
+export type DeliveryOutcome = "accepted" | "declined" | "unknown" | "refused";

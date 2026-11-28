@@ -53,3 +53,10 @@ pub const REPLAY_MAX_BYTES: usize = 1024 * 1024;
 pub const PING_INTERVAL_SECS: u64 = 30;
 /// Agent commands run under `nice -n` this value.
 pub const AGENT_NICE: i32 = 10;
+
+/// Memory limit for one thread's engine process group (8 GiB); over it, only that thread stops.
+pub const ENGINE_GROUP_MEMORY_LIMIT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// How often the host samples engine process-group memory.
+pub const ENGINE_MEMORY_SAMPLE_SECS: u64 = 10;
+/// Warn when a process group passes this share of [ENGINE_GROUP_MEMORY_LIMIT_BYTES].
+pub const ENGINE_MEMORY_WARN_PERCENT: u8 = 80;

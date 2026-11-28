@@ -18,4 +18,7 @@ export const REPLAY_MAX_EVENTS = 128;
 export const REPLAY_MAX_BYTES = 1048576;
 export const PING_INTERVAL_SECS = 30;
 export const AGENT_NICE = 10;
+export const ENGINE_GROUP_MEMORY_LIMIT_BYTES = 8589934592;
+export const ENGINE_MEMORY_SAMPLE_SECS = 10;
+export const ENGINE_MEMORY_WARN_PERCENT = 80;
 export const LOG_EVENT_TYPES = ["thread.created", "thread.changed", "input.accepted", "input.changed", "input.delivered", "run.started", "run.accepted", "item.completed", "request.opened", "request.resolved", "run.finished", "child.started", "child.reported", "user.notified", "checkpoint"] as const;

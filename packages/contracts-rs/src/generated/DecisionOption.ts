@@ -3,4 +3,8 @@
 /**
  * One choice of a `decision` request.
  */
-export type DecisionOption = { id: string, label: string, consequence?: string, };
+export type DecisionOption = { id: string, label: string, 
+/**
+ * v1 `DecisionOption.consequence` (required).
+ */
+consequence: string, };

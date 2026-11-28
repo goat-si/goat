@@ -8,23 +8,27 @@
       "total": 1
     },
     "engine": {
-      "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "runtimeMode": "auto",
+      "cwd": "example"
     },
     "engineRef": null,
     "epoch": "example",
     "followUpMode": "steer",
     "id": "example",
     "kind": "bot",
-    "lastExcerpt": "example",
     "needsYou": null,
     "parent": null,
     "projectId": null,
     "status": "idle",
     "title": "example",
-    "updatedAt": "2026-11-28T10:00:00Z"
+    "updatedAt": "2026-11-28T10:00:00Z",
+    "latestAnswerExcerpt": "example",
+    "archivedAt": null
   },
   "fold": {
     "activeRunId": null,

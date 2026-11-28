@@ -104,7 +104,7 @@ fn typescript_output_has_the_wire_shape() {
     assert!(!host.contains("Box"), "Box must not leak into TypeScript");
     assert!(host.contains("card: ThreadCard") && host.contains("line: LogLine"));
     assert!(ts("InputDelivered").contains("as: DeliveredAs,"));
-    assert!(ts("ThreadCard").contains("archived?: boolean"));
+    assert!(ts("ThreadCard").contains("archivedAt: string | null"));
     assert!(ts("InputAccepted").contains("attachments?: Array<ChatAttachment>"));
     assert!(ts("ProviderFailure").contains("resetAt?: string | null"));
     assert!(ts("RequestResolved").contains("answers?: { [key in string]: JsonValue }"));

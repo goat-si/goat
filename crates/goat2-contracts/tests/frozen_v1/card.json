@@ -8,8 +8,11 @@
     "botId": "bot-goat",
     "parent": null,
     "engine": {
-      "driver": "codex",
-      "model": "gpt-6.1-terra",
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
+      },
       "runtimeMode": "auto",
       "cwd": "/Users/jun/Developer/goat2"
     },
@@ -19,7 +22,6 @@
     },
     "status": "queued",
     "needsYou": null,
-    "lastExcerpt": "The risky part is the lock ordering in store.rs; tests pass.",
     "children": {
       "running": 0,
       "total": 1
@@ -28,7 +30,9 @@
     "updatedAt": "2026-11-28T12:00:18Z",
     "epoch": "ep-bot-1",
     "appliedSeq": 18,
-    "cardSeq": 42
+    "cardSeq": 42,
+    "latestAnswerExcerpt": "The risky part is the lock ordering in store.rs; tests pass.",
+    "archivedAt": null
   },
   "fold": {
     "activeRunId": null,
@@ -47,7 +51,7 @@
     "heldInputs": [],
     "openRequests": [],
     "runningChildIds": [],
-    "lastRunOutcome": "done",
+    "lastRunOutcome": "completed",
     "counters": {
       "inputs": 2,
       "runs": 1,

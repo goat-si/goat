@@ -1,11 +1,11 @@
 {
   "clientRequestId": "example",
-  "engine": {
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
-  },
   "kind": "bot",
   "reqId": "example",
-  "type": "start_thread"
+  "type": "start_thread",
+  "modelSelection": {
+    "instanceId": "codex",
+    "model": "example"
+  },
+  "runtimeMode": "auto"
 }

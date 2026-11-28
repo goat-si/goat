@@ -168,6 +168,9 @@ pub fn render_limits() -> String {
         REPLAY_MAX_BYTES,
         PING_INTERVAL_SECS,
         AGENT_NICE,
+        ENGINE_GROUP_MEMORY_LIMIT_BYTES,
+        ENGINE_MEMORY_SAMPLE_SECS,
+        ENGINE_MEMORY_WARN_PERCENT,
     );
     let tags = LogEvent::TYPE_TAGS
         .iter()

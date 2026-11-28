@@ -5,17 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::card::EngineDriver;
 use crate::ids::{BotId, ThreadId};
-
-/// Engine choice without a working folder (bots, new threads).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EngineChoice {
-    pub driver: EngineDriver,
-    pub model: String,
-    pub runtime_mode: String,
-}
+use crate::model::ModelSelection;
 
 /// A bot's face, drawn by `packages/bot-face`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -44,7 +35,8 @@ pub struct BotProfile {
     pub purpose: String,
     pub face: BotFace,
     pub role: BotRole,
-    /// The bot's own `bot` thread.
-    pub thread_id: ThreadId,
-    pub engine: EngineChoice,
+    /// The bot's own `bot` thread (v1 `sessionThreadId`).
+    pub session_thread_id: ThreadId,
+    /// v1 `defaultModelSelection`.
+    pub default_model_selection: ModelSelection,
 }

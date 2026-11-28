@@ -2,7 +2,7 @@
 import type { BotFace } from "./BotFace.ts";
 import type { BotId } from "./BotId.ts";
 import type { BotRole } from "./BotRole.ts";
-import type { EngineChoice } from "./EngineChoice.ts";
+import type { ModelSelection } from "./ModelSelection.ts";
 import type { ThreadId } from "./ThreadId.ts";
 
 /**
@@ -10,6 +10,10 @@ import type { ThreadId } from "./ThreadId.ts";
  */
 export type BotProfile = { botId: BotId, name: string, purpose: string, face: BotFace, role: BotRole, 
 /**
- * The bot's own `bot` thread.
+ * The bot's own `bot` thread (v1 `sessionThreadId`).
  */
-threadId: ThreadId, engine: EngineChoice, };
+sessionThreadId: ThreadId, 
+/**
+ * v1 `defaultModelSelection`.
+ */
+defaultModelSelection: ModelSelection, };

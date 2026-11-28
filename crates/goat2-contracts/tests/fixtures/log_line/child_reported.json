@@ -7,7 +7,7 @@
   "childRunId": null,
   "childThreadId": "example",
   "seq": 1,
-  "status": "done",
+  "status": "completed",
   "summary": "example",
   "type": "child.reported",
   "v": 1

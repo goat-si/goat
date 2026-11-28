@@ -3,10 +3,13 @@
     "at": "2026-11-28T10:00:00Z",
     "botId": null,
     "engine": {
-      "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "runtimeMode": "auto",
+      "cwd": "example"
     },
     "followUpMode": "steer",
     "kind": "bot",

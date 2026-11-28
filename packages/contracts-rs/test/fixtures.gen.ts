@@ -3,10 +3,9 @@ import type { BotProfile, CardFile, ClientFrame, Fold, HostFrame, LogEvent, LogH
 
 export const bot_profile__example = {
   "botId": "example",
-  "engine": {
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+  "defaultModelSelection": {
+    "instanceId": "codex",
+    "model": "example"
   },
   "face": {
     "color": "example",
@@ -16,12 +15,13 @@ export const bot_profile__example = {
   "name": "example",
   "purpose": "example",
   "role": "main",
-  "threadId": "example"
+  "sessionThreadId": "example"
 } satisfies BotProfile;
 
 export const card_file__example = {
   "card": {
     "appliedSeq": 1,
+    "archivedAt": null,
     "botId": null,
     "cardSeq": 1,
     "children": {
@@ -30,16 +30,19 @@ export const card_file__example = {
     },
     "engine": {
       "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "providerInstanceId": "codex",
+      "runtimeMode": "auto"
     },
     "engineRef": null,
     "epoch": "example",
     "followUpMode": "steer",
     "id": "example",
     "kind": "bot",
-    "lastExcerpt": "example",
+    "latestAnswerExcerpt": "example",
     "needsYou": null,
     "parent": null,
     "projectId": null,
@@ -90,15 +93,14 @@ export const client_frame__change_thread = {
 
 export const client_frame__create_bot = {
   "clientRequestId": "example",
-  "engine": {
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
-  },
   "face": {
     "color": "example",
     "goat": true,
     "shape": "example"
+  },
+  "modelSelection": {
+    "instanceId": "codex",
+    "model": "example"
   },
   "name": "example",
   "purpose": "example",
@@ -154,7 +156,7 @@ export const client_frame__reorder_queued = {
 
 export const client_frame__resolve_request = {
   "clientRequestId": "example",
-  "outcome": "approved",
+  "outcome": "accept",
   "reqId": "example",
   "requestId": "example",
   "threadId": "example",
@@ -185,13 +187,13 @@ export const client_frame__send_input = {
 
 export const client_frame__start_thread = {
   "clientRequestId": "example",
-  "engine": {
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
-  },
   "kind": "bot",
+  "modelSelection": {
+    "instanceId": "codex",
+    "model": "example"
+  },
   "reqId": "example",
+  "runtimeMode": "auto",
   "type": "start_thread"
 } satisfies ClientFrame;
 
@@ -239,10 +241,9 @@ export const fold__checkpoint_checkpoint = {
 export const host_frame__bot_changed = {
   "bot": {
     "botId": "example",
-    "engine": {
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+    "defaultModelSelection": {
+      "instanceId": "codex",
+      "model": "example"
     },
     "face": {
       "color": "example",
@@ -252,7 +253,7 @@ export const host_frame__bot_changed = {
     "name": "example",
     "purpose": "example",
     "role": "main",
-    "threadId": "example"
+    "sessionThreadId": "example"
   },
   "subId": "example",
   "type": "bot_changed"
@@ -267,6 +268,7 @@ export const host_frame__bot_removed = {
 export const host_frame__card_changed = {
   "card": {
     "appliedSeq": 1,
+    "archivedAt": null,
     "botId": null,
     "cardSeq": 1,
     "children": {
@@ -275,16 +277,19 @@ export const host_frame__card_changed = {
     },
     "engine": {
       "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "providerInstanceId": "codex",
+      "runtimeMode": "auto"
     },
     "engineRef": null,
     "epoch": "example",
     "followUpMode": "steer",
     "id": "example",
     "kind": "bot",
-    "lastExcerpt": "example",
+    "latestAnswerExcerpt": "example",
     "needsYou": null,
     "parent": null,
     "projectId": null,
@@ -369,9 +374,12 @@ export const host_frame__thread_event = {
     "botId": null,
     "engine": {
       "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "providerInstanceId": "codex",
+      "runtimeMode": "auto"
     },
     "followUpMode": "steer",
     "kind": "bot",
@@ -398,6 +406,7 @@ export const host_frame__thread_reset = {
 export const log_event__checkpoint = {
   "card": {
     "appliedSeq": 1,
+    "archivedAt": null,
     "botId": null,
     "cardSeq": 1,
     "children": {
@@ -406,16 +415,19 @@ export const log_event__checkpoint = {
     },
     "engine": {
       "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "providerInstanceId": "codex",
+      "runtimeMode": "auto"
     },
     "engineRef": null,
     "epoch": "example",
     "followUpMode": "steer",
     "id": "example",
     "kind": "bot",
-    "lastExcerpt": "example",
+    "latestAnswerExcerpt": "example",
     "needsYou": null,
     "parent": null,
     "projectId": null,
@@ -448,7 +460,7 @@ export const log_event__child_reported = {
   },
   "childRunId": null,
   "childThreadId": "example",
-  "status": "done",
+  "status": "completed",
   "summary": "example",
   "type": "child.reported"
 } satisfies LogEvent;
@@ -998,7 +1010,7 @@ export const log_event__run_accepted = {
 } satisfies LogEvent;
 
 export const log_event__run_finished = {
-  "outcome": "done",
+  "outcome": "completed",
   "runId": "example",
   "type": "run.finished"
 } satisfies LogEvent;
@@ -1019,9 +1031,12 @@ export const log_event__thread_created = {
   "botId": null,
   "engine": {
     "cwd": "example",
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
   },
   "followUpMode": "steer",
   "kind": "bot",
@@ -1047,6 +1062,7 @@ export const log_line__checkpoint = {
   "at": "2026-11-28T10:00:00Z",
   "card": {
     "appliedSeq": 1,
+    "archivedAt": null,
     "botId": null,
     "cardSeq": 1,
     "children": {
@@ -1055,16 +1071,19 @@ export const log_line__checkpoint = {
     },
     "engine": {
       "cwd": "example",
-      "driver": "codex",
-      "model": "example",
-      "runtimeMode": "example"
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "providerInstanceId": "codex",
+      "runtimeMode": "auto"
     },
     "engineRef": null,
     "epoch": "example",
     "followUpMode": "steer",
     "id": "example",
     "kind": "bot",
-    "lastExcerpt": "example",
+    "latestAnswerExcerpt": "example",
     "needsYou": null,
     "parent": null,
     "projectId": null,
@@ -1101,7 +1120,7 @@ export const log_line__child_reported = {
   "childRunId": null,
   "childThreadId": "example",
   "seq": 1,
-  "status": "done",
+  "status": "completed",
   "summary": "example",
   "type": "child.reported",
   "v": 1
@@ -1731,7 +1750,7 @@ export const log_line__run_accepted = {
 
 export const log_line__run_finished = {
   "at": "2026-11-28T10:00:00Z",
-  "outcome": "done",
+  "outcome": "completed",
   "runId": "example",
   "seq": 1,
   "type": "run.finished",
@@ -1761,9 +1780,12 @@ export const log_line__thread_created = {
   "botId": null,
   "engine": {
     "cwd": "example",
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
   },
   "followUpMode": "steer",
   "kind": "bot",
@@ -1901,6 +1923,7 @@ export const provider_capabilities__example = {
 
 export const thread_card__checkpoint_checkpoint = {
   "appliedSeq": 1,
+  "archivedAt": null,
   "botId": null,
   "cardSeq": 1,
   "children": {
@@ -1909,16 +1932,19 @@ export const thread_card__checkpoint_checkpoint = {
   },
   "engine": {
     "cwd": "example",
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
   },
   "engineRef": null,
   "epoch": "example",
   "followUpMode": "steer",
   "id": "example",
   "kind": "bot",
-  "lastExcerpt": "example",
+  "latestAnswerExcerpt": "example",
   "needsYou": null,
   "parent": null,
   "projectId": null,
@@ -1929,6 +1955,7 @@ export const thread_card__checkpoint_checkpoint = {
 
 export const thread_card__example = {
   "appliedSeq": 1,
+  "archivedAt": null,
   "botId": null,
   "cardSeq": 1,
   "children": {
@@ -1937,16 +1964,19 @@ export const thread_card__example = {
   },
   "engine": {
     "cwd": "example",
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
   },
   "engineRef": null,
   "epoch": "example",
   "followUpMode": "steer",
   "id": "example",
   "kind": "bot",
-  "lastExcerpt": "example",
+  "latestAnswerExcerpt": "example",
   "needsYou": null,
   "parent": null,
   "projectId": null,
@@ -1957,7 +1987,7 @@ export const thread_card__example = {
 
 export const thread_card__full_decision = {
   "appliedSeq": 1,
-  "archived": true,
+  "archivedAt": "2026-11-28T12:00:00Z",
   "botId": null,
   "cardSeq": 1,
   "children": {
@@ -1966,16 +1996,19 @@ export const thread_card__full_decision = {
   },
   "engine": {
     "cwd": "example",
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
   },
   "engineRef": null,
   "epoch": "example",
   "followUpMode": "steer",
   "id": "example",
   "kind": "bot",
-  "lastExcerpt": "example",
+  "latestAnswerExcerpt": "example",
   "needsYou": {
     "kind": "decision",
     "summary": "Choose"
@@ -1989,7 +2022,7 @@ export const thread_card__full_decision = {
 
 export const thread_card__full_resend = {
   "appliedSeq": 1,
-  "archived": true,
+  "archivedAt": "2026-11-28T12:00:00Z",
   "botId": null,
   "cardSeq": 1,
   "children": {
@@ -1998,16 +2031,19 @@ export const thread_card__full_resend = {
   },
   "engine": {
     "cwd": "example",
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "example"
+    },
+    "providerInstanceId": "codex",
+    "runtimeMode": "auto"
   },
   "engineRef": null,
   "epoch": "example",
   "followUpMode": "steer",
   "id": "example",
   "kind": "bot",
-  "lastExcerpt": "example",
+  "latestAnswerExcerpt": "example",
   "needsYou": {
     "kind": "resend",
     "summary": "Choose"

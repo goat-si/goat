@@ -1,6 +1,6 @@
 {
   "at": "2026-11-28T10:00:00Z",
-  "outcome": "done",
+  "outcome": "completed",
   "runId": "example",
   "seq": 1,
   "type": "run.finished",

@@ -1,10 +1,5 @@
 {
   "botId": "example",
-  "engine": {
-    "driver": "codex",
-    "model": "example",
-    "runtimeMode": "example"
-  },
   "face": {
     "color": "example",
     "goat": true,
@@ -13,5 +8,9 @@
   "name": "example",
   "purpose": "example",
   "role": "main",
-  "threadId": "example"
+  "sessionThreadId": "example",
+  "defaultModelSelection": {
+    "instanceId": "codex",
+    "model": "example"
+  }
 }

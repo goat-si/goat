@@ -74,10 +74,8 @@
       "description": "One choice of a `decision` request.",
       "properties": {
         "consequence": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "v1 `DecisionOption.consequence` (required).",
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -88,7 +86,8 @@
       },
       "required": [
         "id",
-        "label"
+        "label",
+        "consequence"
       ],
       "type": "object"
     },
@@ -342,10 +341,14 @@
       "oneOf": [
         {
           "enum": [
-            "done",
             "failed",
             "interrupted"
           ],
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "v1 run status `completed`.",
           "type": "string"
         },
         {

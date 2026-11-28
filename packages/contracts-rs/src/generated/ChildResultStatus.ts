@@ -3,4 +3,4 @@
 /**
  * Result status carried to the parent.
  */
-export type ChildResultStatus = "done" | "failed" | "interrupted" | "unknown" | "interrupted_by_restart";
+export type ChildResultStatus = "completed" | "failed" | "interrupted" | "unknown" | "interrupted_by_restart";

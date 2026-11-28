@@ -210,7 +210,7 @@
       "oneOf": [
         {
           "enum": [
-            "done",
+            "completed",
             "failed",
             "interrupted",
             "unknown"
@@ -323,10 +323,8 @@
       "description": "One choice of a `decision` request.",
       "properties": {
         "consequence": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "v1 `DecisionOption.consequence` (required).",
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -337,7 +335,8 @@
       },
       "required": [
         "id",
-        "label"
+        "label",
+        "consequence"
       ],
       "type": "object"
     },
@@ -374,28 +373,33 @@
           "const": "unknown",
           "description": "No answer (transport failure, restart).",
           "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "Refused because GOAT never owned the native turn. Fails closed: the input leaves the queue\nand is never retried.",
+          "type": "string"
         }
       ]
     },
     "EngineConfig": {
-      "description": "Engine settings for a thread.",
+      "description": "Engine settings for a thread, with v1 `OrchestrationV2AppThread` field names.",
       "properties": {
         "cwd": {
           "type": "string"
         },
-        "driver": {
-          "$ref": "#/$defs/EngineDriver"
+        "modelSelection": {
+          "$ref": "#/$defs/ModelSelection"
         },
-        "model": {
-          "type": "string"
+        "providerInstanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
         },
         "runtimeMode": {
-          "type": "string"
+          "$ref": "#/$defs/RuntimeMode"
         }
       },
       "required": [
-        "driver",
-        "model",
+        "providerInstanceId",
+        "modelSelection",
         "runtimeMode",
         "cwd"
       ],
@@ -865,6 +869,31 @@
       "description": "A chat message id carried by user and assistant TurnItems.",
       "type": "string"
     },
+    "ModelSelection": {
+      "description": "v1 `ModelSelection`: provider instance, model and model options.",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "model": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ProviderOptionSelection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "instanceId",
+        "model"
+      ],
+      "type": "object"
+    },
     "NativeItemRef": {
       "description": "v1 `OrchestrationV2ProviderRef`: where the engine keeps this item.",
       "properties": {
@@ -1065,6 +1094,37 @@
       ],
       "type": "string"
     },
+    "ProviderInstanceId": {
+      "description": "A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.",
+      "type": "string"
+    },
+    "ProviderOptionSelection": {
+      "description": "v1 `ProviderOptionSelection`, e.g. `{id: \"reasoningEffort\", value: \"xhigh\"}`.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/ProviderOptionSelectionValue"
+        }
+      },
+      "required": [
+        "id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ProviderOptionSelectionValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "v1 `ProviderOptionSelectionValue`: a trimmed string or a boolean."
+    },
     "ProviderRequestKind": {
       "description": "v1 `ProviderRequestKind`.",
       "enum": [
@@ -1226,16 +1286,21 @@
       "type": "object"
     },
     "RequestOutcome": {
-      "description": "How a request ended.",
+      "description": "How a request ended. Approval outcomes are v1 `ProviderApprovalDecision` literals\n(`providerPolicy.ts`); `answered`, `decided`, `resend` and `dropped` are GOAT 2 kinds.",
       "oneOf": [
         {
           "enum": [
-            "approved",
-            "approved_for_session",
-            "declined",
-            "answered",
-            "cancelled"
+            "accept",
+            "acceptForSession",
+            "acceptAlways",
+            "decline",
+            "answered"
           ],
+          "type": "string"
+        },
+        {
+          "const": "cancel",
+          "description": "Approval cancelled, or a question/decision withdrawn.",
           "type": "string"
         },
         {
@@ -1340,10 +1405,14 @@
       "oneOf": [
         {
           "enum": [
-            "done",
             "failed",
             "interrupted"
           ],
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "v1 run status `completed`.",
           "type": "string"
         },
         {
@@ -1390,6 +1459,16 @@
       ],
       "type": "object"
     },
+    "RuntimeMode": {
+      "description": "v1 `RuntimeMode` (`providerPolicy.ts`).",
+      "enum": [
+        "approval-required",
+        "auto-accept-edits",
+        "auto",
+        "full-access"
+      ],
+      "type": "string"
+    },
     "SubagentOrigin": {
       "description": "v1 subagent `origin`.",
       "enum": [
@@ -1408,9 +1487,12 @@
           "minimum": 0,
           "type": "integer"
         },
-        "archived": {
-          "description": "Set by `thread.changed {archived}`. Archived cards stay in the index.",
-          "type": "boolean"
+        "archivedAt": {
+          "description": "v1 `archivedAt`: when the thread was archived (`thread.changed {archivedAt}`), else `null`.\nArchived cards stay in the index.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "botId": {
           "anyOf": [
@@ -1458,8 +1540,8 @@
         "kind": {
           "$ref": "#/$defs/ThreadKind"
         },
-        "lastExcerpt": {
-          "description": "Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters.",
+        "latestAnswerExcerpt": {
+          "description": "Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters (v1\n`latestAnswerExcerpt`).",
           "type": "string"
         },
         "needsYou": {
@@ -1511,7 +1593,7 @@
         "title",
         "engine",
         "status",
-        "lastExcerpt",
+        "latestAnswerExcerpt",
         "children",
         "followUpMode",
         "updatedAt",
@@ -1524,9 +1606,10 @@
     "ThreadChanged": {
       "description": "`thread.changed`: only the fields that changed are present.",
       "properties": {
-        "archived": {
+        "archivedAt": {
+          "description": "v1 `archivedAt`: a timestamp archives the thread, `null` unarchives it.",
           "type": [
-            "boolean",
+            "string",
             "null"
           ]
         },
@@ -1540,16 +1623,24 @@
             }
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
+        "modelSelection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelSelection"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "runtimeMode": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeMode"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "title": {

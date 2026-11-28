@@ -25,13 +25,15 @@ title: string,
  */
 projectId: ProjectId | null, botId: BotId | null, parent: ParentRef | null, engine: EngineConfig, engineRef: EngineRef | null, status: ThreadStatus, needsYou: NeedsYou | null, 
 /**
- * Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters.
+ * Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters (v1
+ * `latestAnswerExcerpt`).
  */
-lastExcerpt: string, children: ChildCounts, followUpMode: FollowUpMode, 
+latestAnswerExcerpt: string, children: ChildCounts, followUpMode: FollowUpMode, 
 /**
- * Set by `thread.changed {archived}`. Archived cards stay in the index.
+ * v1 `archivedAt`: when the thread was archived (`thread.changed {archivedAt}`), else `null`.
+ * Archived cards stay in the index.
  */
-archived?: boolean, 
+archivedAt: string | null, 
 /**
  * RFC 3339 UTC timestamp.
  */

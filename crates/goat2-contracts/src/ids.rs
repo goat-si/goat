@@ -67,6 +67,10 @@ string_id!(
     ProjectId
 );
 string_id!(
+    /// A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.
+    ProviderInstanceId
+);
+string_id!(
     /// A human-in-the-loop request (approval, question, sign-in).
     RequestId
 );

@@ -4,9 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::ids::{BotId, Epoch, ItemId, ProjectId, ThreadId};
+use crate::ids::{BotId, Epoch, ItemId, ProjectId, ProviderInstanceId, ThreadId};
 use crate::limits::{CARD_EXCERPT_MAX_CHARS, CARD_TITLE_MAX_CHARS, NEEDS_YOU_SUMMARY_MAX_CHARS};
 use crate::log::Fold;
+use crate::model::{ModelSelection, RuntimeMode};
 
 /// Who created the thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
@@ -36,13 +37,13 @@ pub enum EngineDriver {
     Codex,
 }
 
-/// Engine settings for a thread.
+/// Engine settings for a thread, with v1 `OrchestrationV2AppThread` field names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineConfig {
-    pub driver: EngineDriver,
-    pub model: String,
-    pub runtime_mode: String,
+    pub provider_instance_id: ProviderInstanceId,
+    pub model_selection: ModelSelection,
+    pub runtime_mode: RuntimeMode,
     pub cwd: String,
 }
 
@@ -123,13 +124,14 @@ pub struct ThreadCard {
     pub engine_ref: Option<EngineRef>,
     pub status: ThreadStatus,
     pub needs_you: Option<NeedsYou>,
-    /// Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters.
-    pub last_excerpt: String,
+    /// Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters (v1
+    /// `latestAnswerExcerpt`).
+    pub latest_answer_excerpt: String,
     pub children: ChildCounts,
     pub follow_up_mode: FollowUpMode,
-    /// Set by `thread.changed {archived}`. Archived cards stay in the index.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub archived: bool,
+    /// v1 `archivedAt`: when the thread was archived (`thread.changed {archivedAt}`), else `null`.
+    /// Archived cards stay in the index.
+    pub archived_at: Option<String>,
     /// RFC 3339 UTC timestamp.
     pub updated_at: String,
     /// Generation of this thread's `goat.jsonl`.
@@ -166,10 +168,6 @@ impl CardFile {
     }
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 /// A text field above its bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LimitViolation {
@@ -203,7 +201,11 @@ impl ThreadCard {
     /// Check every bounded text field. Writers clamp with [crate::text::clamp_chars] first.
     pub fn check_limits(&self) -> Result<(), LimitViolation> {
         check_chars("title", &self.title, CARD_TITLE_MAX_CHARS)?;
-        check_chars("lastExcerpt", &self.last_excerpt, CARD_EXCERPT_MAX_CHARS)?;
+        check_chars(
+            "latestAnswerExcerpt",
+            &self.latest_answer_excerpt,
+            CARD_EXCERPT_MAX_CHARS,
+        )?;
         if let Some(needs_you) = &self.needs_you {
             check_chars(
                 "needsYou.summary",

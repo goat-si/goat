@@ -14,6 +14,7 @@ use crate::card::{
 };
 use crate::ids::{BotId, Epoch, InputId, ItemId, ProjectId, RequestId, RunId, ThreadId};
 use crate::limits::LOG_FORMAT_VERSION;
+use crate::model::{ModelSelection, RuntimeMode};
 use crate::subscribe::ThreadCursor;
 use crate::turn_item::{BlobRef, ChatAttachment, TurnItem};
 
@@ -176,16 +177,22 @@ pub struct ThreadChanged {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub model: Option<String>,
+    pub model_selection: Option<ModelSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub runtime_mode: Option<String>,
+    pub runtime_mode: Option<RuntimeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub follow_up_mode: Option<FollowUpMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// v1 `archivedAt`: a timestamp archives the thread, `null` unarchives it.
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_util::present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
-    pub archived: Option<bool>,
+    #[schemars(with = "Option<String>")]
+    pub archived_at: Option<Option<String>>,
 }
 
 /// Who put an input in the mailbox.
@@ -273,6 +280,9 @@ pub enum DeliveryOutcome {
     Declined,
     /// No answer (transport failure, restart).
     Unknown,
+    /// Refused because GOAT never owned the native turn. Fails closed: the input leaves the queue
+    /// and is never retried.
+    Refused,
 }
 
 /// `input.delivered`: the engine answered a steer or a turn start carrying this input.
@@ -369,22 +379,24 @@ pub struct RequestOpened {
 pub struct DecisionOption {
     pub id: String,
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub consequence: Option<String>,
+    /// v1 `DecisionOption.consequence` (required).
+    pub consequence: String,
 }
 
-/// How a request ended.
+/// How a request ended. Approval outcomes are v1 `ProviderApprovalDecision` literals
+/// (`providerPolicy.ts`); `answered`, `decided`, `resend` and `dropped` are GOAT 2 kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum RequestOutcome {
-    Approved,
-    ApprovedForSession,
-    Declined,
+    Accept,
+    AcceptForSession,
+    AcceptAlways,
+    Decline,
+    /// Approval cancelled, or a question/decision withdrawn.
+    Cancel,
     Answered,
     /// `decision` request: the person picked `optionId`.
     Decided,
-    Cancelled,
     /// `resend` request: send the unknown run again.
     Resend,
     /// `resend` request: drop the unknown run.
@@ -415,7 +427,8 @@ pub struct RequestResolved {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunOutcome {
-    Done,
+    /// v1 run status `completed`.
+    Completed,
     Failed,
     Interrupted,
     /// Sent but not known to have reached the engine. Never re-sent automatically.
@@ -447,7 +460,7 @@ pub struct ChildStarted {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChildResultStatus {
-    Done,
+    Completed,
     Failed,
     Interrupted,
     Unknown,

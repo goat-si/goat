@@ -114,33 +114,6 @@
       ],
       "type": "string"
     },
-    "EngineChoice": {
-      "description": "Engine choice without a working folder (bots, new threads).",
-      "properties": {
-        "driver": {
-          "$ref": "#/$defs/EngineDriver"
-        },
-        "model": {
-          "type": "string"
-        },
-        "runtimeMode": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "driver",
-        "model",
-        "runtimeMode"
-      ],
-      "type": "object"
-    },
-    "EngineDriver": {
-      "description": "Engine drivers. Part 1 ships Codex only.",
-      "enum": [
-        "codex"
-      ],
-      "type": "string"
-    },
     "Epoch": {
       "description": "Generation of a `goat.jsonl` file or of the card index. A UUID string.",
       "type": "string"
@@ -191,21 +164,82 @@
       "description": "A finished item inside a run (TurnItem id).",
       "type": "string"
     },
+    "ModelSelection": {
+      "description": "v1 `ModelSelection`: provider instance, model and model options.",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "model": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ProviderOptionSelection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "instanceId",
+        "model"
+      ],
+      "type": "object"
+    },
+    "ProviderInstanceId": {
+      "description": "A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.",
+      "type": "string"
+    },
+    "ProviderOptionSelection": {
+      "description": "v1 `ProviderOptionSelection`, e.g. `{id: \"reasoningEffort\", value: \"xhigh\"}`.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/ProviderOptionSelectionValue"
+        }
+      },
+      "required": [
+        "id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ProviderOptionSelectionValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "v1 `ProviderOptionSelectionValue`: a trimmed string or a boolean."
+    },
     "RequestId": {
       "description": "A human-in-the-loop request (approval, question, sign-in).",
       "type": "string"
     },
     "RequestOutcome": {
-      "description": "How a request ended.",
+      "description": "How a request ended. Approval outcomes are v1 `ProviderApprovalDecision` literals\n(`providerPolicy.ts`); `answered`, `decided`, `resend` and `dropped` are GOAT 2 kinds.",
       "oneOf": [
         {
           "enum": [
-            "approved",
-            "approved_for_session",
-            "declined",
-            "answered",
-            "cancelled"
+            "accept",
+            "acceptForSession",
+            "acceptAlways",
+            "decline",
+            "answered"
           ],
+          "type": "string"
+        },
+        {
+          "const": "cancel",
+          "description": "Approval cancelled, or a question/decision withdrawn.",
           "type": "string"
         },
         {
@@ -224,6 +258,16 @@
           "type": "string"
         }
       ]
+    },
+    "RuntimeMode": {
+      "description": "v1 `RuntimeMode` (`providerPolicy.ts`).",
+      "enum": [
+        "approval-required",
+        "auto-accept-edits",
+        "auto",
+        "full-access"
+      ],
+      "type": "string"
     },
     "StartMode": {
       "description": "`start_thread.mode`: whether the starter waits for the thread's result.",
@@ -490,9 +534,6 @@
             "null"
           ]
         },
-        "engine": {
-          "$ref": "#/$defs/EngineChoice"
-        },
         "kind": {
           "$ref": "#/$defs/ThreadKind"
         },
@@ -506,6 +547,9 @@
             }
           ]
         },
+        "modelSelection": {
+          "$ref": "#/$defs/ModelSelection"
+        },
         "parent": {
           "anyOf": [
             {
@@ -518,6 +562,16 @@
         },
         "reqId": {
           "type": "string"
+        },
+        "runtimeMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "text": {
           "type": [
@@ -541,7 +595,7 @@
         "reqId",
         "clientRequestId",
         "kind",
-        "engine"
+        "modelSelection"
       ],
       "type": "object"
     },
@@ -720,19 +774,27 @@
             }
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
+        "modelSelection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelSelection"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "reqId": {
           "type": "string"
         },
         "runtimeMode": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeMode"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "threadId": {
@@ -880,11 +942,11 @@
         "clientRequestId": {
           "type": "string"
         },
-        "engine": {
-          "$ref": "#/$defs/EngineChoice"
-        },
         "face": {
           "$ref": "#/$defs/BotFace"
+        },
+        "modelSelection": {
+          "$ref": "#/$defs/ModelSelection"
         },
         "name": {
           "type": "string"
@@ -907,7 +969,7 @@
         "name",
         "purpose",
         "face",
-        "engine"
+        "modelSelection"
       ],
       "type": "object"
     }

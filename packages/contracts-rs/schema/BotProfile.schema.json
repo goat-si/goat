@@ -33,32 +33,61 @@
       ],
       "type": "string"
     },
-    "EngineChoice": {
-      "description": "Engine choice without a working folder (bots, new threads).",
+    "ModelSelection": {
+      "description": "v1 `ModelSelection`: provider instance, model and model options.",
       "properties": {
-        "driver": {
-          "$ref": "#/$defs/EngineDriver"
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
         },
         "model": {
           "type": "string"
         },
-        "runtimeMode": {
-          "type": "string"
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ProviderOptionSelection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
-        "driver",
-        "model",
-        "runtimeMode"
+        "instanceId",
+        "model"
       ],
       "type": "object"
     },
-    "EngineDriver": {
-      "description": "Engine drivers. Part 1 ships Codex only.",
-      "enum": [
-        "codex"
-      ],
+    "ProviderInstanceId": {
+      "description": "A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.",
       "type": "string"
+    },
+    "ProviderOptionSelection": {
+      "description": "v1 `ProviderOptionSelection`, e.g. `{id: \"reasoningEffort\", value: \"xhigh\"}`.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/ProviderOptionSelectionValue"
+        }
+      },
+      "required": [
+        "id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ProviderOptionSelectionValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "v1 `ProviderOptionSelectionValue`: a trimmed string or a boolean."
     },
     "ThreadId": {
       "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
@@ -71,8 +100,9 @@
     "botId": {
       "$ref": "#/$defs/BotId"
     },
-    "engine": {
-      "$ref": "#/$defs/EngineChoice"
+    "defaultModelSelection": {
+      "$ref": "#/$defs/ModelSelection",
+      "description": "v1 `defaultModelSelection`."
     },
     "face": {
       "$ref": "#/$defs/BotFace"
@@ -86,9 +116,9 @@
     "role": {
       "$ref": "#/$defs/BotRole"
     },
-    "threadId": {
+    "sessionThreadId": {
       "$ref": "#/$defs/ThreadId",
-      "description": "The bot's own `bot` thread."
+      "description": "The bot's own `bot` thread (v1 `sessionThreadId`)."
     }
   },
   "required": [
@@ -97,8 +127,8 @@
     "purpose",
     "face",
     "role",
-    "threadId",
-    "engine"
+    "sessionThreadId",
+    "defaultModelSelection"
   ],
   "title": "BotProfile",
   "type": "object"

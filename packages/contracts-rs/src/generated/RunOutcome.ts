@@ -3,4 +3,4 @@
 /**
  * How a run ended.
  */
-export type RunOutcome = "done" | "failed" | "interrupted" | "unknown";
+export type RunOutcome = "completed" | "failed" | "interrupted" | "unknown";

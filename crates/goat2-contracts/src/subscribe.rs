@@ -9,10 +9,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::bot::{BotFace, BotProfile, EngineChoice};
+use crate::bot::{BotFace, BotProfile};
 use crate::card::{FollowUpMode, ThreadCard, ThreadKind};
 use crate::ids::{BotId, Epoch, InputId, ItemId, RequestId, RunId, ThreadId};
 use crate::log::{InputMode, LogLine, RequestOutcome};
+use crate::model::{ModelSelection, RuntimeMode};
 use crate::turn_item::ChatAttachment;
 
 /// Position in one thread's `goat.jsonl`.
@@ -121,7 +122,10 @@ pub enum ClientFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         parent: Option<ThreadId>,
-        engine: EngineChoice,
+        model_selection: ModelSelection,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        runtime_mode: Option<RuntimeMode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         cwd: Option<String>,
@@ -182,10 +186,10 @@ pub enum ClientFrame {
         thread_id: ThreadId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        model: Option<String>,
+        model_selection: Option<ModelSelection>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        runtime_mode: Option<String>,
+        runtime_mode: Option<RuntimeMode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         follow_up_mode: Option<FollowUpMode>,
@@ -226,7 +230,7 @@ pub enum ClientFrame {
         name: String,
         purpose: String,
         face: BotFace,
-        engine: EngineChoice,
+        model_selection: ModelSelection,
     },
 }
 
@@ -311,36 +315,46 @@ pub struct CommandValue {
     pub deduped: Option<bool>,
 }
 
-/// Why a command failed.
+/// Failure class, v1 `AgentSurfaceErrorCode` (`agentSurface/envelope.ts`). The domain cause goes in
+/// [CommandError::reason].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum CommandErrorCode {
+pub enum AgentSurfaceErrorCode {
     InvalidRequest,
-    ThreadMissing,
-    RequestMissing,
-    BotMissing,
-    /// The input is no longer queued (delivered, cancelled or unknown), or `reorder_queued` did
-    /// not list exactly the queued inputs.
-    NotQueued,
-    /// Not allowed for this thread kind or state (e.g. archived, worker starting a child).
-    NotAllowed,
-    /// A steer refused at admission; nothing was sent (fails closed).
-    SteerRefused,
-    /// A cap is full (children per bot, depth).
-    LimitReached,
-    PayloadTooLarge,
-    /// The same `clientRequestId` was used with different arguments.
-    IdempotencyConflict,
+    Unauthenticated,
+    PermissionDenied,
+    NotFound,
+    Conflict,
+    Unavailable,
+    Timeout,
+    Expired,
+    Cancelled,
     Internal,
+    ResourceExhausted,
+    FailedPrecondition,
+    UnknownOutcome,
 }
 
-/// `command_result.error`.
+/// `command_result.error`, the v1 `AgentSurfaceError` shape.
+///
+/// Reasons the host uses (code / reason): `not_found` / `thread_not_found`, `request_not_found`,
+/// `bot_not_found`; `permission_denied` / `not_allowed`; `conflict` / `steer_refused` (a steer
+/// refused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different
+/// arguments); `failed_precondition` / `not_queued` (the input left the queue, or
+/// `reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,
+/// `payload_too_large`; `invalid_request` / `invalid_request`; `internal` / `internal`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
-    pub code: CommandErrorCode,
+    pub code: AgentSurfaceErrorCode,
+    /// The domain's own code, unchanged.
+    pub reason: String,
     pub message: String,
+    /// True only when repeating the command cannot duplicate an effect.
     pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub details: Option<serde_json::Value>,
 }
 
 /// Frames the host sends.

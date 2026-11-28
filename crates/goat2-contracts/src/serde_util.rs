@@ -82,7 +82,7 @@ mod tests {
             "2026-11-28T00:00:00Z",
             LogEvent::RunFinished(RunFinished {
                 run_id: RunId::from("run-1"),
-                outcome: RunOutcome::Done,
+                outcome: RunOutcome::Completed,
                 reason: None,
             }),
         )

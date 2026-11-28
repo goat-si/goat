@@ -25,24 +25,24 @@
       "type": "object"
     },
     "EngineConfig": {
-      "description": "Engine settings for a thread.",
+      "description": "Engine settings for a thread, with v1 `OrchestrationV2AppThread` field names.",
       "properties": {
         "cwd": {
           "type": "string"
         },
-        "driver": {
-          "$ref": "#/$defs/EngineDriver"
+        "modelSelection": {
+          "$ref": "#/$defs/ModelSelection"
         },
-        "model": {
-          "type": "string"
+        "providerInstanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
         },
         "runtimeMode": {
-          "type": "string"
+          "$ref": "#/$defs/RuntimeMode"
         }
       },
       "required": [
-        "driver",
-        "model",
+        "providerInstanceId",
+        "modelSelection",
         "runtimeMode",
         "cwd"
       ],
@@ -99,6 +99,31 @@
       "description": "A finished item inside a run (TurnItem id).",
       "type": "string"
     },
+    "ModelSelection": {
+      "description": "v1 `ModelSelection`: provider instance, model and model options.",
+      "properties": {
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "model": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ProviderOptionSelection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "instanceId",
+        "model"
+      ],
+      "type": "object"
+    },
     "NeedsYou": {
       "description": "The open human request summarised on the card.",
       "properties": {
@@ -137,6 +162,37 @@
       "description": "A project the thread belongs to (card index column).",
       "type": "string"
     },
+    "ProviderInstanceId": {
+      "description": "A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.",
+      "type": "string"
+    },
+    "ProviderOptionSelection": {
+      "description": "v1 `ProviderOptionSelection`, e.g. `{id: \"reasoningEffort\", value: \"xhigh\"}`.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/ProviderOptionSelectionValue"
+        }
+      },
+      "required": [
+        "id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ProviderOptionSelectionValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "description": "v1 `ProviderOptionSelectionValue`: a trimmed string or a boolean."
+    },
     "RequestKind": {
       "description": "What kind of human step a request needs.",
       "oneOf": [
@@ -159,6 +215,16 @@
           "type": "string"
         }
       ]
+    },
+    "RuntimeMode": {
+      "description": "v1 `RuntimeMode` (`providerPolicy.ts`).",
+      "enum": [
+        "approval-required",
+        "auto-accept-edits",
+        "auto",
+        "full-access"
+      ],
+      "type": "string"
     },
     "ThreadId": {
       "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
@@ -206,9 +272,12 @@
       "minimum": 0,
       "type": "integer"
     },
-    "archived": {
-      "description": "Set by `thread.changed {archived}`. Archived cards stay in the index.",
-      "type": "boolean"
+    "archivedAt": {
+      "description": "v1 `archivedAt`: when the thread was archived (`thread.changed {archivedAt}`), else `null`.\nArchived cards stay in the index.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "botId": {
       "anyOf": [
@@ -256,8 +325,8 @@
     "kind": {
       "$ref": "#/$defs/ThreadKind"
     },
-    "lastExcerpt": {
-      "description": "Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters.",
+    "latestAnswerExcerpt": {
+      "description": "Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters (v1\n`latestAnswerExcerpt`).",
       "type": "string"
     },
     "needsYou": {
@@ -309,7 +378,7 @@
     "title",
     "engine",
     "status",
-    "lastExcerpt",
+    "latestAnswerExcerpt",
     "children",
     "followUpMode",
     "updatedAt",
