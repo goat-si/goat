@@ -91,6 +91,7 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
   git merge --no-ff goat2_<lane> -m "merge goat2_<lane>: <what>"
   cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
   pnpm -r typecheck                      # the TS side must stay green too
+  ! git grep -n -E '^(<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)( |$)' -- . ':!design'   # no conflict markers (diff3 too)
   git push --force-with-lease origin goat2
   trap - ERR; rmdir /tmp/goat2-merge.lock
   ```
