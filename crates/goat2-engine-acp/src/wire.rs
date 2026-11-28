@@ -42,6 +42,8 @@ pub struct InitializeInfo {
     pub load_session: bool,
     pub session_resume: bool,
     pub session_fork: bool,
+    /// `sessionCapabilities.delete`: the agent takes `session/delete` (v1 AcpSessionRuntime.ts:1902-1915).
+    pub session_delete: bool,
     /// `sessionCapabilities.systemPrompt` (ACP 1.22): the agent takes `systemPrompt` on new/load/resume.
     pub system_prompt: bool,
     pub mcp_http: bool,
@@ -99,6 +101,7 @@ impl InitializeInfo {
             load_session: caps.get("loadSession").and_then(Value::as_bool) == Some(true),
             session_resume: present(session.get("resume")),
             session_fork: present(session.get("fork")),
+            session_delete: present(session.get("delete")),
             system_prompt: present(session.get("systemPrompt")),
             mcp_http: mcp.get("http").and_then(Value::as_bool) == Some(true),
             mcp_sse: mcp.get("sse").and_then(Value::as_bool) == Some(true),

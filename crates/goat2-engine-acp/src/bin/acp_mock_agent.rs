@@ -14,6 +14,8 @@
 //! - `GOAT_ACP_SYSTEM_PROMPT=1` (GOAT 2): advertise `sessionCapabilities.systemPrompt`.
 //! - `GOAT_ACP_LOAD_SESSION=0` (GOAT 2): do not advertise `loadSession`; `GOAT_ACP_RESUME_SESSION=1`
 //!   advertises `sessionCapabilities.resume`.
+//! - `GOAT_ACP_SESSION_DELETE=1` (GOAT 2): advertise `sessionCapabilities.delete` and answer `session/delete`.
+//! - `GOAT_ACP_EMIT_COMMANDS=1` (GOAT 2): send `available_commands_update` (`/review`) right after `session/new`.
 //! - `GOAT_ACP_REQUEST_LOG_PATH=<file>` (GOAT 2): append every inbound message as a JSON line.
 //! - `GOAT_ACP_PROMPT_RESPONSE_TEXT`: the reply text (default `hello from mock`).
 //! - `GOAT_ACP_EMIT_TOOL_CALLS=1`: `before tool`, an `echo hello` command, `after tool`.
@@ -151,6 +153,9 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
             if flag("GOAT_ACP_RESUME_SESSION") {
                 caps["sessionCapabilities"]["resume"] = json!({});
             }
+            if flag("GOAT_ACP_SESSION_DELETE") {
+                caps["sessionCapabilities"]["delete"] = json!({});
+            }
             let mut result = json!({
                 "protocolVersion": 1,
                 "agentCapabilities": caps,
@@ -195,7 +200,11 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                     "configOptions": agent.model_options()
                 }),
             );
+            if flag("GOAT_ACP_EMIT_COMMANDS") {
+                agent.update("mock-session-1", json!({"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "review", "description": "Review the diff"}]}));
+            }
         }
+        "session/delete" if flag("GOAT_ACP_SESSION_DELETE") => agent.respond(&id, json!({})),
         "session/load" | "session/resume" => {
             let session = params
                 .get("sessionId")

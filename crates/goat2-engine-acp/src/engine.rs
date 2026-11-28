@@ -96,6 +96,8 @@ pub struct AcpEngineFactory {
     client_version: String,
     /// GOAT's stdio MCP bridge for agents that do not take HTTP MCP (see [crate::mcp]).
     mcp_bridge: Option<McpBridgeCommand>,
+    /// A provider probe: never sign in when the agent asks (v1 probe.ts `authenticateOnAuthRequired: false`).
+    probe: bool,
 }
 
 impl AcpEngineFactory {
@@ -106,7 +108,15 @@ impl AcpEngineFactory {
             timeouts: AcpTimeouts::default(),
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
             mcp_bridge: McpBridgeCommand::locate(),
+            probe: false,
         }
+    }
+
+    /// The factory for provider probes (see [crate::probe]): session setup that answers
+    /// "authentication required" fails instead of signing in.
+    pub fn for_probe(mut self) -> Self {
+        self.probe = true;
+        self
     }
 
     /// Use this bridge command instead of [McpBridgeCommand::locate].
@@ -186,6 +196,8 @@ struct State {
     preamble: Option<String>,
     runtime_mode: Option<goat2_contracts::RuntimeMode>,
     model: Option<String>,
+    /// The latest `available_commands_update` list (probes read it; v1 probe.ts:470-476).
+    available_commands: Option<Vec<Value>>,
 }
 
 struct Shared {
@@ -203,6 +215,8 @@ struct Shared {
     timeouts: AcpTimeouts,
     resolver: Option<AttachmentResolver>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// Bumped when the agent advertises commands or config options (probes wait on it).
+    advertised: watch::Sender<u64>,
 }
 
 fn emit(shared: &Shared, event: EngineEvent) {
@@ -388,6 +402,17 @@ impl Shared {
                     if let Some(options) = update.get("configOptions").and_then(Value::as_array) {
                         state.config_options = options.clone();
                     }
+                    self.advertised.send_modify(|n| *n += 1);
+                }
+                "available_commands_update" => {
+                    state.available_commands = Some(
+                        update
+                            .get("availableCommands")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                    self.advertised.send_modify(|n| *n += 1);
                 }
                 _ => {
                     // ACP: after session/cancel the agent may still report what it was doing
@@ -1056,6 +1081,72 @@ impl AcpSession {
         setup
     }
 
+    /// The latest `available_commands_update` list, if the agent sent one.
+    pub fn available_commands(&self) -> Option<Vec<Value>> {
+        self.shared
+            .state
+            .lock()
+            .expect("state")
+            .available_commands
+            .clone()
+    }
+
+    /// Wait up to `models_grace` for a model catalog (when setup had none) and up to
+    /// `commands_grace` for the command list, concurrently (v1 probe.ts:500-516).
+    pub async fn wait_for_advertisements(&self, models_grace: Duration, commands_grace: Duration) {
+        fn has_models(shared: &Shared) -> bool {
+            let state = shared.state.lock().expect("state");
+            state.setup.models.is_some()
+                || crate::wire::find_model_config_option(&state.config_options).is_some()
+        }
+        fn has_commands(shared: &Shared) -> bool {
+            shared
+                .state
+                .lock()
+                .expect("state")
+                .available_commands
+                .is_some()
+        }
+        async fn until(shared: &Shared, grace: Duration, ready: fn(&Shared) -> bool) {
+            let mut rx = shared.advertised.subscribe();
+            if ready(shared) {
+                return;
+            }
+            let _ = tokio::time::timeout(grace, async {
+                while rx.changed().await.is_ok() {
+                    if ready(shared) {
+                        return;
+                    }
+                }
+            })
+            .await;
+        }
+        tokio::join!(
+            until(&self.shared, models_grace, has_models),
+            until(&self.shared, commands_grace, has_commands)
+        );
+    }
+
+    /// `session/delete` when the agent advertises it (v1 probe.ts:493-498); otherwise nothing.
+    pub async fn delete_session(&self, timeout: Duration) -> Result<(), EngineError> {
+        let init = self.shared.init.get().cloned().unwrap_or_default();
+        if !init.session_delete {
+            return Ok(());
+        }
+        let Some(session_id) = self.shared.session_id.get().cloned() else {
+            return Ok(());
+        };
+        self.shared
+            .request(
+                "session/delete",
+                json!({ "sessionId": session_id }),
+                timeout,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| EngineError::Transport(e.to_string()))
+    }
+
     /// The capabilities negotiated with the started agent (v1 `negotiatedCapabilities`).
     pub fn negotiated_capabilities(&self) -> ProviderCapabilities {
         let init = self.shared.init.get().cloned().unwrap_or_default();
@@ -1367,6 +1458,41 @@ fn handshake_error(step: &str, error: agent_client_protocol::Error, stderr: &str
 }
 
 /// A started session with its concrete controller (probes read the negotiated state from it).
+/// A failed start, with the initialize result when the agent got that far.
+pub(crate) struct StartFailure {
+    pub error: EngineError,
+    pub init: Option<InitializeInfo>,
+    /// What the agent emitted before failing (sign-in URLs); None when it never started.
+    pub events: Option<mpsc::UnboundedReceiver<EngineEvent>>,
+}
+
+impl StartFailure {
+    fn new(
+        error: EngineError,
+        init: Option<InitializeInfo>,
+        events: mpsc::UnboundedReceiver<EngineEvent>,
+    ) -> Self {
+        Self {
+            error,
+            init,
+            events: Some(events),
+        }
+    }
+}
+
+impl From<EngineError> for StartFailure {
+    fn from(error: EngineError) -> Self {
+        Self {
+            error,
+            init: None,
+            events: None,
+        }
+    }
+}
+
+/// How a probe's start failure names an agent that wants a sign-in.
+pub(crate) const AUTH_REQUIRED_PREFIX: &str = "authentication required";
+
 pub struct StartedAcp {
     pub session: AcpSession,
     pub events: mpsc::UnboundedReceiver<EngineEvent>,
@@ -1392,9 +1518,19 @@ impl EngineFactory for AcpEngineFactory {
 impl AcpEngineFactory {
     /// [EngineFactory::start] returning the concrete [AcpSession].
     pub async fn start_acp(&self, spec: SessionSpec) -> Result<StartedAcp, EngineError> {
+        self.start_inner(spec)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// [Self::start_acp], keeping what a probe needs when the start fails.
+    pub(crate) async fn start_inner(&self, spec: SessionSpec) -> Result<StartedAcp, StartFailure> {
         let flavor = Arc::clone(&self.flavor);
-        let launch = launch_for(flavor.as_ref(), &spec)?;
         let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let launch = match launch_for(flavor.as_ref(), &spec) {
+            Ok(launch) => launch,
+            Err(error) => return Err(StartFailure::new(error, None, events_rx)),
+        };
 
         let shared = Arc::new(Shared {
             flavor: Arc::clone(&flavor),
@@ -1415,6 +1551,7 @@ impl AcpEngineFactory {
             timeouts: self.timeouts.clone(),
             resolver: self.resolver.clone(),
             shutdown_tx: Mutex::new(None),
+            advertised: watch::channel(0).0,
         });
 
         let stderr_hook = {
@@ -1571,7 +1708,11 @@ impl AcpEngineFactory {
             }),
             Err(error) => {
                 shared.stop("start failed".into()).await;
-                Err(error)
+                Err(StartFailure::new(
+                    error,
+                    shared.init.get().cloned(),
+                    events_rx,
+                ))
             }
         }
     }
@@ -1751,6 +1892,11 @@ impl AcpEngineFactory {
         };
         let setup = match setup_once().await {
             Ok(setup) => setup,
+            Err(error) if is_auth_required(&error) && self.probe => {
+                return Err(EngineError::StartFailed(format!(
+                    "{AUTH_REQUIRED_PREFIX}: {error}"
+                )));
+            }
             Err(error) if is_auth_required(&error) => {
                 // v1 authenticateAfterRequired (AcpSessionRuntime.ts:1505-1555).
                 let configured = match flavor.auth_policy() {
