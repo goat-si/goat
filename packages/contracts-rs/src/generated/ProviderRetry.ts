@@ -3,4 +3,8 @@
 /**
  * v1 `OrchestrationV2ProviderRetry`.
  */
-export type ProviderRetry = { attempt: number, maxAttempts: number | null, retryDelayMs: number | null, };
+export type ProviderRetry = { attempt: number, maxAttempts: number | null, 
+/**
+ * v1 `NullOr`: written as `null` when unknown; a missing field reads as `null`.
+ */
+retryDelayMs: number | null, };
