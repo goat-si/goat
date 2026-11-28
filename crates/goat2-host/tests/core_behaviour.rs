@@ -2135,6 +2135,126 @@ async fn provider_instance_settings_survive_a_restart() {
     );
 }
 
+#[tokio::test]
+async fn a_provider_sign_in_flow_is_shown_and_settles() {
+    let t = setup(manual()).await;
+    let method: goat2_contracts::ProviderAuthMethod = serde_json::from_value(serde_json::json!({
+        "id": "chatgpt", "name": "Sign in with ChatGPT", "description": null, "type": "agent"
+    }))
+    .unwrap();
+    t.fake.set_provider_setup(
+        Some((
+            vec![method],
+            auth_state("codex", "waiting", Some("https://auth.example.invalid/x")),
+        )),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("auth-0", None)).await.unwrap();
+    let idle = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    assert!(idle.setup.as_ref().unwrap().can_authenticate);
+    let flow = idle.auth_flow.unwrap();
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Idle);
+    assert_eq!(flow.methods.unwrap()[0].id, "chatgpt");
+    // Start: the driver's state is answered and shown.
+    let started = t.host.command(auth_start("auth-1")).await.unwrap();
+    let state = started.auth_state.unwrap();
+    assert_eq!(state.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    assert_eq!(
+        state.authorization_url.as_deref(),
+        Some("https://auth.example.invalid/x")
+    );
+    eventually_provider(&t, |e| {
+        e.auth_flow
+            .as_ref()
+            .is_some_and(|a| a.phase == goat2_contracts::ProviderAuthPhase::Waiting)
+    })
+    .await;
+    // A second start while it runs answers the running flow; the driver is not asked again.
+    let again = t.host.command(auth_start("auth-2")).await.unwrap();
+    assert_eq!(again.auth_state.unwrap().flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(t.fake.auth_starts(), 1);
+    // An update for another instance is dropped; success is shown and the provider re-probed.
+    let updates = t.fake.auth_updates().unwrap();
+    updates
+        .send(auth_state("other", "succeeded", None))
+        .unwrap();
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    updates
+        .send(auth_state("codex", "succeeded", None))
+        .unwrap();
+    let done = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    assert_eq!(
+        done.auth_flow.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn a_provider_install_is_shown_and_settles() {
+    let t = setup(manual()).await;
+    t.fake
+        .set_provider_setup(None, Some(install_state("downloading")));
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("inst-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_install)).await;
+    let started = t
+        .host
+        .command(ClientFrame::ProviderInstallStart {
+            req_id: "r".into(),
+            client_request_id: "inst-1".into(),
+            instance_id: "codex".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        started.install_state.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Downloading
+    );
+    eventually_provider(&t, |e| e.install.is_some()).await;
+    t.fake.set_probe(Ok(ready_probe("0.169.0")));
+    t.fake
+        .install_updates()
+        .unwrap()
+        .send(install_state("succeeded"))
+        .unwrap();
+    let done = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.169.0")).await;
+    assert_eq!(
+        done.install.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Succeeded
+    );
+}
+
+fn auth_state(
+    instance: &str,
+    phase: &str,
+    url: Option<&str>,
+) -> goat2_contracts::ProviderAuthState {
+    serde_json::from_value(serde_json::json!({
+        "instanceId": instance, "phase": phase, "flowId": "flow-1", "authorizationUrl": url,
+        "expiresAt": null, "message": null
+    }))
+    .unwrap()
+}
+
+fn install_state(phase: &str) -> goat2_contracts::ProviderInstallState {
+    serde_json::from_value(serde_json::json!({
+        "driver": "codex", "operationId": "op-1", "phase": phase, "downloadedBytes": 0,
+        "totalBytes": null, "version": "0.169.0", "installedVersion": "0.167.0", "canRemove": false,
+        "message": null
+    }))
+    .unwrap()
+}
+
+fn auth_start(key: &str) -> ClientFrame {
+    ClientFrame::ProviderAuthStart {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: "codex".into(),
+        method_id: Some("chatgpt".into()),
+    }
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()

@@ -476,12 +476,79 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
         }
         // Part 2 commands whose host module has not landed yet (provider install, sign-in and
         // ACP registry: lane E slice 2; bot notes, update_bot, get_turn_item, mark_read: P2-E).
-        Command::ProviderInstallStart { .. }
-        | Command::ProviderInstallCancel { .. }
-        | Command::ProviderAuthStart { .. }
-        | Command::ProviderAuthCancel { .. }
-        | Command::ProviderAuthLogout { .. }
-        | Command::AcceptAcpRegistryUrlAuth { .. }
+        Command::ProviderAuthStart {
+            instance_id,
+            method_id,
+            ..
+        } => {
+            let state = host
+                .inner
+                .providers
+                .auth_start(host, instance_id.as_str(), method_id)
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                auth_state: Some(state),
+                ..Default::default()
+            })
+        }
+        Command::ProviderAuthCancel {
+            instance_id,
+            flow_id,
+            ..
+        } => {
+            let state = host
+                .inner
+                .providers
+                .auth_cancel(host, instance_id.as_str(), &flow_id)
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                auth_state: Some(state),
+                ..Default::default()
+            })
+        }
+        Command::ProviderAuthLogout { instance_id, .. } => {
+            let state = host
+                .inner
+                .providers
+                .auth_logout(host, instance_id.as_str())
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                auth_state: Some(state),
+                ..Default::default()
+            })
+        }
+        Command::ProviderInstallStart { instance_id, .. } => {
+            let state = host
+                .inner
+                .providers
+                .install_start(host, instance_id.as_str())
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                install_state: Some(state),
+                ..Default::default()
+            })
+        }
+        Command::ProviderInstallCancel {
+            instance_id,
+            operation_id,
+            ..
+        } => {
+            let state = host
+                .inner
+                .providers
+                .install_cancel(host, instance_id.as_str(), &operation_id)
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                install_state: Some(state),
+                ..Default::default()
+            })
+        }
+        Command::AcceptAcpRegistryUrlAuth { .. }
         | Command::SearchAcpRegistry { .. }
         | Command::PrepareAcpRegistryAgent { .. }
         | Command::UpdateBot { .. }
@@ -501,6 +568,7 @@ fn provider_refusal(refusal: crate::providers::ProviderRefusal) -> crate::api::C
     match refusal {
         R::NotFound(m) => command_error(Reason::ProviderNotFound, m),
         R::DriverUnavailable(m) => command_error(Reason::DriverUnavailable, m),
+        R::NotAvailable(m) => command_error(Reason::NotAvailable, m),
         R::Invalid(m) => command_error(Reason::InvalidRequest, m),
         R::Internal(m) => command_error(Reason::Internal, m),
     }

@@ -90,6 +90,16 @@ struct Shared {
     pgids: HashMap<ThreadId, i32>,
     /// What [EngineFactory::probe] answers; `None` = Unsupported (the trait default).
     probe: Option<Result<goat2_contracts::ProviderProbeResult, EngineError>>,
+    /// Provider sign-in/install: `None` = Unsupported (the trait defaults).
+    setup: Option<goat2_contracts::ProviderSetup>,
+    auth: Option<(
+        Vec<goat2_contracts::ProviderAuthMethod>,
+        goat2_contracts::ProviderAuthState,
+    )>,
+    auth_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>>,
+    auth_starts: usize,
+    install: Option<goat2_contracts::ProviderInstallState>,
+    install_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderInstallState>>,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -158,6 +168,44 @@ impl FakeEngine {
     /// What the next probes answer.
     pub fn set_probe(&self, probe: Result<goat2_contracts::ProviderProbeResult, EngineError>) {
         self.shared.lock().expect("fake").probe = Some(probe);
+    }
+
+    /// Offer sign-in (`methods`, answering a start with `start`) and install (answering with
+    /// `install`).
+    pub fn set_provider_setup(
+        &self,
+        auth: Option<(
+            Vec<goat2_contracts::ProviderAuthMethod>,
+            goat2_contracts::ProviderAuthState,
+        )>,
+        install: Option<goat2_contracts::ProviderInstallState>,
+    ) {
+        let mut shared = self.shared.lock().expect("fake");
+        shared.setup = Some(goat2_contracts::ProviderSetup {
+            can_authenticate: auth.is_some(),
+            can_install: install.is_some(),
+            documentation_url: None,
+        });
+        shared.auth = auth;
+        shared.install = install;
+    }
+
+    /// The update channel of the last sign-in start, to send its later phases.
+    pub fn auth_updates(
+        &self,
+    ) -> Option<mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>> {
+        self.shared.lock().expect("fake").auth_updates.clone()
+    }
+
+    pub fn auth_starts(&self) -> usize {
+        self.shared.lock().expect("fake").auth_starts
+    }
+
+    /// The update channel of the last install start.
+    pub fn install_updates(
+        &self,
+    ) -> Option<mpsc::UnboundedSender<goat2_contracts::ProviderInstallState>> {
+        self.shared.lock().expect("fake").install_updates.clone()
     }
 
     /// The turn currently running in a thread's fake process.
@@ -288,6 +336,59 @@ impl EngineFactory for FakeEngine {
             .probe
             .clone()
             .unwrap_or_else(|| Err(EngineError::Unsupported("probe".into())))
+    }
+
+    fn setup(&self) -> goat2_contracts::ProviderSetup {
+        self.shared
+            .lock()
+            .expect("fake")
+            .setup
+            .clone()
+            .unwrap_or(goat2_contracts::ProviderSetup {
+                can_authenticate: false,
+                can_install: false,
+                documentation_url: None,
+            })
+    }
+
+    async fn auth_methods(
+        &self,
+        _target: &super::ProviderTarget,
+    ) -> Result<Vec<goat2_contracts::ProviderAuthMethod>, EngineError> {
+        let shared = self.shared.lock().expect("fake");
+        shared
+            .auth
+            .as_ref()
+            .map(|(methods, _)| methods.clone())
+            .ok_or_else(|| EngineError::Unsupported("auth_methods".into()))
+    }
+
+    async fn auth_start(
+        &self,
+        _target: &super::ProviderTarget,
+        _method_id: Option<String>,
+        updates: mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        let mut shared = self.shared.lock().expect("fake");
+        let Some((_, start)) = shared.auth.clone() else {
+            return Err(EngineError::Unsupported("auth_start".into()));
+        };
+        shared.auth_starts += 1;
+        shared.auth_updates = Some(updates);
+        Ok(start)
+    }
+
+    async fn install_start(
+        &self,
+        _launch: Option<&super::LaunchSpec>,
+        updates: mpsc::UnboundedSender<goat2_contracts::ProviderInstallState>,
+    ) -> Result<goat2_contracts::ProviderInstallState, EngineError> {
+        let mut shared = self.shared.lock().expect("fake");
+        let Some(start) = shared.install.clone() else {
+            return Err(EngineError::Unsupported("install_start".into()));
+        };
+        shared.install_updates = Some(updates);
+        Ok(start)
     }
 
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {

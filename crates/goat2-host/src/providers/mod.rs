@@ -14,14 +14,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use goat2_contracts::{
-    AcpRegistryUrlAuthAction, ProviderInstanceId, ProviderProbeResult, ProviderSetup,
-    ServerProviderAuth, ServerProviderAuthStatus, ServerProviderEntry, ServerProviderState,
+    AcpRegistryUrlAuthAction, ProviderAuthPhase, ProviderAuthState, ProviderInstallPhase,
+    ProviderInstallState, ProviderInstanceId, ProviderProbeResult, ServerProviderAuth,
+    ServerProviderAuthStatus, ServerProviderEntry, ServerProviderState,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::core::Host;
-use crate::engine::{EngineError, EngineFactory};
+use crate::engine::{EngineError, EngineFactory, ProviderTarget};
 
 /// The latest list, `None` until every enabled instance was probed once.
 pub type ProviderList = Option<Vec<ServerProviderEntry>>;
@@ -48,6 +49,8 @@ pub struct ProviderInstance {
 pub enum ProviderRefusal {
     NotFound(String),
     DriverUnavailable(String),
+    /// The driver does not offer this (EngineError::Unsupported).
+    NotAvailable(String),
     Invalid(String),
     Internal(String),
 }
@@ -55,6 +58,10 @@ pub enum ProviderRefusal {
 struct State {
     instances: Vec<ProviderInstance>,
     probes: HashMap<String, ProviderProbeResult>,
+    /// Latest sign-in state per instance (memory only: a flow does not survive a restart).
+    auth: HashMap<String, ProviderAuthState>,
+    /// Latest install state per driver kind.
+    installs: HashMap<String, ProviderInstallState>,
 }
 
 pub struct Providers {
@@ -95,6 +102,8 @@ impl Providers {
             state: Mutex::new(State {
                 instances,
                 probes: HashMap::new(),
+                auth: HashMap::new(),
+                installs: HashMap::new(),
             }),
             list: watch::channel(None).0,
         }
@@ -141,15 +150,204 @@ impl Providers {
             }
         };
         let probes = futures_util::future::join_all(targets.iter().map(|i| async move {
+            let factory = self.factories[&i.driver].as_ref();
             let probe = if i.enabled {
-                probe(self.factories[&i.driver].as_ref()).await
+                probe(factory).await
             } else {
                 status_only(ServerProviderState::Disabled, "Turned off in settings.")
             };
-            (i.instance_id.clone(), probe)
+            // Sign-in methods for an instance with no flow yet (v1 lists them idle).
+            let methods = if i.enabled && factory.setup().can_authenticate {
+                factory.auth_methods(&target_of(i)).await.ok()
+            } else {
+                None
+            };
+            (i.instance_id.clone(), probe, methods)
         }))
         .await;
-        self.state.lock().expect("providers").probes.extend(probes);
+        {
+            let mut state = self.state.lock().expect("providers");
+            for (id, probe, methods) in probes {
+                state.probes.insert(id.clone(), probe);
+                if let Some(methods) = methods
+                    && state
+                        .auth
+                        .get(&id)
+                        .is_none_or(|a| a.phase == ProviderAuthPhase::Idle)
+                {
+                    state.auth.insert(id.clone(), idle_auth(&id, methods));
+                }
+            }
+        }
+        self.publish(host);
+        Ok(())
+    }
+
+    /// `provider_auth_start`: a running flow of the instance is returned as is (v1).
+    pub async fn auth_start(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        method_id: Option<String>,
+    ) -> Result<ProviderAuthState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        let running = self
+            .state
+            .lock()
+            .expect("providers")
+            .auth
+            .get(instance_id)
+            .filter(|a| auth_running(&a.phase))
+            .cloned();
+        if let Some(running) = running {
+            return Ok(running);
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let state = factory
+            .auth_start(&target_of(&instance), method_id, tx)
+            .await
+            .map_err(engine_refusal)?;
+        self.record_auth(host, instance_id, state.clone())?;
+        let watching = host.clone();
+        let id = instance_id.to_owned();
+        let flow = state.flow_id.clone();
+        let task = tokio::spawn(async move { watch_auth(watching, id, flow, rx).await });
+        host.track(&task);
+        Ok(state)
+    }
+
+    pub async fn auth_cancel(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        flow_id: &str,
+    ) -> Result<ProviderAuthState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        let state = factory
+            .auth_cancel(&target_of(&instance), flow_id)
+            .await
+            .map_err(engine_refusal)?;
+        self.record_auth(host, instance_id, state.clone())?;
+        Ok(state)
+    }
+
+    pub async fn auth_logout(
+        &self,
+        host: &Host,
+        instance_id: &str,
+    ) -> Result<ProviderAuthState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        let state = factory
+            .auth_logout(&target_of(&instance))
+            .await
+            .map_err(engine_refusal)?;
+        self.record_auth(host, instance_id, state.clone())?;
+        let _ = self.refresh(host, Some(instance_id)).await;
+        Ok(state)
+    }
+
+    /// `provider_install_start` (per driver): a running install of the driver is returned.
+    pub async fn install_start(
+        &self,
+        host: &Host,
+        instance_id: &str,
+    ) -> Result<ProviderInstallState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        let running = self
+            .state
+            .lock()
+            .expect("providers")
+            .installs
+            .get(&instance.driver)
+            .filter(|s| install_running(&s.phase))
+            .cloned();
+        if let Some(running) = running {
+            return Ok(running);
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let state = factory
+            .install_start(None, tx)
+            .await
+            .map_err(engine_refusal)?;
+        self.record_install(host, &instance.driver, state.clone())?;
+        let watching = host.clone();
+        let driver = instance.driver.clone();
+        let operation = state.operation_id.clone();
+        let task =
+            tokio::spawn(async move { watch_install(watching, driver, operation, rx).await });
+        host.track(&task);
+        Ok(state)
+    }
+
+    pub async fn install_cancel(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        operation_id: &str,
+    ) -> Result<ProviderInstallState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        let state = factory
+            .install_cancel(operation_id)
+            .await
+            .map_err(engine_refusal)?;
+        self.record_install(host, &instance.driver, state.clone())?;
+        Ok(state)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn lookup(
+        &self,
+        instance_id: &str,
+    ) -> Result<(ProviderInstance, Arc<dyn EngineFactory>), ProviderRefusal> {
+        let state = self.state.lock().expect("providers");
+        state
+            .instances
+            .iter()
+            .find(|i| i.instance_id == instance_id)
+            .and_then(|i| Some((i.clone(), self.factories.get(&i.driver)?.clone())))
+            .ok_or_else(|| {
+                ProviderRefusal::NotFound(format!("No provider instance {instance_id}."))
+            })
+    }
+
+    /// Store a sign-in state the driver answered for this instance; one for another instance is
+    /// refused, never fixed up.
+    fn record_auth(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        state: ProviderAuthState,
+    ) -> Result<(), ProviderRefusal> {
+        if state.instance_id.as_str() != instance_id {
+            return Err(ProviderRefusal::Internal(
+                "the driver answered for another provider instance".into(),
+            ));
+        }
+        self.state
+            .lock()
+            .expect("providers")
+            .auth
+            .insert(instance_id.to_owned(), state);
+        self.publish(host);
+        Ok(())
+    }
+
+    fn record_install(
+        &self,
+        host: &Host,
+        driver: &str,
+        state: ProviderInstallState,
+    ) -> Result<(), ProviderRefusal> {
+        if state.driver != driver {
+            return Err(ProviderRefusal::Internal(
+                "the driver answered for another provider kind".into(),
+            ));
+        }
+        self.state
+            .lock()
+            .expect("providers")
+            .installs
+            .insert(driver.to_owned(), state);
         self.publish(host);
         Ok(())
     }
@@ -245,16 +443,11 @@ impl Providers {
                 display_name: instance.display_name.clone(),
                 enabled: instance.enabled,
                 acp_agent_id: instance.acp_agent_id.clone(),
-                // Install and sign-in from GOAT 2 are not in this host build yet.
-                setup: Some(ProviderSetup {
-                    can_authenticate: false,
-                    can_install: false,
-                    documentation_url: None,
-                }),
+                setup: Some(factory.setup()),
                 capabilities: factory.capabilities(),
                 probe,
-                auth_flow: None,
-                install: None,
+                auth_flow: state.auth.get(&instance.instance_id).cloned(),
+                install: state.installs.get(&instance.driver).cloned(),
             });
         }
         Some(out)
@@ -299,4 +492,113 @@ fn save(path: &Path, instances: &[ProviderInstance]) -> std::io::Result<()> {
     let body = serde_json::to_vec_pretty(instances).map_err(std::io::Error::other)?;
     std::fs::write(&tmp, body)?;
     std::fs::rename(tmp, path)
+}
+
+/// Later phases of one sign-in flow; an update of an older flow or another instance is dropped.
+async fn watch_auth(
+    host: Host,
+    instance_id: String,
+    flow_id: Option<String>,
+    mut rx: mpsc::UnboundedReceiver<ProviderAuthState>,
+) {
+    while let Some(state) = rx.recv().await {
+        let providers = &host.inner.providers;
+        if state.instance_id.as_str() != instance_id {
+            tracing::warn!(instance = %instance_id, "sign-in update for another instance dropped");
+            continue;
+        }
+        let current = {
+            let s = providers.state.lock().expect("providers");
+            s.auth
+                .get(&instance_id)
+                .is_some_and(|a| a.flow_id == flow_id)
+        };
+        if !current {
+            continue;
+        }
+        let succeeded = state.phase == ProviderAuthPhase::Succeeded;
+        let _ = providers.record_auth(&host, &instance_id, state);
+        if succeeded {
+            let _ = providers.refresh(&host, Some(&instance_id)).await;
+        }
+    }
+}
+
+/// Later phases of one install; an update of an older operation is dropped.
+async fn watch_install(
+    host: Host,
+    driver: String,
+    operation_id: Option<String>,
+    mut rx: mpsc::UnboundedReceiver<ProviderInstallState>,
+) {
+    while let Some(state) = rx.recv().await {
+        let providers = &host.inner.providers;
+        let current = {
+            let s = providers.state.lock().expect("providers");
+            s.installs
+                .get(&driver)
+                .is_some_and(|i| i.operation_id == operation_id)
+        };
+        if !current {
+            continue;
+        }
+        let succeeded = state.phase == ProviderInstallPhase::Succeeded;
+        if providers.record_install(&host, &driver, state).is_err() {
+            tracing::warn!(%driver, "install update for another provider kind dropped");
+            continue;
+        }
+        if succeeded {
+            let _ = providers.refresh(&host, None).await;
+        }
+    }
+}
+
+fn auth_running(phase: &ProviderAuthPhase) -> bool {
+    matches!(
+        phase,
+        ProviderAuthPhase::Starting | ProviderAuthPhase::Waiting | ProviderAuthPhase::Verifying
+    )
+}
+
+fn install_running(phase: &ProviderInstallPhase) -> bool {
+    matches!(
+        phase,
+        ProviderInstallPhase::Downloading
+            | ProviderInstallPhase::Extracting
+            | ProviderInstallPhase::Verifying
+    )
+}
+
+fn target_of(instance: &ProviderInstance) -> ProviderTarget {
+    ProviderTarget {
+        instance_id: ProviderInstanceId::new(instance.instance_id.clone()),
+        // Instances carry no launch settings yet: the driver's default binary and environment.
+        launch: None,
+    }
+}
+
+fn idle_auth(
+    instance_id: &str,
+    methods: Vec<goat2_contracts::ProviderAuthMethod>,
+) -> ProviderAuthState {
+    ProviderAuthState {
+        instance_id: ProviderInstanceId::new(instance_id.to_owned()),
+        phase: ProviderAuthPhase::Idle,
+        flow_id: None,
+        authorization_url: None,
+        expires_at: None,
+        message: None,
+        methods: Some(methods),
+        interaction: None,
+        credential_owner: None,
+    }
+}
+
+fn engine_refusal(err: EngineError) -> ProviderRefusal {
+    match err {
+        EngineError::Unsupported(what) => ProviderRefusal::NotAvailable(format!(
+            "This provider does not support {what} from GOAT."
+        )),
+        other => ProviderRefusal::Internal(other.to_string()),
+    }
 }
