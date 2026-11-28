@@ -1717,6 +1717,7 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: t.fake.active_turn(&id),
             url: Some(url.clone()),
             message: format!("Sign in to Codex at {url}"),
@@ -1771,6 +1772,7 @@ async fn a_sign_in_for_an_ended_turn_is_dropped_and_run_end_closes_the_current_o
     assert_ne!(first, second);
     let auth =
         |turn: &str, url: &str, message: &str| goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: Some(turn.to_owned()),
             url: Some(url.to_owned()),
             message: message.to_owned(),
@@ -1819,6 +1821,7 @@ async fn a_sign_in_outside_a_turn_lasts_until_the_engine_stops() {
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: None,
             url: Some("https://auth.example.invalid/login?state=SECRET-STATE".into()),
             message: "Not logged in".into(),
@@ -1862,6 +1865,7 @@ async fn a_sign_in_message_never_reaches_the_log() {
         t.fake.emit(
             &id,
             goat2_host::engine::EngineEvent::AuthRequired {
+                key: None,
                 turn_id: t.fake.active_turn(&id),
                 url: None,
                 message: message.into(),
@@ -1986,4 +1990,118 @@ fn data_contains(t: &T, needle: &str) -> bool {
         })
     }
     walk(t._dir.as_ref().unwrap().path(), needle.as_bytes())
+}
+
+#[tokio::test]
+async fn usage_is_live_and_only_finished_snapshot_is_durable() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "usage", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let (mut rx, _) = t.host.watch_thread(&id);
+    let usage = |n| serde_json::from_value(serde_json::json!({"usedTokens": n})).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::TokenUsage {
+            turn_id: Some("stale".into()),
+            usage: usage(111),
+        },
+    );
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::TokenUsage {
+            turn_id: None,
+            usage: usage(222),
+        },
+    );
+    let live = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let goat2_host::api::ThreadLive::Usage { usage, updated_at } =
+                rx.recv().await.unwrap()
+            {
+                break (usage, updated_at);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(live.0.used_tokens, 222);
+    assert!(chrono::DateTime::parse_from_rfc3339(&live.1).is_ok());
+    t.fake.finish_turn(&id, "done");
+    eventually("finished", || count(&t, &id, "run.finished") == 1).await;
+    let finished = events(&t, &id)
+        .into_iter()
+        .find_map(|e| match e {
+            LogEvent::RunFinished(e) => Some(e),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.token_usage.unwrap().used_tokens, 222);
+    assert_eq!(
+        t.host
+            .store()
+            .card(&id)
+            .unwrap()
+            .context_usage
+            .unwrap()
+            .used_tokens,
+        222
+    );
+    assert!(!data_contains(&t, "thread_usage"));
+    assert!(!data_contains(&t, "111"));
+}
+
+#[tokio::test]
+async fn keyed_signin_answers_engine_and_declines_at_run_end() {
+    for (requested, expected) in [
+        (RequestOutcome::Answered, RequestOutcome::Accept),
+        (RequestOutcome::Decline, RequestOutcome::Decline),
+        (RequestOutcome::Cancel, RequestOutcome::Decline),
+    ] {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, "keyed", Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("SECRET-KEY".into()),
+                turn_id: t.fake.active_turn(&id),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("signin", || !signins(&t, &id).is_empty()).await;
+        let request_id = signins(&t, &id)[0].request_id.clone();
+        t.host
+            .command(ClientFrame::ResolveRequest {
+                req_id: "r".into(),
+                client_request_id: "resolve".into(),
+                thread_id: id.clone(),
+                request_id,
+                outcome: requested,
+                text: None,
+                answers: None,
+                option_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome, .. } if key == "SECRET-KEY" && *outcome == expected)));
+        assert!(!data_contains(&t, "SECRET-KEY"));
+    }
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-end", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-END".into()),
+            turn_id: t.fake.active_turn(&id),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-END")));
+    assert!(!data_contains(&t, "KEY-END"));
 }

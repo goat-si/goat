@@ -72,6 +72,7 @@ pub enum FakeCall {
     Answer {
         thread_id: ThreadId,
         key: String,
+        outcome: goat2_contracts::RequestOutcome,
     },
     Shutdown {
         thread_id: ThreadId,
@@ -423,7 +424,7 @@ impl EngineSession for FakeSession {
         Ok(())
     }
 
-    async fn answer_request(&self, key: &str, _answer: RequestAnswer) -> Result<(), EngineError> {
+    async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
         self.engine
             .shared
             .lock()
@@ -432,6 +433,7 @@ impl EngineSession for FakeSession {
             .push(FakeCall::Answer {
                 thread_id: self.thread_id.clone(),
                 key: key.to_owned(),
+                outcome: answer.outcome,
             });
         let _ = self.tx.send(EngineEvent::RequestClosed {
             key: key.to_owned(),
