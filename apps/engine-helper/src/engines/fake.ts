@@ -6,6 +6,8 @@
 //   "fail"    the turn fails
 //   anything else echoes "echo: <text>" in two deltas
 // A steer during a turn is accepted and appended to the final message.
+// session.set_config is supported unless launch.env GOAT2_FAKE_NO_SET_CONFIG=1; after it, echoes
+// end with " [model: <model>, mode: <runtimeMode>]".
 import type { EngineHost, EngineModule, EngineSession } from "../engine.ts";
 import { assistantMessage, item } from "../items.ts";
 import {
@@ -14,6 +16,7 @@ import {
   type InitializeParams,
   type RequestAnswer,
   type SteerResult,
+  type TurnSettings,
   type TurnStartResult,
 } from "../protocol.ts";
 
@@ -36,10 +39,17 @@ class FakeSession implements EngineSession {
   #turns = 0;
   #active: ActiveTurn | undefined;
   readonly #requests = new Map<string, (answer: RequestAnswer) => void>();
+  #config: TurnSettings | undefined;
+  readonly setConfig?: (settings: TurnSettings) => Promise<void>;
 
-  constructor(engineRef: string, host: EngineHost) {
+  constructor(engineRef: string, host: EngineHost, allowSetConfig: boolean) {
     this.engineRef = engineRef;
     this.#host = host;
+    if (allowSetConfig) {
+      this.setConfig = async (settings) => {
+        this.#config = settings;
+      };
+    }
   }
 
   async startTurn(inputs: ReadonlyArray<EngineInput>): Promise<TurnStartResult> {
@@ -147,7 +157,10 @@ class FakeSession implements EngineSession {
         break;
       }
       default: {
-        reply = `echo: ${text}`;
+        const config = this.#config;
+        reply =
+          `echo: ${text}` +
+          (config === undefined ? "" : ` [model: ${config.modelSelection.model}, mode: ${config.runtimeMode}]`);
         const half = Math.ceil(reply.length / 2);
         host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: reply.slice(0, half) });
         await sleep(5);
@@ -182,6 +195,7 @@ export const fakeEngine: EngineModule = {
     if (params.launch?.env?.["GOAT2_FAKE_START_FAIL"] === "1") {
       throw new HelperError("start_failed", "fake start failure");
     }
-    return new FakeSession(params.resume ?? `fake-${params.threadId}`, host);
+    const allowSetConfig = params.launch?.env?.["GOAT2_FAKE_NO_SET_CONFIG"] !== "1";
+    return new FakeSession(params.resume ?? `fake-${params.threadId}`, host, allowSetConfig);
   },
 };

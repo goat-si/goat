@@ -225,6 +225,49 @@ async fn steer_then_interrupt() {
     handle.session.shutdown().await;
 }
 
+/// `set_config` reaches an engine that can switch in session and applies to the next turn; an
+/// engine without the switch answers `EngineError::Unsupported` instead of a transport error.
+#[tokio::test]
+async fn set_config_applies_or_reports_unsupported() {
+    let mut handle = start("thread-config").await;
+    let switched = TurnSettings {
+        model_selection: ModelSelection {
+            model: "other-model".into(),
+            ..model()
+        },
+        runtime_mode: RuntimeMode::ApprovalRequired,
+    };
+    handle
+        .session
+        .set_config(&switched)
+        .await
+        .expect("set_config accepted");
+    accepted(handle.session.start_turn(input("hi"), &switched).await);
+    let events = until_finished(&mut handle).await;
+    let text = final_text(&events);
+    assert!(
+        text.starts_with("echo: hi [model: other-model, mode: "),
+        "{text}"
+    );
+    handle.session.shutdown().await;
+
+    let mut fixed = spec("thread-config-fixed");
+    fixed.launch = Some(goat2_engine_api::LaunchSpec {
+        binary: None,
+        args: Vec::new(),
+        env: [("GOAT2_FAKE_NO_SET_CONFIG".to_string(), "1".to_string())].into(),
+    });
+    let handle = HelperFactory::fake(EngineDriver::Cursor, launch())
+        .start(fixed)
+        .await
+        .expect("fake engine starts");
+    match handle.session.set_config(&settings()).await {
+        Err(EngineError::Unsupported(message)) => assert!(message.contains("cannot change")),
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+    handle.session.shutdown().await;
+}
+
 #[tokio::test]
 async fn start_failure_and_missing_engine_map_to_engine_errors() {
     let mut failing = spec("thread-fail");

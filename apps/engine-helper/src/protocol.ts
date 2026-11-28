@@ -135,7 +135,7 @@ export type EngineEvent =
   | { readonly type: "turn_finished"; readonly turnId: string; readonly outcome: TurnOutcome }
   | { readonly type: "exited"; readonly reason: string };
 
-export type ErrorCode = "bad_request" | "unavailable" | "start_failed" | "transport";
+export type ErrorCode = "bad_request" | "unavailable" | "start_failed" | "unsupported" | "transport";
 
 export class HelperError extends Error {
   readonly code: ErrorCode;

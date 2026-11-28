@@ -30,6 +30,11 @@ export interface EngineSession {
   steer(turnId: string, inputs: ReadonlyArray<EngineInput>): Promise<SteerResult>;
   interrupt(turnId: string): Promise<void>;
   answerRequest(key: string, answer: RequestAnswer): Promise<void>;
+  /**
+   * Change model or runtime mode inside the running session. The host calls it only when the
+   * engine's capabilities allow an in-session switch. Engines without it answer `unsupported`.
+   */
+  setConfig?(settings: TurnSettings): Promise<void>;
   shutdown(): Promise<void>;
 }
 

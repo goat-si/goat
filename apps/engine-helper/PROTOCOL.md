@@ -25,7 +25,7 @@ objects are ignored and logged by length only (v1 provider-pi/src/server/rpc.ts 
 ## Host -> helper: requests
 
 Every request has a numeric id and gets exactly one response {id, result} or
-{id, error: {code, message}}. code is one of bad_request | unavailable | start_failed | transport,
+{id, error: {code, message}}. code is one of bad_request | unavailable | start_failed | unsupported | transport,
 mapped to EngineError on the Rust side.
 
 | method | params | result |
@@ -38,6 +38,7 @@ Each attachment is a goat2-contracts ChatAttachment plus path: the absolute path
 | turn.steer | {turnId, inputs} | SteerResult |
 | turn.interrupt | {turnId} | {} |
 | request.answer | {key, answer: {outcome, text?, answers?}} | {} |
+| session.set_config | {settings: {modelSelection, runtimeMode}} | {}; error code unsupported when the engine has no in-session switch (EngineError::Unsupported) |
 | shutdown | {} | {}, then the helper exits 0 |
 
 TurnStartResult: {status: "accepted", turnId} or {status: "declined" / "refused_unowned" / "unknown",

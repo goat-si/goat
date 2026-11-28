@@ -145,6 +145,15 @@ export function createServer(options: ServerOptions): HelperServer {
       case "request.answer":
         await requireSession().answerRequest(String(params.key ?? ""), params.answer as never);
         return {};
+      case "session.set_config": {
+        const current = requireSession();
+        if (current.setConfig === undefined) {
+          throw new HelperError("unsupported", "this engine cannot change model or runtime mode inside a session");
+        }
+        if (!isObject(params.settings)) throw new HelperError("bad_request", "missing settings");
+        await current.setConfig(params.settings as never);
+        return {};
+      }
       case "shutdown":
         await stopSession();
         return {};

@@ -506,6 +506,27 @@ impl EngineSession for HelperSession {
             .map_err(transport_error)
     }
 
+    /// `session.set_config`: engines without an in-session switch answer `unsupported`.
+    async fn set_config(&self, settings: &TurnSettings) -> Result<(), EngineError> {
+        match self
+            .client
+            .call(
+                "session.set_config",
+                json!({ "settings": settings_json(settings) }),
+                CALL_TIMEOUT,
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(CallError::Remote(RemoteError { code, message }))
+                if code.as_deref() == Some("unsupported") =>
+            {
+                Err(EngineError::Unsupported(message))
+            }
+            Err(error) => Err(transport_error(error)),
+        }
+    }
+
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
         let mut body = Map::new();
         body.insert(
