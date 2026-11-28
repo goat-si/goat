@@ -1117,3 +1117,47 @@ async fn a_steer_echoed_by_the_result_before_its_lifecycle_is_accepted() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// Review round 9 finding 1: on a lifecycle CLI the turn ends while the steer's write is blocked,
+/// then the write lands. Claude may run it as its own prompt, so the answer is Unknown (never
+/// Declined, which would requeue it), and no status is reported for it.
+#[tokio::test]
+async fn a_steer_written_after_its_turn_ended_is_unknown() {
+    let run = Run::new("wire/steer_write_lands_after_turn.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    // command_lifecycle for the root prompt arrives first: the CLI reports lifecycles.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let big = "x".repeat(512 * 1024);
+    let EngineHandle {
+        session, events, ..
+    } = &mut handle;
+    let steer = session.steer(&turn_id, input_as("steer-big", &big));
+    let collect = async {
+        let mut seen = Vec::new();
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+                .await
+                .expect("event within 10 s")
+                .expect("events open");
+            let done = matches!(event, EngineEvent::TurnFinished { .. });
+            seen.push(event);
+            if done {
+                return seen;
+            }
+        }
+    };
+    let (steered, seen) = tokio::join!(steer, collect);
+    assert!(
+        matches!(steered, SteerResult::Unknown { .. }),
+        "{steered:?}"
+    );
+    assert_eq!(finished(&seen), TurnOutcome::Done);
+    assert!(
+        steer_updates(&seen).is_empty(),
+        "{:?}",
+        steer_updates(&seen)
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
