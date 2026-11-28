@@ -416,11 +416,17 @@ impl Shared {
     }
 
     fn on_permission(&self, params: Value, responder: ValueResponder) {
-        let options: Vec<Value> = params
-            .get("options")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let options: Vec<Value> = self.flavor.answerable_permission_options(
+            params
+                .get("options")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let mut answerable_params = params.clone();
+        if let Some(object) = answerable_params.as_object_mut() {
+            object.insert("options".into(), Value::Array(options.clone()));
+        }
         let policy = self.policy.lock().expect("policy").clone();
         let disposition = self.flavor.permission_disposition(&policy, &params);
         let tool_call = params.get("toolCall").cloned().unwrap_or(Value::Null);
@@ -477,7 +483,7 @@ impl Shared {
                     request_kind,
                     prompt: Some(title.clone()),
                     reason: None,
-                    options: Some(self.flavor.approval_options(&params)),
+                    options: Some(self.flavor.approval_options(&answerable_params)),
                 },
             );
             state
