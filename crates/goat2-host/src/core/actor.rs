@@ -1013,14 +1013,15 @@ impl Actor {
                 }
             }
             EngineEvent::SteerUpdated {
-                turn_id, status, ..
-            } => {
-                // Owner decision: a cancelled steer is requeued as a followup with the same
-                // inputId (a second input.delivered {as: steer, outcome: declined}, which the
-                // store folds back into the queue). The host side of that lands in a later merge
-                // (lane E); until then the accepted delivery stands and this is only logged.
-                tracing::debug!(thread = %self.id, %turn_id, ?status, "steer settled (not acted on yet)");
-            }
+                turn_id,
+                input_ids,
+                status,
+            } => match status {
+                crate::engine::SteerStatus::Completed => {}
+                crate::engine::SteerStatus::Cancelled { reason } => {
+                    self.requeue_cancelled_steer(&turn_id, input_ids, &reason);
+                }
+            },
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
@@ -1037,6 +1038,52 @@ impl Actor {
             .store
             .fold(&self.id)
             .is_some_and(|f| f.open_requests.iter().any(|r| &r.request_id == request_id))
+    }
+
+    /// An accepted steer the engine later cancelled (owner 2026-11-29, a deliberate difference
+    /// from v1, which marks it cancelled): its inputs go back to the queue as followups with the
+    /// same input ids, like [SteerResult::Declined]. The log gets a second `input.delivered`
+    /// (steer, declined) per input; the fold puts the input back. No new message is written.
+    fn requeue_cancelled_steer(&mut self, turn_id: &str, input_ids: Vec<InputId>, reason: &str) {
+        let run_id = match &self.phase {
+            Phase::Running(run) if run.turn_id == turn_id => Some(run.run_id.clone()),
+            _ => self
+                .turn_runs
+                .iter()
+                .rev()
+                .find(|(t, _)| t == turn_id)
+                .map(|(_, r)| r.clone()),
+        };
+        let Some(run_id) = run_id else {
+            tracing::warn!(thread = %self.id, "cancelled steer for a turn this session did not start: ignored");
+            return;
+        };
+        let queued: Vec<InputId> = self
+            .host
+            .inner
+            .store
+            .fold(&self.id)
+            .map(|f| f.queued_inputs.into_iter().map(|q| q.input_id).collect())
+            .unwrap_or_default();
+        let events: Vec<LogEvent> = input_ids
+            .into_iter()
+            .filter(|id| !queued.contains(id))
+            .map(|input_id| {
+                LogEvent::InputDelivered(InputDelivered {
+                    input_id,
+                    run_id: run_id.clone(),
+                    delivered_as: DeliveredAs::Steer,
+                    outcome: DeliveryOutcome::Declined,
+                })
+            })
+            .collect();
+        if events.is_empty() {
+            return;
+        }
+        tracing::info!(thread = %self.id, reason, "steer cancelled by the engine: requeued as followup");
+        self.append(events);
+        self.sync_runtime();
+        self.maybe_start();
     }
 
     /// The engine needs the person to sign in: a `signin` request, answered by the person. A
