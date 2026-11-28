@@ -221,3 +221,31 @@ per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine g
 ## Provider and bot runtime contracts (lane C)
 
 Source goat v1 `916b5ccc1b2`: `packages/contracts/src/{providerSetup,acpRegistry,server,rpc,channelBotNotes,channelGateway,botProfile}.ts` and `apps/server/src/channels/ChannelSessionFirst.ts`. Provider and bot runtime shapes are adapted to the additive GOAT 2 wire; detailed lifts and deviations are in `crates/goat2-contracts/PROVENANCE.md`.
+
+## Lane P2-E bot runtime (goat origin/dev 916b5ccc1b2)
+
+| GOAT 2 path | Source path (goat origin/dev 916b5ccc1b2) | How |
+|---|---|---|
+| crates/goat2-host/src/bot/registry.rs | apps/server/src/channels/ChannelBotProfiles.ts, ChannelBotHome.ts | ported to Rust: profile file per bot, update keeps fields not given, one main bot (moved unchanged from core/commands.rs) |
+| crates/goat2-host/src/bot/brief.rs SESSION_PREFIX_HEADINGS, section(), frozen_prefix(), identity_section() | apps/server/src/channels/channelBotSessionBrief.ts | ported to Rust, same headings, order and escaping; identity without v1 instructions until BotProfile.instructions lands |
+| crates/goat2-host/src/bot/brief.rs SESSION_RULES | channelBotSessionBrief.ts GOAT_BOT_SESSION_RULES | adapted: first line and result through goat_send_to_user (PRD bot-reply.md decision 2), long work to goat_thread_start, choices through goat_ask, notes through goat_bot_notes_change |
+| crates/goat2-host/src/bot/brief.rs PERSONAL_DATA_RULE | apps/server/src/channels/channelWorkerBrief.ts:95 | verbatim |
+| crates/goat2-host/src/bot/brief.rs rotation_reason() | apps/server/src/channels/channelBotSessionRotation.ts | ported: profile, then notes; v1 cache/context-budget reasons not carried (GOAT 2 records no token usage yet); frozen record in bots/<botId>/session.json instead of SQLite |
+| crates/goat2-host/src/bot/brief.rs journal(), tail() | apps/server/src/channels/channelBotRecall.ts journalFor (15 entries, 3,000 chars, 160-char results); packages/contracts/src/channelReception.ts CHANNEL_RECEPTION_TAIL_LIMITS (20 messages, 16 KiB) | ported to Rust over the bot's worker cards and bot thread log |
+| crates/goat2-host/src/bot/brief.rs worker_prefix(), ASK_FIRST, REPORT_RESULT, FINISH | apps/server/src/channels/channelWorkerBrief.ts workerInstruction, workerHeader, channelWorkerRules("local") | adapted: goat_thread_report_result / goat_ask tool names, bot notes inline, no skills folder |
+| crates/goat2-host/src/bot/guards.rs ACK 20 s, FIXED 55 s, CHECK 5 s, one receipt per message, skip while answering/composing | apps/server/src/channels/ChannelSessionFirst.ts:59-62, check(), deadlines(), commit() | ported to Rust; v1's 20 s line comes from the reception model, GOAT 2 writes it from the same progress facts |
+| crates/goat2-host/src/bot/guards.rs work_step(), Progress | apps/server/src/channels/channelSessionProgress.ts sessionProgress, workStep (3 steps, 120 chars) | ported to Rust |
+| crates/goat2-host/src/bot/guards.rs SESSION_WORKING | apps/server/src/channels/channelCopy.ts:10 sessionWorking | verbatim |
+| crates/goat2-host/src/bot/guards.rs final_text() | apps/server/src/channels/channelSessionReceipt.ts sessionFinalText | ported to Rust |
+| crates/goat2-host/src/bot/notes.rs | apps/server/src/channels/channelBotNoteLines.ts, channelBotNotes.ts, channelBotNotesRecall.ts, channelBotNotesTail.ts | ported to Rust (line format, corrections, 500-char notes, 6,000 + 3,000 chars, BM25, 256 KiB tail) |
+| crates/goat2-host/src/bot/mcp.rs bot.notes_read / bot.notes_change | packages/contracts/src/agentSurface/entries/channel.ts channel.notes_change | adapted: GOAT 2 path names (no channels in Part 2), clientRequestId instead of input id |
+| crates/goat2-host/src/bot/asks.rs (questions with options on one card) | packages/contracts/src/orchestrationV2.ts OrchestrationV2UserInputQuestion; apps/server/src/channels/channelNativeQuestionCards.ts; channelDecisionChoices.ts matchingOption | ported: same user_input_request item; limits 1-4 questions / 2-4 options / 12-char header from Claude AskUserQuestion as v1 ClaudeAdapterV2.ts maps it |
+| crates/goat2-host/src/bot/decisions.rs decision.list / decision.read / decision.answer | packages/contracts/src/agentSurface/entries/decision.ts; packages/contracts/src/decisions.ts (via lane C DecisionItem) | adapted: v1 ids decision:/pending:, reason required, approvals need a person; remote hosts, permission profiles, expiry, escalation and parent routing not carried in Part 2 |
+| crates/goat2-host/src/core/mcp_ops.rs user_send on bot threads (one ack and one result per message) | apps/server/src/channels/ChannelSessionFirst.ts commit() (one receipt per input) | ported; changes the Part 1 "once per run per kind" for bot runs, which carry several steered messages |
+
+GOAT 2 decisions in this lane (no v1 source): a person's message during a running bot turn is steered into the turn when
+the engine reports supportsActiveSteering, and queued as a followup (with the 20 s queued line) otherwise — v1 queues;
+GOAT 2 steers when capable (owner 2026-11-28). A bot run that ends with a final answer but no goat_send_to_user result
+sends that answer as the result. An agent's own ask is opened with runId null so restart settlement leaves it open
+(owner ruling 2026-11-28).
+
