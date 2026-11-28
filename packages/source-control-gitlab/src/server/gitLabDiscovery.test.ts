@@ -1,3 +1,4 @@
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import {
   parseGitRemoteHost,
   unknownRemoteProvider,
@@ -10,9 +11,12 @@ import { processOutput } from "@goat/source-control-testing/TestSourceControlHos
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as GitLabSourceControlProvider from "./GitLabSourceControlProvider.ts";
+
+const onPath = async (command: string) => `/usr/bin/${command}`;
 
 it("reads the account from glab output without status marks", () => {
   const auth = GitLabSourceControlProvider.discovery.parseAuth(
@@ -50,7 +54,57 @@ ${defaultHostOnly}`;
     assert.strictEqual(item.auth.status, "authenticated");
     assert.deepStrictEqual(item.auth.account, Option.some("gitlab-user"));
     assert.deepStrictEqual(item.auth.host, Option.some("gitlab.com"));
-  }),
+  }).pipe(Effect.provideService(SpawnExecutableResolution, onPath)),
+);
+
+// Discovery sweeps every integration on a timer; a CLI that is not installed should cost one spawn.
+it.effect("does not run the auth command when glab is not installed", () =>
+  Effect.gen(function* () {
+    const spawned: Array<string> = [];
+    const item = yield* probeSourceControlProvider({
+      spec: GitLabSourceControlProvider.discovery,
+      cwd: "/repo",
+      process: {
+        run: ({ operation, command, args, cwd }) => {
+          spawned.push([command, ...args].join(" "));
+          return Effect.fail(
+            new VcsProcessSpawnError({
+              operation,
+              command,
+              cwd,
+              cause: PlatformError.systemError({
+                _tag: "NotFound",
+                module: "ChildProcess",
+                method: "spawn",
+                pathOrDescriptor: command,
+              }),
+            }),
+          );
+        },
+      },
+    });
+    assert.strictEqual(item.status, "missing");
+    assert.deepStrictEqual(spawned, ["glab --version"]);
+  }).pipe(Effect.provideService(SpawnExecutableResolution, onPath)),
+);
+
+it.effect("spawns nothing for a glab that is not on PATH", () =>
+  Effect.gen(function* () {
+    const spawned: Array<string> = [];
+    const item = yield* probeSourceControlProvider({
+      spec: GitLabSourceControlProvider.discovery,
+      cwd: "/repo",
+      process: {
+        run: ({ command, args }) => {
+          spawned.push([command, ...args].join(" "));
+          return Effect.succeed(processOutput("glab 1.124.0\n"));
+        },
+      },
+    });
+    assert.strictEqual(item.status, "missing");
+    assert.strictEqual(item.auth.status, "unknown");
+    assert.deepStrictEqual(spawned, []);
+  }).pipe(Effect.provideService(SpawnExecutableResolution, async () => undefined)),
 );
 
 it.effect("skips --all when the current glab host is signed in", () =>
@@ -74,7 +128,7 @@ it.effect("skips --all when the current glab host is signed in", () =>
     });
     assert.strictEqual(item.auth.status, "authenticated");
     assert.isFalse(asked.some((args) => args.includes("--all")));
-  }),
+  }).pipe(Effect.provideService(SpawnExecutableResolution, onPath)),
 );
 
 it.effect("keeps glab's own sign-out detail when glab predates --all", () =>
@@ -104,7 +158,7 @@ it.effect("keeps glab's own sign-out detail when glab predates --all", () =>
       item.auth.detail,
       Option.some("No GitLab instances have been authenticated with glab."),
     );
-  }),
+  }).pipe(Effect.provideService(SpawnExecutableResolution, onPath)),
 );
 
 it.effect.each([

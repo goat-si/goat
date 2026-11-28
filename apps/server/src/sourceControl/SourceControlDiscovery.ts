@@ -15,6 +15,7 @@ import {
   detailFromCause,
   failedProbeHint,
   firstNonEmptyLine,
+  isExecutableOnPath,
 } from "@goat/source-control-core/server/discovery";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 import { refreshDiscoveryPath } from "./refreshDiscoveryPath.ts";
@@ -149,7 +150,22 @@ export const make = Effect.gen(function* () {
       refreshPath,
       Effect.all({
         versionControlSystems: Effect.all(
-          VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
+          VCS_PROBES.map((entry) =>
+            Effect.flatMap(isExecutableOnPath(entry.executable), (found) =>
+              found
+                ? probe(entry)
+                : Effect.succeed({
+                    kind: entry.kind,
+                    label: entry.label,
+                    executable: entry.executable,
+                    implemented: entry.implemented,
+                    status: "missing" as const,
+                    version: Option.none<string>(),
+                    installHint: entry.installHint,
+                    detail: Option.none<string>(),
+                  }),
+            ),
+          ) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
           { concurrency: "unbounded" },
         ),
         sourceControlProviders: sourceControlProviders.discover,

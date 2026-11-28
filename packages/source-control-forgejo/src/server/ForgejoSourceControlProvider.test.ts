@@ -1,3 +1,4 @@
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import { userFacingSourceControlDetail } from "@goat/source-control-core/server/SourceControlProvider";
 import {
   requiredChecksPullRequest,
@@ -25,6 +26,8 @@ import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceC
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
+
+const onPath = async (command: string) => `/usr/bin/${command}`;
 
 const processOutput = TestSourceControlHost.processOutput;
 
@@ -1785,6 +1788,7 @@ it.effect(
             ),
           ),
           Effect.provideService(HostProcess.HomeDirectory, "/home/maria"),
+          Effect.provideService(SpawnExecutableResolution, onPath),
         );
       }
     }),
