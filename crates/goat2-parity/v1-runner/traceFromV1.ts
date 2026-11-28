@@ -6,6 +6,7 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
   const runAliases = new Map<string, string>();
   const statuses = new Map<string, string>();
   const pendingQueuedMessages = new Set<string>();
+  const queuedRunMessages = new Map<string, string>();
   const emit = (event: any) => events.push({seq: events.length + 1, ...event});
   for (const {event} of [...stored].sort((a, b) => a.sequence - b.sequence)) {
     const p = event.payload;
@@ -19,13 +20,24 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
       emit({kind: "input.accepted", thread: step.thread, input: step.input, from: "user", mode: step.mode, text: p.text});
       if (pendingQueuedMessages.delete(p.id)) emit({kind: "queue.changed", thread: step.thread, input: step.input, op: "enqueued"});
     }
+    else if (event.type === "message.updated" && p.role === "user" && queuedRunMessages.has(p.id) && statuses.get(queuedRunMessages.get(p.id)!) === "queued") {
+      const input = messageAliases.get(p.id);
+      if (!input) throw new Error(`unmapped edited message ${p.id}`);
+      emit({kind: "queue.changed", thread: thread, input, op: "edited", text: p.text});
+    }
     if (event.type === "run.created" || event.type === "run.updated") {
       const old = statuses.get(p.id);
       statuses.set(p.id, p.status);
       if (p.status === "queued" && old !== "queued") {
+        queuedRunMessages.set(p.userMessageId, p.id);
         const input = messageAliases.get(p.userMessageId);
         if (input) emit({kind: "queue.changed", thread: thread, input, op: "enqueued"});
         else pendingQueuedMessages.add(p.userMessageId);
+      }
+      if (p.status === "cancelled" && old === "queued") {
+        const input = messageAliases.get(p.userMessageId);
+        if (!input) throw new Error(`unmapped cancelled message ${p.userMessageId}`);
+        emit({kind: "queue.changed", thread: thread, input, op: "cancelled"});
       }
       if (p.status === "running" && !runAliases.has(p.id)) {
         const input = messageAliases.get(p.userMessageId);
@@ -38,6 +50,11 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
         const run = runAliases.get(p.id);
         if (!run) throw new Error(`unmapped run ${p.id}`);
         emit({kind: "run.finished", thread: thread, run, status: "done"});
+      }
+      if (p.status === "interrupted" && old !== "interrupted") {
+        const run = runAliases.get(p.id);
+        if (!run) throw new Error(`unmapped interrupted run ${p.id}`);
+        emit({kind: "run.finished", thread: thread, run, status: "interrupted"});
       }
     }
   }
