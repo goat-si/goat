@@ -117,7 +117,8 @@ export function demoWorld(): FakeWorld {
     [at(15, 35), { type: "run.started", runId: "run-c1", inputIds: [], generation: 1, engineRef: null }],
     [at(15, 36), { type: "item.completed", runId: "run-c1", engineLocator: null, item: { ...item("t-csv", "run-c1", "it-cols", at(15, 36), { type: "user_input_request", requestId: "req-cols", questions: [
       { id: "columns", header: "Columns", question: "Which columns go into the export?", multiSelect: true, required: true, options: [{ label: "Date", description: "Report date" }, { label: "Amount", description: "Total" }, { label: "Customer", description: "Customer name" }] },
-      { id: "name", header: "File name", question: "What should the file be called?", allowCustomAnswer: true, required: false, options: [], initialAnswer: "" },
+      { id: "format", header: "Format", question: "Which delimiter?", required: true, allowCustomAnswer: false, options: [{ label: "Comma", description: "," }, { label: "Semicolon", description: ";" }] },
+      { id: "name", header: "File name", question: "What should the file be called?", required: false, options: [{ label: "report.csv", description: "Default name" }], initialAnswer: "" },
     ] }), status: "waiting" } }],
     [at(15, 36), { type: "request.opened", requestId: "req-cols", runId: "run-c1", itemId: "it-cols", kind: "question", summary: "Which columns?" }],
   ]));

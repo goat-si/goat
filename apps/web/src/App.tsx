@@ -322,7 +322,9 @@ export function RequestCard({ threadId, request, item, onHide, onLoadDetails }: 
     buttons = offered.map((o, i) => action(o.decision, o.label, i === 0, { outcome: o.decision }, o.warning));
   } else if (request.kind === "question" && item?.type === "user_input_request") {
     // The text box shows custom ?? initialAnswer; the same value is validated and sent, unchanged.
-    const typedOf = (q: (typeof item.questions)[number]) => custom[q.id] ?? q.initialAnswer ?? "";
+    // v1: custom text is allowed unless allowCustomAnswer is false. Only a visible box counts.
+    const canType = (q: (typeof item.questions)[number]) => q.allowCustomAnswer !== false;
+    const typedOf = (q: (typeof item.questions)[number]) => (canType(q) ? custom[q.id] ?? q.initialAnswer ?? "" : "");
     const missing = item.questions.filter((q) => q.required !== false && !(answers[q.id]?.length) && typedOf(q).trim() === "");
     body = <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {item.questions.map((q) => (
@@ -343,7 +345,7 @@ export function RequestCard({ threadId, request, item, onHide, onLoadDetails }: 
                 style={{ padding: "4px 10px", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: on ? "#FFFFFF" : "#0D0D0D", background: on ? "#0D0D0D" : "#FFFFFF", boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }}>{o.label}</span>;
             })}
           </div>
-          {(q.allowCustomAnswer || q.options.length === 0) && <input aria-label={`Answer: ${q.header}`} value={typedOf(q)} onChange={(e) => { const v = e.target.value; setCustom((c) => ({ ...c, [q.id]: v })); if (!q.multiSelect && v !== "") setAnswers((a) => ({ ...a, [q.id]: [] })); }}
+          {canType(q) && <input aria-label={`Answer: ${q.header}`} value={typedOf(q)} onChange={(e) => { const v = e.target.value; setCustom((c) => ({ ...c, [q.id]: v })); if (!q.multiSelect && v !== "") setAnswers((a) => ({ ...a, [q.id]: [] })); }}
             style={{ all: "unset", padding: "6px 10px", border: "1px solid #ECECEC", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: "#0D0D0D" }} />}
         </div>
       ))}
