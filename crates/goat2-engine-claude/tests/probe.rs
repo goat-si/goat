@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use goat2_contracts::{ServerProviderAuthStatus, ServerProviderCli, ServerProviderState};
-use goat2_engine_api::EngineFactory;
+use goat2_engine_api::{EngineFactory, ProviderTarget};
 use goat2_engine_claude::{ClaudeEngineFactory, ClaudeEngineOptions};
 
 fn factory(logged_in: bool) -> ClaudeEngineFactory {
@@ -74,4 +74,65 @@ fn models_follow_the_cli_version() {
         old.iter().any(|m| m.slug == "claude-opus-4-6"),
         "no minimum"
     );
+}
+
+fn target(home: Option<PathBuf>, shared_home: Option<PathBuf>) -> ProviderTarget {
+    ProviderTarget {
+        instance_id: "claudeAgent-work".into(),
+        launch: None,
+        home,
+        shared_home,
+    }
+}
+
+/// Each instance's sign-in is read from its own Claude home (CLAUDE_CONFIG_DIR): the shared home
+/// a person set wins over the host's private folder, as v1 homePath does.
+#[tokio::test]
+async fn probe_instance_reads_the_instance_home() {
+    let dir = std::env::temp_dir().join(format!("goat2-claude-probe-{}", std::process::id()));
+    let signed_in = dir.join("signed-in");
+    let signed_out = dir.join("signed-out");
+    std::fs::create_dir_all(&signed_in).unwrap();
+    std::fs::create_dir_all(&signed_out).unwrap();
+    std::fs::write(signed_in.join("goat2-fake-signed-in"), "").unwrap();
+    let factory = factory(false);
+    let status = |probe: goat2_contracts::ProviderProbeResult| probe.auth.status;
+    assert_eq!(
+        status(
+            factory
+                .probe_instance(&target(Some(signed_in.clone()), None))
+                .await
+                .unwrap()
+        ),
+        ServerProviderAuthStatus::Authenticated
+    );
+    assert_eq!(
+        status(
+            factory
+                .probe_instance(&target(Some(signed_out.clone()), None))
+                .await
+                .unwrap()
+        ),
+        ServerProviderAuthStatus::Unauthenticated
+    );
+    assert_eq!(
+        status(
+            factory
+                .probe_instance(&target(Some(signed_out.clone()), Some(signed_in.clone())))
+                .await
+                .unwrap()
+        ),
+        ServerProviderAuthStatus::Authenticated,
+        "shared_home wins"
+    );
+    let probe = factory
+        .probe_instance(&target(Some(signed_out.clone()), None))
+        .await
+        .unwrap();
+    let printed = format!("{probe:?}");
+    assert!(
+        !printed.contains("signed-out"),
+        "home path leaked: {printed}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
