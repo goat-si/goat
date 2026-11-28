@@ -96,7 +96,6 @@ const makeHarness = Effect.fn("AntigravityRuntimeHealthTest.makeHarness")(functi
   const installation = yield* AntigravityInstallation.makeAntigravityInstallation({
     baseDir: root,
     releaseAsset: null,
-    updateChecksEnabled: Effect.succeed(false),
   });
   const instance = yield* AntigravityDriver.create({
     instanceId: ProviderInstanceId.make(path.basename(root)),

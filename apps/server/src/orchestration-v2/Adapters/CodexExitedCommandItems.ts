@@ -16,7 +16,7 @@ export interface TrackedProcessCommandItem {
 export const terminateCodexBackgroundTerminal = Effect.fn(
   "CodexAdapterV2.terminateBackgroundTerminal",
 )(function* (
-  client: CodexAppServer.CodexAppServerClient,
+  client: CodexAppServer.CodexAppServerClient["Service"],
   nativeThreadId: string,
   processId: string,
 ) {

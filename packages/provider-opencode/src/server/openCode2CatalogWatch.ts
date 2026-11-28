@@ -38,9 +38,9 @@ export const makeOpenCode2CatalogWatch = Effect.fn(
   "OpencodeProviderStatus.makeOpenCode2CatalogWatch",
 )(function* (environment?: NodeJS.ProcessEnv | Effect.Effect<NodeJS.ProcessEnv>) {
   const scope = yield* Effect.scope;
-  const resolveEnvironment =
+  const resolveEnvironment: Effect.Effect<NodeJS.ProcessEnv | null> =
     environment === undefined
-      ? Effect.succeed(undefined)
+      ? Effect.succeed(null)
       : Effect.isEffect(environment)
         ? environment
         : Effect.succeed(environment);
@@ -138,7 +138,7 @@ export const makeOpenCode2CatalogWatch = Effect.fn(
                   reread(
                     machine,
                     (catalog) => SubscriptionRef.set(latest, catalog),
-                    readSettledOpenCode2Catalog(machine.read, env).pipe(
+                    readSettledOpenCode2Catalog(machine.read, env ?? undefined).pipe(
                       Effect.map(Option.getOrElse((): ReadonlyArray<OpenCode2Model> => [])),
                     ),
                   ),

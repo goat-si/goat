@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type { PiSessionEntry, PiSessionListing } from "./entries.ts";
+import type { PiSessionEntry } from "./entries.ts";
 import { piRecordField, piRecordString } from "./rpc.ts";
 
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -186,7 +186,7 @@ export const readBoundedSessionJsonl = Effect.fnUntraced(function* (
   file: string,
   account: (bytes: number) => Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
   onSkip: () => void,
-): Effect.fn.Return<PiSessionListing, ProviderAdapter.ProviderAdapterProtocolError | unknown> {
+) {
   const entries = new Map<string, PiSessionEntry>();
   let leafId: string | null = null;
   yield* scanSessionJsonl(

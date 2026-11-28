@@ -399,28 +399,29 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
                   ),
               }
             : {}),
-          onSessionConfigurationUpdate: (configOptions, modeState, modelState, updateOptions) => {
-            const environmentKey = configurationOrigin(configOptions);
-            const normalized = normalizeAcpRegistryLiveConfiguration(
-              configOptions,
-              modeState,
-              modelState,
-            );
-            const catalogKey = acpRegistryLiveCatalogKey(normalized);
-            const includeCatalog =
-              catalogKey.length > 0 && catalogKey !== updateOptions?.lastCatalogKey;
-            const published = includeCatalog
-              ? normalized
-              : normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState, {
-                  includeCatalog: false,
-                });
-            return runtimeCoordinator
-              .publishLiveConfiguration(options.instanceId, {
+          onSessionConfigurationUpdate: Effect.fnUntraced(
+            function* (configOptions, modeState, modelState, updateOptions) {
+              const environmentKey = configurationOrigin(configOptions);
+              const normalized = normalizeAcpRegistryLiveConfiguration(
+                configOptions,
+                modeState,
+                modelState,
+              );
+              const catalogKey = acpRegistryLiveCatalogKey(normalized);
+              const includeCatalog =
+                catalogKey.length > 0 && catalogKey !== updateOptions?.lastCatalogKey;
+              const published = includeCatalog
+                ? normalized
+                : normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState, {
+                    includeCatalog: false,
+                  });
+              yield* runtimeCoordinator.publishLiveConfiguration(options.instanceId, {
                 ...published,
                 ...(environmentKey === undefined ? {} : { environmentKey }),
-              })
-              .pipe(Effect.as(catalogKey.length > 0 ? catalogKey : null));
-          },
+              });
+              return catalogKey.length > 0 ? catalogKey : null;
+            },
+          ),
           onUrlElicitation: ({ elicitationId, url, message }) => {
             const normalizedUrl = normalizeAcpRegistryWebUrl(url);
             if (normalizedUrl === undefined || elicitationId.trim().length === 0) {

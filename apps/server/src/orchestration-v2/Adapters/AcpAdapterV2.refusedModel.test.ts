@@ -1,12 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off - ACP fixtures use Node HTTP servers and native paths
 import { assert, describe, it } from "@effect/vitest";
 import {
-  ACP_SESSION_MODE_OPTION_ID,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
   type OrchestrationV2ProviderThread,
 } from "@goat/contracts";
+import { ACP_SESSION_MODE_OPTION_ID } from "@goat/provider-acp/server/sessionConfig";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

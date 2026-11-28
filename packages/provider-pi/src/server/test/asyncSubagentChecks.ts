@@ -180,7 +180,7 @@ export function registerPiAsyncSubagentChecks({
         method: "setWidget",
         widgetKey: "subagent-async",
         widgetLines: [
-          `PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({
+          `PI_SUBAGENT_ASYNC_JSON:${encodeJson({
             kind: "pi-subagents.async-status-snapshot",
             version: 1,
             runs: [

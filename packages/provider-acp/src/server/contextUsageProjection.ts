@@ -1,5 +1,6 @@
 import type {
   ModelSelection,
+  OrchestrationV2ProviderThreadNativeMetadata,
   OrchestrationV2ProviderThread,
   ProviderDriverKind,
   ThreadTokenUsageSnapshot,
@@ -22,12 +23,10 @@ export function makeAcpContextUsageProjection(deps: {
   readonly activeSelection: Ref.Ref<ModelSelection | null>;
   readonly activeSessionSetup: Ref.Ref<AcpSessionRuntime.AcpSessionRuntimeStartResult | null>;
   readonly activeTurn: Ref.Ref<ActiveAcpTurn | null>;
-  readonly providerThreadByNativeSessionId: Ref.Ref<
-    ReadonlyMap<string, OrchestrationV2ProviderThread>
-  >;
-  readonly contextUsageBySessionId: Ref.Ref<ReadonlyMap<string, ThreadTokenUsageSnapshot>>;
+  readonly providerThreadByNativeSessionId: Ref.Ref<Map<string, OrchestrationV2ProviderThread>>;
+  readonly contextUsageBySessionId: Ref.Ref<Map<string, ThreadTokenUsageSnapshot>>;
   readonly nativeMetadataBySessionId: Ref.Ref<
-    ReadonlyMap<string, Readonly<Record<string, unknown>>>
+    Map<string, OrchestrationV2ProviderThreadNativeMetadata>
   >;
   readonly emitProviderEvent: (
     event: ProviderAdapter.ProviderAdapterV2Event,

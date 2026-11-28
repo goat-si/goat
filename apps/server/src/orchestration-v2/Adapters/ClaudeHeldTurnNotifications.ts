@@ -15,9 +15,7 @@ import { claudeToolResultBlocksFromUserMessage } from "./ClaudeToolFrames.ts";
  */
 export function makeClaudeHeldTurnNotifications<Turn>(deps: {
   readonly wakeEligibleTasks: Ref.Ref<Map<string, Set<string>>>;
-  readonly pendingTasks: Ref.Ref<
-    Map<string, ReadonlyMap<string, OrchestrationV2PendingBackgroundTask>>
-  >;
+  readonly pendingTasks: Ref.Ref<Map<string, Map<string, OrchestrationV2PendingBackgroundTask>>>;
   readonly lastProviderThreads: Ref.Ref<Map<string, OrchestrationV2ProviderThread>>;
   readonly clearWakeEligible: (nativeThreadId: string, taskId: string) => Effect.Effect<void>;
   readonly markWakeEligible: (

@@ -128,7 +128,10 @@ export function makeClaudeAppContextDelivery() {
       providerThread: OrchestrationV2ProviderThread,
     ): OrchestrationV2ProviderThread {
       const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
-      const entries = nativeThreadId === undefined ? undefined : delivered.get(nativeThreadId);
+      const entries =
+        nativeThreadId === undefined || nativeThreadId === null
+          ? undefined
+          : delivered.get(nativeThreadId);
       if (entries === undefined) return providerThread;
       const { claudeDeliveredAppContext: _recorded, ...nativeMetadata } =
         providerThread.nativeMetadata ?? {};

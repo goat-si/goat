@@ -2,7 +2,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
-import { findModelConfigOption } from "@goat/provider-acp/server/runtimeModel";
+import {
+  type AcpSessionModeState,
+  findModelConfigOption,
+} from "@goat/provider-acp/server/runtimeModel";
 import { flattenSelectChoices } from "@goat/provider-acp/server/sessionConfig";
 
 import type { AcpRegistryConfigurationProbeResult, AcpRegistryLiveConfiguration } from "./probe.ts";
@@ -34,8 +37,8 @@ export const discoverAcpRegistryModelOptions = Effect.fn("AcpRegistryProbe.disco
     result: AcpRegistryConfigurationProbeResult,
     discovery: AcpRegistryModelDiscovery,
     normalizeLiveConfiguration: (
-      configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
-      modeState?: EffectAcpSchema.SessionModeState | null | undefined,
+      configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+      modeState?: AcpSessionModeState | undefined,
     ) => AcpRegistryLiveConfiguration,
   ) {
     const modelOption = findModelConfigOption(yield* runtime.getConfigOptions);

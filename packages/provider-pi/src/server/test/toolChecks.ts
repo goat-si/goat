@@ -19,6 +19,7 @@ import { registerPiAsyncSubagentChecks } from "./asyncSubagentChecks.ts";
 const decodeUserInputQuestions = Schema.decodeUnknownSync(
   Schema.Array(OrchestrationV2UserInputQuestion),
 );
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export function registerPiToolChecks({
   makeFakePi,

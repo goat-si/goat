@@ -83,10 +83,7 @@ export const executePiRollback = Effect.fnUntraced(function* <E>({
   ) => ProviderAdapter.ProviderAdapterProtocolError;
   readonly invalidateThreadState: () => void;
   readonly onSessionSwitched: (switched: boolean) => void;
-}): Effect.fn.Return<
-  PiRollbackPlanResult,
-  E | ProviderAdapter.ProviderAdapterProtocolError | unknown
-> {
+}) {
   const target =
     rollbackInput.target.type === "provider_turn" ? rollbackInput.target.providerTurn : null;
   const targetFile = target?.nativeThreadRef?.nativeId ?? undefined;
@@ -145,7 +142,7 @@ export const executePiRollback = Effect.fnUntraced(function* <E>({
         Effect.catchIf(
           (error) =>
             error.detail.startsWith("Cannot recover Pi fork session: no verified sibling session"),
-          () => Effect.succeed(undefined),
+          () => Effect.succeed(null),
         ),
       );
     }

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- reads native Antigravity swarm state read-only beside AntigravityChildWork.
 import * as NodeFSP from "node:fs/promises";
 
 import * as Option from "effect/Option";

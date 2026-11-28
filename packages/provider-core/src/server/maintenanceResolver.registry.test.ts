@@ -48,9 +48,7 @@ const nativePackageToolUpdate = makePackageManagedProviderMaintenanceResolver({
   provider: driver("nativePackageTool"),
   npmPackageName: "@example/native-package-tool",
   nativeUpdate: {
-    executable: "native-package-tool",
     args: ["update"],
-    lockKey: "native-package-tool",
   },
 });
 const installedPackageToolProvider: ServerProvider = {

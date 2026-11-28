@@ -60,7 +60,9 @@ describe("late ACP session load", () => {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
           onSessionConfigurationUpdate: (configOptions) =>
-            Effect.sync(() => publishedConfigurations.push(configOptions)),
+            Effect.sync(() => {
+              publishedConfigurations.push(configOptions);
+            }),
           makeRuntime: makeLateMockRuntime({
             childProcessSpawner,
             mockAgentPath,

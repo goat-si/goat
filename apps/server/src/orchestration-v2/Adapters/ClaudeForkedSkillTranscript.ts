@@ -51,8 +51,8 @@ export function makeClaudeForkedSkillController<S extends ForkedSkillSubagent>(d
   readonly path: Path.Path;
   readonly sessionScope: Scope.Scope;
   readonly flushMs: number;
-  readonly subagentsByTaskId: Ref.Ref<ReadonlyMap<string, S>>;
-  readonly taskIdsByToolUseId: Ref.Ref<ReadonlyMap<string, string>>;
+  readonly subagentsByTaskId: Ref.Ref<Map<string, S>>;
+  readonly taskIdsByToolUseId: Ref.Ref<Map<string, string>>;
   readonly projectLine: (subagent: S, line: unknown) => Effect.Effect<boolean>;
 }) {
   const getSubagent = (taskId: string) =>

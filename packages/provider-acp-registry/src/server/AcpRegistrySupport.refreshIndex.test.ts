@@ -1,69 +1,16 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
-import * as HostProcess from "@goat/shared/HostProcess";
-import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
-import { AcpRegistrySettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
-
-const decodeAcpRegistrySettings = Schema.decodeSync(AcpRegistrySettings);
-const registryUrl = "https://registry.example.test/registry.json";
-
-const settings = (overrides?: Partial<AcpRegistrySettings>) =>
-  decodeAcpRegistrySettings({ agentId: "example-agent", ...overrides });
-
-const makeAgent = (distribution: Record<string, unknown>) => ({
-  id: "example-agent",
-  name: "Example Agent",
-  version: "1.2.3",
-  description: "Example ACP agent",
-  distribution,
-});
-
-const makeRegistry = (...agents: ReadonlyArray<Record<string, unknown>>) =>
-  JSON.stringify({ version: "1.0.0", agents });
-
-const layerResolver = (
-  handler: (
-    request: HttpClientRequest.HttpClientRequest,
-  ) => Effect.Effect<HttpClientResponse.HttpClientResponse>,
-) =>
-  Layer.mergeAll(
-    NodeServices.layer,
-    NodeCrypto.layer,
-    Layer.succeed(HttpClient.HttpClient, HttpClient.make(handler)),
-    Layer.succeed(HostProcess.Platform, "linux"),
-    Layer.succeed(HostProcess.Architecture, "x64"),
-    Layer.succeed(HostProcess.Environment, { PATH: "/usr/bin" }),
-    Layer.succeed(ProviderHost.ProviderHost, {
-      compatibility: { minimumVersion: () => undefined },
-      paths: {
-        baseDir: "/tmp/goat-acp-test",
-        stateDir: "/tmp/goat-acp-test/state",
-        attachmentsDir: "/tmp/goat-acp-test/attachments",
-        providerStatusCacheDir: "/tmp/goat-acp-test/cache",
-        cwd: "/workspace",
-      },
-      settings: {
-        get: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-        withSnapshot: (use) => use(DEFAULT_SERVER_SETTINGS),
-        changes: undefined as never,
-        subscribe: undefined as never,
-      },
-      shouldRunBackgroundWork: () => Effect.succeed(false),
-      resolveAttachmentPath: () => null,
-      resolveExtractedTextPath: () => null,
-    }),
-  );
+import {
+  layerResolver,
+  makeAgent,
+  makeRegistry,
+  registryUrl,
+  settings,
+} from "./AcpRegistrySupport.testkit.ts";
 
 describe("AcpRegistrySupport index refresh", () => {
   it.effect("refreshes stale disk indexes with max-age, offline backoff, and invalidation", () => {

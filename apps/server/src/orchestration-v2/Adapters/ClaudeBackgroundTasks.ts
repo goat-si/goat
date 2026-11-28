@@ -211,7 +211,7 @@ export function startsAwaitedClaudeBackgroundTask(
 }
 
 export function upsertClaudeRosterTask(
-  current: ReadonlyMap<string, ReadonlyMap<string, OrchestrationV2PendingBackgroundTask>>,
+  current: ReadonlyMap<string, Map<string, OrchestrationV2PendingBackgroundTask>>,
   nativeThreadId: string,
   task: OrchestrationV2PendingBackgroundTask,
 ) {
