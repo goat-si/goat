@@ -5,7 +5,7 @@ Merge locally into `goat2`, force-with-lease push.
 
 | Lane | Branch / worktree | GOAT thread |
 |---|---|---|
-| A thread_store | `goat2_thread_store` | `mcp:a0b59ee4-1aa7-4348-87f7-ecb275b23ccb` |
+| A thread_store — **done for Part 1** (`13fd36b`); Part 2: small additive card fields only | `goat2_thread_store` | `mcp:a0b59ee4-1aa7-4348-87f7-ecb275b23ccb` |
 | B engine_codex | `goat2_engine_codex` | `mcp:05e314f6-b3e5-4ade-bebb-861258209746` |
 | C contracts — **done** (final report 2026-11-28; reopen for contract changes) | `goat2_contracts` | `mcp:628b0dd7-0b60-4332-9be9-0078ee058667` |
 | D parity | `goat2_parity` | `mcp:6bee8c38-9aa4-4405-9f97-61e074c2998c` |
