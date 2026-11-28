@@ -2477,6 +2477,151 @@ async fn a_failed_approval_answer_never_returns_the_engine_text() {
     assert_eq!(refused.message, "the engine did not take the answer");
 }
 
+#[tokio::test]
+async fn a_steer_settled_after_its_turn_ended_is_ignored() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "late-steer-more", "also this", InputMode::Steer).await;
+    let steered = steered_input(&t);
+    t.fake.finish_turn(&id, "ok");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    let delivered_before = count(&t, &id, "input.delivered");
+    t.fake
+        .emit(&id, steer_cancelled(&turn, vec![steered.as_str()]));
+    // Barrier: a later event of the same session is handled after the cancel.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "barrier", goat2_contracts::TurnItemStatus::Running),
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        count(&t, &id, "input.delivered"),
+        delivered_before,
+        "nothing written"
+    );
+    assert!(
+        t.host.store().fold(&id).unwrap().queued_inputs.is_empty(),
+        "not requeued"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_requeues_only_inputs_this_turn_accepted_as_steers() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "stray-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "stray-steer-more", "also this", InputMode::Steer).await;
+    let steered = steered_input(&t);
+    // A stray id and a duplicate next to the real one: the real one is requeued once.
+    t.fake.emit(
+        &id,
+        steer_cancelled(
+            &turn,
+            vec!["in_not_a_steer", steered.as_str(), steered.as_str()],
+        ),
+    );
+    eventually("requeued", || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered)
+    })
+    .await;
+    assert_eq!(t.host.store().fold(&id).unwrap().queued_inputs.len(), 1);
+}
+
+#[tokio::test]
+async fn a_live_and_an_ended_subagent_still_let_the_idle_stop_happen() {
+    let t = setup_with(manual(), |o| {
+        o.idle_stop = Duration::from_millis(150);
+        o.subagent_item_grace = Duration::from_millis(400);
+    })
+    .await;
+    let id = start_user_thread(&t, "mixed", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    let running_ = goat2_contracts::TurnItemStatus::Running;
+    t.fake
+        .emit(&id, subagent_update(Some(turn.clone()), "live", running_));
+    t.fake
+        .emit(&id, subagent_update(Some(turn.clone()), "ended", running_));
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    // One ends (its item never comes) while the other still runs; an idle check passes in that
+    // state and does not re-arm. Then the other's item arrives without an end update.
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "ended",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!shut_down(&t, &id));
+    emit_item(
+        &t,
+        &id,
+        &turn,
+        subagent_item(&id, "live-item", Some("live")),
+    );
+    eventually("idle stop after the grace", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_subagent_first_heard_of_at_its_end_holds_until_its_item() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "first-end", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "quick",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!shut_down(&t, &id), "held while its item is on the way");
+    emit_item(
+        &t,
+        &id,
+        &turn,
+        subagent_item(&id, "quick-item", Some("quick")),
+    );
+    eventually("idle stop after the item", || shut_down(&t, &id)).await;
+}
+
+fn steered_input(t: &T) -> String {
+    t.fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine")
+}
+
+fn steer_cancelled(turn: &str, ids: Vec<&str>) -> goat2_host::engine::EngineEvent {
+    goat2_host::engine::EngineEvent::SteerUpdated {
+        turn_id: turn.to_owned(),
+        input_ids: ids.into_iter().map(Into::into).collect(),
+        status: goat2_host::engine::SteerStatus::Cancelled {
+            reason: "discarded".into(),
+        },
+    }
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()

@@ -154,6 +154,9 @@ struct ActiveRun {
     permit: RunPermit,
     /// Set when an engine request id must map back (key -> request).
     engine_requests: Vec<(String, RequestId)>,
+    /// Inputs this run's turn accepted as steers and the engine has not settled yet: a later
+    /// `SteerUpdated` Cancelled may requeue only these, each once.
+    steered: Vec<InputId>,
     /// `signin` requests opened for this run, closed when the run ends. Engine handles are
     /// tracked separately in `signin_keys`.
     signins: Vec<RequestId>,
@@ -495,6 +498,11 @@ impl Actor {
         match session.steer(&turn_id, vec![to_engine(q)]).await {
             SteerResult::Accepted => {
                 self.append(vec![delivered(DeliveryOutcome::Accepted)]);
+                if let Phase::Running(run) = &mut self.phase
+                    && run.run_id == run_id
+                {
+                    run.steered.push(q.input_id.clone());
+                }
                 Ok(Some(run_id))
             }
             SteerResult::Declined { .. } => {
@@ -786,6 +794,7 @@ impl Actor {
                     engine_requests: Vec::new(),
                     signins: Vec::new(),
                     usage: None,
+                    steered: Vec::new(),
                 });
             }
             TurnStartResult::RefusedUnowned { reason } => {
@@ -832,6 +841,7 @@ impl Actor {
                     engine_requests: Vec::new(),
                     signins: Vec::new(),
                     usage: None,
+                    steered: Vec::new(),
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
             }
@@ -862,8 +872,9 @@ impl Actor {
                 if let TurnItemBody::Subagent { subagent_id, .. } = &item.body
                     && is_terminal(item.status)
                     && self.live_subagents.remove(subagent_id).is_some()
-                    && self.live_subagents.is_empty()
                     && matches!(self.phase, Phase::Idle)
+                    // The others (if any) only wait for their items: the idle check runs again.
+                    && self.live_subagents.values().all(|s| s.ended.is_some())
                 {
                     self.arm_idle();
                 }
@@ -1009,12 +1020,22 @@ impl Actor {
                 // is no live wire frame for it yet (structure/30_wire.md). A running one keeps
                 // the engine from being idle-stopped.
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
+                let running = match &self.phase {
+                    Phase::Running(run) if !run.turn_id.is_empty() => Some(run.turn_id.clone()),
+                    _ => None,
+                };
                 if is_terminal(status) {
                     // Ended, but its finished item comes separately: keep its origin and the
                     // idle protection until that item is recorded, or until the grace runs out.
-                    if let Some(live) = self.live_subagents.get_mut(&subagent_id) {
-                        live.ended.get_or_insert_with(Instant::now);
-                    }
+                    // A subagent first heard of at its end gets the same hold.
+                    let live =
+                        self.live_subagents
+                            .entry(subagent_id)
+                            .or_insert_with(|| LiveSubagent {
+                                origin: turn_id.or(running),
+                                ended: None,
+                            });
+                    live.ended.get_or_insert_with(Instant::now);
                     if matches!(self.phase, Phase::Idle)
                         && self.live_subagents.values().all(|s| s.ended.is_some())
                     {
@@ -1025,10 +1046,6 @@ impl Actor {
                     // without one, the turn running now (drivers report a subagent during the
                     // turn that started it); with no turn running it stays unknown, which
                     // stops all eviction while it lives. A later named turn replaces it.
-                    let running = match &self.phase {
-                        Phase::Running(run) if !run.turn_id.is_empty() => Some(run.turn_id.clone()),
-                        _ => None,
-                    };
                     match self.live_subagents.entry(subagent_id) {
                         std::collections::hash_map::Entry::Occupied(mut known) => {
                             let known = known.get_mut();
@@ -1110,29 +1127,29 @@ impl Actor {
     /// same input ids, like [SteerResult::Declined]. The log gets a second `input.delivered`
     /// (steer, declined) per input; the fold puts the input back. No new message is written.
     fn requeue_cancelled_steer(&mut self, turn_id: &str, input_ids: Vec<InputId>, reason: &str) {
-        let run_id = match &self.phase {
-            Phase::Running(run) if run.turn_id == turn_id => Some(run.run_id.clone()),
-            _ => self
-                .turn_runs
-                .iter()
-                .rev()
-                .find(|(t, _)| t == turn_id)
-                .map(|(_, r)| r.clone()),
-        };
-        let Some(run_id) = run_id else {
-            tracing::warn!(thread = %self.id, "cancelled steer for a turn this session did not start: ignored");
+        // Drivers report a turn's steers before its TurnFinished (engine-api contract); one
+        // after it would be refused by the store once the next run started, so it is ignored.
+        let Phase::Running(run) = &mut self.phase else {
+            tracing::warn!(thread = %self.id, "steer settled after its turn ended: ignored");
             return;
         };
-        let queued: Vec<InputId> = self
-            .host
-            .inner
-            .store
-            .fold(&self.id)
-            .map(|f| f.queued_inputs.into_iter().map(|q| q.input_id).collect())
-            .unwrap_or_default();
-        let events: Vec<LogEvent> = input_ids
+        if run.turn_id != turn_id {
+            tracing::warn!(thread = %self.id, "steer settled after its turn ended: ignored");
+            return;
+        }
+        let run_id = run.run_id.clone();
+        // Only inputs this turn accepted as steers, each once.
+        let mut requeue = Vec::new();
+        for id in input_ids {
+            match run.steered.iter().position(|s| *s == id) {
+                Some(pos) => requeue.push(run.steered.remove(pos)),
+                None => {
+                    tracing::warn!(thread = %self.id, input = %id, "cancelled steer for an input this turn did not accept as a steer: skipped")
+                }
+            }
+        }
+        let events: Vec<LogEvent> = requeue
             .into_iter()
-            .filter(|id| !queued.contains(id))
             .map(|input_id| {
                 LogEvent::InputDelivered(InputDelivered {
                     input_id,
