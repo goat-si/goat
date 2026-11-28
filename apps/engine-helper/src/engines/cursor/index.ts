@@ -123,10 +123,12 @@ class CursorSession implements EngineSession {
   private readonly params: InitializeParams;
   private readonly host: EngineHost;
   private readonly platform: CursorAgentPlatform;
+  private readonly checkpointStore: Awaited<ReturnType<Sdk["createAgentPlatform"]>>["checkpointStore"];
   private recoverAbandoned: boolean;
   private configured: TurnSettings | undefined;
-  constructor(agent: SDKAgent, platform: CursorAgentPlatform, params: InitializeParams, host: EngineHost) {
+  constructor(agent: SDKAgent, platform: CursorAgentPlatform, checkpointStore: Awaited<ReturnType<Sdk["createAgentPlatform"]>>["checkpointStore"], params: InitializeParams, host: EngineHost) {
     this.agent = agent; this.platform = platform; this.params = params; this.host = host;
+    this.checkpointStore = checkpointStore;
     this.recoverAbandoned = params.resume !== null;
     this.engineRef = agent.agentId;
     this.preamble = params.resume ? "" : [params.instructions?.appendSystemPrompt, params.instructions?.firstMessagePreamble].filter(Boolean).join("\n\n");
@@ -229,7 +231,7 @@ class CursorSession implements EngineSession {
       outcome = active.interrupted ? { type: "interrupted" } : { type: "failed", reason: failure.message };
       if (active.interrupted) this.interruptedPrompt = active.prompt;
     }
-    this.finalize(active, outcome);
+    await this.finalize(active, outcome);
   }
   private async waitForCancellation(active: NonNullable<CursorSession["active"]>) {
     if (!active.cancelPending) return;
@@ -238,10 +240,18 @@ class CursorSession implements EngineSession {
       await Promise.race([active.cancelPending, new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000); })]);
     } finally { if (timer) clearTimeout(timer); }
   }
-  private finalize(active: NonNullable<CursorSession["active"]>, outcome: { type: "done" } | { type: "failed"; reason: string } | { type: "interrupted" }) {
+  private async finalize(active: NonNullable<CursorSession["active"]>, outcome: { type: "done" } | { type: "failed"; reason: string } | { type: "interrupted" }) {
     if (active.finalized) return;
     active.finalized = true;
     active.projection.finalize(outcome.type === "done" ? "completed" : outcome.type);
+    // v1 CursorAgentSdk.ts:822-839 and adapter.ts:993-1018: checkpoint context fill.
+    try {
+      const checkpoint = await this.checkpointStore.loadLatest(this.engineRef);
+      const details = (checkpoint as { tokenDetails?: { usedTokens?: unknown; maxTokens?: unknown } } | null)?.tokenDetails;
+      if (details && Number.isSafeInteger(details.usedTokens) && (details.usedTokens as number) >= 0 && Number.isSafeInteger(details.maxTokens) && (details.maxTokens as number) > 0) {
+        this.host.emit({ type: "token_usage", turnId: active.run.id, usage: { usedTokens: details.usedTokens as number, maxTokens: details.maxTokens as number } });
+      }
+    } catch { this.host.log("debug", "Cursor context usage unavailable"); }
     if (this.active === active) this.active = undefined;
     this.host.emit({ type: "turn_finished", turnId: active.run.id, outcome });
   }
@@ -268,7 +278,7 @@ class CursorSession implements EngineSession {
       throw new HelperError("transport", "Cursor could not interrupt the run.");
     }
     // v1 adapter.ts:1750-1772: settle even if the SDK never resolves wait after cancel.
-    setTimeout(() => { if (!active.finalized) { this.interruptedPrompt = active.prompt; this.finalize(active, { type: "interrupted" }); } }, 10_000).unref();
+    setTimeout(() => { if (!active.finalized) { this.interruptedPrompt = active.prompt; void this.finalize(active, { type: "interrupted" }); } }, 10_000).unref();
   }
   async answerRequest(_key: string, _answer: RequestAnswer) { throw new HelperError("bad_request", "Cursor SDK has no live approval or question callbacks"); }
   async setConfig(settings: TurnSettings) {
@@ -306,7 +316,7 @@ export const cursorEngine: EngineModule = {
       const agent = params.resume === null ? await platform.createAgent(options) : await platform.resumeAgent(params.resume, options);
       const secrets = [key ?? "", params.mcp?.bearerToken ?? "", ...Object.entries(process.env).filter(([name]) => /CURSOR.*(token|secret|password|api.?key)/i.test(name)).map(([, value]) => value ?? ""), ...Object.entries(params.launch?.env ?? {}).filter(([name]) => /token|secret|password|api.?key/i.test(name)).map(([, value]) => value)];
       sessionOpen = true;
-      return new CursorSession(agent, platform, params, safeHost(host, secrets));
+      return new CursorSession(agent, platform, shared.checkpointStore, params, safeHost(host, secrets));
     } catch (error) {
       if (error instanceof HelperError) throw error;
       throw new HelperError("start_failed", "Cursor SDK could not open the agent.");

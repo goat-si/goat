@@ -78,6 +78,32 @@ fn input(text: &str) -> Vec<EngineInput> {
 }
 
 #[tokio::test]
+async fn cursor_checkpoint_usage_reaches_engine_event() {
+    let (factory, spec, settings) = setup("cursor-usage");
+    let mut handle = factory.start(spec).await.expect("helper starts");
+    let turn_id = match handle.session.start_turn(input("usage"), &settings).await {
+        TurnStartResult::Accepted { turn_id } => turn_id,
+        other => panic!("turn not accepted: {other:?}"),
+    };
+    let mut seen = false;
+    loop {
+        match handle.events.recv().await.expect("event stream") {
+            EngineEvent::TokenUsage { turn_id: id, usage } => {
+                assert_eq!(id.as_deref(), Some(turn_id.as_str()));
+                assert_eq!(usage.used_tokens, 123);
+                assert_eq!(usage.max_tokens, Some(1000));
+                seen = true;
+            }
+            EngineEvent::TurnFinished { .. } => break,
+            EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
+            _ => {}
+        }
+    }
+    assert!(seen, "usage must precede turn completion");
+    handle.session.shutdown().await;
+}
+
+#[tokio::test]
 async fn cursor_helper_turn_validates_items() {
     let (factory, spec, settings) = setup("cursor-thread");
     let mut handle = factory.start(spec).await.expect("helper starts");

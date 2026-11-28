@@ -56,6 +56,34 @@ function helper(env: Record<string, string> = {}) {
 }
 const input = (text: string) => [{ inputId: "i", text, attachments: [] }];
 
+test("Cursor forwards checkpoint token usage before turn completion", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const turn = (await h.request("turn.start", { inputs: input("usage"), settings })).result;
+    await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
+    const events = h.lines.map(l => l.event).filter(Boolean);
+    const usageIndex = events.findIndex(e => e.type === "token_usage");
+    assert.deepEqual(events[usageIndex], { type: "token_usage", turnId: turn.turnId, usage: { usedTokens: 123, maxTokens: 1000 } });
+    assert.ok(usageIndex < events.findIndex(e => e.type === "turn_finished"));
+    await h.request("shutdown", {});
+  } finally { h.child.kill(); }
+});
+
+test("Cursor ignores missing, malformed, or unavailable checkpoint usage", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    for (const text of ["plain", "bad-usage", "usage-error"]) {
+      const turn = (await h.request("turn.start", { inputs: input(text), settings })).result;
+      const done = await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
+      assert.equal(done.event.outcome.type, "done");
+      assert.equal(h.lines.some(l => l.event?.type === "token_usage" && l.event.turnId === turn.turnId), false);
+    }
+    await h.request("shutdown", {});
+  } finally { h.child.kill(); }
+});
+
 test("Cursor helper streams a turn, projects tools, steers, interrupts and resumes", async () => {
   const h = helper();
   try {
