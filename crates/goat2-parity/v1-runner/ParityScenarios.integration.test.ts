@@ -19,7 +19,8 @@ import { CodexOrchestratorReplayHarness } from "../../Adapters/CodexAdapterV2.te
 import * as CodexAdapterV2Testkit from "../../Adapters/CodexAdapterV2.testkit.ts";
 import { withThreadNames, withThreadSetupReads } from "../../Adapters/CodexReplay.testkit.ts";
 import { provideDeterministicTestRuntime } from "../DeterministicRuntime.ts";
-import { CODEX_MODEL_SELECTION, WORKSPACE_NEVER_POLICY, materializeFixtureInput } from "../fixtures/shared.ts";
+import { CODEX_MODEL_SELECTION, materializeFixtureInput } from "../fixtures/shared.ts";
+import { ORCHESTRATOR_REPLAY_FIXTURES } from "../fixtures/index.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "../ProviderReplayHarness.ts";
 import { traceFromV1 } from "./traceFromV1.ts";
 
@@ -27,6 +28,12 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const dir = process.env.GOAT2_PARITY_SCENARIO!;
   const out = process.env.GOAT2_PARITY_OUT!;
   const scenario = JSON.parse(readFileSync(join(dir, "scenario.json"), "utf8"));
+  // Use the runtime policy v1 registers for the Codex fixture this scenario's transcript was
+  // recorded from (fixtures/index.ts), rather than choosing one per scenario.
+  const source = scenario.streams.codex.provenance?.source as string | undefined;
+  const fixtureProvider = ORCHESTRATOR_REPLAY_FIXTURES.flatMap((f) => f.providers).find((p) =>
+    p.driver === "codex" && source !== undefined && p.transcriptFile.pathname.endsWith(`/${source}`));
+  const runtimePolicy = fixtureProvider?.runtimePolicyOverride ?? {};
   const threadAliases = new Set(scenario.steps.map((s: any) => s.thread).filter(Boolean));
   if (threadAliases.size !== 1) throw new Error(`single-thread runner got threads ${[...threadAliases]}`);
   const sends = scenario.steps.filter((s: any) => s.do === "send");
@@ -105,7 +112,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     driver = yield* CodexReplay.makeReplayDriver(augmented, options?.replayGate ? {beforeEmitInbound: (entry) => Effect.promise((signal) => options.replayGate.beforeEmit(entry.label, signal))} : {});
     return CodexAdapterV2Testkit.layer({transcript, driver});
   }))};
-  const exit = yield* Effect.exit(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex`, transcript, commands: materialized.commands, steps, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace, ...(scenario.name === "interrupt_ack_then_terminal" ? WORKSPACE_NEVER_POLICY : {})}}, harness));
+  const exit = yield* Effect.exit(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex`, transcript, commands: materialized.commands, steps, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace, ...runtimePolicy}}, harness));
   const state = yield* Ref.get(driver.state);
   const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? exit.value.storedEvents : [], driver.transcript, state, threadId, messageInputs, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
   const tmp = `${out}.${process.pid}.tmp`;
