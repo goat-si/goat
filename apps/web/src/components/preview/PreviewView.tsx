@@ -875,6 +875,26 @@ export function PreviewView({
     };
   }, [visible]);
 
+  const desktopSlotShown = Boolean(
+    runtimeTabId && snapshot && !isServerTab && !showEmptyState && previewBridge,
+  );
+  const pageOverlays = (
+    <>
+      {runtimeTabId &&
+      desktopOverlay &&
+      !showEmptyState &&
+      !isUnreachable &&
+      !activeRecordingTabIds.has(runtimeTabId) ? (
+        <AgentBrowserCursor
+          tabId={runtimeTabId}
+          zoomFactor={layoutZoomFactor}
+          controller={controller}
+        />
+      ) : null}
+      {find.bar}
+    </>
+  );
+
   return (
     <div
       data-glass-layer
@@ -975,7 +995,6 @@ export function PreviewView({
       />
 
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
-        {find.bar}
         {runtimeTabId && snapshot && isServerTab ? (
           <>
             {viewport._tag !== "fill" && !showEmptyState && !isUnreachable ? (
@@ -1032,7 +1051,9 @@ export function PreviewView({
               tabId={runtimeTabId}
               visible={visible && !isUnreachable}
               className="absolute inset-0 h-full w-full"
-            />
+            >
+              {pageOverlays}
+            </BrowserSurfaceSlot>
           ) : (
             <div className="flex h-full items-center justify-center p-8 text-center">
               <p className="max-w-sm text-sm text-muted-foreground">
@@ -1054,17 +1075,7 @@ export function PreviewView({
         {snapshot && desktopOverlay ? (
           <ZoomIndicator zoomFactor={desktopOverlay.zoomFactor} />
         ) : null}
-        {runtimeTabId &&
-        desktopOverlay &&
-        !showEmptyState &&
-        !isUnreachable &&
-        !activeRecordingTabIds.has(runtimeTabId) ? (
-          <AgentBrowserCursor
-            tabId={runtimeTabId}
-            zoomFactor={layoutZoomFactor}
-            controller={controller}
-          />
-        ) : null}
+        {desktopSlotShown ? null : pageOverlays}
         {navStatus._tag === "LoadFailed" && navStatus.download ? (
           <div className="absolute inset-0 z-10 bg-background">
             <ServerTabFileNotShown

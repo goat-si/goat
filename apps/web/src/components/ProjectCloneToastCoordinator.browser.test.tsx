@@ -10,10 +10,15 @@ const state = vi.hoisted(() => ({
 }));
 
 // Plain factories keep the RPC runtime out; the silence state is the real module.
-vi.mock("../state/projectClones", async () => ({
-  ...(await import("../state/projectCloneToastSilence")),
-  useEnvironmentProjectClones: () => state.clones,
-}));
+vi.mock("../state/projectClones", async () => {
+  const { create } = await import("zustand");
+  const useProjectCloneToastHolds = create<ReadonlySet<string>>(() => new Set());
+  return {
+    ...(await import("../state/projectCloneToastSilence")),
+    useEnvironmentProjectClones: () => state.clones,
+    useProjectCloneToastHolds,
+  };
+});
 vi.mock("../state/environments", () => ({
   useEnvironments: () => ({ environments: [{ environmentId: "studio" }] }),
 }));

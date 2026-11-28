@@ -72,6 +72,7 @@ it("opens empty thread history from details and hides it without read permission
     gitCwd: null,
     isGitRepo: false,
     envLocked: false,
+    offersWorkspaceModes: true,
     availableEnvironments: [],
     environmentsWithoutProject: [],
     onEnvModeChange: () => {},

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { goatBotRowTime } from "@goat/client-runtime/goatBot";
 
 import {
@@ -7,6 +7,30 @@ import {
   formatRelativeElapsed,
   formatUpcomingTimestamp,
 } from "./timestampFormat";
+
+// Node re-resolves the default zone when TZ is assigned, like a renderer after the OS zone changes.
+function useTimeZone(timeZone: string): Disposable {
+  const previous = process.env.TZ;
+  process.env.TZ = timeZone;
+  return {
+    [Symbol.dispose]: () => {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    },
+  };
+}
+
+it("writes full timestamps in the system locale", async () => {
+  using _zone = useTimeZone("UTC");
+  vi.stubGlobal("window", { desktopBridge: { getSystemLocale: () => "de-DE" } });
+  vi.resetModules();
+  try {
+    const { formatFullTimestamp } = await import("./timestampFormat");
+    expect(formatFullTimestamp("2026-11-19T18:05:00.000Z", "24-hour")).toBe("19.11.2026, 18:05:00");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("GOAT Bot work rows", () => {
   // Home's rows use client-runtime's scale; the sidebar uses this one. They must say the same.

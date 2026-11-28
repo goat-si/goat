@@ -10,10 +10,14 @@ import {
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import type { ComposerAttachmentInsertion } from "../composerAttachmentInsertion";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
-import { getCompatibleRuntimeModeOptions } from "./runtimeModeConfig";
+import { resolveDraftRuntimeModes } from "./runtimeModeConfig";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
+import {
+  importPastedComposerText,
+  type PastedComposerClipboard,
+  readPastedComposerClipboard,
+} from "../composerInlineTokenPaste";
 import {
   questionAttachmentDraftId,
   trackOpenQuestionAttachmentDraft,
@@ -48,6 +52,7 @@ import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   memo,
   type ReactNode,
+  use,
   useEffect,
   useId,
   useImperativeHandle,
@@ -290,7 +295,11 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope } from "../../state/session";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
-import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
+import { BackgroundThreadContext } from "./backgroundThread";
+import {
+  ComposerCommandMenuLayer,
+  DeferredComposerCommandMenuLayer,
+} from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
 import { useComposerProviderModel } from "./useComposerProviderModel";
@@ -904,14 +913,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : undefined;
   const resolvedCompactDisabledReason =
     compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
-  const compatibleRuntimeModeOptions = getCompatibleRuntimeModeOptions(
-    selectedProviderEntry?.snapshot.supportedRuntimeModes,
-  );
-  const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
-    (option) => option.mode === runtimeMode,
-  )
-    ? runtimeMode
-    : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
+  const { options: compatibleRuntimeModeOptions, mode: compatibleRuntimeMode } =
+    resolveDraftRuntimeModes(
+      runtimeMode,
+      selectedProviderEntry?.snapshot.supportedRuntimeModes,
+      multipleModelSelections,
+      providerStatuses,
+    );
 
   const providerSendBlockReason = sshWorktreeSelected
     ? null
@@ -2200,6 +2208,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     attachmentTargetKey,
     isComposerDraftTargetOpen: (key) => composerDraftTargetKeyRef.current === key,
     composerEditorRef,
+    composerFormRef,
     isRevertingCheckpoint: () => isRevertingCheckpointRef.current,
     pendingThreadImportsRef,
     setComposerCursor,
@@ -2270,8 +2279,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const showInlineRestingControls = composerControlsCollapsed && restingControlsHost === null;
   const composerControlsVisibleInStrip =
     composerControlsCollapsed && restingControlsHost !== null && restingControlsVisible;
+  const backgroundThread = use(BackgroundThreadContext);
   const composerControlsHidden = composerControlsCollapsed && !restingControlsVisible;
-  if (composerControlsHidden && isComposerModelPickerOpen) {
+  // Popovers and menus stack above app modals, so one left open would cover Usage.
+  const composerMenusClosed = composerControlsHidden || backgroundThread;
+  if (composerMenusClosed && isComposerModelPickerOpen) {
     setIsComposerModelPickerOpen(false);
   }
   useLayoutEffect(() => {
@@ -2475,28 +2487,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }
   if (tasksDrawerThreadId !== activeThreadId) setTasksDrawerThreadId(activeThreadId);
 
+  const canInsertComposerText =
+    !isConnecting &&
+    !activePendingIsResponding &&
+    (pendingUserInputs.length === 0 || Boolean(activePendingProgress?.activeQuestion)) &&
+    !projectSelectionRequired &&
+    !voice.isVoiceActive;
+
   const insertComposerText = (
     text: string,
     position: "cursor" | "end",
     options?: {
       ensureLeadingBoundary?: boolean;
       citationCommentAnchor?: AssistantCitationSourceAnchor;
-      clipboardData?: DataTransfer;
+      clipboardPaste?: PastedComposerClipboard;
     },
   ): boolean => {
     if (
       text.length === 0 ||
-      isConnecting ||
-      activePendingIsResponding ||
-      (pendingUserInputs.length > 0 && !activePendingProgress?.activeQuestion) ||
-      projectSelectionRequired ||
-      voice.isVoiceActive ||
+      !canInsertComposerText ||
       (options?.citationCommentAnchor && !composerEditorRef.current)
     ) {
       return false;
     }
-    if (options?.clipboardData) {
-      text = importPastedComposerText(options.clipboardData, importContextFragment);
+    if (options?.clipboardPaste) {
+      text = importPastedComposerText(options.clipboardPaste, importContextFragment);
     }
     const prompt = promptRef.current;
     const cursor = position === "cursor" ? readComposerSnapshot().expandedCursor : prompt.length;
@@ -2621,7 +2636,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       toggleInteractionMode={toggleInteractionMode}
       handleRuntimeModeChange={handleRuntimeModeChange}
       composerControlsCollapsed={composerControlsCollapsed}
-      composerControlsHidden={composerControlsHidden}
+      composerControlsHidden={composerMenusClosed}
       restingHiddenBlockCount={restingHiddenBlockCount}
       iconOnlyBlockCount={iconOnlyBlockCount}
       showInlineRestingControls={showInlineRestingControls}
@@ -2674,10 +2689,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     insertAtEnd: insertComposerTextAtEndStable,
     focus: focusComposer,
   });
-  const onComposerPaste: ComposerPromptEditorProps["onPaste"] = (event, importSnapshot) => {
+  const onComposerPaste: ComposerPromptEditorProps["onPaste"] = (
+    event,
+    importSnapshot,
+    readClipboard,
+  ) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
+    const paste = readClipboard
+      ? readClipboard(bypassAutoAttachment)
+      : readPastedComposerClipboard(
+          event.clipboardData,
+          bypassAutoAttachment || isLiteralPendingAnswer,
+        );
     const htmlImageContent =
       activeThreadId && files.length > 0 && plainText.length > 0
         ? clipboardHtmlImageContent(event.clipboardData.getData("text/html"))
@@ -2722,7 +2747,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
-    if ((readPastedComposerContext(event.clipboardData)?.records.length ?? 0) > 0) return;
+    if (paste.context?.records.length) return;
     const imagesBesideText = imagesToAttachBesidePastedText({
       files,
       plainText,
@@ -2730,7 +2755,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       htmlHasImageAndText: htmlImageContent === "image-and-text",
     });
     if (imagesBesideText.length > 0) void addComposerAttachments(imagesBesideText);
-    if (!foldPastedText(plainText, bypassAutoAttachment)) {
+    if (!foldPastedText(paste.text, bypassAutoAttachment)) {
       return;
     }
     event.preventDefault();
@@ -2939,21 +2964,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         countPreparingComposerImages(attachmentTargetKey) > 0 ||
         pendingDraftWork.has(attachmentTargetKey),
       insertTextAtEnd: insertComposerTextAtEndStable,
-      pasteTextAtEnd: (text: string, options) => {
-        if (voice.isVoiceActive) return false;
+      pasteTextAtEnd: (clipboardData, options) => {
+        if (!canInsertComposerText) return false;
         const shortcutArmed = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
-        const bypassAutoAttachment = options?.bypassAutoAttachment === true || shortcutArmed;
+        const bypassAutoAttachment = options.bypassAutoAttachment || shortcutArmed;
+        if (composerEditorRef.current?.pasteAtCodeBlockEnd(clipboardData)) return true;
+        const paste = readPastedComposerClipboard(
+          clipboardData,
+          bypassAutoAttachment || isLiteralPendingAnswer,
+        );
+        if (paste.context?.records.length) {
+          return insertComposerTextAtEndStable(paste.text, { clipboardPaste: paste });
+        }
         const promptLength = promptRef.current.length;
         if (
-          !foldPastedText(text, bypassAutoAttachment, {
+          foldPastedText(paste.text, bypassAutoAttachment, {
             start: promptLength,
             end: promptLength,
           })
         ) {
-          return false;
+          focusComposer();
+          return true;
         }
-        focusComposer();
-        return true;
+        return insertComposerTextAtEndStable(paste.text);
       },
       citeAssistantText: (citation, sourceAnchor) =>
         insertComposerTextStable(
@@ -3152,6 +3185,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThread,
       addComposerAttachments,
       addComposerFoldersStable,
+      canInsertComposerText,
       foldPastedText,
       composerDraftTarget,
       composerModelOptions,
@@ -3552,22 +3586,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     : composerMenuEmptyState
                   : ""}
               </div>
-              {composerSuggestionsVisible && (
-                <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
-                  <ComposerCommandMenu
-                    listId={composerSuggestionListId}
-                    items={composerMenuItems}
-                    resolvedTheme={resolvedTheme}
-                    isLoading={isComposerMenuLoading}
-                    triggerKind={composerTriggerKind}
-                    emptyStateText={composerMenuEmptyState}
-                    errorText={composerMenuError}
-                    activeItemId={activeComposerMenuItem?.id ?? null}
-                    onHighlightedItemChange={onComposerMenuItemHighlightedStable}
-                    onSelect={onSelectComposerItemStable}
-                  />
-                </ComposerCommandMenuLayer>
-              )}
+              <DeferredComposerCommandMenuLayer
+                open={composerSuggestionsVisible}
+                anchor={composerMenuAnchor}
+              >
+                <ComposerCommandMenu
+                  listId={composerSuggestionListId}
+                  items={composerMenuItems}
+                  resolvedTheme={resolvedTheme}
+                  isLoading={isComposerMenuLoading}
+                  triggerKind={composerTriggerKind}
+                  emptyStateText={composerMenuEmptyState}
+                  errorText={composerMenuError}
+                  activeItemId={activeComposerMenuItem?.id ?? null}
+                  onHighlightedItemChange={onComposerMenuItemHighlightedStable}
+                  onSelect={onSelectComposerItemStable}
+                />
+              </DeferredComposerCommandMenuLayer>
               {!isComposerCollapsedMobile &&
                 pendingUserInputs.length === 0 &&
                 editingQueuedAttachments !== null &&

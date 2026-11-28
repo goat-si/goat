@@ -162,11 +162,19 @@ export function humanizeThemeName(raw: string): string {
     .join(" ");
 }
 
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 function resolveName(value: Record<string, unknown>): string {
   for (const candidate of [value.displayName, value.name]) {
     if (typeof candidate !== "string") continue;
     const humanized = humanizeThemeName(candidate);
-    if (humanized.length > 0) return humanized.slice(0, 48);
+    if (humanized.length > 0) {
+      return humanized.slice(0, splitsSurrogatePair(humanized, 48) ? 47 : 48);
+    }
   }
   return "VS Code theme";
 }
@@ -446,12 +454,27 @@ export function pairVsCodeThemes(
   return [...passthrough, ...paired].sort((a, b) => a.order - b.order).map((entry) => entry.theme);
 }
 
+export function numberedThemeName(label: string, suffix: string): string {
+  const suffixId = themeIdFromName(suffix);
+  const base = [...label];
+  while (base.length > 0) {
+    const stem = base.join("").trimEnd();
+    const name = `${stem}${suffix}`;
+    const id = themeIdFromName(name);
+    if (name.length <= 48 && id.split("-").at(-1) === suffixId && id !== themeIdFromName(stem)) {
+      return name;
+    }
+    base.pop();
+  }
+  return suffix.trimStart();
+}
+
 export function resolveThemeLabelCollisions(
   entries: ReadonlyArray<{ theme: ThemeDefinition; sourceName?: string | undefined }>,
 ): ReadonlyArray<ThemeDefinition> {
   const rename = (theme: ThemeDefinition, name: string): ThemeDefinition | null => {
     try {
-      return renameTheme(theme, name.slice(0, 48));
+      return renameTheme(theme, name.slice(0, splitsSurrogatePair(name, 48) ? 47 : 48));
     } catch {
       return null;
     }
@@ -480,22 +503,7 @@ export function resolveThemeLabelCollisions(
       return theme;
     }
     for (let suffix = 2; suffix < 100; suffix += 1) {
-      const suffixText = String(suffix);
-      const base = [...theme.label];
-      let stem = base.join("").trimEnd();
-      let name = `${stem} ${suffixText}`;
-      let id = themeIdFromName(name);
-      while (
-        name.length > 48 ||
-        id.split("-").at(-1) !== suffixText ||
-        id === themeIdFromName(stem)
-      ) {
-        base.pop();
-        stem = base.join("").trimEnd();
-        name = `${stem} ${suffixText}`;
-        id = themeIdFromName(name);
-      }
-      const candidate = rename(theme, name);
+      const candidate = rename(theme, numberedThemeName(theme.label, ` ${suffix}`));
       if (candidate && !inputIds.has(candidate.id) && !seen.has(candidate.id)) {
         seen.add(candidate.id);
         return candidate;

@@ -1932,6 +1932,11 @@ html[data-theme-id="goat-chat"] [data-app-sidebar] {
     color-mix(in srgb, var(--input) var(--appearance-contrast-base), transparent),
     var(--foreground) var(--appearance-contrast-border-boost)
   );
+  --contrast-accent: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--accent) var(--appearance-contrast-base), transparent),
+    var(--foreground) var(--appearance-contrast-border-boost)
+  );
   --contrast-border: color-mix(
     in srgb,
     color-mix(in srgb, var(--border) var(--appearance-contrast-base), transparent),
@@ -2396,9 +2401,11 @@ code {
 }
 
 /* Triple-click selection stops at block-level boxes, flex items included, so file chips in
-   prose stay inline-level down to the icon and label. */
+   prose stay inline-level down to the icon and label. Chromium also stops it at
+   draggable="true" (desktop native file drags) unless user-select is set back to text. */
 .chat-markdown-file-link {
   display: inline-block;
+  user-select: text;
   overflow-x: clip;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2408,6 +2415,17 @@ code {
   display: inline;
   margin-inline-end: 0.2em;
   vertical-align: -0.125em;
+}
+
+/* Firefox resolves a drag over the sprite icon's <use> to the shared <symbol> and collapses the
+   selection there, or snaps an unselectable icon's point into the text before it. Passing the
+   pointer to the chip lands the selection at its label. Chromium keeps triple-click line
+   selection only without user-select: none here. */
+@supports (-moz-appearance: none) {
+  .chat-markdown-file-link > svg {
+    pointer-events: none;
+    user-select: none;
+  }
 }
 
 .chat-markdown-file-link > [data-slot="context-chip-label"] {
@@ -2570,11 +2588,26 @@ code {
   background: transparent !important;
 }
 
+/* Markdown fences hold sentences, not code: each line takes the direction of its
+   own words. Coding-font ligatures assume left-to-right and would overprint RTL letters.
+   Text and unlabeled fences stay LTR: they often hold trees and tables, whose lines must align. */
+.chat-markdown
+  .chat-markdown-codeblock:is(
+    [data-language="md" i],
+    [data-language="markdown" i],
+    [data-language="mdx" i]
+  )
+  pre {
+  unicode-bidi: plaintext;
+  font-variant-ligatures: none;
+}
+
 /* Paragraphs and code blocks arrive in chunks while a response streams. Fade
    each new block in so the chunk does not pop. @starting-style only applies
-   when an element is first inserted, and the rule is gated on data-streaming,
-   so opening a finished thread never replays the fade. Opacity only, one
-   shot, no layout change. */
+   when an element is first inserted, and ChatMarkdown leaves data-streaming off
+   a reply it already showed until new text arrives, so remounting it (thread
+   switch, virtualized scroll) never replays the fade. Opacity only, one shot,
+   no layout change. */
 @media (prefers-reduced-motion: no-preference) {
   .chat-markdown[data-streaming] > *,
   .chat-markdown[data-streaming] .chat-markdown-shiki,
@@ -3256,4 +3289,8 @@ code {
 
 .messages-timeline-scroll:focus-visible {
   outline: none;
+}
+
+[data-script-command-input] {
+  font-variant-ligatures: none;
 }

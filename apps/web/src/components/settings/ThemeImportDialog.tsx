@@ -18,6 +18,7 @@ import {
 } from "../../themePalette";
 import {
   humanizeThemeName,
+  numberedThemeName,
   pairVsCodeThemes,
   parseThemeImport,
   resolveThemeLabelCollisions,
@@ -33,6 +34,12 @@ import { ThemeSearchSection } from "./ThemeSearchSection";
  * locks the UI for as long as that takes.
  */
 const MAX_THEME_FILE_BYTES = 256 * 1024;
+
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
 
 async function validateThemeCss(theme: ThemeDefinition): Promise<ThemeDefinition> {
   if (theme.css === undefined) return theme;
@@ -275,7 +282,7 @@ function ThemeImportBody({
     for (const file of files) {
       const oversized = describeOversizedThemeFile(file.size, gt);
       if (oversized) {
-        failures.push(gt("{name}: too large", { name: file.name }));
+        failures.push(`${file.name}: ${oversized}`);
         continue;
       }
       try {
@@ -354,15 +361,17 @@ function ThemeImportBody({
     theme: ThemeDefinition,
     preferredName?: string | null,
   ): ThemeDefinition => {
-    if (preferredName && preferredName.toLowerCase() !== theme.label.toLowerCase()) {
-      const candidate = renameTheme(theme, preferredName.slice(0, 48));
-      if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
+    if (preferredName) {
+      const name = preferredName
+        .slice(0, splitsSurrogatePair(preferredName, 48) ? 47 : 48)
+        .trimEnd();
+      if (name.toLowerCase() !== theme.label.toLowerCase()) {
+        const candidate = renameTheme(theme, name);
+        if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
+      }
     }
     for (let copy = 1; copy < 100; copy += 1) {
-      const candidate = renameTheme(
-        theme,
-        `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
-      );
+      const candidate = renameTheme(theme, numberedThemeName(theme.label, ` (${copy})`));
       if (getCustomThemes().some((existing) => existing.id === candidate.id)) continue;
       return candidate;
     }

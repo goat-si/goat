@@ -21,12 +21,13 @@ import { getRouter } from "~/router";
 import {
   CLAUDE_PROVIDER,
   CODEX_PROVIDER,
+  emitThreadEvent,
   ENVIRONMENT_ID,
   installFakeEnvironment,
   threadWithHistory,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
-import { render } from "../../test/render";
+import { act, render } from "../../test/render";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock("../../../../packages/client-runtime/src/connection/driver.ts", async (importOriginal) => {
@@ -127,4 +128,34 @@ it("sends a Codex follow-up on a cold Claude thread without compacting first", a
   const sent = { text: "keep going", instanceId: CODEX_PROVIDER.instanceId };
   await vi.waitFor(() => expect(messages()).toContainEqual(sent));
   expect(messages()).toEqual([sent]);
+});
+
+it("/compact stays in the slash menu while a turn runs, since a typed command queues", async () => {
+  const history = threadWithHistory("compact-mid-turn", 2, {
+    instanceId: CLAUDE,
+    model: "claude-opus-4-6",
+  });
+  using _environment = installFakeEnvironment([history], { providers: [CLAUDE_PROVIDER] });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${history.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 1 for ${history.id}.`)).toBeVisible();
+  const compact = page.getByRole("option", { name: /^\/compact/ });
+
+  await userEvent.type(page.getByTestId("composer-editor"), "/compact");
+  await expect.element(compact).toBeVisible();
+
+  const running = { ...history.runs[1]!, status: "running" as const, completedAt: null };
+  await act(() => emitThreadEvent(history.id, { type: "run.updated", payload: running }));
+  await expect.element(page.getByRole("button", { name: "Steer message" })).toBeVisible();
+  await expect.element(compact).toBeVisible();
 });

@@ -1,5 +1,6 @@
 import { useGT } from "gt-react";
 import { useState } from "react";
+import { commitNumberFieldOnEnter } from "./commitNumberFieldOnEnter";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -69,7 +70,10 @@ export function IntervalSecondsField({
     >
       <NumberFieldGroup>
         <NumberFieldDecrement aria-label={gt("Decrease {label}", { label })} />
-        <NumberFieldInput aria-label={gt("{label} in seconds", { label })} />
+        <NumberFieldInput
+          aria-label={gt("{label} in seconds", { label })}
+          onKeyDown={commitNumberFieldOnEnter}
+        />
         <NumberFieldIncrement aria-label={gt("Increase {label}", { label })} />
       </NumberFieldGroup>
     </NumberField>

@@ -1,6 +1,8 @@
 import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 import { shortcutLabelForCommand } from "./keybindings";
 import { describe, expect, it } from "vite-plus/test";
+import { ProjectId } from "@goat/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import {
   projectScriptRuntimeEnv,
   projectScriptMenuLabel,
@@ -13,6 +15,7 @@ import {
   commandForProjectScript,
   nextProjectScriptId,
   primaryProjectScript,
+  projectScriptIdsInEnvironment,
   releaseClaimedRoles,
 } from "./projectScripts";
 
@@ -48,6 +51,29 @@ describe("projectScripts helpers", () => {
     expect(nextProjectScriptId("Run Tests", [])).toBe("run-tests");
     expect(nextProjectScriptId("Run Tests", ["run-tests"])).toBe("run-tests-2");
     expect(nextProjectScriptId("!!!", [])).toBe("script");
+  });
+
+  it("avoids script ids another project in the environment uses", () => {
+    const script = (id: string) => ({
+      id,
+      name: id,
+      command: id,
+      icon: "test" as const,
+      runOnWorktreeCreate: false,
+    });
+    const settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      projectSettingsFolded: false,
+      defaultProjectScripts: [script("lint")],
+      projectSettingsOverrides: {
+        [ProjectId.make("a")]: { defaultProjectScripts: [script("test")] },
+      },
+    };
+    const ids = projectScriptIdsInEnvironment(settings, [
+      { id: ProjectId.make("b"), scripts: [script("build")] },
+    ]);
+    expect(new Set(ids)).toEqual(new Set(["lint", "test", "build"]));
+    expect(nextProjectScriptId("Test", ids)).toBe("test-2");
   });
 
   it("resolves primary, setup, and settle scripts", () => {

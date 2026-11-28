@@ -1,4 +1,5 @@
 import type { ContextMenuItem } from "@goat/contracts";
+import { threadRuntimeCanArchive } from "@goat/client-runtime/state/models";
 import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
@@ -96,6 +97,8 @@ export interface ThreadActionMenuState {
   readonly canPromote?: boolean | undefined;
   /** Archive rejects attached providers, so disable it while running. */
   readonly isRunning: boolean;
+  /** The server marks unread against the latest run's completion, so in-flight runs cannot be. */
+  readonly hasCompletedRun: boolean;
   readonly supports: {
     readonly settlement: boolean;
     readonly autoSettleOptOut: boolean;
@@ -185,6 +188,38 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
     "copy-thread",
     "copy-thread-id",
   ].includes(action);
+}
+
+/**
+ * The server marks unread against the latest run's completion, and a stopped run never reads as
+ * unread, so only a run that finished on its own can be marked unread.
+ */
+export function canMarkLatestRunUnread(
+  run: { readonly status: string; readonly completedAt?: string | null } | null | undefined,
+): boolean {
+  return run?.completedAt != null && run.status !== "interrupted" && run.status !== "cancelled";
+}
+
+export function buildBulkMarkUnreadContextMenu<
+  T extends {
+    readonly latestRun?: { readonly status: string; readonly completedAt?: string | null } | null;
+    readonly runtime: Parameters<typeof threadRuntimeCanArchive>[0];
+  },
+>(
+  threads: readonly T[],
+): {
+  readonly threads: readonly T[];
+  readonly items: readonly ContextMenuItem<"mark-unread">[];
+} {
+  // Same rule as the single-thread menu: only a settled, completed run can be marked unread.
+  const eligible = threads.filter(
+    (thread) => canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime),
+  );
+  return {
+    threads: eligible,
+    items:
+      eligible.length > 0 ? [{ id: "mark-unread", label: `Mark unread (${eligible.length})` }] : [],
+  };
 }
 
 export function buildThreadActionMenuItems(
@@ -281,7 +316,9 @@ export function buildThreadActionMenuItems(
           },
         ]
       : []),
-    { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+    ...(state.hasCompletedRun && !state.isRunning
+      ? [{ id: "mark-unread" as const, label: "Mark unread", icon: "mail-open" }]
+      : []),
     ...(state.canShareWithGuest
       ? [{ id: "share-guest" as const, label: "Share with guest", icon: "user-plus" }]
       : []),

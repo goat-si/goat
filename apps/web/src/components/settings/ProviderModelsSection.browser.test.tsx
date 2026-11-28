@@ -1,12 +1,41 @@
 import "../../index.css";
-import { useState } from "react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
+import { type ComponentProps, useState } from "react";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProviderModel } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
-import { act } from "../../../test/render";
+import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { ProviderModelsSection } from "./ProviderModelsSection";
+import { SettingsPageShell } from "./SettingsPageShell";
+
+function section(props: Partial<ComponentProps<typeof ProviderModelsSection>>) {
+  return (
+    <ProviderModelsSection
+      instanceId={ProviderInstanceId.make("codex")}
+      driverKind={ProviderDriverKind.make("codex")}
+      models={[]}
+      customModels={[]}
+      canManageCustomModels
+      hiddenModels={[]}
+      favoriteModels={[]}
+      modelOrder={[]}
+      onChange={() => {}}
+      onHiddenModelsChange={() => {}}
+      onFavoriteModelsChange={() => {}}
+      onToggleFavorite={() => {}}
+      onModelOrderChange={() => {}}
+      {...props}
+    />
+  );
+}
 
 it("lists a favorite the provider no longer reports so it can be unstarred", async () => {
   const onToggleFavorite = vi.fn();
@@ -239,4 +268,112 @@ it("regroups the list when all models are disabled and enabled again", async () 
   await expect.element(toggle).toBeChecked();
 
   expect(rowSlugs(screen.container)).toEqual(models.map((model) => model.slug));
+});
+
+it("cancels adding or editing a custom model on Escape without closing Settings", async () => {
+  const kept = { slug: "kept-model", name: "kept-model", capabilities: null };
+  const root = createRootRoute({ component: Outlet });
+  const settingsRoute = createRoute({
+    getParentRoute: () => root,
+    path: "/settings/providers",
+    component: () => (
+      <SettingsPageShell pathname="/settings/providers">
+        {section({ models: [{ ...kept, isCustom: true }], customModels: [kept] })}
+      </SettingsPageShell>
+    ),
+  });
+  const home = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: () => <h1>Home view</h1>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([settingsRoute, home]),
+    history: createMemoryHistory({ initialEntries: ["/settings/providers"] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  // Uses a custom multi-route router with SettingsPageShell and a home fallback route.
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  const closeSettings = page.getByRole("button", { name: "Close settings" });
+
+  await userEvent.click(page.getByRole("button", { name: "Add custom model" }));
+  const addInput = page.getByRole("textbox");
+  await userEvent.type(addInput, "draft-model");
+  await userEvent.keyboard("{Escape}");
+  await expect.element(addInput).not.toBeInTheDocument();
+  await expect.element(closeSettings).toBeVisible();
+
+  await userEvent.click(page.getByRole("button", { name: "Edit kept-model", exact: true }));
+  const displayName = page.getByRole("textbox", { name: "Display name", exact: true });
+  await userEvent.click(displayName);
+  await expect.element(displayName).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(displayName).not.toBeInTheDocument();
+  await expect.element(closeSettings).toBeVisible();
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
+});
+
+it("clears the model filter on Escape without closing Settings", async () => {
+  const manyModels = Array.from({ length: 9 }, (_, index) => ({
+    slug: `gpt-${index}`,
+    name: `GPT ${index}`,
+    isCustom: false,
+    capabilities: null,
+  }));
+  const root = createRootRoute({ component: Outlet });
+  const settingsRoute = createRoute({
+    getParentRoute: () => root,
+    path: "/settings/providers",
+    component: () => (
+      <SettingsPageShell pathname="/settings/providers">
+        {section({ models: manyModels })}
+      </SettingsPageShell>
+    ),
+  });
+  const home = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: () => <h1>Home view</h1>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([settingsRoute, home]),
+    history: createMemoryHistory({ initialEntries: ["/settings/providers"] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  // Uses a custom multi-route router with SettingsPageShell and a home fallback route.
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  const closeSettings = page.getByRole("button", { name: "Close settings" });
+  const filter = page.getByRole("textbox", { name: "Filter models" });
+  await userEvent.type(filter, "gpt 1");
+  for (const composition of [
+    { key: "Escape", isComposing: true, keyCode: 27 },
+    { key: "Escape", isComposing: false, keyCode: 229 },
+  ]) {
+    // Safari ends the composition just before the Escape keydown.
+    await act(() => {
+      filter.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      filter
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { ...composition, bubbles: true }));
+    });
+    await expect.element(filter).toHaveValue("gpt 1");
+  }
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(filter).toHaveValue("");
+  await expect.element(filter).toHaveFocus();
+  // Holding Escape repeats the keydown, which must not also close Settings.
+  await act(() => {
+    filter
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", repeat: true, bubbles: true }));
+  });
+  await expect.element(closeSettings).toBeVisible();
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
 });

@@ -7,7 +7,11 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
-import { ensureClientSettingsHydrated, persistClientSettingsPatch } from "../../hooks/useSettings";
+import {
+  ensureClientSettingsHydrated,
+  getClientSettings,
+  persistClientSettingsPatch,
+} from "../../hooks/useSettings";
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { Project } from "../../types";
@@ -176,4 +180,29 @@ it("allows device preferences when no project is selected", async () => {
   await expect
     .element(page.getByRole("menuitem", { name: "Set as default" }))
     .not.toHaveAttribute("aria-disabled", "true");
+});
+
+it("saves a typed default viewport size on Enter", async () => {
+  await ensureClientSettingsHydrated();
+  await persistClientSettingsPatch(
+    { browserDefaultViewport: { _tag: "freeform", width: 1280, height: 800 } },
+    async () => {},
+  );
+  await using screen = await render(
+    <SettingsScopeProvider search={{}} onChange={() => {}}>
+      <IntegrationsSettingsPanel />
+    </SettingsScopeProvider>,
+    { router: "/settings/browser" },
+  );
+
+  const width = screen.getByRole("textbox", { name: "Default viewport width" });
+  await userEvent.clear(width);
+  await userEvent.type(width, "1440");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(width).toHaveFocus();
+  expect(getClientSettings().browserDefaultViewport).toEqual({
+    _tag: "freeform",
+    width: 1440,
+    height: 800,
+  });
 });

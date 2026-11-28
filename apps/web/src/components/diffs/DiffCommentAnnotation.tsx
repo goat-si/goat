@@ -127,8 +127,14 @@ export function DiffCommentAnnotation({
           event.currentTarget.setSelectionRange(end, end);
         }}
         onKeyDown={(event) => {
+          // Unclaimed, an IME Escape would close the right panel sheet or leave the pull requests page.
+          if (event.nativeEvent.isComposing || event.keyCode === 229) {
+            event.stopPropagation();
+            return;
+          }
           if (event.key === "Escape") {
             event.preventDefault();
+            event.stopPropagation();
             if (speech?.voice.blocksSubmission()) {
               speech.voice.cancel();
               return;

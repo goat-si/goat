@@ -102,6 +102,17 @@ export function AcpRegistrySearchStep({
     [onPreparingChange],
   );
 
+  const typeQuery = (value: string) => {
+    const nextQuery = value.slice(0, ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH);
+    setQuery(nextQuery);
+    setPrepareError(null);
+    if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null;
+      setSubmittedQuery(nextQuery.trim());
+    }, 300);
+  };
+
   const submitSearch = (nextQuery: string) => {
     if (searchTimer.current !== null) {
       clearTimeout(searchTimer.current);
@@ -163,26 +174,27 @@ export function AcpRegistrySearchStep({
           <InputGroupAddon>
             <SearchIcon />
           </InputGroupAddon>
+          {/* Native search inputs clear on Escape even during IME composition. */}
           <InputGroupInput
             aria-label="Search ACP Registry"
             maxLength={ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH}
             disabled={preparingId !== null}
-            onChange={(event) => {
-              const nextQuery = event.currentTarget.value.slice(
-                0,
-                ACP_REGISTRY_SEARCH_QUERY_MAX_LENGTH,
-              );
-              setQuery(nextQuery);
-              setPrepareError(null);
-              if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-              searchTimer.current = setTimeout(() => {
-                searchTimer.current = null;
-                setSubmittedQuery(nextQuery.trim());
-              }, 300);
+            enterKeyHint="search"
+            onChange={(event) => typeQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape" || event.defaultPrevented) return;
+              if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+              const composing = event.nativeEvent.isComposing || event.keyCode === 229;
+              if (!composing && !query && !event.repeat) return;
+              event.stopPropagation();
+              if (composing) return;
+              event.preventDefault();
+              if (query) typeQuery("");
             }}
             placeholder="Search agents…"
+            role="searchbox"
             size="sm"
-            type="search"
+            type="text"
             value={query}
           />
         </InputGroup>

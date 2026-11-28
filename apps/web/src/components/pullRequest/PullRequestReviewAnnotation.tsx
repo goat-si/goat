@@ -14,6 +14,7 @@ import {
   CircleCheckIcon,
   CircleIcon,
 } from "~/components/solar";
+import { T } from "gt-react";
 import { useRef, useState } from "react";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 
@@ -49,8 +50,14 @@ function submitKeys(input: {
   readonly onCancel?: (() => void) | undefined;
 }) {
   return (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Unclaimed, an IME Escape would reach the pull requests page and leave it.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      event.stopPropagation();
+      return;
+    }
     if (event.key === "Escape" && input.onCancel) {
       event.preventDefault();
+      event.stopPropagation();
       input.onCancel();
     }
     if (isCommentSubmitShortcut(event, input.value, input.pending)) {
@@ -253,7 +260,11 @@ export function ReviewThreadCard({
           {thread.isResolved ? "Resolved" : "Open"} · {commentCount}{" "}
           {commentCount === 1 ? "comment" : "comments"}
         </button>
-        {thread.isOutdated ? <span>outdated</span> : null}
+        {thread.isOutdated ? (
+          <span>
+            <T context="review thread state">Outdated</T>
+          </span>
+        ) : null}
         {onFix ? (
           <Button
             size="xs"

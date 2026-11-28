@@ -1,14 +1,19 @@
 import { useGT, useMessages } from "gt-react";
 import {
   WhenExpressionRemoveButton,
+  keybindingAnchorIds,
+  KeybindingsGroupsSkeleton,
   KeybindingsSearchInput,
   KeybindingRowTitle,
   UnknownWhenVariableWarning,
   KeybindingConflictWarning,
   BrowserKeybindingNotice,
 } from "./KeybindingSettingsParts";
-import { useEnvironmentScope } from "../../state/session";
-import { useEnvironmentsWithScope, readEnvironmentScope } from "../../state/session";
+import {
+  readEnvironmentScope,
+  useEnvironmentScope,
+  useEnvironmentsWithScope,
+} from "../../state/session";
 import {
   ChevronDownIcon,
   CircleXIcon,
@@ -18,7 +23,7 @@ import {
   XIcon,
 } from "~/components/solar";
 import { useLocation } from "@tanstack/react-router";
-import { type KeyboardEvent, useReducer, useRef, useState } from "react";
+import { type KeyboardEvent, useDeferredValue, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   AuthOrchestrationOperateScope,
@@ -89,11 +94,11 @@ import {
   whenAstToExpression,
   whenNodeRemoveLabel,
 } from "./KeybindingsSettings.logic";
+import { isBareEscape } from "./keybindingsSearchEscape";
 import { KeybindingPill } from "./KeybindingPill";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { useKeybindingDisplayLabel } from "./useKeybindingDisplayLabel";
-import { keybindingSearchAnchorId } from "./settingsSearch";
 import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -619,9 +624,9 @@ function useKeybindingRowEditor({
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab" && !isRecording) return;
     event.preventDefault();
-    if (event.key === "Escape") {
-      // An unhandled Escape closes the settings page.
-      event.stopPropagation();
+    // An unhandled Escape closes the settings page.
+    if (event.key === "Escape") event.stopPropagation();
+    if (isBareEscape(event)) {
       const field = event.currentTarget;
       flushSync(() =>
         setDraft({
@@ -980,9 +985,9 @@ function useNewKeybindingDraft({
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab" && !isRecording) return;
     event.preventDefault();
-    if (event.key === "Escape") {
-      // An unhandled Escape closes the settings page.
-      event.stopPropagation();
+    // An unhandled Escape closes the settings page.
+    if (event.key === "Escape") event.stopPropagation();
+    if (isBareEscape(event)) {
       setDraft({ keyDraft: "", isRecording: false });
       event.currentTarget.blur();
       return;
@@ -1232,17 +1237,6 @@ function KeybindingsGroups(props: KeybindingsGroupsProps) {
   ));
 }
 
-function keybindingAnchorIds(rows: ReturnType<typeof buildKeybindingRows>) {
-  const ids = new Map<string, string>();
-  const seen = new Set<KeybindingCommand>();
-  for (const row of rows) {
-    if (seen.has(row.command)) continue;
-    seen.add(row.command);
-    ids.set(row.id, keybindingSearchAnchorId(row.command));
-  }
-  return ids;
-}
-
 // Cache rows in a separate hook so the compiler does not rebuild them per search keystroke.
 function useKeybindingCatalog() {
   const sendShortcut = useClientSettings((settings) => settings.sendShortcut);
@@ -1294,6 +1288,9 @@ export function KeybindingsSettingsPanel() {
   const { commandOptions, allRows } = useKeybindingCatalog();
   const rows = filterKeybindingRows(allRows, query, labelForCommand);
   const groups = groupKeybindingRows(rows);
+  // Building every row takes a long frame, so the page opens at once and the list fills in
+  // without blocking input. A search the user types renders the same way.
+  const shownGroups = useDeferredValue(groups, null);
   const anchorIds = keybindingAnchorIds(rows);
 
   const openKeybindingsFile = () => {
@@ -1481,9 +1478,11 @@ export function KeybindingsSettingsPanel() {
           </SettingsGroup>
         ) : null}
 
-        {groups.length > 0 ? (
+        {shownGroups === null ? (
+          <KeybindingsGroupsSkeleton />
+        ) : shownGroups.length > 0 ? (
           <KeybindingsGroups
-            groups={groups}
+            groups={shownGroups}
             anchorIds={anchorIds}
             savingCommand={savingCommand}
             {...rowActions}

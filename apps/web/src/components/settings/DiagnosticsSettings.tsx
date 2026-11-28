@@ -41,6 +41,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { formatProcessName, formatShortProcessName } from "./DiagnosticsSettings.logic";
 import { ExpandableText } from "./ExpandableText";
 import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
@@ -205,14 +206,6 @@ function TraceIdCell({ traceId }: { traceId: string }) {
       </Tooltip>
     </div>
   );
-}
-
-function formatProcessName(command: string): string {
-  const firstToken = command.trim().split(/\s+/)[0];
-  if (!firstToken) return command;
-  const normalized = firstToken.replace(/^['"]|['"]$/g, "");
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  return segments.at(-1) ?? normalized;
 }
 
 function formatProcessType(process: ServerProcessDiagnosticsEntry): string {
@@ -408,11 +401,6 @@ const RESOURCE_HISTORY_WINDOWS = [
   { label: "1h", windowMs: 60 * 60_000, bucketMs: 5 * 60_000 },
 ] as const;
 
-function formatShortProcessName(command: string): string {
-  const name = formatProcessName(command);
-  return name.length > 42 ? `${name.slice(0, 39)}...` : name;
-}
-
 function ResourceHistoryProcessNameCell({
   process,
   visualDepth,
@@ -469,10 +457,10 @@ function ProcessResourceHistoryChart({
               <TooltipTrigger
                 render={
                   <div className="flex h-full min-w-1 flex-1 items-end">
-                    <div
-                      className="relative h-full w-full"
-                      aria-label={`Average CPU ${bucket.avgCpuPercent.toFixed(1)}%, peak CPU ${bucket.maxCpuPercent.toFixed(1)}%`}
-                    >
+                    <div className="relative h-full w-full">
+                      <span className="sr-only">
+                        {`Average CPU ${bucket.avgCpuPercent.toFixed(1)}%, peak CPU ${bucket.maxCpuPercent.toFixed(1)}%`}
+                      </span>
                       <div
                         className="absolute inset-x-0 bottom-0 rounded-t-sm bg-foreground/15 transition-colors"
                         style={{ height: `${peakHeight}%` }}

@@ -307,13 +307,20 @@ export const makePreviewSessionPopoutInstaller = Effect.fn("PreviewSessionPopout
           void runPromise(Effect.logWarning("Preview session popout failed", error));
         },
       );
+      // Popups from every frame in this window arrive here without a caller, so only web links
+      // pass. The app opens editors and other applications over IPC.
       owner.webContents.setWindowOpenHandler((details) => {
         const popout = manager.open(details);
         if (popout) return popout;
-        if (Option.isSome(ElectronShell.parseSafeExternalUrl(details.url)))
+        if (Option.isSome(ElectronShell.parseWebExternalUrl(details.url)))
           void runPromise(shell.openExternal(details.url));
         return { action: "deny" };
       });
+      // Chromium asks this before handing a navigation to an OS protocol handler, and grants it
+      // when nothing answers. External links are opened through ElectronShell only.
+      owner.webContents.session.setPermissionRequestHandler((_contents, permission, callback) =>
+        callback(permission !== "openExternal"),
+      );
     });
   },
 );

@@ -1,8 +1,9 @@
 import { getCommandPaletteOpener } from "../commandPaletteBus";
 import { requestWorkspaceFocus } from "../lib/workspaceFocus";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { useRouter } from "@tanstack/react-router";
 import { XIcon } from "~/components/solar";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { useCloseAppModal } from "./sidebar/mainAppLocation";
 import { Button } from "./ui/button";
@@ -14,14 +15,36 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
  * backdrop returns to the page that opened it. Keyboard guards that skip dialogs exempt
  * `[data-app-modal]`, because these pages own their shortcuts.
  */
-export function AppRouteModal({ label, children }: { label: string; children: ReactNode }) {
+export function AppRouteModal({
+  label,
+  actionsRef,
+  children,
+}: {
+  label: string;
+  actionsRef?: RefObject<DialogPrimitive.Root.Actions | null>;
+  children: ReactNode;
+}) {
   const closeAppModal = useCloseAppModal();
+  const router = useRouter();
   const [open, setOpen] = useState(true);
   // Text selection that ends on the backdrop is not a dismissal.
   const backdropPressRef = useRef(false);
   // Focus the surface, not its first control: no stray focus ring, no phone keyboard.
   // Pointer dismissal leaves focus alone to avoid a focus ring.
   const popupRef = useRef<HTMLDivElement>(null);
+  // Leaving the page without closing (Navigation: Back) unmounts a focused field during a
+  // commit, when React no longer delivers its blur, so commit-on-blur rows would drop what was
+  // typed. Blur text fields before the navigation renders; other controls keep their focus.
+  const [bindPopupRef] = useState(() => (node: HTMLDivElement | null) => {
+    popupRef.current = node;
+    if (node === null) return undefined;
+    return router.subscribe("onBeforeLoad", ({ pathChanged }) => {
+      const focused = document.activeElement;
+      if (pathChanged && focused?.matches("input, textarea, [contenteditable]")) {
+        blurFocusedWithin(popupRef.current);
+      }
+    });
+  });
   const [opener] = useState(
     () =>
       getCommandPaletteOpener() ??
@@ -31,14 +54,18 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
   return (
     <DialogPrimitive.Root
       open={open}
+      actionsRef={actionsRef}
       // Portaled layers outside this tree (toasts, Clerk, confirm dialogs) are not backdrop presses.
       disablePointerDismissal
-      onOpenChange={(nextOpen) => {
+      onOpenChange={(nextOpen, eventDetails) => {
         if (nextOpen) return;
+        // Base UI's dismiss handler fires on held Esc repeats after a nested popup closes.
+        if (eventDetails.reason === "escape-key" && eventDetails.event.repeat) {
+          return eventDetails.cancel();
+        }
         // Closing unmounts a focused field without a blur, so commit-on-blur rows would
         // drop what was typed. Blur first so they commit.
-        const focused = document.activeElement;
-        if (focused instanceof HTMLElement && popupRef.current?.contains(focused)) focused.blur();
+        blurFocusedWithin(popupRef.current);
         setOpen(false);
       }}
       onOpenChangeComplete={(nextOpen) => {
@@ -58,7 +85,7 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
           }}
         >
           <DialogPrimitive.Popup
-            ref={popupRef}
+            ref={bindPopupRef}
             initialFocus={popupRef}
             finalFocus={(closeType) => {
               if (closeType !== "keyboard" || !opener?.isConnected) return false;
@@ -80,6 +107,11 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
   );
+}
+
+function blurFocusedWithin(container: HTMLElement | null) {
+  const focused = document.activeElement;
+  if (focused instanceof HTMLElement && container?.contains(focused)) focused.blur();
 }
 
 export function AppRouteModalClose() {

@@ -75,7 +75,7 @@ describe("keepFailedSendInStash", () => {
   // regression: an attachment-only send whose stash write storage rejected vanished without a word
   it("names the lost attachments when storage rejects the stash of a send without text", async () => {
     usePromptStashStore.setState({
-      stashEntry: () => ({ evicted: null, written: false, durable: false }),
+      stashEntry: () => ({ full: false, written: false, durable: false }),
     });
 
     await keepFailedSendInStash({ snapshot: snapshot(""), environmentId, interrupted: false });
@@ -89,7 +89,7 @@ describe("keepFailedSendInStash", () => {
 
   it("names the lost attachments beside Copy when storage rejects the stash of a send with text", async () => {
     usePromptStashStore.setState({
-      stashEntry: () => ({ evicted: null, written: false, durable: false }),
+      stashEntry: () => ({ full: false, written: false, durable: false }),
     });
 
     await keepFailedSendInStash({ snapshot: snapshot("See"), environmentId, interrupted: false });

@@ -1,5 +1,6 @@
 import type { PullRequestCommit } from "@goat/contracts";
 import { ChevronDownIcon } from "~/components/solar";
+import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -30,10 +31,13 @@ export function PullRequestDiffCommitMenu({
     <DropdownMenu>
       <DropdownMenuTrigger
         render={<Button size="xs" variant="secondary" />}
-        className="min-w-0 max-w-64"
+        className="min-w-0 max-w-64 shrink-[999]"
         aria-label={`Diff scope: ${scopeLabel}`}
       >
-        <span className="truncate">{scopeLabel}</span>
+        <span className={cn("truncate", selectedCommit && "hidden @xl:inline")}>{scopeLabel}</span>
+        {selectedCommit ? (
+          <span className="truncate font-mono @xl:hidden">{selectedCommit.oid.slice(0, 7)}</span>
+        ) : null}
         <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-[min(28rem,calc(100vw-2rem))]">

@@ -56,7 +56,7 @@ export function isClosedCodeFence(
   const opening = /^(?:`{3,}|~{3,})/.exec(source)?.[0];
   // One class for the blockquote prefix: nested quantifiers here backtrack
   // exponentially on code lines that start with many `> ` markers.
-  const closing = /(?:^|\n)[ \t>]*(`{3,}|~{3,})[ \t\r]*$/.exec(source)?.[1];
+  const closing = /(?:^|[\r\n])[ \t>]*(`{3,}|~{3,})[ \t\r]*$/.exec(source)?.[1];
   return (
     opening !== undefined &&
     closing !== undefined &&

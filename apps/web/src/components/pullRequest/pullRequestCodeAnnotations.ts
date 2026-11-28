@@ -1,5 +1,6 @@
 import type { PullRequestDiffSide, PullRequestReviewThread } from "@goat/contracts";
 import type { DiffLineAnnotation } from "@pierre/diffs";
+import { fnv1a32 } from "~/lib/diffRendering";
 import type { PendingReviewComment } from "./pullRequestReviewStore";
 import type { PullRequestImagePreview } from "./PullRequestImageAnnotation";
 
@@ -34,4 +35,34 @@ export interface MutableAnnotationGroup {
   readonly threads: PullRequestReviewThread[];
   readonly pending: PendingReviewComment[];
   draft: boolean;
+}
+
+// The viewer redraws annotations only when their version changes.
+export function reviewAnnotationsVersion(annotations: ReadonlyArray<ReviewAnnotation>): number {
+  return fnv1a32(
+    annotations
+      .map(
+        ({ side, lineNumber, metadata }) =>
+          `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.withheld?.readable ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
+            .map((comment) => `${comment.id}:${comment.body}`)
+            .join(",")}:${metadata.threads
+            .map(
+              (thread) =>
+                `${thread.id}:${thread.isResolved ? "r" : ""}:${
+                  thread.isOutdated ? "o" : ""
+                }:${thread.comments
+                  .map(
+                    (comment) =>
+                      `${comment.id}:${comment.author?.login ?? ""}:${comment.createdAt}:${comment.body}:${(
+                        comment.reactions ?? []
+                      )
+                        .map((r) => `${r.content}:${r.count}:${r.viewerHasReacted ? "v" : ""}`)
+                        .join(",")}`,
+                  )
+                  .join(";")}`,
+            )
+            .join(",")}`,
+      )
+      .join("|"),
+  );
 }

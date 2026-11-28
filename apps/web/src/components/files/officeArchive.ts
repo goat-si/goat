@@ -252,6 +252,11 @@ function wordPartTypes() {
   return {
     roles,
     relationships,
+    svg(path: string) {
+      if (path === "[Content_Types].xml" || path.endsWith(".rels")) return false;
+      const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+      return /^image\/svg\+xml$/i.test(overrides.get(path) ?? defaults.get(extension) ?? "");
+    },
     binary(path: string) {
       const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
       const type = overrides.get(path) ?? defaults.get(extension) ?? "";
@@ -292,13 +297,13 @@ function wordPartTypes() {
         const external =
           attr("TargetMode").toLowerCase() === "external" ||
           /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(attr("Target"));
-        const folder = path === "_rels/.rels" ? "" : path.replace(/_rels\/[^/]+\.rels$/, "");
-        // Preserve archive URL resolution, including literal query/fragment
-        // characters in ZIP names rather than silently classifying another file.
-        const target = new URL(attr("Target"), `https://docx.invalid/${folder}`)
-          .toString()
-          .slice("https://docx.invalid/".length);
         if (!external) {
+          const folder = path === "_rels/.rels" ? "" : path.replace(/_rels\/[^/]+\.rels$/, "");
+          // Preserve archive URL resolution, including literal query/fragment
+          // characters in ZIP names rather than silently classifying another file.
+          const target = new URL(attr("Target"), `https://docx.invalid/${folder}`)
+            .toString()
+            .slice("https://docx.invalid/".length);
           if (
             !WORD_BINARY_PARTS.has(role) &&
             role !== "hyperlink" &&
@@ -566,7 +571,13 @@ async function wordExpansion(
       }
       if (tag.local === "altChunk") cost.bytes = Infinity;
       if (tag.local !== "blip" && tag.local !== "imagedata") return;
-      const target = parts.relationships.get(path)?.get(attr("embed") || attr("id"));
+      // VML imagedata also carries an unprefixed shape `id`; only `r:id` names the relationship.
+      const relId =
+        attr("embed") ||
+        Object.values(tag.attributes).find(
+          (a) => a.local === "id" && a.uri === WORD_RELATIONSHIP.slice(0, -1),
+        )?.value;
+      const target = parts.relationships.get(path)?.get(relId ?? "");
       if (target) {
         cost.media += mediaSizes.get(target) ?? OFFICE_PREVIEW_MAX_BYTES + 1;
         cost.images.add(target);
@@ -812,6 +823,8 @@ export async function boundedArchive(input: Extract<OfficeWorkerRequest, { type:
         continue;
       }
       costs.set(entry.name, cost);
+      if (roles?.size === 1 && roles.has("image") && partTypes.svg(entry.name))
+        mediaSizes.set(entry.name, Math.ceil((content.length * 4) / 3));
       archive.file(entry.name, xml);
     } else {
       if (input.kind === "docx" && partTypes.roles.get(entry.name)?.has("font")) {

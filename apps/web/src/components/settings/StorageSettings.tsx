@@ -276,10 +276,14 @@ function CleanupResults({
       })}
       {report.omittedCount > 0 && (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-          {gt("{environment}: {count} more results.", {
-            environment: environmentLabel,
-            count: report.omittedCount,
-          })}
+          {gt(
+            "{omitted, plural, one {{environment}: {count} more result.} other {{environment}: {count} more results.}}",
+            {
+              omitted: report.omittedCount,
+              environment: environmentLabel,
+              count: report.omittedCount,
+            },
+          )}
         </p>
       )}
       {report.entries.length === 0 && report.omittedCount === 0 && (
@@ -554,14 +558,6 @@ export function StorageSettingsPanel() {
   return (
     <SettingsPageContainer>
       {!isProjectScope && <DiskUsageSection />}
-      {!isProjectScope && (
-        <DatabaseStorageNotice
-          environments={connectedEnvironments.filter(
-            (environment) =>
-              environment.serverConfig?.environment.capabilities.databaseStorage === true,
-          )}
-        />
-      )}
       <SettingsSection id="storage-worktrees" title={gt("Worktrees")}>
         {!isProjectScope && <WorktreesDirectoryRow />}
         {isProjectScope && (
@@ -796,6 +792,15 @@ export function StorageSettingsPanel() {
         </SettingsSection>
       )}
       {!isProjectScope && <CleanupSection />}
+      {/* Machines report their databases after the page renders, so the notice goes last to push nothing down. */}
+      {!isProjectScope && (
+        <DatabaseStorageNotice
+          environments={connectedEnvironments.filter(
+            (environment) =>
+              environment.serverConfig?.environment.capabilities.databaseStorage === true,
+          )}
+        />
+      )}
     </SettingsPageContainer>
   );
 }

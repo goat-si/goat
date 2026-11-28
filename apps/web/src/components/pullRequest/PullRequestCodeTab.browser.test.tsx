@@ -16,6 +16,7 @@ import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 
 const {
   diffAtom,
+  onlyTestFilesDiffAtom,
   pagedDiffAtom,
   imageDiffAtom,
   withheldPageAtom,
@@ -43,6 +44,11 @@ const {
     ].join("\n");
   const firstPage: PullRequestDiffResult = {
     patch: filePatch("a.ts"),
+    truncated: false,
+    nextCursor: null,
+  };
+  const refreshedFirstPage: PullRequestDiffResult = {
+    patch: `${filePatch("a.ts")}${filePatch("b.ts")}`,
     truncated: false,
     nextCursor: null,
   };
@@ -130,7 +136,12 @@ const {
     withheldFilesAtom,
     withheldAdvertisementAtom: Atom.family((fresh: boolean) => Atom.make(() => fresh)),
     revisionReviewAtom: Atom.make(true),
-    diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
+    diffAtom: Atom.make(() =>
+      AsyncResult.success(mocks.refreshed ? refreshedFirstPage : firstPage),
+    ),
+    onlyTestFilesDiffAtom: Atom.make(
+      AsyncResult.success({ ...firstPage, patch: filePatch("a.test.ts") }),
+    ),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
       Atom.make(() => AsyncResult.success(pages[cursor]!)),
@@ -140,6 +151,8 @@ const {
 
 const mocks = vi.hoisted(() => ({
   paged: false,
+  refreshed: false,
+  onlyTestFiles: false,
   image: false,
   withheld: false,
   inlineWithheldPage: false,
@@ -212,6 +225,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
         mocks.diffCommits.push(input.commit);
         if (mocks.image) return imageDiffAtom;
         if (mocks.withheld) return withheldPageAtom(mocks.withheldFixture);
+        if (mocks.onlyTestFiles) return onlyTestFilesDiffAtom;
         return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
       }) as never,
     },
@@ -279,6 +293,8 @@ const detail: PullRequestDetailView = {
 
 function setup(paged = false, image = false) {
   mocks.paged = paged;
+  mocks.refreshed = false;
+  mocks.onlyTestFiles = false;
   mocks.image = image;
   mocks.withheld = false;
   mocks.inlineWithheldPage = false;
@@ -326,6 +342,19 @@ it("keeps the diff after a refresh that brings back the same page", async () => 
     .element(screen.getByText("This pull request has no file changes."))
     .not.toBeInTheDocument();
   await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+});
+
+it("can show test files again from the narrow Code tab empty state", async () => {
+  setup();
+  mocks.onlyTestFiles = true;
+  const container = document.createElement("div");
+  container.className = "h-[700px] w-[429px]";
+  await using screen = await render(tab(0), { container });
+  await screen.getByRole("button", { name: "Hide test files", exact: true }).click();
+
+  await expect.element(screen.getByText("1 test file hidden", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "Show test files", exact: true }).click();
+  await expect.element(screen.getByText("a.test.ts", { exact: true }).first()).toBeVisible();
 });
 
 it("never requests the diff of a selected commit the pull request no longer has", async () => {
@@ -406,6 +435,52 @@ it("scrolls to a loaded file requested before the viewer mounts", async () => {
   await using screen = await render(tab(0, { path: "early-39.ts", nonce: 1 }), { container });
 
   await expectFileHeaderShown(screen, container, "early-39.ts");
+});
+
+// regression: #42199 an agent's push re-keyed every file and dropped the comment being typed
+it("keeps an unfinished inline comment when a background refresh changes another file", async () => {
+  setup();
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  const reviewable = {
+    ...detail,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const reviewTab = (backgroundRefreshToken: number) => (
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={reviewable}
+      detail={reviewable}
+      selectedCommitOid={null}
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+      backgroundRefreshToken={backgroundRefreshToken}
+    />
+  );
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(reviewTab(0), { container });
+  const header = screen.getByText("a.ts", { exact: true }).first();
+  await expect.element(header).toBeVisible();
+  const root = header.element().getRootNode() as ShadowRoot;
+  await userEvent.click(root.querySelector<HTMLElement>('[data-column-number="1"]')!);
+  const input = () => screen.getByRole("textbox", { name: "Comment on lines a.ts:1" });
+  await input().fill("Unsent review note");
+
+  mocks.refreshed = true;
+  await screen.rerender(reviewTab(1));
+
+  await expect.element(screen.getByText("2 files", { exact: true })).toBeVisible();
+  await expect.element(input()).toHaveValue("Unsent review note");
 });
 
 it("previews an image the host sent no patch for at the pull request's head", async () => {

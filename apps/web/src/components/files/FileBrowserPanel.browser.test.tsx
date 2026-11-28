@@ -8,8 +8,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { dismissContextMenu, showContextMenuFallback } from "~/contextMenuFallback";
 
+import { RightPanelSheet } from "~/components/RightPanelSheet";
 import { resolveShortcutCommand } from "~/keybindings";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { GTProvider } from "gt-react";
 import chinese from "~/i18n/translations/zh.json";
 
@@ -19,6 +20,7 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
   menu: vi.fn(),
   loads: [] as string[],
+  revalidate: vi.fn<(directoryPath: string) => void>(),
   largeListing: false,
   listing: null as ProjectEntry[] | null,
   keybindings: [] as typeof DEFAULT_RESOLVED_KEYBINDINGS,
@@ -94,6 +96,7 @@ vi.mock("./useDirectoryEntries", async () => {
         entries: state.listing ?? entries,
         load,
         refresh: vi.fn(),
+        revalidate: state.revalidate,
         ready: true,
         error: null,
         isPending: false,
@@ -121,6 +124,7 @@ function setup(customRules: KeybindingRule[] = []) {
   state.toast.mockClear();
   state.menu.mockReset();
   state.loads.length = 0;
+  state.revalidate.mockClear();
   state.largeListing = false;
   state.listing = null;
 }
@@ -525,6 +529,53 @@ describe("file viewer path copy shortcuts", () => {
     expect(state.copy).not.toHaveBeenCalled();
   });
 
+  it("Escape in the file search clears it without closing the panel sheet", async () => {
+    setup();
+    const onCloseSheet = vi.fn();
+    await using _screen = await render(
+      <RightPanelSheet animationDurationMs={0} open onClose={onCloseSheet}>
+        <FileBrowserPanel
+          environmentId={EnvironmentId.make("env-files")}
+          cwd="/repo"
+          projectName="repo"
+          selectedPath={null}
+          selectedPathRevealId={0}
+          onOpenFile={() => {}}
+          workspaceMutationId={null}
+        />
+      </RightPanelSheet>,
+    );
+    const search = page.getByRole("searchbox", { name: "Search repo files" });
+    await userEvent.fill(search, "read");
+    for (const composition of [
+      { key: "Escape", isComposing: true, keyCode: 27 },
+      { key: "Escape", isComposing: false, keyCode: 229 },
+    ]) {
+      // Safari ends the composition just before the Escape keydown.
+      await act(() => {
+        search.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+        search
+          .element()
+          .dispatchEvent(new KeyboardEvent("keydown", { ...composition, bubbles: true }));
+      });
+      await expect.element(search).toHaveValue("read");
+    }
+    expect(search.element().getAttribute("type")).toBe("text");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(search).toHaveValue("");
+    await expect.element(search).toHaveFocus();
+    await act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", repeat: true, bubbles: true }),
+      );
+    });
+    expect(onCloseSheet).not.toHaveBeenCalled();
+
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(onCloseSheet).toHaveBeenCalledOnce());
+  });
+
   it("keeps expanded folders when the panel remounts", async () => {
     setup();
     {
@@ -536,6 +587,78 @@ describe("file viewer path copy shortcuts", () => {
     await using second = await renderPanel({ cwd: "/repo-expansion-test" });
     const folder = await row(second.container, "src/");
     await vi.waitFor(() => expect(folder.getAttribute("aria-expanded")).toBe("true"));
+
+    // Refresh revalidates the folders behind the rows on screen: the open one and the root.
+    // The tree can render its rows again at any time, so compare folders, not calls.
+    state.revalidate.mockClear();
+    await userEvent.click(second.getByRole("button", { name: "Refresh workspace files" }));
+    expect(new Set(state.revalidate.mock.calls.flat())).toEqual(new Set(["src", ""]));
+  });
+
+  it("opens a chain of single folders from one click and keeps it closed once closed", async () => {
+    setup();
+    const cwd = "/repo-single-folder-chain";
+    using _stored = {
+      [Symbol.dispose]: () => writeExpandedDirectories(`remote-ssh:${cwd}`, []),
+    };
+    const chain: ProjectEntry[] = [
+      { path: "tests", kind: "directory" },
+      { path: "tests/edit", kind: "directory" },
+      { path: "tests/edit/unit", kind: "directory" },
+      { path: "tests/edit/unit/a.ts", kind: "file" },
+    ];
+    const panel = () => (
+      <FileBrowserPanel
+        environmentId={EnvironmentId.make("remote-ssh")}
+        cwd={cwd}
+        workspaceRoot={cwd}
+        hostFolder={false}
+        projectName="repo"
+        selectedPath={null}
+        selectedPathRevealId={0}
+        onOpenFile={() => {}}
+        workspaceMutationId={null}
+      />
+    );
+    const findRow = (container: HTMLElement, path: string) =>
+      treeRoot(container).querySelector<HTMLElement>(`[data-item-path="${path}"]`);
+    state.listing = chain.slice(0, 1);
+    {
+      await using screen = await render(panel(), { router: false /* no links */ });
+      const testsRow = await row(screen.container, "tests/");
+      testsRow.click();
+      await vi.waitFor(() => expect(testsRow.getAttribute("aria-expanded")).toBe("true"));
+      for (const listed of [2, 3, 4]) {
+        state.listing = chain.slice(0, listed);
+        await screen.rerender(panel());
+      }
+      await row(screen.container, "tests/edit/unit/a.ts");
+
+      findRow(screen.container, "tests/edit/unit/")!.click();
+      await vi.waitFor(() => expect(findRow(screen.container, "tests/edit/unit/a.ts")).toBeNull());
+      state.listing = [...chain, { path: "tests/edit/unit/b.ts", kind: "file" }];
+      await screen.rerender(panel());
+      expect(findRow(screen.container, "tests/edit/unit/")!.getAttribute("aria-expanded")).toBe(
+        "false",
+      );
+    }
+
+    state.listing = [...chain, { path: "pkg", kind: "directory" }];
+    await using remounted = await render(panel(), { router: false /* no links */ });
+    const unitRow = await row(remounted.container, "tests/edit/unit/");
+    expect(unitRow.getAttribute("aria-expanded")).toBe("false");
+
+    // An ignored folder can hold tens of thousands of entries, so it still opens by hand.
+    const pkgRow = await row(remounted.container, "pkg/");
+    pkgRow.click();
+    await vi.waitFor(() => expect(pkgRow.getAttribute("aria-expanded")).toBe("true"));
+    state.listing = [
+      ...state.listing,
+      { path: "pkg/node_modules", kind: "directory", ignored: true },
+    ];
+    await remounted.rerender(panel());
+    const ignoredRow = await row(remounted.container, "pkg/node_modules/");
+    expect(ignoredRow.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("opens collapsed when the stored folders cannot be read, and expands when they cannot be saved", async () => {

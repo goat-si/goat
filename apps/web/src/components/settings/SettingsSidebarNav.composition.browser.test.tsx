@@ -1,8 +1,17 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
 import { SidebarProvider } from "../ui/sidebar";
+import { SettingsPageShell } from "./SettingsPageShell";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 
 vi.mock("./useAvailableSettingsSearchItems", () => ({
@@ -41,6 +50,59 @@ it("ignores composing keys in the search", async () => {
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/settings/appearance"),
   );
+});
+
+it("Esc clears a search of spaces and a held Esc keeps Settings open", async () => {
+  const root = createRootRoute({ component: Outlet });
+  const settingsRoute = createRoute({
+    getParentRoute: () => root,
+    path: "/settings/general",
+    component: () => (
+      <SidebarProvider defaultOpen>
+        <SettingsSidebarNav pathname="/settings/general" />
+        <SettingsPageShell pathname="/settings/general">
+          <div />
+        </SettingsPageShell>
+      </SidebarProvider>
+    ),
+  });
+  const home = createRoute({
+    getParentRoute: () => root,
+    path: "/",
+    component: () => <h1>Home view</h1>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([settingsRoute, home]),
+    history: createMemoryHistory({ initialEntries: ["/settings/general"] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  // Uses a custom multi-route router with SettingsPageShell and a home fallback route.
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  const closeSettings = page.getByRole("button", { name: "Close settings" });
+  const search = page.getByRole("combobox", { name: "Search settings" });
+  await expect.element(closeSettings).toBeVisible();
+
+  for (const text of ["theme", "   "]) {
+    await search.fill(text);
+    await userEvent.keyboard("{Escape}");
+    await expect.element(search).toHaveValue("");
+    await expect.element(search).toHaveFocus();
+    await act(() =>
+      search.element().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    await expect.element(closeSettings).toBeVisible();
+  }
+
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("heading", { name: "Home view" })).toBeVisible();
 });
 
 it("tabs through settings sections and moves focus with arrow keys", async () => {

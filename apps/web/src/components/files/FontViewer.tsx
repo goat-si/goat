@@ -38,8 +38,18 @@ async function readFont(src: string, signal: AbortSignal) {
   });
 }
 
+const fontColors = (style = getComputedStyle(document.documentElement)) =>
+  [style.getPropertyValue("--background"), style.getPropertyValue("--foreground")] as const;
+
 export default function FontViewer(props: { readonly src: string; readonly name: string }) {
-  const { resolvedTheme } = useTheme();
+  const { theme, resolvedTheme, themeHalves } = useTheme();
+  const [[background, foreground], setColors] = useState(fontColors);
+  // oxlint-disable-next-line goat/react-effect-budget -- Read the host DOM's applied theme tokens so the sandboxed font preview receives the current palette.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- Read tokens after useTheme applies the selected palette.
+    setColors(fontColors());
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Theme values invalidate the palette read from the host DOM.
+  }, [theme, resolvedTheme, themeHalves]);
   const [data, setData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- Load the font from its URL and abort the request and timeout when the source changes or unmounts.
@@ -76,9 +86,6 @@ export default function FontViewer(props: { readonly src: string; readonly name:
       </div>
     );
   if (!data) return <FileSurfaceLoading />;
-  const tokens = getComputedStyle(document.documentElement);
-  const background = tokens.getPropertyValue("--background");
-  const foreground = tokens.getPropertyValue("--foreground");
   const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>@font-face{font-family:preview;src:url('${data}')}html{color-scheme:${resolvedTheme};background:${background};color:${foreground}}body{margin:0;padding:32px;font-family:preview;overflow-wrap:anywhere}h1{font-size:40px;font-weight:normal}p{line-height:1.4}small{font:12px monospace;display:block;opacity:.6;margin-bottom:8px}</style></head><body><h1>Font preview</h1><p style="font-size:24px">ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>abcdefghijklmnopqrstuvwxyz<br>0123456789 !?&amp;@#%(){}[]</p>${[12, 16, 24, 40, 64].map((size) => `<p style="font-size:${size}px"><small>${size} px</small>The quick brown fox jumps over the lazy dog.</p>`).join("")}</body></html>`;
   return (
     <iframe title={props.name} srcDoc={srcDoc} sandbox="" className="min-h-0 flex-1 border-0" />

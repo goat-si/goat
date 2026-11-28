@@ -190,7 +190,6 @@ import {
 } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useAvailableSettingsSearchItems } from "./settings/useAvailableSettingsSearchItems";
 import {
   applyWslEnvironmentConfiguration,
   parseWslUncPath,
@@ -260,7 +259,11 @@ import {
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
 import { CommandPaletteProjectSummaries } from "./CommandPaletteProjectSummaries";
-import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
+import { useCommandPaletteThreadActions } from "./CommandPaletteThreadActions";
+import {
+  CommandPaletteThreadQueryContext,
+  useCommandPaletteThreadItems,
+} from "./CommandPaletteThreadItems";
 import {
   APPEARANCE_OPTIONS,
   notifyThemeSaveFailure,
@@ -330,10 +333,20 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           usagePageOpen,
         },
       });
+      const mode = overlayModeForCommand(command);
+      if (
+        command !== "appearance.cycle" &&
+        command !== "theme.select" &&
+        command !== "themeEditor.toggle" &&
+        command !== "usage.open" &&
+        mode === null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
       if (command === "appearance.cycle") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
         const nextMode =
           appearanceMode === "system" ? "light" : appearanceMode === "light" ? "dark" : "system";
         if (!setAppearanceMode(nextMode)) {
@@ -348,36 +361,19 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         return;
       }
       if (command === "theme.select") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
         dispatch({ _tag: "OpenChangeTheme" });
         return;
       }
       if (command === "themeEditor.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleThemeEditorForTheme({
-          theme,
-          themeHalves,
-          initialAppearance: resolvedTheme,
-        });
+        toggleThemeEditorForTheme({ theme, themeHalves, initialAppearance: resolvedTheme });
         return;
       }
       if (command === "usage.open") {
-        event.preventDefault();
-        event.stopPropagation();
         setOpen(false);
         void navigate({ to: "/usage" });
         return;
       }
-      const mode = overlayModeForCommand(command);
-      if (mode === null) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      toggleMode(mode);
+      if (mode !== null) toggleMode(mode);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -511,7 +507,7 @@ function OpenCommandPaletteDialog(props: {
   const canCreateNote = useAtomValue(notesRpc.write.permissionAtom(primaryEnvironmentId));
   const goatBots = useGoatBotPaletteBots();
   const goatBotNewBot = useGoatBotPaletteNewBot(props.openTemplates);
-  const availableSettingsSearchItems = useAvailableSettingsSearchItems();
+  const settingsSearchItems = useCommandPaletteSettingsItems(deferredQuery.trim().length > 0);
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useProjects();
@@ -728,6 +724,10 @@ function OpenCommandPaletteDialog(props: {
     currentProjectId,
   );
   const currentProjectCwd = currentProject?.workspaceRoot ?? null;
+  const currentThreadActionItems = useCommandPaletteThreadActions({
+    threadRef: activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null,
+    projectCwd: currentProjectCwd,
+  });
   const currentProjectCwdForBrowse =
     browseEnvironmentId && currentProjectEnvironmentId === browseEnvironmentId
       ? currentProjectCwd
@@ -931,18 +931,18 @@ function OpenCommandPaletteDialog(props: {
     highlightClearedRef.current = true;
     setHighlightedItemValue(null);
   });
-  function popView(): void {
+  const popView = useStableCallback((): void => {
     browseNavigation.invalidate();
+    cloneLookupGeneration.current += 1;
+    setIsRemoteProjectLookingUp(false);
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
-    if (viewStack.length <= 1) {
-      setAddProjectEnvironmentId(null);
-    } else if (newProjectFlow?.sourcesEnvironmentId) {
+    if (viewStack.length <= 1) setAddProjectEnvironmentId(null);
+    else if (newProjectFlow?.sourcesEnvironmentId)
       setAddProjectEnvironmentId(newProjectFlow.sourcesEnvironmentId);
-    }
     dispatchSearch({ type: "back" });
     setHighlightedItemValue(null);
-  }
+  });
   function handleQueryChange(nextQuery: string, source: EventTarget | null): void {
     browseNavigation.invalidate();
     clearTypedHighlight();
@@ -1461,7 +1461,7 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add({
           type: "success",
           title: "Agent session will restart",
-          description: "Your next message starts a fresh session.",
+          description: gt("Your next message restarts the agent. This conversation is kept."),
         });
         const project = projectByKey.get(`${environmentId}:${thread.projectId}`);
         if (!project) return;
@@ -1477,6 +1477,8 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push(...currentThreadActionItems);
 
   actionItems.push({
     kind: "action",
@@ -1775,10 +1777,6 @@ function OpenCommandPaletteDialog(props: {
     });
   }
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
-  const settingsSearchItems = useCommandPaletteSettingsItems(
-    availableSettingsSearchItems,
-    pathname,
-  );
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
@@ -2650,13 +2648,20 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
-    if (event.key === "Backspace" && query === "" && isSubmenu) {
+    if (event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+
+    if (
+      event.key === "Backspace" &&
+      query === "" &&
+      isSubmenu &&
+      !event.repeat &&
+      !event.nativeEvent.isComposing &&
+      event.keyCode !== 229
+    ) {
       event.preventDefault();
       popView();
       return;
     }
-
-    if (event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
 
     if (event.key === "Tab" && isBrowsing && !relativePathNeedsActiveProject) {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -3004,36 +3009,39 @@ function OpenCommandPaletteDialog(props: {
         </div>
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
-      <CommandPaletteVirtualizedResults
-        searchFailed={isThreadSearchFailed}
-        onDragStart={() => props.setOpen(false)}
-        rows={resultRows.rows}
-        listRef={resultListRef}
-        highlightedItemValue={highlightedItemValue}
-        isActionsOnly={isActionsOnly}
-        keybindings={keybindings}
-        onExecuteItem={executeItem}
-        {...(addProjectCloneFlow?.step === "repository"
-          ? {
-              emptyStateMessage:
-                addProjectCloneFlow.source === "url"
-                  ? "Enter a Git clone URL and press Enter to continue."
-                  : "Enter a repository path and press Enter to look it up.",
-            }
-          : addProjectCloneFlow?.step === "confirm"
-            ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-            : relativePathNeedsActiveProject
-              ? { emptyStateMessage: "Relative paths require an active project." }
-              : willCreateProjectPath
-                ? {
-                    emptyStateMessage: "Press Enter to create this folder and add it as a project.",
-                  }
-                : isThreadSearchPending
-                  ? { emptyStateMessage: "Searching thread messages…" }
-                  : isThreadSearchFailed
-                    ? { emptyStateMessage: "Couldn't search thread messages." }
-                    : {})}
-      />
+      <CommandPaletteThreadQueryContext value={threadSearchQuery}>
+        <CommandPaletteVirtualizedResults
+          searchFailed={isThreadSearchFailed}
+          onDragStart={() => props.setOpen(false)}
+          rows={resultRows.rows}
+          listRef={resultListRef}
+          highlightedItemValue={highlightedItemValue}
+          isActionsOnly={isActionsOnly}
+          keybindings={keybindings}
+          onExecuteItem={executeItem}
+          {...(addProjectCloneFlow?.step === "repository"
+            ? {
+                emptyStateMessage:
+                  addProjectCloneFlow.source === "url"
+                    ? "Enter a Git clone URL and press Enter to continue."
+                    : "Enter a repository path and press Enter to look it up.",
+              }
+            : addProjectCloneFlow?.step === "confirm"
+              ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
+              : relativePathNeedsActiveProject
+                ? { emptyStateMessage: "Relative paths require an active project." }
+                : willCreateProjectPath
+                  ? {
+                      emptyStateMessage:
+                        "Press Enter to create this folder and add it as a project.",
+                    }
+                  : isThreadSearchPending
+                    ? { emptyStateMessage: "Searching thread messages…" }
+                    : isThreadSearchFailed
+                      ? { emptyStateMessage: "Couldn't search thread messages." }
+                      : {})}
+        />
+      </CommandPaletteThreadQueryContext>
     </CommandPaletteContent>
   );
 }

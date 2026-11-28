@@ -65,7 +65,7 @@ const NAMED_COMMAND_LABELS: Record<NamedCommand, string> = {
   "files.copyName": msg("Files: Copy Name"),
   "files.copyContents": msg("Files: Copy Contents"),
   "projectSearch.toggle": msg("Project Search: Toggle"),
-  "usage.open": msg("Usage: Open"),
+  "usage.open": msg("Usage: Toggle"),
   "notes.new": msg("Notes: New"),
   "notes.toggleList": msg("Notes: Toggle List"),
   "theme.select": msg("Theme: Select"),

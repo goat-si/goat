@@ -166,8 +166,7 @@ describe("Projects view shared range selection", () => {
     const selection = useThreadSelectionStore.getState();
     selection.clearSelection();
     try {
-      selection.setAnchor(anchor);
-      selection.rangeSelectTo(target, order);
+      selection.rangeSelectTo(target, order, anchor);
       expect([...useThreadSelectionStore.getState().selectedThreadKeys]).toEqual([
         "local:pin",
         "remote:pin",

@@ -1532,6 +1532,7 @@ export function useComposerSend(input: ComposerSendInput) {
     sendInFlightRef,
     readPendingEnvironmentChange,
     refreshBeforeSend,
+    draftId,
   );
   return { onSend: onSendWithRouting, continueThreadOnSsh, forkCommand };
 }

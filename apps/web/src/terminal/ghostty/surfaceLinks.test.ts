@@ -60,6 +60,25 @@ describe("terminalLinkAtPositionWithRange", () => {
     }
   });
 
+  it("offers the location of a grep hit as the fallback only from the pointer on it", () => {
+    const text = "./src/a.js:1:function inner() {";
+    const row: GhosttyRow = {
+      cells: Array.from(text, (character) => cell(character)),
+      text,
+      isWrapContinuation: false,
+      wrapsToNext: false,
+    };
+    const whole = {
+      text: "./src/a.js:1:function",
+      range: { start: { x: 0, y: 0 }, end: { x: 20, y: 0 } },
+    };
+    expect(terminalLinkAtPositionWithRange([row], 0, 11)).toEqual({
+      ...whole,
+      fallback: { text: "./src/a.js:1", range: { start: { x: 0, y: 0 }, end: { x: 11, y: 0 } } },
+    });
+    expect(terminalLinkAtPositionWithRange([row], 0, 12)).toEqual(whole);
+  });
+
   it("activates a wrapped quoted Windows path from its spaces and position suffix", () => {
     const row = (text: string, isWrapContinuation: boolean): GhosttyRow => ({
       cells: Array.from(text, (character) => cell(character)),

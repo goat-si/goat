@@ -5,7 +5,9 @@ import {
   openEnvironmentUrlExternally,
   urlNeedsEnvironmentRoute,
 } from "~/browser/openEnvironmentUrl";
+import { isElectron } from "~/env";
 import { readLocalApi } from "~/localApi";
+import { isLocalEditorFileHref } from "~/markdown-links";
 
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
@@ -28,7 +30,7 @@ export function reportMarkdownExternalOpenFailure(target: string, cause: unknown
   );
 }
 
-export function markdownLinkNeedsEnvironmentRoute(
+function markdownLinkNeedsEnvironmentRoute(
   environmentId: EnvironmentId | null,
   href: string,
 ): boolean {
@@ -46,13 +48,32 @@ function absoluteLinkUrl(href: string): string {
   return href.startsWith("//") ? `${window.location.protocol}${href}` : href;
 }
 
-/** Middle clicks skip onClick, so a loopback link would otherwise open on this device. */
+export function markdownLinkNeedsExternalBridge(
+  environmentId: EnvironmentId | null,
+  href: string,
+  altKey: boolean,
+): boolean {
+  // Editor links also go over IPC: the desktop popup handler only passes web links.
+  return (
+    (isElectron && (altKey || isLocalEditorFileHref(href))) ||
+    markdownLinkNeedsEnvironmentRoute(environmentId, href)
+  );
+}
+
+/** Middle clicks skip onClick, so loopback and desktop editor links open over the bridge here. */
 export function handleMarkdownLinkAuxClick(
   event: { readonly button: number; preventDefault(): void },
   environmentId: EnvironmentId | null,
   href: string | undefined,
 ): void {
-  if (event.button !== 1 || !href || !markdownLinkNeedsEnvironmentRoute(environmentId, href))
+  if (
+    event.button !== 1 ||
+    !href ||
+    !(
+      (isElectron && isLocalEditorFileHref(href)) ||
+      markdownLinkNeedsEnvironmentRoute(environmentId, href)
+    )
+  )
     return;
   event.preventDefault();
   openMarkdownLinkInSystemBrowser(environmentId, href);

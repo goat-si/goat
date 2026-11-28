@@ -1,7 +1,11 @@
 import { expect, it } from "vite-plus/test";
 import { ComposerContextId, EnvironmentId } from "@goat/contracts";
 import { CONTEXT_CLIPBOARD_MIMES, GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
-import { readPastedComposerContext, importPastedComposerText } from "./composerInlineTokenPaste";
+import {
+  importPastedComposerText,
+  readPastedComposerClipboard,
+  readPastedComposerContext,
+} from "./composerInlineTokenPaste";
 
 const record = {
   version: 1 as const,
@@ -27,14 +31,19 @@ it.each(CONTEXT_CLIPBOARD_MIMES)("imports context from clipboard MIME %s", (mime
             : "",
     };
     expect(readPastedComposerContext(clipboard)).toEqual(fragment);
-    expect(importPastedComposerText(clipboard, () => new Map([["ctx", "imported"]]))).toBe(
-      `[file](${GOAT_CONTEXT_LINK_PROTOCOL}://v1/mention/imported)`,
-    );
+    expect(
+      importPastedComposerText(
+        readPastedComposerClipboard(clipboard),
+        () => new Map([["ctx", "imported"]]),
+      ),
+    ).toBe(`[file](${GOAT_CONTEXT_LINK_PROTOCOL}://v1/mention/imported)`);
   }
 });
 // goat-rename: legacy-end
 
 it("imports CRLF and CR clipboard text with LF line breaks", () => {
   const clipboard = { getData: (type: string) => (type === "text/plain" ? "x\r\n\r\ny\rz" : "") };
-  expect(importPastedComposerText(clipboard, () => new Map())).toBe("x\n\ny\nz");
+  expect(importPastedComposerText(readPastedComposerClipboard(clipboard), () => new Map())).toBe(
+    "x\n\ny\nz",
+  );
 });

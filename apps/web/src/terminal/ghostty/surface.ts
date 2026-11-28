@@ -30,6 +30,9 @@ import {
   type GhosttyCellMetrics,
 } from "./renderer";
 import { observeResize } from "../../lib/observeResize";
+import { t } from "gt-react";
+import { DEFAULT_LOCALE } from "../../i18n/locales";
+import { getI18nSnapshot, subscribeI18n } from "../../i18n/runtime";
 
 const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
@@ -142,6 +145,11 @@ function shouldReportTerminalMouse(
   event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">,
 ): boolean {
   return tracking && !event.shiftKey && !event.ctrlKey && !event.metaKey;
+}
+
+// macOS Chromium reports Control-click as a primary press and opens the context menu on it.
+function isTerminalPrimaryPress(event: Pick<MouseEvent, "button" | "ctrlKey">): boolean {
+  return event.button === 0 && !(event.ctrlKey && isMacPlatform(navigator.platform));
 }
 
 type TerminalMouseAction = "press" | "release" | "motion";
@@ -275,8 +283,11 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
   readonly canActivateLink?: (text: string) => boolean;
   readonly validateLink?: (text: string) => Promise<boolean>;
-  /** Reports hovered candidates once their rendered text is stable for 250 ms; null cancels. */
-  readonly onLinkHover?: (text: string | null) => void;
+  /**
+   * Reports hovered candidates once their rendered text is stable for 250 ms; null cancels.
+   * `fallbackText` is the candidate's shorter reading, used when `text` is no file.
+   */
+  readonly onLinkHover?: (text: string | null, fallbackText?: string) => void;
   /** The host must prevent the default menu; native Paste cannot reach a canvas terminal. */
   readonly onContextMenu?: (event: MouseEvent) => void;
 }
@@ -402,6 +413,7 @@ export class GhosttyTerminalSurface {
     metrics: GhosttyCellMetrics,
     fontFamily: string,
     options: GhosttyTerminalSurfaceOptions,
+    private readonly stopObservingI18n: () => void,
   ) {
     this.mount = mount;
     this.canvas = canvas;
@@ -437,7 +449,6 @@ export class GhosttyTerminalSurface {
     canvas.setAttribute("aria-hidden", "true");
     const input = document.createElement("textarea");
     input.className = "goat-ghostty-input";
-    input.setAttribute("aria-label", "Terminal input");
     input.autocapitalize = "off";
     input.autocomplete = "off";
     input.spellcheck = false;
@@ -447,7 +458,6 @@ export class GhosttyTerminalSurface {
     scrollbar.className =
       "group absolute top-1 right-px bottom-1 z-1 w-[var(--app-scrollbar-width)] cursor-default touch-none";
     scrollbar.setAttribute("role", "scrollbar");
-    scrollbar.setAttribute("aria-label", "Terminal scrollback");
     scrollbar.setAttribute("aria-orientation", "vertical");
     scrollbar.tabIndex = 0;
     scrollbar.hidden = true;
@@ -455,42 +465,63 @@ export class GhosttyTerminalSurface {
     scrollbarThumb.className =
       "absolute inset-x-px top-0 rounded-[3px] bg-[var(--app-scrollbar-thumb)] transition-[background-color] duration-adjust ease-[ease-out] group-hover:bg-[var(--app-scrollbar-thumb-hover)] group-focus-visible:bg-[var(--app-scrollbar-thumb-hover)]";
     scrollbar.append(scrollbarThumb);
+    const updateAccessibleNames = () => {
+      const english = getI18nSnapshot().locale === DEFAULT_LOCALE;
+      input.setAttribute("aria-label", english ? "Terminal input" : t("Terminal input"));
+      scrollbar.setAttribute(
+        "aria-label",
+        english ? "Terminal scrollback" : t("Terminal scrollback"),
+      );
+    };
+    updateAccessibleNames();
     mount.replaceChildren(canvas, input, scrollbar);
     const context = canvas.getContext("2d", { alpha: options.transparentBackground === true });
     if (!context) throw new Error("Canvas 2D is unavailable");
     context.fillStyle = `rgb(${options.theme.background.r}, ${options.theme.background.g}, ${options.theme.background.b})`;
     const paint = options.transparentBackground ? "clearRect" : "fillRect";
     context[paint](0, 0, canvas.width, canvas.height);
-    const fontSize = terminalFontSize(options.font?.size);
+    const stopObservingI18n = subscribeI18n(updateAccessibleNames);
     try {
-      // Load bundled fonts before measuring; fallback metrics would size the wrong grid.
-      await ensureTerminalSymbolsFont();
-    } catch {}
-    const fontFamily = await loadTerminalFontFamily(options.font?.family, fontSize);
-    const metrics = measureGhosttyCell(context, fontSize, fontFamily);
-    const grid = terminalGridSize(mount.clientWidth, mount.clientHeight, metrics, CONTENT_PADDING);
-    const core = await GhosttyTerminalCore.create(
-      grid.cols,
-      grid.rows,
-      metrics.width,
-      metrics.height,
-      options.theme,
-      options.onData,
-    );
-    const surface = new GhosttyTerminalSurface(
-      mount,
-      canvas,
-      input,
-      scrollbar,
-      scrollbarThumb,
-      context,
-      core,
-      metrics,
-      fontFamily,
-      options,
-    );
-    surface.fit();
-    return surface;
+      const fontSize = terminalFontSize(options.font?.size);
+      try {
+        // Load bundled fonts before measuring; fallback metrics would size the wrong grid.
+        await ensureTerminalSymbolsFont();
+      } catch {}
+      const fontFamily = await loadTerminalFontFamily(options.font?.family, fontSize);
+      const metrics = measureGhosttyCell(context, fontSize, fontFamily);
+      const grid = terminalGridSize(
+        mount.clientWidth,
+        mount.clientHeight,
+        metrics,
+        CONTENT_PADDING,
+      );
+      const core = await GhosttyTerminalCore.create(
+        grid.cols,
+        grid.rows,
+        metrics.width,
+        metrics.height,
+        options.theme,
+        options.onData,
+      );
+      const surface = new GhosttyTerminalSurface(
+        mount,
+        canvas,
+        input,
+        scrollbar,
+        scrollbarThumb,
+        context,
+        core,
+        metrics,
+        fontFamily,
+        options,
+        stopObservingI18n,
+      );
+      surface.fit();
+      return surface;
+    } catch (error) {
+      stopObservingI18n();
+      throw error;
+    }
   }
 
   setVisible(visible: boolean): void {
@@ -798,11 +829,16 @@ export class GhosttyTerminalSurface {
     return this.core.isViewportActive();
   }
 
+  isAlternateScreen(): boolean {
+    return this.core.isAlternateScreen();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.clearHoveredLink();
     this.stopObservingResize();
+    this.stopObservingI18n();
     document.fonts.removeEventListener("loadingdone", this.onFontsLoaded);
     this.dprMedia?.removeEventListener("change", this.onDevicePixelRatioChange);
     this.dprMedia = null;
@@ -911,6 +947,15 @@ export class GhosttyTerminalSurface {
           });
         }
       }
+      return;
+    }
+    const copyChord =
+      primaryModifier &&
+      !event.altKey &&
+      (mac ? !event.shiftKey : event.shiftKey || event.key.toLowerCase() === "insert");
+    if (copyChord && isTerminalCopyShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (isTerminalPasteShortcut(event)) {
@@ -1129,7 +1174,7 @@ export class GhosttyTerminalSurface {
       }
       return;
     }
-    if (event.button !== 0) return;
+    if (!isTerminalPrimaryPress(event)) return;
     const clickCount = this.recordSelectionClick(event);
     const link = this.linkAt(event.clientX, event.clientY, true);
     if (link && !event.shiftKey && clickCount === 1) {
@@ -1340,7 +1385,7 @@ export class GhosttyTerminalSurface {
     const pointer = this.hoverPointer;
     const link = pointer ? this.findLinkAt(pointer.x, pointer.y) : null;
     this.updateLinkHover(link);
-    this.setHoveredLink(link && this.options.canActivateLink?.(link.text) !== false ? link : null);
+    this.setHoveredLink(link && this.activatableLink(link));
   }
 
   private updateLinkHover(link: TerminalLinkWithRange | null): void {
@@ -1360,13 +1405,17 @@ export class GhosttyTerminalSurface {
         changedAt = Math.max(changedAt, this.linkRowStability[y]?.changedAt ?? now);
       }
       const delay = Math.max(0, TERMINAL_LINK_HOVER_DELAY_MS - (now - changedAt));
+      const report = () =>
+        link.fallback
+          ? this.options.onLinkHover?.(link.text, link.fallback.text)
+          : this.options.onLinkHover?.(link.text);
       if (delay === 0) {
-        this.options.onLinkHover(link.text);
+        report();
         return;
       }
       this.linkHoverTimer = window.setTimeout(() => {
         this.linkHoverTimer = null;
-        this.options.onLinkHover?.(link.text);
+        report();
       }, delay);
     }
   }
@@ -1472,7 +1521,7 @@ export class GhosttyTerminalSurface {
       event.preventDefault();
       return;
     }
-    if (event.button !== 0) return;
+    if (!isTerminalPrimaryPress(event)) return;
     if (!this.selectionMoved && this.selectionMode === "cell") {
       this.clearSelection();
     }
@@ -1890,6 +1939,12 @@ export class GhosttyTerminalSurface {
     };
   }
 
+  private activatableLink(link: TerminalLinkWithRange): TerminalLinkWithRange | null {
+    const canActivate = this.options.canActivateLink;
+    if (!canActivate || canActivate(link.text)) return link;
+    return link.fallback && canActivate(link.fallback.text) ? link.fallback : null;
+  }
+
   private validateLink(text: string): Promise<boolean> | undefined {
     if (this.options.canActivateLink?.(text) !== false) return;
     const validation = this.options.validateLink?.(text);
@@ -1908,20 +1963,25 @@ export class GhosttyTerminalSurface {
       return;
     }
     const requestId = this.linkActivationRequestId;
-    void validation.then(
-      (valid) => {
-        if (
-          this.disposed ||
-          !this.visible ||
-          requestId !== this.linkActivationRequestId ||
-          !isSameTerminalLink(link, this.findLinkAt(event.clientX, event.clientY))
-        )
-          return;
-        if (valid) this.options.onLinkActivate(link.text, event);
-        else this.clearSelection();
-      },
-      () => {},
-    );
+    const settle = (candidate: TerminalLinkWithRange, pending: Promise<boolean>) =>
+      void pending.then(
+        (valid) => {
+          if (
+            this.disposed ||
+            !this.visible ||
+            requestId !== this.linkActivationRequestId ||
+            !isSameTerminalLink(link, this.findLinkAt(event.clientX, event.clientY))
+          )
+            return;
+          if (valid) return this.options.onLinkActivate(candidate.text, event);
+          const fallback = candidate.fallback;
+          const fallbackValidation = fallback && this.options.validateLink?.(fallback.text);
+          if (fallback && fallbackValidation) settle(fallback, fallbackValidation);
+          else this.clearSelection();
+        },
+        () => {},
+      );
+    settle(link, validation);
   }
 
   private linkAt(
@@ -1930,11 +1990,8 @@ export class GhosttyTerminalSurface {
     allowValidation = false,
   ): TerminalLinkWithRange | null {
     const link = this.findLinkAt(clientX, clientY);
-    return link &&
-      ((allowValidation && this.options.validateLink) ||
-        this.options.canActivateLink?.(link.text) !== false)
-      ? link
-      : null;
+    if (!link) return null;
+    return allowValidation && this.options.validateLink ? link : this.activatableLink(link);
   }
 
   private findLinkAt(clientX: number, clientY: number): TerminalLinkWithRange | null {

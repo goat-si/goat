@@ -12,6 +12,7 @@ import { CheckboxMark } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Kbd } from "../ui/kbd";
 import { cn } from "~/lib/utils";
+import { isEditableFocused } from "~/lib/editableFocus";
 import ChatMarkdown from "../ChatMarkdown";
 import { ComposerBanner } from "./ComposerBanner";
 
@@ -152,13 +153,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-        return;
-      }
+      if (isEditableFocused(target)) return;
       if (
         target instanceof HTMLElement &&
         target.closest(
-          'select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
+          '[role="dialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
         )
       ) {
         return;
@@ -210,7 +209,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         <ComposerBanner.Content>
           <span
             dir={textDirection(activeQuestion.header)}
-            className="shrink-0 text-muted-foreground"
+            className={cn(
+              "min-w-0 text-muted-foreground",
+              isCollapsed ? "max-w-1/2 truncate" : "wrap-anywhere",
+            )}
           >
             {activeQuestion.header}
           </span>

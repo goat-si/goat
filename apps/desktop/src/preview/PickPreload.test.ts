@@ -1,3 +1,4 @@
+import type { PreviewAnnotationPayload } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 import {
@@ -11,8 +12,12 @@ import "./PickPreload.ts";
 
 const ipcListeners = vi.hoisted(() => new Map<string, Array<(...args: unknown[]) => void>>());
 const ipcSends = vi.hoisted(() => ({ send: vi.fn(), sendToHost: vi.fn() }));
+const pageElementContext = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 
 vi.mock("electron", () => ({
+  contextBridge: {
+    executeInMainWorld: () => ({ elementContext: pageElementContext }),
+  },
   ipcRenderer: {
     on: (channel: string, listener: (...args: unknown[]) => void) => {
       ipcListeners.set(channel, [...(ipcListeners.get(channel) ?? []), listener]);
@@ -24,7 +29,10 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("react-grab/primitives", () => ({ getElementContext: async () => null }));
+vi.mock("./PageWorldBridge.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./PageWorldBridge.ts")>();
+  return { ...actual, pageWorld: { elementContext: pageElementContext } };
+});
 
 const startAnnotation = (): ShadowRoot => {
   vi.stubGlobal(
@@ -37,11 +45,46 @@ const startAnnotation = (): ShadowRoot => {
   // jsdom has no popover API.
   HTMLElement.prototype.showPopover ??= () => {};
   HTMLElement.prototype.hidePopover ??= () => {};
+  // jsdom has no adoptedStyleSheets.
+  for (const target of [Document.prototype, ShadowRoot.prototype]) {
+    if (!("adoptedStyleSheets" in target)) {
+      Object.defineProperty(target, "adoptedStyleSheets", { value: [], writable: true });
+    }
+  }
   using attachShadow = vi.spyOn(Element.prototype, "attachShadow");
   for (const listener of ipcListeners.get(START_PICK_CHANNEL) ?? []) listener({}, undefined, false);
   const shadowRoot = attachShadow.mock.results[0]?.value;
   if (!(shadowRoot instanceof ShadowRoot)) throw new Error("annotation overlay did not start");
   return shadowRoot;
+};
+
+const pickAndAttach = async (element: Element) => {
+  ipcSends.send.mockReset();
+  document.elementsFromPoint = () => [element];
+  using listeners = vi.spyOn(HTMLButtonElement.prototype, "addEventListener");
+  const shadowRoot = startAnnotation();
+  element.dispatchEvent(
+    new PointerEvent("pointerdown", { button: 0, clientX: 100, clientY: 100, bubbles: true }),
+  );
+  const attach = Array.from(shadowRoot.querySelectorAll("button")).find(
+    (button) => button.textContent === "Attach",
+  );
+  const listenerIndex = listeners.mock.contexts.findIndex(
+    (target, index) => target === attach && listeners.mock.calls[index]?.[0] === "click",
+  );
+  const listener = listeners.mock.calls[listenerIndex]?.[1];
+  if (!attach || typeof listener !== "function") throw new Error("Attach listener not found");
+  // The DOM test environment has no native input source.
+  listener.call(attach, { isTrusted: true } as MouseEvent);
+
+  await vi.waitFor(() =>
+    expect(ipcSends.send.mock.calls.some(([channel]) => channel === ELEMENT_PICKED_CHANNEL)).toBe(
+      true,
+    ),
+  );
+  const [, annotation] =
+    ipcSends.send.mock.calls.find(([channel]) => channel === ELEMENT_PICKED_CHANNEL) ?? [];
+  return (annotation as PreviewAnnotationPayload | undefined)?.elements[0]?.element;
 };
 
 it("switches tools from the keyboard after a toolbar button is clicked", () => {
@@ -211,4 +254,33 @@ it("keeps an oversized inserted annotation and shows its count", () => {
   expect(comment.value).toHaveLength(8001);
   expect(shadowRoot.textContent).toContain("8001 / 8000");
   expect(shadowRoot.host.isConnected).toBe(true);
+});
+
+it("keeps only the well-typed fields of what the page reports about an element", async () => {
+  pageElementContext.mockResolvedValueOnce({
+    selector: { toString: () => "#object" },
+    htmlPreview: "<button>Pay</button>",
+    componentName: 7,
+    styles: null,
+    stack: [{ functionName: "Checkout", fileName: ["x"], lineNumber: "12", columnNumber: 4 }, 3],
+  });
+  const card = document.body.appendChild(document.createElement("div"));
+  const element = await pickAndAttach(card);
+  const frame = { functionName: "Checkout", fileName: null, lineNumber: null, columnNumber: 4 };
+  expect(element).toMatchObject({
+    selector: null,
+    htmlPreview: "<button>Pay</button>",
+    componentName: null,
+    styles: "",
+    source: frame,
+    stack: [frame, { functionName: null, fileName: null, lineNumber: null, columnNumber: null }],
+  });
+});
+
+it("drops a straddling surrogate pair when falling back to outerHTML preview", async () => {
+  pageElementContext.mockRejectedValueOnce(new Error("page lookup failed"));
+  const card = document.body.appendChild(document.createElement("div"));
+  card.textContent = `${"a".repeat(494)}🚀tail`;
+  expect(card.outerHTML.charCodeAt(499)).toBe(0xd83d);
+  expect((await pickAndAttach(card))?.htmlPreview).toBe(card.outerHTML.slice(0, 499));
 });

@@ -103,6 +103,7 @@ function AssistantMessageTimelineRow({ row }: { row: Extract<TimelineRow, { kind
               cwd={ctx.markdownCwd}
               threadRef={ctx.threadRef ?? undefined}
               isStreaming={Boolean(row.message.streaming)}
+              streamingId={row.message.id}
               lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
               skills={ctx.skills}
               headingLevelOffset={MESSAGE_HEADING_LEVEL}

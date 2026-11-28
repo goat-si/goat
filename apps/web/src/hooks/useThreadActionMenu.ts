@@ -26,6 +26,7 @@ import { canPromoteThread } from "../components/Sidebar.logic";
 import { usePromoteThread } from "../components/promoteThread";
 import {
   buildThreadActionMenuItems,
+  canMarkLatestRunUnread,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
@@ -73,8 +74,7 @@ function failureToast(title: string, error: unknown) {
 export function useThreadActionMenu(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly projectCwd: string | null;
-  readonly onStartRename: () => void;
-  /** Hide project actions and title edits for the global agent. */
+  readonly onStartRename?: (() => void) | undefined;
   readonly globalAgent?: boolean | undefined;
   readonly onFind?: ((threadRef: ScopedThreadRef) => void) | undefined;
   readonly canShareWithGuest: boolean;
@@ -140,56 +140,53 @@ export function useThreadActionMenu(input: {
     onError: (error) => failureToast("Failed to copy thread ID", error),
   });
 
-  const openMenu = (position: { x: number; y: number }) => {
-    if (threadRef === null) return;
-    void (async () => {
+  const readMenu = () => {
+    if (threadRef === null) return null;
+    const thread = readThreadShell(threadRef);
+    if (!thread) {
+      failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
+      return null;
+    }
+    const now = new Date();
+    const supports = {
+      settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
+      autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
+      snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
+      pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
+      titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+    };
+    const isRegeneratingTitle = thread.titleRegeneration != null;
+    const snoozePresets = resolveSnoozePresets(now, threadRef.environmentId);
+    const items = buildThreadActionMenuItems({
+      canOpenSshHandoff: true,
+      canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+      canFollowWithBot: webThreadFollowAvailable(threadRef),
+      canFind: onFind !== undefined,
+      canRename: onStartRename !== undefined,
+      branch: thread.branch ?? null,
+      projectFilter: null,
+      isPinned: thread.pinnedAt != null,
+      isSettled: supports.settlement && thread.settledOverride === "settled",
+      autoSettleEnabled: thread.autoSettleDisabledAt == null,
+      isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
+      canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
+      isRegeneratingTitle,
+      isRunning: !threadRuntimeCanArchive(thread.runtime),
+      hasCompletedRun: canMarkLatestRunUnread(thread.latestRun),
+      canPromote: canPromoteThread(thread, {
+        threadPromotion: readEnvironmentSupportsPromotion(threadRef.environmentId),
+      }),
+      supports,
+      snoozePresets,
+      snoozeLabels,
+      globalAgent,
+      canShareWithGuest,
+      canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+      fork: globalAgent ? null : readThreadForkMenuState(threadRef),
+    });
+    const run = async (action: ThreadActionMenuId) => {
       const api = readLocalApi();
       if (!api) return;
-      const thread = readThreadShell(threadRef);
-      if (!thread) {
-        failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
-        return;
-      }
-      const now = new Date();
-      const supports = {
-        settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
-        autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
-        snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
-        pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
-        titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
-      };
-      const isRegeneratingTitle = thread.titleRegeneration != null;
-      const snoozePresets = resolveSnoozePresets(now, threadRef.environmentId);
-      const items = buildThreadActionMenuItems({
-        canOpenSshHandoff: true,
-        canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
-        canFollowWithBot: webThreadFollowAvailable(threadRef),
-        canFind: onFind !== undefined,
-        branch: thread.branch ?? null,
-        projectFilter: null,
-        isPinned: thread.pinnedAt != null,
-        isSettled: supports.settlement && thread.settledOverride === "settled",
-        autoSettleEnabled: thread.autoSettleDisabledAt == null,
-        isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
-        canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
-        isRegeneratingTitle,
-        isRunning: !threadRuntimeCanArchive(thread.runtime),
-        canPromote: canPromoteThread(thread, {
-          threadPromotion: readEnvironmentSupportsPromotion(threadRef.environmentId),
-        }),
-        supports,
-        snoozePresets,
-        snoozeLabels,
-        globalAgent,
-        canShareWithGuest,
-        canTurnIntoProject: canTurnThreadIntoProject(threadRef),
-        fork: globalAgent ? null : readThreadForkMenuState(threadRef),
-      });
-      const clicked = await settlePromise(() => api.contextMenu.show(items, position));
-      if (clicked._tag === "Failure" || clicked.value === null) return;
-      const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
-      if (botAction) return await botAction;
-      const action: ThreadActionMenuId = clicked.value;
       if (
         threadActionRequiresOperate(action) &&
         !readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)
@@ -280,7 +277,7 @@ export function useThreadActionMenu(input: {
           );
           return;
         case "rename":
-          onStartRename();
+          onStartRename?.();
           return;
         case "regenerate-title": {
           if (isRegeneratingTitle) return;
@@ -386,6 +383,24 @@ export function useThreadActionMenu(input: {
         default:
           return;
       }
+    };
+    return { items, run };
+  };
+
+  const openMenu = (position: { x: number; y: number }) => {
+    void (async () => {
+      const api = readLocalApi();
+      if (!api || threadRef === null) return;
+      const menu = readMenu();
+      if (!menu) {
+        failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
+        return;
+      }
+      const clicked = await settlePromise(() => api.contextMenu.show(menu.items, position));
+      if (clicked._tag === "Failure" || clicked.value === null) return;
+      const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
+      if (botAction) return await botAction;
+      await menu.run(clicked.value);
     })();
   };
 
@@ -393,5 +408,5 @@ export function useThreadActionMenu(input: {
     void readLocalApi()?.contextMenu.close();
   };
 
-  return { openMenu, closeMenu };
+  return { openMenu, closeMenu, readMenu };
 }

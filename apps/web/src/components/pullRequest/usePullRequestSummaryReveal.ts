@@ -1,7 +1,7 @@
 import { parsePullRequestAnchor } from "@goat/shared/pullRequestAnchor";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
-import { holdLinkedNodeInView } from "./holdLinkedNodeInView";
+import { holdLinkedNodeInView, holdScrollTop } from "./holdLinkedNodeInView";
 
 /**
  * Scrolls the Summary tab to a clicked link's section, description or heading once it renders,
@@ -12,8 +12,9 @@ export function usePullRequestSummaryReveal(input: {
   readonly onRevealSettled: ((revealUrl: string) => void) | undefined;
   readonly description: string;
   readonly editingDescription: boolean;
+  readonly initialScrollTop: number;
 }) {
-  const { revealUrl, onRevealSettled, description, editingDescription } = input;
+  const { revealUrl, onRevealSettled, description, editingDescription, initialScrollTop } = input;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const location = parsePullRequestAnchor(revealUrl);
   const [checksReveals, setChecksReveals] = useState(0);
@@ -27,6 +28,8 @@ export function usePullRequestSummaryReveal(input: {
     }
   }
   const stopHolding = useRef<(() => void) | null>(null);
+  // A restore clamped by content still loading must not overwrite the saved position.
+  const restoringScroll = useRef(false);
   const revealSummary = useEffectEvent(() => {
     const root = scrollRef.current;
     if (revealUrl === undefined || !root) return;
@@ -65,7 +68,16 @@ export function usePullRequestSummaryReveal(input: {
     revealSummary();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retries once the description markdown renders, including after its editor closes
   }, [revealUrl, description, checksReveals, descriptionReveals, editingDescription]);
+  // oxlint-disable-next-line goat/react-effect-budget -- puts a remounted Summary back at the scroll position it left, before paint
+  useLayoutEffect(() => {
+    if (!scrollRef.current || initialScrollTop === 0) return;
+    restoringScroll.current = true;
+    stopHolding.current = holdScrollTop(scrollRef.current, initialScrollTop, () => {
+      restoringScroll.current = false;
+    });
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- restores once per mount
+  }, []);
   // oxlint-disable-next-line goat/react-effect-budget -- the hold observes DOM outside React and must end with the tab
   useEffect(() => () => stopHolding.current?.(), []);
-  return { scrollRef, checksReveals, descriptionReveals };
+  return { scrollRef, restoringScroll, checksReveals, descriptionReveals };
 }

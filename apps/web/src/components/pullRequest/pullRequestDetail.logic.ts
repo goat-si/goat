@@ -1,5 +1,11 @@
 import { checkoutInstruction, handoffPreamble } from "./pullRequestHandoffPreamble";
-import { bounded, reviewThreadContext, visibleBody } from "./pullRequestChatContext";
+import {
+  bounded,
+  readableBody,
+  reviewThreadContext,
+  reviewThreadText,
+  visibleBody,
+} from "./pullRequestChatContext";
 export { visibleBody, buildPullRequestCommentContext } from "./pullRequestChatContext";
 export type { PullRequestChatSubject } from "./pullRequestChatContext";
 import {
@@ -40,18 +46,15 @@ import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
-
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 export { threadPullRequestPanelTarget } from "./threadPullRequestPanelTarget";
 import { stripInlineContextReferences } from "~/lib/composerContextReferences";
-
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
   merge: "Merge",
   squash: "Squash and merge",
   rebase: "Rebase and merge",
   "fast-forward": "Fast-forward merge",
 };
-
 export function allowsSinglePullRequestMerge(input: {
   supportsStackActions: boolean;
   hasStack: boolean;
@@ -63,7 +66,6 @@ export function allowsSinglePullRequestMerge(input: {
     (!input.hasStack && !input.stackPending && input.stackError === null)
   );
 }
-
 export function resolvePullRequestMergeMethod(
   allowed: ReadonlyArray<PullRequestMergeMethod>,
   current: PullRequestMergeMethod | null,
@@ -75,7 +77,6 @@ export function resolvePullRequestMergeMethod(
   }
   return allowed[0] ?? "merge";
 }
-
 export type PullRequestPrimaryControl =
   | "resolve"
   | "ready"
@@ -786,8 +787,7 @@ export function buildFixFindingsHandoff(input: {
   readonly inThisThread?: boolean;
 }): FixFindingsHandoff {
   const threads = input.reviewThreads.filter(
-    (thread) =>
-      !thread.isResolved && thread.comments.some((comment) => comment.body.trim().length > 0),
+    (thread) => !thread.isResolved && reviewThreadText(thread) !== "",
   );
   const attached = new Set(
     input.reviewThreads.flatMap((thread) => thread.comments.map((comment) => comment.id)),
@@ -799,7 +799,7 @@ export function buildFixFindingsHandoff(input: {
         !attached.has(comment.id),
     )
     .flatMap((comment) => {
-      const body = visibleBody(comment.body);
+      const body = readableBody(comment.body);
       if (body === null) return [];
       const where = comment.path === null ? "" : ` on \`${boundedField(comment.path)}\``;
       return [`${boundedField(comment.author?.login ?? "ghost")}${where}: ${boundedField(body)}`];
@@ -824,7 +824,6 @@ export function buildFixFindingsHandoff(input: {
     includedChecks.length -
     includedRemarks.length;
   const terminology = terminologyForUrl(input.url);
-
   return {
     prompt: [
       `Fix the actionable findings on ${terminology.shortLabel} #${input.number}, titled \`${boundedField(input.title)}\`, at \`${boundedField(input.url)}\`.`,
@@ -899,7 +898,7 @@ export function buildFixFindingHandoff(input: {
   }
   if (input.finding.kind === "comment") {
     const comment = input.finding.comment;
-    const body = visibleBody(comment.body) ?? "";
+    const body = readableBody(comment.body) ?? "";
     const where = comment.path === null ? "" : ` on \`${boundedField(comment.path)}\``;
     return {
       prompt: [
@@ -1141,11 +1140,11 @@ export function readableFailure(failure: unknown, hint: string): string {
     failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "";
   const detail = raw.replace(OPERATION_PREFIX, "").trim();
   if (detail.length === 0 || TOOL_NOISE.some((pattern) => pattern.test(detail))) return hint;
-  const bounded =
-    detail.length <= FAILURE_DETAIL_MAX_LENGTH
-      ? detail
-      : `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}…`;
-  return bounded;
+  if (detail.length <= FAILURE_DETAIL_MAX_LENGTH) return detail;
+  let end = FAILURE_DETAIL_MAX_LENGTH - 1;
+  const last = detail.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${detail.slice(0, end).trimEnd()}…`;
 }
 
 const isGitCommandError = Schema.is(GitCommandError);

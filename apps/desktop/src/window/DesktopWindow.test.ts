@@ -940,7 +940,7 @@ describe("DesktopWindow", () => {
     },
     { primaryPasteEnabled: true, expected: [PASSKEY_BRIDGE_ARGUMENT] },
   ])(
-    "passes the primary-paste setting to preview guests (enabled: $primaryPasteEnabled)",
+    "isolates preview guests and passes them the primary-paste setting (enabled: $primaryPasteEnabled)",
     ({ primaryPasteEnabled, expected }) =>
       Effect.gen(function* () {
         const fakeWindow = makeFakeBrowserWindow();
@@ -957,15 +957,15 @@ describe("DesktopWindow", () => {
           yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
           const willAttachWebview = fakeWindow.webContentsListeners.get("will-attach-webview");
-          if (!willAttachWebview) {
+          if (!willAttachWebview)
             return yield* Effect.die("will-attach-webview listener was not registered");
-          }
           const webPreferences: Electron.WebPreferences = {};
           willAttachWebview({ preventDefault: () => {} }, webPreferences, {
             partition: "persist:t3code-preview-test",
           });
 
           assert.deepEqual(webPreferences.additionalArguments, expected);
+          assert.isTrue(webPreferences.contextIsolation);
         }).pipe(Effect.provide(layer));
       }),
   );

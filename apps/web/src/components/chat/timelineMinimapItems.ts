@@ -109,11 +109,20 @@ export function markdownPlainText(markdown: string): string {
 
 const MINIMAP_PREFIX_LENGTH = 1_500;
 
+export function splitsSurrogatePair(text: string, index: number): boolean {
+  if (index <= 0 || index >= text.length) return false;
+  const high = text.charCodeAt(index - 1);
+  const low = text.charCodeAt(index);
+  return high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+}
+
 function markdownMinimapPreview(markdown: string | null) {
   // The tooltip only shows a few lines, including while assistant text is streaming.
-  return markdown === null
-    ? null
-    : markdownPlainText(markdown.slice(0, MINIMAP_PREFIX_LENGTH)) || null;
+  if (markdown === null) return null;
+  const end = splitsSurrogatePair(markdown, MINIMAP_PREFIX_LENGTH)
+    ? MINIMAP_PREFIX_LENGTH - 1
+    : MINIMAP_PREFIX_LENGTH;
+  return markdownPlainText(markdown.slice(0, end)) || null;
 }
 
 function sliceCitationText(text: string, limit: number): string {
@@ -151,11 +160,14 @@ function expandUserPreviewTokens(markdown: string) {
       "citation" in token
         ? citationPreviewLabel(token.citation, Math.max(0, MINIMAP_PREFIX_LENGTH - expanded.length))
         : token.label;
-    const literal = label.replace(/\s+/g, " ").replace(/[!-\/:-@[-`{-~]/g, "\\$&");
+    const literal = label.replace(/\s+/g, " ").replace(/[!-/:-@[-`{-~]/g, "\\$&");
     expanded += literal;
     offset = end;
   }
-  return expanded + markdown.slice(offset, MINIMAP_PREFIX_LENGTH);
+  const limit = splitsSurrogatePair(markdown, MINIMAP_PREFIX_LENGTH)
+    ? MINIMAP_PREFIX_LENGTH - 1
+    : MINIMAP_PREFIX_LENGTH;
+  return expanded + markdown.slice(offset, limit);
 }
 
 function userMinimapPreview(markdown: string | null) {

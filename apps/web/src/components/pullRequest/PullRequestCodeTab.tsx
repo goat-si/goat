@@ -4,7 +4,7 @@ import { useWithheldPullRequestFiles } from "./useWithheldPullRequestFiles";
 import { PullRequestWithheldFileNotice } from "./PullRequestWithheldFileNotice";
 import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
-import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
+import { placedReviewThreadIds, reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { useCodeLinkTarget, useRevealCodeLink } from "./usePullRequestCodeLink";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
@@ -16,6 +16,7 @@ import type {
   PullRequestRef,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
+  ScopedThreadRef,
 } from "@goat/contracts";
 import {
   ChevronDownIcon,
@@ -82,7 +83,7 @@ import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -106,7 +107,6 @@ import {
   getFileViewedRange,
   flipFileDiffFold,
   isFileDiffCollapsed,
-  isLineInFileDiff,
   withFileDiffFold,
   type DiffFoldOverride,
   type FileDiffFoldChoices,
@@ -126,11 +126,17 @@ import {
   COMMIT_PAGE_SIZE,
   PULL_REQUEST_FILE_TREE_STORAGE_KEY,
   REPLACE_FILE_COUNTS_CSS,
+  reviewAnnotationsVersion,
   type ReviewAnnotationGroup,
   type ReviewAnnotation,
   type MutableAnnotationGroup,
 } from "./pullRequestCodeAnnotations";
-import { PullRequestInlineDraft, type DraftAnchor } from "./PullRequestInlineDraft";
+import {
+  draftFileIdentity,
+  PullRequestInlineDraft,
+  resolveDraftFile,
+  type DraftAnchor,
+} from "./PullRequestInlineDraft";
 import { PullRequestStaleReviewComments } from "./PullRequestStaleReviewComments";
 import { PullRequestStaleInlineDraft } from "./PullRequestStaleInlineDraft";
 
@@ -142,6 +148,7 @@ export interface PullRequestAgentSelectionInput {
 function PullRequestCodeTab({
   scrollerRef,
   environmentId,
+  threadRef = null,
   reference,
   detail,
   selectedCommitOid,
@@ -160,6 +167,7 @@ function PullRequestCodeTab({
 }: {
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
+  threadRef?: ScopedThreadRef | null;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
   selectedCommitOid: string | null;
@@ -436,6 +444,15 @@ function PullRequestCodeTab({
       })
     : loadedFiles;
   const hiddenTestFileCount = loadedFiles.length - files.length;
+  const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
+  const draftMatch = resolveDraftFile(
+    draft,
+    loadedFiles,
+    fileRenderKey,
+    loadedSlices.length > 0 && nextCursor === null,
+  );
+  const { file: draftFile, fileKey: draftFileKey } = draftMatch;
+  if (!draftStale && draftMatch.invalid) closeDraft();
   const filePaths = files.map((file) => resolveFileDiffPath(file));
   const omittedFileStats = new Map(
     loadedSlices.flatMap((slice) =>
@@ -445,19 +462,7 @@ function PullRequestCodeTab({
   const fileTreeEntries = diffFileTreeEntries(files);
   const threadsByPath = reviewThreadsByPath(detail.reviewThreads);
   // File membership does not guarantee a rendered hunk for the thread.
-  const placedThreadIds = (() => {
-    const placed = new Set<string>();
-    // Commit diffs use different line coordinates; list conversations separately.
-    if (commit !== null) return placed;
-    for (const file of files) {
-      for (const thread of threadsByPath.get(resolveFileDiffPath(file)) ?? []) {
-        if (thread.line !== null && isLineInFileDiff(file, thread.side, thread.line)) {
-          placed.add(thread.id);
-        }
-      }
-    }
-    return placed;
-  })();
+  const placedThreadIds = placedReviewThreadIds(files, threadsByPath, commit);
 
   const imagePreviewUrl = pullRequestImagePreviewUrl(detail, commit);
   const annotatedFiles = files.map((fileDiff) => {
@@ -490,7 +495,7 @@ function PullRequestCodeTab({
         groupAt(anchor.side, anchor.line).pending.push(comment);
       }
     }
-    if (!draftStale && draft?.fileKey === fileKey) {
+    if (!draftStale && draft !== null && draftFileKey === fileKey) {
       const anchor = getReviewPositionAnchor(draft.position);
       groupAt(anchor.side, anchor.line).draft = true;
     }
@@ -528,37 +533,10 @@ function PullRequestCodeTab({
       path,
       fileDiff,
       annotations,
-      // The viewer redraws annotations only when their version changes.
-      annotationsVersion: fnv1a32(
-        annotations
-          .map(
-            ({ side, lineNumber, metadata }) =>
-              `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.withheld?.readable ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
-                .map((comment) => `${comment.id}:${comment.body}`)
-                .join(",")}:${metadata.threads
-                .map(
-                  (thread) =>
-                    `${thread.id}:${thread.isResolved ? "r" : ""}:${
-                      thread.isOutdated ? "o" : ""
-                    }:${thread.comments
-                      .map(
-                        (comment) =>
-                          `${comment.id}:${comment.author?.login ?? ""}:${comment.createdAt}:${comment.body}:${(
-                            comment.reactions ?? []
-                          )
-                            .map((r) => `${r.content}:${r.count}:${r.viewerHasReacted ? "v" : ""}`)
-                            .join(",")}`,
-                      )
-                      .join(";")}`,
-                )
-                .join(",")}`,
-          )
-          .join("|"),
-      ),
+      annotationsVersion: reviewAnnotationsVersion(annotations),
     };
   });
 
-  const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
   const withheldContent =
     loadedSlices.some((slice) => slice.truncated) ||
     parsedSlices.some((parsed) => parsed?.kind === "raw");
@@ -699,7 +677,7 @@ function PullRequestCodeTab({
       sourceRevision,
       moving,
       openedHeadSha: detail.headSha,
-      fileKey: item.id,
+      ...draftFileIdentity(file),
       path,
       oldPath: previousPath === path ? null : previousPath,
       ...anchor,
@@ -712,16 +690,15 @@ function PullRequestCodeTab({
     text: string,
     onFinish: (comment: ReviewCommentContext) => void,
   ) => {
-    const file = files.find((candidate) => fileRenderKey(candidate) === anchor.fileKey);
     const comment =
-      file === undefined
+      draftFile === undefined || draftFileKey === null
         ? null
         : buildDiffReviewComment({
-            id: `pull-request-selection:${anchor.fileKey}:${anchor.range.start}:${anchor.range.end}`,
+            id: `pull-request-selection:${draftFileKey}:${anchor.range.start}:${anchor.range.end}`,
             sectionId: `pull-request:${detail.number}`,
             sectionTitle: `PR #${detail.number} review`,
             filePath: anchor.path,
-            fileDiff: file,
+            fileDiff: draftFile,
             range: anchor.range,
             text,
           });
@@ -948,13 +925,17 @@ function PullRequestCodeTab({
     </div>
   );
 
+  const hiddenTestFilesLabel =
+    hiddenTestFileCount > 0
+      ? `${hiddenTestFileCount} test ${hiddenTestFileCount === 1 ? "file" : "files"} hidden`
+      : null;
   const changeIgnoreWhitespace = (next: boolean) => {
     setIgnoreWhitespace(next);
     if (!draftStale) closeDraft();
   };
   const toolbar = (
     <div data-glass-layer className={DIFF_SURFACE_TOOLBAR_CLASS}>
-      <div className="flex min-w-0 flex-1 items-center gap-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-clip">
         <PullRequestDiffCommitMenu
           commits={orderedCommits}
           commit={commit}
@@ -963,15 +944,27 @@ function PullRequestCodeTab({
           onShowMore={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
         />
         <PullRequestMetaLine>
-          <span className="shrink-0 tabular-nums">
-            {files.length} {files.length === 1 ? "file" : "files"}
-            {nextCursor === null ? "" : "+"}
+          <span className="flex shrink-0 items-center gap-1.5">
+            <span className="tabular-nums">
+              {files.length} {files.length === 1 ? "file" : "files"}
+              {nextCursor === null ? "" : "+"}
+            </span>
+            {hiddenTestFilesLabel !== null && (files.length > 0 || nextCursor !== null) ? (
+              <span className="hidden items-center gap-1.5 @2xl:flex">
+                <span aria-hidden className="text-muted-foreground/50">
+                  ·
+                </span>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="link"
+                  onClick={() => setHideTestFiles(false)}
+                >
+                  {hiddenTestFilesLabel}
+                </Button>
+              </span>
+            ) : null}
           </span>
-          {hiddenTestFileCount > 0 ? (
-            <Button type="button" size="xs" variant="link" onClick={() => setHideTestFiles(false)}>
-              {hiddenTestFileCount} test {hiddenTestFileCount === 1 ? "file" : "files"} hidden
-            </Button>
-          ) : null}
           {filesViewed.enabled && files.length > 0 ? (
             <span className="flex min-w-0 items-center gap-1 tabular-nums">
               <span className="shrink-0">
@@ -1301,23 +1294,27 @@ function PullRequestCodeTab({
   if (diffQuery.isPending && loadedSlices.length === 0) {
     return withToolbar(<DiffPanelLoadingState label={`Loading ${term} diff...`} />);
   }
-
   if (diffQuery.error && loadedSlices.length === 0) {
     return withToolbar(
       <PullRequestDiffUnavailableState
         error={diffQuery.error}
         provider={detail.provider}
         url={detail.url}
+        threadRef={threadRef}
         onRetry={() => diffQuery.refresh()}
       />,
     );
   }
-
-  if (rawSlicesView !== null) {
-    return withToolbar(rawSlicesView);
-  }
-
+  if (rawSlicesView !== null) return withToolbar(rawSlicesView);
   if (items.length === 0 && nextCursor === null) {
+    if (hiddenTestFilesLabel !== null && files.length === 0) {
+      return withToolbar(
+        <div className="flex flex-wrap items-center gap-2 px-4 py-5 text-sm text-muted-foreground">
+          <p>{hiddenTestFilesLabel}</p>
+          <InlineButton onClick={() => setHideTestFiles(false)}>Show test files</InlineButton>
+        </div>,
+      );
+    }
     return withToolbar(
       <p className="px-4 py-5 text-sm text-muted-foreground">
         {commit === null ? `This ${term} has no file changes.` : "This commit has no file changes."}

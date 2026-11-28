@@ -78,11 +78,9 @@ export interface DraftState {
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
   readonly existingWorktreePath: string;
-  readonly modelKey: string;
+  readonly modelSelection: ModelSelection | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  /** Retain the source selection's provider options when the picker leaves instanceId:model unchanged. */
-  readonly baseModelSelection: ModelSelection | null;
   readonly signatureEnabled: boolean;
   readonly signatureHeader: string;
   readonly signatureEncoding: "hex" | "base64";
@@ -250,10 +248,9 @@ export function taskToDraft(task: ScheduledTask): DraftState {
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
+    modelSelection: task.modelSelection,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
-    baseModelSelection: task.modelSelection,
     ...(schedule.type === "webhook" && schedule.signature !== null
       ? {
           signatureEnabled: true,
@@ -351,10 +348,9 @@ export const EMPTY_DRAFT: DraftState = {
   baseRef: "",
   startFromOrigin: true,
   existingWorktreePath: "",
-  modelKey: "",
+  modelSelection: null,
   runtimeMode: "full-access",
   interactionMode: "default",
-  baseModelSelection: null,
   signatureEnabled: false,
   ...WEBHOOK_SIGNATURE_DEFAULTS,
   signatureSecret: "",
@@ -415,7 +411,8 @@ export const withProject = (
   projectId: string,
   saved?: Pick<ScheduledTask, "threadId" | "projectId"> | null,
 ): DraftState => {
-  const moved = { ...draft, projectId };
+  if (projectId === draft.projectId) return draft;
+  const moved = { ...draft, projectId, baseRef: "", existingWorktreePath: "" };
   if (!saved?.threadId) return moved;
   if (projectId === saved.projectId)
     return draft.threadId === "" && draft.threadMode !== "new_thread"

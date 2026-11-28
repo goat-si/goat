@@ -84,11 +84,21 @@ export function GuideTour({
   const step = (delta: 1 | -1) => goTo(stepTourPosition(position, delta, stopCount));
 
   const stepFromKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing || isCommandPaletteOpen()) return;
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+    if (isCommandPaletteOpen()) return;
     if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     const key = event.key.toLowerCase();
     if (key !== "j" && key !== "k") return;
-    if (isEditableFocused(event.target)) return;
+    const inSideChatPane =
+      event.target instanceof Element && event.target.closest("[data-side-chat-pane]") !== null;
+    if (isEditableFocused(event.target) || inSideChatPane) return;
+    const floatingLayer =
+      event.target instanceof Element
+        ? event.target.closest(
+            '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="combobox"], [data-slot$="popup"]',
+          )
+        : null;
+    if (floatingLayer !== null && !floatingLayer.contains(scrollRef.current)) return;
     event.preventDefault();
     step(key === "j" ? 1 : -1);
   });

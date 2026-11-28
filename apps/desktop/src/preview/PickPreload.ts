@@ -1,7 +1,8 @@
 import { mountAnnotationTopLayer } from "./AnnotationTopLayer.ts";
 import { describeRawElement } from "./AnnotationElementLabel.ts";
 import { positionBox } from "./AnnotationPositionBox.ts";
-import { COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS } from "@goat/contracts";
+// Keep in sync with packages/contracts/src/composerContext.ts so the sandboxed preload stays free of Effect/Schema runtime imports.
+const COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS = 8_000;
 import {
   createButton,
   styleControl,
@@ -13,12 +14,10 @@ import {
 import "./HumanInputGuest.ts";
 // @effect-diagnostics globalDate:off globalTimers:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
-import { getElementContext } from "react-grab/primitives";
 import type {
   AnnotationVoiceConfig,
   DesktopPreviewAnnotationTheme,
   PickedElementPayload,
-  PickedElementStackFrame,
   PreviewAnnotationPayload,
   PreviewAnnotationPoint,
   PreviewAnnotationRect,
@@ -39,6 +38,8 @@ import {
   type StrokeGeometry,
 } from "./AnnotationStroke.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
+import { pageWorld, parsePageElementContext } from "./PageWorldBridge.ts";
+import { pickElementAtPoint } from "./PickTarget.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
 import { installAnnotationVoice } from "./AnnotationVoiceGuest.ts";
 import {
@@ -250,13 +251,16 @@ function isAnnotationNode(element: Element): boolean {
 }
 
 function pickFromPoint(clientX: number, clientY: number): Element | null {
-  for (const candidate of document.elementsFromPoint(clientX, clientY)) {
-    if (!(candidate instanceof Element)) continue;
-    if (isAnnotationNode(candidate) || candidate.hasAttribute(INPUT_LAYER_ATTRIBUTE)) continue;
-    if (candidate === document.documentElement || candidate === document.body) continue;
-    return candidate;
-  }
-  return null;
+  return pickElementAtPoint(
+    document,
+    clientX,
+    clientY,
+    (element) =>
+      isAnnotationNode(element) ||
+      element.hasAttribute(INPUT_LAYER_ATTRIBUTE) ||
+      element === document.documentElement ||
+      element === document.body,
+  );
 }
 
 function createBox(color: string, fill: string): HTMLDivElement {
@@ -309,20 +313,6 @@ function updateSelectedVisual(target: SelectedElement): void {
   target.label.style.transform = `translate(${Math.max(4, rect.x)}px, ${Math.max(4, rect.y - 22)}px)`;
 }
 
-function toStackFrame(frame: {
-  functionName?: string;
-  fileName?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-}): PickedElementStackFrame {
-  return {
-    functionName: frame.functionName ?? null,
-    fileName: frame.fileName ?? null,
-    lineNumber: frame.lineNumber ?? null,
-    columnNumber: frame.columnNumber ?? null,
-  };
-}
-
 /** React-internals lookups can remain pending forever; bound them so submit cannot stall the overlay. */
 function withCaptureTimeout<A>(promise: Promise<A>, millis: number): Promise<A | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -345,27 +335,22 @@ async function captureElement(element: Element): Promise<PickedElementPayload> {
     pickedAt: new Date().toISOString(),
   };
   try {
-    const context = await withCaptureTimeout(
-      Promise.resolve(getElementContext(element)),
-      ELEMENT_CONTEXT_TIMEOUT_MS,
+    const context = parsePageElementContext(
+      await withCaptureTimeout(
+        Promise.resolve(pageWorld.elementContext(element)),
+        ELEMENT_CONTEXT_TIMEOUT_MS,
+      ),
     );
-    if (context) {
-      const stack = (context.stack ?? []).map(toStackFrame);
-      return {
-        ...base,
-        selector: context.selector,
-        htmlPreview: context.htmlPreview ?? "",
-        componentName: context.componentName,
-        source: stack[0] ?? null,
-        stack,
-        styles: context.styles ?? "",
-      };
-    }
+    if (context !== null) return { ...base, ...context };
   } catch {}
+  const html = element.outerHTML;
+  const before = html.charCodeAt(HTML_PREVIEW_MAX_CHARS - 1);
+  const after = html.charCodeAt(HTML_PREVIEW_MAX_CHARS);
+  const splitPair = before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
   return {
     ...base,
     selector: null,
-    htmlPreview: element.outerHTML.slice(0, HTML_PREVIEW_MAX_CHARS),
+    htmlPreview: html.slice(0, splitPair ? HTML_PREVIEW_MAX_CHARS - 1 : HTML_PREVIEW_MAX_CHARS),
     componentName: null,
     source: null,
     stack: [],
@@ -384,19 +369,21 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   host.style.cssText = `position:fixed;inset:0;width:auto;height:auto;margin:0;border:0;padding:0;overflow:visible;background:transparent;color:inherit;z-index:${Z_INDEX_OVERLAY};pointer-events:none`;
   applyAnnotationTheme(host, annotationTheme);
   const shadowRoot = host.attachShadow({ mode: "closed" });
-  const themeStyle = document.createElement("style");
-  themeStyle.textContent = previewAnnotationStyles;
-  shadowRoot.appendChild(themeStyle);
+  // Constructed sheets are exempt from the page's CSP style-src; <style> elements are not.
+  const themeSheet = new CSSStyleSheet();
+  themeSheet.replaceSync(previewAnnotationStyles);
+  shadowRoot.adoptedStyleSheets = [themeSheet];
 
   const root = document.createElement("div");
   root.setAttribute(OVERLAY_ATTRIBUTE, "");
   root.setAttribute("dir", "ltr");
   root.className = "fixed inset-0 font-sans text-foreground";
   root.style.cssText = "pointer-events:none";
-  const cursorStyle = document.createElement("style");
-  cursorStyle.setAttribute(OVERLAY_ATTRIBUTE, "");
-  cursorStyle.textContent = `[${OVERLAY_ATTRIBUTE}]::backdrop { display:none !important; } html[data-goat-annotation-tool] body, html[data-goat-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
-  document.documentElement.appendChild(cursorStyle);
+  const cursorSheet = new CSSStyleSheet();
+  cursorSheet.replaceSync(
+    `[${OVERLAY_ATTRIBUTE}]::backdrop { display:none !important; } html[data-goat-annotation-tool] body, html[data-goat-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`,
+  );
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, cursorSheet];
   shadowRoot.appendChild(root);
 
   const hoverOutline = createBox(PRIMARY, PRIMARY_FILL);
@@ -1250,7 +1237,9 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
     ipcRenderer.off(ANNOTATION_CAPTURED_CHANNEL, onCaptured);
     voiceControl?.dispose();
     document.documentElement.removeAttribute("data-goat-annotation-tool");
-    cursorStyle.remove();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+      (sheet) => sheet !== cursorSheet,
+    );
     inputLayer?.remove();
     host.remove();
     activeSession = null;

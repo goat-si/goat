@@ -8,6 +8,14 @@ import { PullRequestsPage } from "../components/pullRequest/PullRequestsPage";
 
 const MAX_SEARCH_LABEL_CANDIDATES = 100;
 
+function sliceWhole(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const before = text.charCodeAt(limit - 1);
+  const after = text.charCodeAt(limit);
+  const splits = before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+  return text.slice(0, splits ? limit - 1 : limit);
+}
+
 function pullRequestSearchLabels(raw: unknown): PullRequestsSearch["labels"] {
   const values = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : []).slice(
     0,
@@ -17,7 +25,7 @@ function pullRequestSearchLabels(raw: unknown): PullRequestsSearch["labels"] {
   const seen = new Set<string>();
   for (const rawValue of values) {
     if (typeof rawValue !== "string") continue;
-    const value = rawValue.trim().slice(0, 200);
+    const value = sliceWhole(rawValue.trim(), 200);
     const key = value.toLowerCase();
     if (value.length === 0 || seen.has(key)) continue;
     labels.push(value);
@@ -60,7 +68,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
       : {}),
     // Always include free-text keys to override numeric values in the parent route's unvalidated search.
-    q: typeof raw.q === "string" && raw.q ? raw.q.slice(0, 200) : undefined,
+    q: typeof raw.q === "string" && raw.q ? sliceWhole(raw.q, 200) : undefined,
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
     ...(raw.review === "approved" ||
     raw.review === "changes-requested" ||
@@ -70,9 +78,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       : {}),
     ...(raw.checks === "passing" || raw.checks === "failing" ? { checks: raw.checks } : {}),
     author:
-      typeof raw.author === "string" && raw.author.trim()
-        ? raw.author.trim().slice(0, 200)
-        : undefined,
+      typeof raw.author === "string" ? sliceWhole(raw.author.trim(), 200) || undefined : undefined,
     labels: pullRequestSearchLabels(raw.labels),
     ...(raw.upstream === "include" ? { upstream: "include" as const } : {}),
   }),

@@ -950,6 +950,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         status={prStatus}
         onOpenList={handlePrListClick}
         onOpenPullRequest={handlePrClick}
+        side="right"
       />
     ) : null;
   const terminalStatusIcon = (
@@ -1148,7 +1149,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     >
                       <Undo2Icon className="mb-px size-3.5" />
                     </TooltipTrigger>
-                    <TooltipPopup side="top">Un-settle thread</TooltipPopup>
+                    <TooltipPopup side="right">Un-settle thread</TooltipPopup>
                   </Tooltip>
                 ) : (
                   <button
@@ -1408,7 +1409,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                               <CheckIcon className="size-3.5" />
                             )}
                           </TooltipTrigger>
-                          <TooltipPopup>
+                          <TooltipPopup side="right">
                             {variantAction === "unsettle" ? "Un-settle thread" : "Settle thread"}
                           </TooltipPopup>
                         </Tooltip>
@@ -1619,7 +1620,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                   settled={props.isSettled}
                 />
               </span>
-              <span className="w-8 shrink-0 text-right text-xs text-muted-foreground/55 dark:text-muted-foreground/70 tabular-nums">
+              <span className="min-w-8 shrink-0 text-right text-xs text-muted-foreground/55 dark:text-muted-foreground/70 tabular-nums">
                 <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
               </span>
             </span>

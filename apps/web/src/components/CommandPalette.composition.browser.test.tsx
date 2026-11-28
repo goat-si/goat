@@ -1,4 +1,5 @@
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../i18n/initializeI18n";
 import chinese from "../i18n/translations/zh.json";
 import spanish from "../i18n/translations/es.json";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -10,11 +11,14 @@ import { act, render } from "../../test/render";
 import { CommandPalette } from "./CommandPalette";
 import { openCommandPalette } from "../commandPaletteBus";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { sourceControlEnvironment } from "../state/sourceControl";
+import { AsyncResult } from "effect/reactivity";
 
 const scopes = vi.hoisted(() => ({
   denied: undefined as string | undefined,
   sourceControl: undefined as unknown,
   showSettings: false,
+  lookupRepository: vi.fn(),
 }));
 const setup = (deniedScope?: string, sourceControl?: unknown) => {
   scopes.denied = deniedScope;
@@ -76,7 +80,10 @@ vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: () => async () => ({ _tag: "Success", value: { projectId: "project-cloned" } }),
 }));
 vi.mock("../state/use-atom-query-runner", () => ({
-  useAtomQueryRunner: () => async () => ({ _tag: "Success", value: undefined }),
+  useAtomQueryRunner: (family: unknown) =>
+    family === sourceControlEnvironment.repository
+      ? scopes.lookupRepository
+      : async () => ({ _tag: "Success", value: undefined }),
 }));
 vi.mock("../state/environments", async (original) => ({
   ...(await original<typeof import("../state/environments")>()),
@@ -289,6 +296,11 @@ it("tells screen readers whether a new project will be published", async () => {
 
 it("shows settings in the UI language and matches both localized names and English keywords", async () => {
   setup();
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   scopes.showSettings = true;
   try {
     await using _screen = await render(
@@ -311,6 +323,11 @@ it("shows settings in the UI language and matches both localized names and Engli
 
 it("translates the add-project source picker and keeps English search aliases", async () => {
   setup();
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using _screen = await render(
     <GTProvider locale="zh" translations={{ zh: chinese }}>
       <CommandPalette>{null}</CommandPalette>
@@ -327,4 +344,32 @@ it("translates the add-project source picker and keeps English search aliases", 
     await expect.element(page.getByText("本地文件夹", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Git 地址", { exact: true })).not.toBeInTheDocument();
   }
+});
+
+it("keeps the source list visible after a dismissed repository lookup succeeds", async () => {
+  setup(undefined, githubAvailable);
+  const repository = AsyncResult.success({
+    provider: "github",
+    nameWithOwner: "example/slow",
+    url: "https://github.com/example/slow",
+    sshUrl: "git@github.com:example/slow.git",
+  });
+  const lookup = Promise.withResolvers<typeof repository>();
+  scopes.lookupRepository.mockReset().mockReturnValue(lookup.promise);
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+  await act(() => openCommandPalette({ open: "add-project" }));
+  await page.getByRole("option", { name: /^GitHub repository/ }).click();
+  await page.getByRole("combobox").fill("example/slow");
+  await userEvent.keyboard("{Enter}");
+  expect(scopes.lookupRepository).toHaveBeenCalledOnce();
+  await page.getByRole("combobox").fill("");
+  await userEvent.keyboard("{Backspace}");
+  const sources = page.getByText("Git URL", { exact: true });
+  await expect.element(sources).toBeVisible();
+
+  await act(async () => {
+    lookup.resolve(repository);
+    await lookup.promise;
+  });
+  expect(sources.element()).toBeVisible();
 });

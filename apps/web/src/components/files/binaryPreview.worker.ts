@@ -51,6 +51,14 @@ function tarEntries(bytes: Uint8Array<ArrayBuffer>) {
     if (!/^[0-7]*$/.test(value)) throw new Error("This TAR uses an unsupported numeric format.");
     return Number.parseInt(value || "0", 8);
   };
+  const timestamp = (offset: number, length: number) => {
+    const first = bytes[offset] ?? 0;
+    if ((first & 0x80) === 0) return number(offset, length);
+    let value = BigInt(first & 0x40 ? first - 0x100 : first & 0x7f);
+    for (let index = 1; index < length; index++)
+      value = (value << 8n) | BigInt(bytes[offset + index] ?? 0);
+    return Number(value);
+  };
   let longPath: string | null = null;
   const globalPax: Record<string, string> = {};
   let localPax: Record<string, string> = {};
@@ -122,7 +130,7 @@ function tarEntries(bytes: Uint8Array<ArrayBuffer>) {
       if (attributes.mtime && !/^[+-]?\d+(?:\.\d+)?$/.test(attributes.mtime))
         throw new Error("The TAR metadata is damaged.");
       const modified =
-        (attributes.mtime ? Number(attributes.mtime) : number(offset + 136, 12)) * 1000;
+        (attributes.mtime ? Number(attributes.mtime) : timestamp(offset + 136, 12)) * 1000;
       const date = new Date(modified);
       entries.push({
         path,
@@ -163,7 +171,7 @@ async function handle(input: BinaryWorkerRequest) {
         .slice(0, 50) ?? [];
     const fields = columns.map((name) => {
       const field = quote(name);
-      return `CASE WHEN typeof(${field}) = 'blob' THEN '[blob: ' || length(${field}) || ' bytes]' ELSE substr(CAST(${field} AS TEXT), 1, 1024) END`;
+      return `CASE WHEN typeof(${field}) = 'blob' THEN '[blob: ' || length(${field}) || CASE length(${field}) WHEN 1 THEN ' byte]' ELSE ' bytes]' END ELSE substr(CAST(${field} AS TEXT), 1, 1024) END`;
     });
     const result = database.exec(
       `SELECT ${fields.join(",")} FROM ${quote(input.table)} LIMIT ${SQLITE_PAGE_SIZE} OFFSET ${input.page * SQLITE_PAGE_SIZE}`,
@@ -220,7 +228,9 @@ async function handle(input: BinaryWorkerRequest) {
           path,
           size: file.bytes.length,
           directory: file.directory,
-          modified: Number.isNaN(file.date.getTime()) ? null : file.date.toISOString(),
+          // ZIP stores wall-clock time without a zone, while JSZip reads those fields as UTC.
+          // Omitting "Z" marks the timestamp as wall-clock so the viewer formats its calendar date.
+          modified: Number.isNaN(file.date.getTime()) ? null : file.date.toISOString().slice(0, -1),
         };
       });
     } else if (/\.(gz|tgz)$/i.test(input.name) || new Uint8Array(input.bytes)[0] === 0x1f) {

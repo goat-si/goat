@@ -18,9 +18,16 @@ export interface ElementContextSelection {
   styles: string;
 }
 
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 function truncateString(value: string, limit: number): string {
   if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 1))}…`;
+  const cut = Math.max(0, limit - 1);
+  return `${value.slice(0, splitsSurrogatePair(value, cut) ? cut - 1 : cut)}…`;
 }
 
 function normalizeText(value: string): string {

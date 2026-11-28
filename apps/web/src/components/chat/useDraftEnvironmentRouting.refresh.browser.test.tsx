@@ -26,7 +26,22 @@ vi.mock("../../hooks/useLoadBalancedEnvironment", () => ({
     refreshSelection: resources.refreshSelection,
   }),
 }));
-vi.mock("../../state/entities", () => ({ useProjects: () => [], waitForProject: vi.fn() }));
+vi.mock("../../state/entities", () => ({
+  useProjects: () => [],
+  waitForProject: vi.fn(),
+  readProject: () => ({ workspaceRoot: "/project" }),
+  readProjects: () => [],
+  readThreadShells: () => [],
+  subscribeProjects: () => () => {},
+}));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: () => async () => ({
+    _tag: "Success" as const,
+    value: {
+      refs: [{ name: "main", current: true, isDefault: true, worktreePath: null }],
+    },
+  }),
+}));
 vi.mock("../../hooks/useScratchProject", () => ({ useScratchProject: () => ({}) }));
 
 function setup() {
@@ -150,6 +165,7 @@ it("refreshes a stored automatic choice before sending an unsent draft", async (
   store.setDraftThreadContext(draftId, {
     branch: "main",
     envMode: "worktree",
+    workspaceExplicit: true,
     environmentSelection: "auto",
   });
   await using screen = await render(
