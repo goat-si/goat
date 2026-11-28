@@ -319,6 +319,7 @@ async fn devin_never_auto_selects_plan_bypass() {
         local: false,
     };
     let mut handle = AcpEngineFactory::new(Arc::new(flavor))
+        .with_mcp_bridge(McpBridgeCommand::new(TEST_BRIDGE, Vec::<String>::new()))
         .start(spec(dir.path(), RuntimeMode::FullAccess))
         .await
         .unwrap();
@@ -349,6 +350,7 @@ async fn copilot_resends_the_reported_current_model() {
         local: false,
     };
     let mut handle = AcpEngineFactory::new(Arc::new(flavor))
+        .with_mcp_bridge(McpBridgeCommand::new(TEST_BRIDGE, Vec::<String>::new()))
         .start(spec(dir.path(), RuntimeMode::FullAccess))
         .await
         .unwrap();
