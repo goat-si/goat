@@ -501,7 +501,17 @@ pub mod auth_values {
     pub fn deserialize<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<BTreeMap<String, String>, D::Error> {
-        let v = BTreeMap::deserialize(d)?;
+        // v1 decodes each key as a SetupOperationId (TrimmedNonEmptyString): trim first, as
+        // JavaScript `trim` does. Two keys that trim to the same name are refused rather than one
+        // silently winning.
+        let raw = BTreeMap::<String, String>::deserialize(d)?;
+        let mut v = BTreeMap::new();
+        for (k, value) in raw {
+            let k = k.trim_matches(super::is_ecmascript_whitespace).to_owned();
+            if v.insert(k, value).is_some() {
+                return Err(de::Error::custom("duplicate credential field name"));
+            }
+        }
         check(&v).map_err(de::Error::custom)?;
         Ok(v)
     }
@@ -554,7 +564,10 @@ pub mod auth_operation_id {
         s.serialize_str(v)
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-        let v = String::deserialize(d)?;
+        // v1 TrimmedNonEmptyString trims before checking; serde returns the trimmed id.
+        let v = String::deserialize(d)?
+            .trim_matches(super::is_ecmascript_whitespace)
+            .to_owned();
         check(&v).map_err(de::Error::custom)?;
         Ok(v)
     }

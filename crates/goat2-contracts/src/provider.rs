@@ -151,7 +151,7 @@ pub struct ProviderAuthTerminalSize {
 fn auth_values_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type": "object", "maxProperties": 16,
         "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128,
-          "pattern": r"^[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff](?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"},
+          "pattern": r"\S"},
         "additionalProperties": {"type": "string", "maxLength": 16384}})
 }
 
