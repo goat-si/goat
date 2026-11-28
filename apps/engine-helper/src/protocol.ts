@@ -132,6 +132,17 @@ export type EngineEvent =
     }
   | { readonly type: "request_closed"; readonly key: string }
   | {
+      /** A request outside any GOAT turn (v1 runless child approval, Pi dialog); lives until answered or closed. */
+      readonly type: "session_request_opened";
+      readonly key: string;
+      readonly itemId: ItemId | null;
+      readonly kind: RequestKind;
+      readonly summary: string;
+      readonly item: HelperItem | null;
+    }
+  | { readonly type: "continuation_requested"; readonly key: string; readonly text: string }
+  | { readonly type: "continuation_withdrawn"; readonly key: string }
+  | {
       readonly type: "auth_required";
       readonly turnId: string | null;
       readonly url: string | null;

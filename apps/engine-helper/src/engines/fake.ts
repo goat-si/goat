@@ -6,6 +6,11 @@
 //   "fail"    the turn fails
 //   anything else echoes "echo: <text>" in two deltas
 //   "think"   streams reasoning (content_delta reasoning_text) on its own item, then echoes
+//   "offer"   echoes, then holds a continuation under "<turnId>:wake" (continuation_requested)
+//   "offer-withdraw"  offers a continuation and withdraws it again
+//   "session-ask"  opens a request outside the turn (session_request_opened "session-ask"); the
+//             answer closes it after the turn has ended
+// turn.continue runs a held continuation as a turn echoing its text; an unknown key is declined.
 // A steer during a turn is accepted and appended to the final message. When the turn ends, its
 // steers are reported with steer_updated: completed if the turn finished, cancelled otherwise.
 // session.set_config is supported unless launch.env GOAT2_FAKE_NO_SET_CONFIG=1; after it, echoes
@@ -43,6 +48,7 @@ class FakeSession implements EngineSession {
   #turns = 0;
   #active: ActiveTurn | undefined;
   readonly #requests = new Map<string, (answer: RequestAnswer) => void>();
+  readonly #continuations = new Map<string, string>();
   #config: TurnSettings | undefined;
   readonly setConfig?: (settings: TurnSettings) => Promise<void>;
 
@@ -95,10 +101,22 @@ class FakeSession implements EngineSession {
   }
 
   async answerRequest(key: string, answer: RequestAnswer): Promise<void> {
+    if (key === "session-ask") {
+      this.#host.emit({ type: "request_closed", key });
+      return;
+    }
     const resolve = this.#requests.get(key);
     if (resolve === undefined) throw new HelperError("bad_request", `no open request ${key}`);
     this.#requests.delete(key);
     resolve(answer);
+  }
+
+  async startContinuation(key: string, inputs: ReadonlyArray<EngineInput>, _settings: TurnSettings): Promise<TurnStartResult> {
+    const text = this.#continuations.get(key);
+    if (text === undefined) return { status: "declined", reason: "continuation no longer available" };
+    this.#continuations.delete(key);
+    const input = inputs[0] ?? { inputId: `continue-${key}`, text, attachments: [] };
+    return this.startTurn([{ ...input, text }]);
   }
 
   async shutdown(): Promise<void> {
@@ -136,6 +154,24 @@ class FakeSession implements EngineSession {
 
     let reply: string;
     switch (text.trim()) {
+      case "offer":
+      case "offer-withdraw": {
+        const key = `${turn.turnId}:wake`;
+        this.#continuations.set(key, "background finished");
+        host.emit({ type: "continuation_requested", key, text: "background finished" });
+        if (text.trim() === "offer-withdraw") {
+          this.#continuations.delete(key);
+          host.emit({ type: "continuation_withdrawn", key });
+        }
+        reply = `echo: ${text.trim()}`;
+        host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: reply });
+        break;
+      }
+      case "session-ask":
+        host.emit({ type: "session_request_opened", key: "session-ask", itemId: null, kind: "question", summary: "Background question", item: null });
+        reply = "echo: session-ask";
+        host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: reply });
+        break;
       case "think": {
         const reasoningId = `${turn.turnId}:reasoning`;
         for (const part of ["weighing ", "options"]) {

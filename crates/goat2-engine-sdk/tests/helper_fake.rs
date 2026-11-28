@@ -345,6 +345,81 @@ async fn steer_settlement_is_reported_with_input_ids() {
     handle.session.shutdown().await;
 }
 
+/// Engine work outside a GOAT turn: a held continuation reaches the host as ContinuationRequested
+/// and start_continuation runs it; an unknown or withdrawn key is Declined (never sent as a
+/// prompt); a session request opens without a turn and closes when answered after the turn.
+#[tokio::test]
+async fn continuations_and_session_requests_cross_the_helper() {
+    let mut handle = start("thread-offer").await;
+    let turn = accepted(handle.session.start_turn(input("offer"), &settings()).await);
+    let events = until_finished(&mut handle).await;
+    let key = format!("{turn}:wake");
+    assert!(events.iter().any(|event| matches!(event,
+        EngineEvent::ContinuationRequested { key: k, text } if *k == key && text == "background finished")));
+    let continued = accepted(
+        handle
+            .session
+            .start_continuation(&key, input("background finished"), &settings())
+            .await,
+    );
+    assert_ne!(continued, turn);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(final_text(&events), "echo: background finished");
+    // Taken once: a second start for the same key is declined.
+    assert!(matches!(
+        handle
+            .session
+            .start_continuation(&key, input("again"), &settings())
+            .await,
+        TurnStartResult::Declined { .. }
+    ));
+
+    let turn = accepted(
+        handle
+            .session
+            .start_turn(input("offer-withdraw"), &settings())
+            .await,
+    );
+    let events = until_finished(&mut handle).await;
+    let key = format!("{turn}:wake");
+    assert!(events.iter().any(|event| matches!(event,
+        EngineEvent::ContinuationWithdrawn { key: k } if *k == key)));
+    assert!(matches!(
+        handle
+            .session
+            .start_continuation(&key, input("x"), &settings())
+            .await,
+        TurnStartResult::Declined { .. }
+    ));
+
+    accepted(
+        handle
+            .session
+            .start_turn(input("session-ask"), &settings())
+            .await,
+    );
+    let events = until_finished(&mut handle).await;
+    assert!(events.iter().any(|event| matches!(event,
+        EngineEvent::SessionRequestOpened { key, kind: RequestKind::Question, summary, .. }
+            if key == "session-ask" && summary == "Background question")));
+    handle
+        .session
+        .answer_request(
+            "session-ask",
+            RequestAnswer {
+                outcome: RequestOutcome::Answered,
+                text: Some("ok".into()),
+                answers: None,
+            },
+        )
+        .await
+        .expect("answered");
+    assert!(
+        matches!(next(&mut handle).await, EngineEvent::RequestClosed { key } if key == "session-ask")
+    );
+    handle.session.shutdown().await;
+}
+
 #[tokio::test]
 async fn start_failure_and_missing_engine_map_to_engine_errors() {
     let mut failing = spec("thread-fail");

@@ -36,6 +36,7 @@ mapped to EngineError on the Rust side.
 Each attachment is a goat2-contracts ChatAttachment plus path: the absolute path of its saved file
 (resolved by the host's AttachmentResolver), or null when the host could not find it.
 | turn.steer | {turnId, inputs} | SteerResult |
+| turn.continue | {key, inputs, settings} | TurnStartResult: run the continuation offered under key; declined when the engine has no continuations or no longer holds the key (the host then drops the input) |
 | turn.interrupt | {turnId} | {} |
 | request.answer | {key, answer: {outcome, text?, answers?}} | {} |
 | session.set_config | {settings: {modelSelection, runtimeMode}} | {}; error code unsupported when the engine has no in-session switch (EngineError::Unsupported) |
@@ -59,6 +60,9 @@ reason}. Same meaning as goat2-engine-api (structure/30_wire.md).
 | type | fields |
 |---|---|
 | text_delta | turnId, itemId, text (never stored) |
+| session_request_opened | key, itemId or null, kind, summary, item or null: a request outside any GOAT turn (EngineEvent::SessionRequestOpened); answered with request.answer, closed with request_closed |
+| continuation_requested | key, text: the engine holds a turn it wants to run when the thread is free (EngineEvent::ContinuationRequested); a later one replaces a pending one |
+| continuation_withdrawn | key: the engine no longer holds that continuation (EngineEvent::ContinuationWithdrawn) |
 | content_delta | turnId, itemId, streamKind (goat2-contracts ContentStreamKind: assistant_text, reasoning_text, reasoning_summary_text, plan_text, command_output, file_change_output, unknown), text (never stored). Stream on the item's own id, then item_completed with the same id; an item's first delta fixes its kind. text_delta is the assistant_text shorthand. |
 | item_completed | turnId, item, locator: {turnId, itemId} or null |
 | request_opened | turnId, key, itemId or null, kind: approval/question/signin, summary, item or null |

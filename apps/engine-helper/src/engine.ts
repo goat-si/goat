@@ -35,6 +35,11 @@ export interface EngineSession {
    * engine's capabilities allow an in-session switch. Engines without it answer `unsupported`.
    */
   setConfig?(settings: TurnSettings): Promise<void>;
+  /**
+   * Run a continuation this session offered with continuation_requested. Engines without it, or
+   * that no longer hold the key, answer declined; the host then drops the input.
+   */
+  startContinuation?(key: string, inputs: ReadonlyArray<EngineInput>, settings: TurnSettings): Promise<TurnStartResult>;
   shutdown(): Promise<void>;
 }
 

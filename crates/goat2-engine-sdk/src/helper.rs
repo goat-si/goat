@@ -463,6 +463,45 @@ fn settings_json(settings: &TurnSettings) -> Value {
     })
 }
 
+/// Map a `turn.start` / `turn.continue` answer. A request the helper rejected outright never
+/// reached the engine (Declined); a transport failure may have (Unknown).
+fn turn_start_result(answer: Result<Value, CallError>) -> TurnStartResult {
+    match answer {
+        Ok(result) => match status_reason(&result) {
+            (status, _) if status == "accepted" => {
+                match result.get("turnId").and_then(Value::as_str) {
+                    Some(turn_id) => TurnStartResult::Accepted {
+                        turn_id: turn_id.to_string(),
+                    },
+                    None => TurnStartResult::Unknown {
+                        reason: "engine accepted the turn without a turn id".into(),
+                    },
+                }
+            }
+            (status, reason) if status == "declined" => TurnStartResult::Declined { reason },
+            (status, reason) if status == "refused_unowned" => {
+                TurnStartResult::RefusedUnowned { reason }
+            }
+            (_, reason) => TurnStartResult::Unknown { reason },
+        },
+        Err(CallError::Remote(remote)) => TurnStartResult::Declined {
+            reason: remote.message,
+        },
+        Err(error) => TurnStartResult::Unknown {
+            reason: error.to_string(),
+        },
+    }
+}
+
+fn request_kind(kind: &str) -> Result<RequestKind, String> {
+    match kind {
+        "approval" => Ok(RequestKind::Approval),
+        "question" => Ok(RequestKind::Question),
+        "signin" => Ok(RequestKind::Signin),
+        other => Err(format!("unknown request kind {other}")),
+    }
+}
+
 fn status_reason(result: &Value) -> (String, String) {
     let status = result
         .get("status")
@@ -492,32 +531,22 @@ impl EngineSession for HelperSession {
         settings: &TurnSettings,
     ) -> TurnStartResult {
         let params = json!({ "inputs": inputs_json(&inputs, &self.thread_id, self.attachments.as_ref()), "settings": settings_json(settings) });
-        match self.client.call("turn.start", params, CALL_TIMEOUT).await {
-            Ok(result) => match status_reason(&result) {
-                (status, _) if status == "accepted" => {
-                    match result.get("turnId").and_then(Value::as_str) {
-                        Some(turn_id) => TurnStartResult::Accepted {
-                            turn_id: turn_id.to_string(),
-                        },
-                        None => TurnStartResult::Unknown {
-                            reason: "engine accepted the turn without a turn id".into(),
-                        },
-                    }
-                }
-                (status, reason) if status == "declined" => TurnStartResult::Declined { reason },
-                (status, reason) if status == "refused_unowned" => {
-                    TurnStartResult::RefusedUnowned { reason }
-                }
-                (_, reason) => TurnStartResult::Unknown { reason },
-            },
-            // A request the helper rejected outright never reached the engine.
-            Err(CallError::Remote(remote)) => TurnStartResult::Declined {
-                reason: remote.message,
-            },
-            Err(error) => TurnStartResult::Unknown {
-                reason: error.to_string(),
-            },
-        }
+        turn_start_result(self.client.call("turn.start", params, CALL_TIMEOUT).await)
+    }
+
+    /// `turn.continue`: run a continuation the engine offered; declined when it no longer holds it.
+    async fn start_continuation(
+        &self,
+        key: &str,
+        inputs: Vec<EngineInput>,
+        settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let params = json!({ "key": key, "inputs": inputs_json(&inputs, &self.thread_id, self.attachments.as_ref()), "settings": settings_json(settings) });
+        turn_start_result(
+            self.client
+                .call("turn.continue", params, CALL_TIMEOUT)
+                .await,
+        )
     }
 
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
@@ -715,12 +744,7 @@ impl Translator {
                 }
             }
             "request_opened" => {
-                let kind = match text("kind")?.as_str() {
-                    "approval" => RequestKind::Approval,
-                    "question" => RequestKind::Question,
-                    "signin" => RequestKind::Signin,
-                    other => return Err(format!("unknown request kind {other}")),
-                };
+                let kind = request_kind(&text("kind")?)?;
                 let item = match event.get("item").filter(|item| !item.is_null()) {
                     Some(item) => Some(Box::new(self.item(item)?)),
                     None => None,
@@ -735,6 +759,21 @@ impl Translator {
                 }
             }
             "request_closed" => EngineEvent::RequestClosed { key: text("key")? },
+            "session_request_opened" => EngineEvent::SessionRequestOpened {
+                key: text("key")?,
+                item_id: optional_text("itemId").map(ItemId::from),
+                kind: request_kind(&text("kind")?)?,
+                summary: text("summary")?,
+                item: match event.get("item").filter(|item| !item.is_null()) {
+                    Some(item) => Some(Box::new(self.item(item)?)),
+                    None => None,
+                },
+            },
+            "continuation_requested" => EngineEvent::ContinuationRequested {
+                key: text("key")?,
+                text: text("text")?,
+            },
+            "continuation_withdrawn" => EngineEvent::ContinuationWithdrawn { key: text("key")? },
             "auth_required" => EngineEvent::AuthRequired {
                 key: optional_text("key"),
                 turn_id: optional_text("turnId"),

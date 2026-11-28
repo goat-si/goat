@@ -139,6 +139,13 @@ export function createServer(options: ServerOptions): HelperServer {
         );
       case "turn.steer":
         return requireSession().steer(String(params.turnId ?? ""), (params.inputs ?? []) as never);
+      case "turn.continue": {
+        const current = requireSession();
+        if (current.startContinuation === undefined) {
+          return { status: "declined", reason: "this engine does not offer continuations" };
+        }
+        return current.startContinuation(String(params.key ?? ""), (params.inputs ?? []) as never, params.settings as never);
+      }
       case "turn.interrupt":
         await requireSession().interrupt(String(params.turnId ?? ""));
         return {};
