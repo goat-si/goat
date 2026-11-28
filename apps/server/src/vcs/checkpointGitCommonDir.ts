@@ -16,7 +16,7 @@ export function makeResolveGitCommonDir(
       cwd,
       args: ["rev-parse", "--git-common-dir"],
     });
-    const gitCommonDir = result.stdout.trim();
+    const gitCommonDir = result.stdout.replace(/\n$/, "");
     if (path.isAbsolute(gitCommonDir)) return gitCommonDir;
     const physicalCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
     return path.resolve(physicalCwd, gitCommonDir);
