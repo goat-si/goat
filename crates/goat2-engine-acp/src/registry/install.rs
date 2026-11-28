@@ -1465,6 +1465,8 @@ mod tests {
 
     /// A redirect the policy stops (here: away from HTTPS) is not a download: only a 2xx final
     /// response is (v1 AcpRegistrySupport.ts:1313-1315 `filterStatusOk`; final review finding 6).
+    /// The failure must be the 302 itself: a connection that never reached the server fails here
+    /// at once instead of passing and then waiting forever for the server's accept.
     #[tokio::test]
     async fn a_stopped_redirect_is_not_a_download() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1486,7 +1488,10 @@ mod tests {
         });
         let download = HttpsDownload::new().unwrap();
         let opened = http_stream(&download.client, &format!("http://{addr}/start")).await;
-        assert!(opened.is_err(), "a 302 body was accepted as the download");
+        let Err(error) = opened else {
+            panic!("a 302 body was accepted as the download")
+        };
+        assert!(error.contains("302"), "{error}");
         server.await.unwrap();
     }
 

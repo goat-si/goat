@@ -785,12 +785,21 @@ async fn installs_an_npm_package_into_the_managed_prefix_and_launches_its_comman
 #[tokio::test]
 async fn uses_the_managed_prefix_despite_a_system_owned_npm_prefix() {
     use std::os::unix::fs::PermissionsExt;
+    /// Gives the read-only directory its write bit back however the test ends, so the temporary
+    /// directory can always be removed.
+    struct Writable(PathBuf);
+    impl Drop for Writable {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start().await;
     server.registry(&example(json!({"npx": {"package": "@example/acp@1.2.3"}})));
     let npm = fake_npm(dir.path());
     let system = dir.path().join("system-global");
     std::fs::create_dir(&system).unwrap();
+    let _writable = Writable(system.clone());
     std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o555)).unwrap();
     let mut env = npm.environment.clone();
     env.insert("HOME".into(), dir.path().join("home").display().to_string());
@@ -806,7 +815,6 @@ async fn uses_the_managed_prefix_despite_a_system_owned_npm_prefix() {
         .await
         .unwrap();
     assert_eq!(resolved.spawn.command, npm.global_bin.join("example-agent"));
-    std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 // v1 AcpRegistrySupport.npmShim.test.ts:18-43.

@@ -2,7 +2,8 @@
 //! endpoint through the ACP connection. The endpoint is a fake HTTP MCP server inside the test.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -41,7 +42,25 @@ impl AcpFlavor for Mock {
 /// What the fake endpoint saw: (method or "DELETE", authorization, mcp-session-id).
 type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 
-fn fake_mcp_endpoint() -> (String, Seen) {
+/// Stops the fake endpoint when dropped: a wake-up connection ends its accept loop, the
+/// connections it held are closed, and its thread is joined, so nothing outlives the test.
+struct Stop {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Stop {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(self.addr);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn fake_mcp_endpoint() -> (String, Seen, Stop) {
     fake_mcp_endpoint_with(None, 0)
 }
 
@@ -50,14 +69,21 @@ fn fake_mcp_endpoint() -> (String, Seen) {
 fn fake_mcp_endpoint_with(
     hold: Option<std::sync::mpsc::Sender<()>>,
     failing_deletes: usize,
-) -> (String, Seen) {
+) -> (String, Seen, Stop) {
     let mut failing_deletes = failing_deletes;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{addr}/mcp");
     let seen: Seen = Arc::default();
     let log = Arc::clone(&seen);
-    std::thread::spawn(move || {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::clone(&stop);
+    let thread = std::thread::spawn(move || {
+        let mut held = Vec::new();
         for stream in listener.incoming() {
+            if stopped.load(Ordering::SeqCst) {
+                return;
+            }
             let Ok(mut stream) = stream else { return };
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut request_line = String::new();
@@ -104,7 +130,7 @@ fn fake_mcp_endpoint_with(
             {
                 let _ = hold.send(());
                 // Keep the connection open without answering, as a long-running tool would.
-                std::mem::forget(stream);
+                held.push(stream);
                 continue;
             }
             let reply = match method.as_str() {
@@ -133,13 +159,21 @@ fn fake_mcp_endpoint_with(
             );
         }
     });
-    (url, seen)
+    (
+        url,
+        seen,
+        Stop {
+            addr,
+            stop,
+            thread: Some(thread),
+        },
+    )
 }
 
 #[tokio::test]
 async fn agent_reaches_goat_mcp_over_acp() {
     let dir = tempfile::tempdir().unwrap();
-    let (url, seen) = fake_mcp_endpoint();
+    let (url, seen, _endpoint) = fake_mcp_endpoint();
     let factory = AcpEngineFactory::new(Arc::new(Mock(vec![
         ("GOAT_ACP_MCP_ACP".into(), "1".into()),
         ("GOAT_ACP_EMIT_MCP_OVER_ACP".into(), "1".into()),
@@ -221,7 +255,7 @@ async fn interrupt_stops_mcp_calls_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("call.json");
     let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (url, _seen) = fake_mcp_endpoint_with(Some(held_tx), 0);
+    let (url, _seen, _endpoint) = fake_mcp_endpoint_with(Some(held_tx), 0);
     let factory = AcpEngineFactory::new(Arc::new(Mock(vec![
         ("GOAT_ACP_MCP_ACP".into(), "1".into()),
         ("GOAT_ACP_EMIT_MCP_OVER_ACP".into(), "1".into()),
@@ -370,7 +404,7 @@ async fn run_turn(url: String, env: &[(&str, &str)]) -> (String, TurnOutcome) {
 /// stays usable, so a retry ends it (final review finding 2).
 #[tokio::test]
 async fn failed_disconnect_keeps_the_connection_for_a_retry() {
-    let (url, seen) = fake_mcp_endpoint_with(None, 1);
+    let (url, seen, _endpoint) = fake_mcp_endpoint_with(None, 1);
     let (text, outcome) = run_turn(
         url,
         &[
