@@ -3228,6 +3228,234 @@ async fn providers_are_probed_on_demand_and_once() {
     );
 }
 
+#[tokio::test]
+async fn an_unsafe_instance_id_is_refused_before_any_folder_exists() {
+    let t = setup(manual()).await;
+    let long = "a".repeat(65);
+    for (n, id) in [
+        "../x",
+        "a/b",
+        "..",
+        ".hidden",
+        "x\0y",
+        "",
+        " codex-2",
+        "2nd",
+        long.as_str(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let refused = t
+            .host
+            .command(set_instance(&format!("unsafe-{n}"), id, "codex", true))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.reason, "invalid_request", "{id:?}");
+    }
+    t.host.command(refresh("unsafe-r", None)).await.unwrap();
+    eventually_provider(&t, |_| true).await;
+    let data = t._dir.as_ref().unwrap().path();
+    assert!(
+        !data.join("provider-homes").exists(),
+        "no home for the default instance or a refused id"
+    );
+    assert!(!data.join("x").exists() && !data.parent().unwrap().join("x").exists());
+}
+
+#[tokio::test]
+async fn each_provider_instance_runs_with_its_own_home() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host
+        .command(set_instance("home-1", "codex-2", "codex", true))
+        .await
+        .unwrap();
+    t.host.command(refresh("home-r", None)).await.unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    let home = t
+        ._dir
+        .as_ref()
+        .unwrap()
+        .path()
+        .join("provider-homes")
+        .join("codex-2");
+    eventually("both instances probed", || {
+        let seen = t.fake.probe_targets();
+        seen.iter().any(|p| p.instance_id.as_str() == "codex")
+            && seen.iter().any(|p| p.instance_id.as_str() == "codex-2")
+    })
+    .await;
+    for target in t.fake.probe_targets() {
+        match target.instance_id.as_str() {
+            // The default instance keeps the driver's shared home.
+            "codex" => assert_eq!(target.home, None),
+            "codex-2" => assert_eq!(target.home.as_deref(), Some(home.as_path())),
+            other => panic!("unexpected instance {other}"),
+        }
+    }
+    let meta = std::fs::metadata(&home).unwrap();
+    assert!(meta.is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    }
+    // A thread on the second instance starts with that instance and its home.
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: "r-home-thread".into(),
+            client_request_id: "home-thread".into(),
+            kind: ThreadKind::User,
+            title: Some("second account".into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: "codex-2".into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap();
+    eventually("started", || !t.fake.start_targets().is_empty()).await;
+    let started = t.fake.start_targets().pop().unwrap().expect("an instance");
+    assert_eq!(started.instance_id.as_str(), "codex-2");
+    assert_eq!(started.home.as_deref(), Some(home.as_path()));
+    // Turning it off keeps its home (credentials stay until sign-out).
+    t.host
+        .command(set_instance("home-off", "codex-2", "codex", false))
+        .await
+        .unwrap();
+    assert!(home.is_dir());
+}
+
+#[tokio::test]
+async fn instance_ids_that_differ_only_in_case_are_refused() {
+    // macOS folders ignore case: such ids would share one home and its credentials.
+    let t = setup(manual()).await;
+    t.host
+        .command(set_instance("case-1", "codex-2", "codex", true))
+        .await
+        .unwrap();
+    for (n, id) in ["Codex-2", "CODEX"].into_iter().enumerate() {
+        let refused = t
+            .host
+            .command(set_instance(&format!("case-r{n}"), id, "codex", true))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.reason, "invalid_request", "{id}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_provider_home_is_never_used() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    let data = t._dir.as_ref().unwrap().path().to_path_buf();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::create_dir(data.join("provider-homes")).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        data.join("provider-homes").join("codex-2"),
+    )
+    .unwrap();
+    t.host
+        .command(set_instance("link-1", "codex-2", "codex", true))
+        .await
+        .unwrap();
+    t.host.command(refresh("link-r", None)).await.unwrap();
+    let rx = t.host.watch_providers();
+    eventually("codex-2 reported as an error", || {
+        rx.borrow()
+            .as_ref()
+            .and_then(|l| {
+                l.iter()
+                    .find(|e| e.instance_id.as_str() == "codex-2")
+                    .cloned()
+            })
+            .is_some_and(|e| e.probe.status == goat2_contracts::ServerProviderState::Error)
+    })
+    .await;
+    assert!(
+        t.fake
+            .probe_targets()
+            .iter()
+            .all(|p| p.instance_id.as_str() != "codex-2"),
+        "never probed through the link"
+    );
+    // A thread on it never starts (no fallback to the shared home).
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: "r-link-thread".into(),
+            client_request_id: "link-thread".into(),
+            kind: ThreadKind::User,
+            title: Some("linked".into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: "codex-2".into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(t.fake.start_targets().is_empty(), "no session started");
+    assert!(
+        std::fs::read_dir(elsewhere.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_instance_id_in_the_file_is_kept_but_never_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let file = path.join("provider-instances.json");
+    std::fs::write(
+        &file,
+        r#"[{"instanceId":"../x","driver":"codex","enabled":true}]"#,
+    )
+    .unwrap();
+    let fake = FakeEngine::new(manual());
+    fake.set_probe(Ok(ready_probe("0.167.0")));
+    let t = open_at(&path, Some(dir), fake, 1).await;
+    t.host.command(refresh("bad-file", None)).await.unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    let list = t.host.watch_providers().borrow().clone().unwrap();
+    assert!(
+        list.iter().all(|e| e.instance_id.as_str() != "../x"),
+        "{list:?}"
+    );
+    assert!(
+        t.fake
+            .probe_targets()
+            .iter()
+            .all(|p| p.instance_id.as_str() != "../x")
+    );
+    let refused = t
+        .host
+        .command(refresh("bad-one", Some("../x")))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "provider_not_found");
+    assert!(!path.join("provider-homes").exists());
+    assert!(std::fs::read_to_string(&file).unwrap().contains("../x"));
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()

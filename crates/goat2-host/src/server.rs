@@ -11,6 +11,7 @@ use serde_json::json;
 use crate::config::{EngineChoice, HostConfig};
 use crate::core::{Host, HostOptions};
 use crate::engine::EngineFactory;
+use crate::engine::claude::claude_factory;
 use crate::engine::codex::codex_factory;
 use crate::engine::fake::{FakeEngine, FakeScript};
 use crate::stall::StallRecorder;
@@ -257,19 +258,14 @@ pub async fn start_with_engine(
     let generation = stored.max(previous.as_ref().map_or(0, |p| p.generation)) + 1;
     std::fs::write(&generation_path, format!("{generation}\n"))
         .map_err(|e| format!("generation file: {e}"))?;
-    let engine: Arc<dyn EngineFactory> = match engine {
-        Some(engine) => engine,
-        None => match cfg.engine {
-            EngineChoice::Codex => Arc::new(codex_factory(&data_dir, cfg.codex_bin.as_deref())),
-            EngineChoice::Fake => Arc::new(FakeEngine::new(FakeScript {
-                turn_ms: 400,
-                ..FakeScript::default()
-            })),
-        },
+    let factories = match engine {
+        Some(engine) => std::collections::BTreeMap::from([("codex".to_owned(), engine)]),
+        None => built_in_factories(&cfg, &data_dir),
     };
     let default_cwd = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
     let opts = HostOptions::new(data_dir.clone(), generation, ui_token.clone(), default_cwd);
-    let host = Host::open(opts, store, engine, stall).map_err(|e| format!("host: {e}"))?;
+    let host = Host::open_with_factories(opts, store, factories, stall)
+        .map_err(|e| format!("host: {e}"))?;
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port))
         .await
@@ -341,6 +337,38 @@ pub async fn start_with_engine(
         server,
         ticker,
     })
+}
+
+/// Driver kind (v1 ProviderDriverKind slug) -> factory; each gets a default instance named after
+/// it. The fake engine stands in for Codex alone.
+fn built_in_factories(
+    cfg: &HostConfig,
+    data_dir: &std::path::Path,
+) -> std::collections::BTreeMap<String, Arc<dyn EngineFactory>> {
+    let mut factories: std::collections::BTreeMap<String, Arc<dyn EngineFactory>> =
+        std::collections::BTreeMap::new();
+    match cfg.engine {
+        EngineChoice::Codex => {
+            factories.insert(
+                "codex".to_owned(),
+                Arc::new(codex_factory(data_dir, cfg.codex_bin.as_deref())),
+            );
+            factories.insert(
+                goat2_engine_claude::engine::DRIVER.to_owned(),
+                Arc::new(claude_factory(data_dir, cfg.claude_bin.as_deref())),
+            );
+        }
+        EngineChoice::Fake => {
+            factories.insert(
+                "codex".to_owned(),
+                Arc::new(FakeEngine::new(FakeScript {
+                    turn_ms: 400,
+                    ..FakeScript::default()
+                })),
+            );
+        }
+    }
+    factories
 }
 
 #[cfg(all(test, unix))]
@@ -431,6 +459,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_real_engine_registers_codex_and_claude() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = |engine| HostConfig {
+            data_dir: dir.path().to_path_buf(),
+            port: 0,
+            ui_token: None,
+            engine,
+            codex_bin: None,
+            claude_bin: None,
+            exit_on_stdin_close: false,
+        };
+        let real = super::built_in_factories(&cfg(EngineChoice::Codex), dir.path());
+        assert_eq!(
+            real.keys().collect::<Vec<_>>(),
+            vec!["claudeAgent", "codex"]
+        );
+        assert_eq!(
+            real["claudeAgent"].capabilities(),
+            goat2_engine_claude::claude_capabilities()
+        );
+        assert!(dir.path().join("claude-home").is_dir());
+        let fake = super::built_in_factories(&cfg(EngineChoice::Fake), dir.path());
+        assert_eq!(fake.keys().collect::<Vec<_>>(), vec!["codex"]);
+    }
+
     #[tokio::test]
     async fn a_second_host_is_refused_before_it_signals_anything() {
         let dir = tempfile::tempdir().unwrap();
@@ -440,6 +494,7 @@ mod tests {
             ui_token: Some("t".into()),
             engine: EngineChoice::Fake,
             codex_bin: None,
+            claude_bin: None,
             exit_on_stdin_close: false,
         };
         let first = start(cfg()).await.unwrap();

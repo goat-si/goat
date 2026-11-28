@@ -868,9 +868,10 @@ impl Actor {
             },
             host_generation: self.host.inner.opts.host_generation,
             process_generation: pgen,
-            // Driver defaults: bot instructions and launch overrides come with Part 2 bots.
+            // Driver defaults: bot instructions come with Part 2 bots. The provider instance
+            // (launch settings, private home) is filled in when the factory is picked.
             instructions: None,
-            launch: None,
+            instance: None,
         };
         self.phase = Phase::Starting(permit);
         let host = self.host.clone();
@@ -880,7 +881,11 @@ impl Actor {
             let _slot = host.inner.sched.start_slot().await;
             // The thread's provider instance picks the driver (the factory registry).
             let result = match host.inner.providers.factory_for_start(&instance) {
-                Ok(factory) => factory.start(spec).await.map_err(|e| e.to_string()),
+                Ok((factory, target)) => {
+                    let mut spec = spec;
+                    spec.instance = Some(target);
+                    factory.start(spec).await.map_err(|e| e.to_string())
+                }
                 Err(reason) => Err(reason),
             };
             let _ = tx.send(Msg::Started { pgen, result });

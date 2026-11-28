@@ -105,6 +105,9 @@ struct Shared {
     probe_delay: Duration,
     /// How many probes ran.
     probes: usize,
+    /// The provider instances probes and session starts were handed, in order.
+    probe_targets: Vec<crate::engine::ProviderTarget>,
+    start_targets: Vec<Option<crate::engine::ProviderTarget>>,
     /// Provider sign-in/install: `None` = Unsupported (the trait defaults).
     setup: Option<goat2_contracts::ProviderSetup>,
     auth: Option<(
@@ -203,6 +206,16 @@ impl FakeEngine {
     /// How many probes ran so far.
     pub fn probes(&self) -> usize {
         self.shared.lock().expect("fake").probes
+    }
+
+    /// The instances probes were run for, in order.
+    pub fn probe_targets(&self) -> Vec<crate::engine::ProviderTarget> {
+        self.shared.lock().expect("fake").probe_targets.clone()
+    }
+
+    /// The instance each session start was handed, in order.
+    pub fn start_targets(&self) -> Vec<Option<crate::engine::ProviderTarget>> {
+        self.shared.lock().expect("fake").start_targets.clone()
     }
 
     /// Offer sign-in (`methods`, answering a start with `start`) and install (answering with
@@ -396,6 +409,18 @@ impl EngineFactory for FakeEngine {
         probe.unwrap_or_else(|| Err(EngineError::Unsupported("probe".into())))
     }
 
+    async fn probe_instance(
+        &self,
+        target: &crate::engine::ProviderTarget,
+    ) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        self.shared
+            .lock()
+            .expect("fake")
+            .probe_targets
+            .push(target.clone());
+        self.probe().await
+    }
+
     fn setup(&self) -> goat2_contracts::ProviderSetup {
         self.shared
             .lock()
@@ -486,6 +511,7 @@ impl EngineFactory for FakeEngine {
             .unwrap_or_else(|| new_id("fakethread"));
         {
             let mut shared = self.shared.lock().expect("fake");
+            shared.start_targets.push(spec.instance.clone());
             shared.calls.push(FakeCall::Start {
                 thread_id: spec.thread_id.clone(),
                 resume: spec.resume.as_ref().map(|r| r.id.clone()),

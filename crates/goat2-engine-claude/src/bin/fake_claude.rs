@@ -57,7 +57,8 @@ struct Fake {
     exit_instead: bool,
 }
 
-const LOGGED_ENV: [&str; 9] = [
+const LOGGED_ENV: [&str; 10] = [
+    "GOAT2_HOST_TOKEN",
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_CONFIG_DIR",
     "MCP_CONNECTION_NONBLOCKING",

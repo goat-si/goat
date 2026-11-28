@@ -46,7 +46,7 @@ fn spec(mode: RuntimeMode, resume: Option<&str>) -> SessionSpec {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     }
 }
 
@@ -1421,15 +1421,20 @@ async fn host_launch_and_instructions_reach_codex() {
         ..CodexEngineOptions::default()
     });
     let mut s = spec(RuntimeMode::ApprovalRequired, None);
-    s.launch = Some(goat2_engine_api::LaunchSpec {
-        binary: Some(env!("CARGO_BIN_EXE_goat2-fake-codex").into()),
-        args: Vec::new(),
-        env: [(
-            "GOAT2_FAKE_CODEX_TRANSCRIPT".to_string(),
-            path.to_string_lossy().into_owned(),
-        )]
-        .into_iter()
-        .collect(),
+    s.instance = Some(goat2_engine_api::ProviderTarget {
+        instance_id: "codex".into(),
+        launch: Some(goat2_engine_api::LaunchSpec {
+            binary: Some(env!("CARGO_BIN_EXE_goat2-fake-codex").into()),
+            args: Vec::new(),
+            env: [(
+                "GOAT2_FAKE_CODEX_TRANSCRIPT".to_string(),
+                path.to_string_lossy().into_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        home: None,
+        shared_home: None,
     });
     s.instructions = Some(goat2_engine_api::Instructions {
         append_system_prompt: Some("GOAT rules".into()),

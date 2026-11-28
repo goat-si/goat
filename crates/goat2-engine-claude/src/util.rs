@@ -93,6 +93,26 @@ pub fn redact_secrets(text: &str, token: &str) -> String {
     out
 }
 
+/// Reads a regular file without following a symlink at its final component (`O_NOFOLLOW`), so a
+/// file swapped for a symlink after the host checked it is refused.
+pub fn read_no_follow(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +129,24 @@ mod tests {
     #[test]
     fn rfc3339_epoch() {
         assert_eq!(rfc3339_ms(0), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_no_follow_refuses_a_symlink() {
+        let dir = std::env::temp_dir().join(format!("goat2-claude-nofollow-{}", super::uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("real.png"), b"png").unwrap();
+        std::os::unix::fs::symlink(dir.join("real.png"), dir.join("link.png")).unwrap();
+        assert_eq!(
+            super::read_no_follow(&dir.join("real.png")).unwrap(),
+            b"png"
+        );
+        assert!(super::read_no_follow(&dir.join("link.png")).is_err());
+        assert!(
+            super::read_no_follow(&dir).is_err(),
+            "a directory is not read"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
