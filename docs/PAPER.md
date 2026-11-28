@@ -31,7 +31,7 @@ built from clones of the SSOT board.
 
 1. Change Paper first. Code follows the board, not the other way round.
 2. Export the board: Paper `get_jsx` on the SSOT artboard with `includeNodeIds: false`.
-3. Generate the static parts: `scripts/paper-to-parts.py <export.jsx> > apps/web/src/bot-home/ssotParts.tsx`.
+3. Generate the static parts: `scripts/paper-parts.py <export.jsx> > apps/web/src/paper/parts.tsx`.
    That file is generated. Do not edit it by hand. When the board's structure changes, fix the
    line ranges in the script.
 4. Interactive pieces (`BotHome.tsx`, `RuntimePicker.tsx`) copy their style values from the same
