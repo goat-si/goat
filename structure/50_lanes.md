@@ -44,3 +44,7 @@ Wave 2 (launched 2026-11-28 ~23:40 KST after host merge 635e915):
 
 Remote thread ids replace the local ones after handoff (read with `goat_thread_read {host, threadId}`).
 Each machine merges in its own `~/Developer/goat2`; the non-force push of `goat2` is the cross-machine lock.
+
+Cross-machine messages: `mac-studio` and `macbookpro2` have the SSH alias `juns-macbook-pro-origin` for the origin Mac,
+so a remote lane calls `goat thread.send {host: "juns-macbook-pro-origin", threadId}` to reach a lane still there; the
+origin reaches remote lanes with `host: "mac-studio"` / `"macbookpro2"`.
