@@ -55,3 +55,18 @@ Newest at the bottom.
   This replaces the earlier "collapsed rail shows GOAT then pinned faces".
 - **Main bot on the rail.** Clicking it opens the main bot chat and switches the second sidebar to
   the bot sidebar (pinned tiles, Needs you, Bots), from any mode (threads, inbox).
+- **Repo and names.** GOAT 2 lives on the `goat2` branch of `goat-si/goat` (no common ancestor with
+  `dev`; local only for now). Each feature gets a `goat2_<feature>` branch and a worktree of the same
+  name at `~/Developer/goat2_<feature>`, lowercase English snake_case (`goat2/<x>` is impossible
+  while a `goat2` branch exists). Package folders stay kebab-case, code and record fields camelCase,
+  as in GOAT 1. First worktree: `~/Developer/goat2_thread_store`.
+- **Language and runtime.** Part 1 is TypeScript + Node + Effect 4. GOAT 1's bottlenecks were
+  structural (full-list reads, whole-message resends, a shared Codex process, no caps), not the
+  language. The packaged host runs as Electron 44's Node 24.22 (`ELECTRON_RUN_AS_NODE`, as GOAT 1),
+  so host code uses Node 24 APIs only. Rust only for herdr-core and the computer-use helper; a host
+  piece moves to Rust only if the stall recorder shows repeated >100 ms stalls from it that
+  `worker_threads` does not fix.
+- **Part 1 thread structure.** Decided 2026-11-28; see the PRD Part 1 chapter
+  (https://goat-si.github.io/goat2-design/prd/part1/): per-thread folder with `goat.jsonl` as the
+  only source, card index rebuilt from folders, one Codex process per thread, caps 4 runs / 2 starts
+  / 4 children per bot / depth 1, quitting the app ends the work, append-only text streaming.
