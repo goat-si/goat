@@ -14,8 +14,13 @@ use goat2_engine_codex::{CodexEngineFactory, CodexEngineOptions};
 use serde_json::{Value, json};
 use support::fake::{load, write_temp};
 
-/// initialize + initialized as recorded from codex 0.167.0 (the GOAT client identity).
+/// initialize + initialized as recorded from codex 0.167.0 (the GOAT client identity), then the
+/// config read for the cwd v1 takes the effective endpoint from.
 fn handshake(codex_home: Option<&str>) -> Vec<Entry> {
+    handshake_with_route(codex_home, json!({}))
+}
+
+fn handshake_with_route(codex_home: Option<&str>, route_config: Value) -> Vec<Entry> {
     let t = load("codex-0.167.0/basic.json");
     let mut entries: Vec<Entry> = t.entries[..3].to_vec();
     if let Entry::EmitInbound { frame, .. } = &mut entries[1] {
@@ -25,6 +30,12 @@ fn handshake(codex_home: Option<&str>) -> Vec<Entry> {
             frame["result"]["codexHome"] = json!(home);
         }
     }
+    entries.push(Entry::ExpectOutbound {
+        label: None,
+        frame: json!({"id": 90, "method": "config/read", "params": {"cwd": "<cwd>", "includeLayers": false}}),
+        wildcards: vec!["/params/cwd".into()],
+    });
+    entries.push(emit(json!({"id": 90, "result": {"config": route_config}})));
     entries
 }
 
@@ -222,6 +233,156 @@ async fn a_missing_binary_reports_could_not_start() {
             .unwrap()
             .starts_with("Could not start Codex CLI (`/nonexistent/codex`).")
     );
+}
+
+#[tokio::test]
+async fn a_route_away_from_openai_needs_no_openai_login() {
+    // v1 CodexProvider.ts:520-525 and CodexProviderAccount.ts:156-170: Codex keeps
+    // requiresOpenaiAuth for its built-in provider even when the config sends requests elsewhere.
+    let mut e = handshake_with_route(None, json!({"openai_base_url": "http://127.0.0.1:9999/v1"}));
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": null, "requiresOpenaiAuth": true}}),
+    ));
+    e.push(expect(
+        json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
+    ));
+    e.push(emit(
+        json!({"id": 3, "result": {"config": {"openai_base_url": "http://127.0.0.1:9999/v1"}}}),
+    ));
+    e.push(expect(
+        json!({"id": 4, "method": "model/list", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 4, "result": {"data": [model("local-model", true, json!({}))]}}),
+    ));
+    let p = factory(e).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.auth.status, ServerProviderAuthStatus::Unknown);
+    assert_eq!(p.auth.endpoint.as_deref(), Some("http://127.0.0.1:9999"));
+    assert_eq!(p.models.len(), 1);
+}
+
+#[tokio::test]
+async fn a_refused_model_list_is_a_failure_not_a_late_catalog() {
+    // v1 propagates request failures (CodexProvider.ts:290-303,864-904); only the deadline makes
+    // the catalog absent (warning).
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+    ));
+    e.push(expect(
+        json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
+    ));
+    e.push(emit(json!({"id": 3, "result": {"config": {}}})));
+    e.push(expect(
+        json!({"id": 4, "method": "model/list", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 4, "error": {"code": -32603, "message": "catalog unavailable"}}),
+    ));
+    let p = factory(e).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert!(p.installed);
+    let message = p.message.unwrap();
+    assert!(
+        message.starts_with("Codex app-server provider probe failed: model/list"),
+        "{message}"
+    );
+    assert!(message.contains("catalog unavailable"), "{message}");
+}
+
+#[cfg(unix)]
+fn script(name: &str, body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("goat2-probe-bin-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("codex");
+    std::fs::write(&path, body).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_missing_interpreter_is_not_a_missing_cli() {
+    // v1: not found is also what a missing interpreter gives; only a missing command counts.
+    let path = script("interp", "#!/nonexistent/interpreter\n");
+    let f = CodexEngineFactory::new(CodexEngineOptions {
+        program: path.clone(),
+        ..CodexEngineOptions::default()
+    });
+    let p = f.probe().await.unwrap();
+    assert!(p.installed, "{:?}", p.message);
+    assert_ne!(p.cli, Some(ServerProviderCli::Missing));
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert_eq!(p.binary_path.as_deref(), Some(path.to_str().unwrap()));
+    assert!(
+        p.message
+            .unwrap()
+            .starts_with("Codex app-server provider probe failed:")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_version_fallback_ends_its_whole_process_group() {
+    // app-server fails at once, so the probe asks `codex --version`; that leaves a background
+    // child, which must not outlive the probe.
+    let pid_file = std::env::temp_dir().join(format!("goat2-probe-pid-{}", std::process::id()));
+    let path = script(
+        "version",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then sleep 30 >/dev/null 2>&1 & echo $! > \"$PROBE_PID_FILE\"; echo \"codex-cli 9.9.9\"; exit 0; fi\nexit 1\n",
+    );
+    let f = CodexEngineFactory::new(CodexEngineOptions {
+        program: path,
+        env_set: vec![("PROBE_PID_FILE".into(), pid_file.clone().into_os_string())],
+        ..CodexEngineOptions::default()
+    });
+    let p = f.probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert_eq!(p.version.as_deref(), Some("9.9.9"));
+    assert_eq!(p.cli, Some(ServerProviderCli::Present));
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only checks that the process exists.
+    let alive = unsafe { libc::kill(pid, 0) == 0 };
+    assert!(!alive, "the --version child {pid} outlived the probe");
+}
+
+#[tokio::test]
+async fn a_stalled_config_read_does_not_cost_the_catalog() {
+    // v1 runs config/read and model/list together under the discovery deadline
+    // (CodexProvider.ts:535-600): models that answer at once count even when config never does.
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+    ));
+    e.push(expect(
+        json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
+    ));
+    // No answer to config/read.
+    e.push(expect(
+        json!({"id": 4, "method": "model/list", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 4, "result": {"data": [model("gpt-6.1-terra", true, json!({}))]}}),
+    ));
+    let f = factory(e);
+    let p = goat2_engine_codex::probe::probe_with(&f.options, Duration::from_millis(2_500)).await;
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.models.len(), 1);
 }
 
 #[tokio::test]
