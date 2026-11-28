@@ -1,0 +1,5 @@
+{"type": "transcript_start", "provider": "claudeAgent", "protocol": "claude-stream-json", "version": "2.1.332", "scenario": "crash_mid_turn", "metadata": {"prompts": ["Work."], "model": "claude-sonnet-5-5", "nativeSessionId": "11111111-2222-4333-8444-555555555555", "generatedBy": "goat2 hand-written"}}
+{"type": "expect_outbound", "label": "query.open", "frame": {"type": "query.open", "options": {"model": "claude-sonnet-5-5", "permissionMode": "bypassPermissions", "sessionId": "11111111-2222-4333-8444-555555555555"}}}
+{"type": "expect_outbound", "label": "prompt.offer:1", "frame": {"type": "prompt.offer", "message": {"type": "user", "message": {"role": "user", "content": "Work."}, "parent_tool_use_id": null}}}
+{"type": "emit_inbound", "label": "assistant", "frame": {"type": "assistant", "message": {"id": "msg_x", "role": "assistant", "content": [{"type": "text", "text": "Starting."}]}, "parent_tool_use_id": null, "session_id": "11111111-2222-4333-8444-555555555555"}}
+{"type": "runtime_exit", "status": "error", "error": "Error: fatal: out of memory"}

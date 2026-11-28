@@ -52,6 +52,9 @@ pub struct HostOptions {
     pub memory_sample: Duration,
     /// Longest `thread.wait` / `thread.start {mode: wait}` block.
     pub max_wait: Duration,
+    /// How long a background subagent that reported its end keeps its origin turn and the
+    /// engine's idle protection while its finished item is still on the way.
+    pub subagent_item_grace: Duration,
 }
 
 impl HostOptions {
@@ -75,6 +78,7 @@ impl HostOptions {
             memory_limit_bytes: ENGINE_GROUP_MEMORY_LIMIT_BYTES,
             memory_sample: Duration::from_secs(ENGINE_MEMORY_SAMPLE_SECS),
             max_wait: Duration::from_secs(60),
+            subagent_item_grace: Duration::from_secs(60),
         }
     }
 }

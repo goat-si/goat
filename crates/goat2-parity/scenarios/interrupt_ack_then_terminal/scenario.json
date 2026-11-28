@@ -103,8 +103,7 @@
       "status": "supported"
     },
     "goat2": {
-      "status": "pending",
-      "reason": "no host yet"
+      "status": "supported"
     }
   }
 }

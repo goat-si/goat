@@ -2,7 +2,8 @@
 //!
 //! Env: `GOAT2_DATA_DIR` (default `~/.goat2`), `GOAT2_HOST_PORT` (0 = pick a free port),
 //! `GOAT2_HOST_TOKEN` (UI token; when absent one is generated and written to `host.json` with
-//! mode 0600, for manual runs). `--data-dir` / `--port` are aliases for manual runs only.
+//! mode 0600, for manual runs). `--data-dir` / `--port` are aliases for manual runs only. A
+//! relative data dir is made absolute against the host's working directory.
 //! `GOAT2_ENGINE=fake` runs the scripted fake engine (UI work without Codex).
 //! `GOAT2_CODEX_BIN` is the Codex program the driver starts (absolute path, e.g. a fake codex
 //! app-server for parity runs); unset = `codex` on the host's PATH. The engine process
@@ -73,6 +74,9 @@ impl HostConfig {
                 .ok_or("no HOME for the default data dir")?
                 .join(".goat2"),
         };
+        // Absolute, so the attachment paths named to an engine resolve from any thread cwd.
+        let data_dir =
+            std::path::absolute(&data_dir).map_err(|e| format!("data dir {data_dir:?}: {e}"))?;
         Ok(Self {
             data_dir,
             port: port.unwrap_or(0),
@@ -86,4 +90,21 @@ impl HostConfig {
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_relative_data_dir_becomes_absolute() {
+        let cfg = super::HostConfig::from_env_and_args([
+            "--data-dir".to_string(),
+            "rel/goat2-data".to_string(),
+        ])
+        .unwrap();
+        assert!(cfg.data_dir.is_absolute(), "{:?}", cfg.data_dir);
+        assert_eq!(
+            cfg.data_dir,
+            std::env::current_dir().unwrap().join("rel/goat2-data")
+        );
+    }
 }

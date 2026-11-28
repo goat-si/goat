@@ -127,8 +127,8 @@
       "status": "supported"
     },
     "goat2": {
-      "status": "pending",
-      "reason": "no host yet"
+      "status": "unsupported",
+      "reason": "Deliberate difference (owner 2026-11-29, answer A): GOAT 2 has no run-targeted steer, and after Stop a person's next message starts a new turn. v1 refuses a steer aimed at an interrupted run with OrchestratorDispatchError 'Target run <id> is interrupted and cannot be steered' (apps/server/src/orchestration-v2/goat/DispatchModeAdjustment.ts:14-39, apps/server/src/orchestration-v2/Orchestrator.ts:4229-4245; docs/parity/follow-up-modes.md). Observed on goat2 2026-11-29: the steer is accepted and starts run r2, which this v1 recording cannot replay (no second turn)."
     }
   }
 }
