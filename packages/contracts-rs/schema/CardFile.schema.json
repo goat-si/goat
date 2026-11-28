@@ -731,7 +731,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "The last finished run's token usage (v1 provider thread `contextUsage`), folded from\n`run.finished.tokenUsage`; a run without one keeps the previous value. Live numbers during a\nrun arrive as the non-stored `thread_usage` frame."
         },
         "engine": {
           "$ref": "#/$defs/EngineConfig"
