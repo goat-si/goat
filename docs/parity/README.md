@@ -73,22 +73,23 @@ may emit the event.
 
 ## Coverage
 
-M = recorded scenario that must pass on v1; S = source-only, reviewed. Status is "planned" until the v1
-runner (wp3) reports it.
+M = recorded scenario that must pass on v1; S = source-only, reviewed. Status is what the unfiltered v1
+runner reports (`cargo run -p goat2-parity -- run --target v1`); GOAT 2 targets stay pending until the goat2
+process target runs.
 
 | Requirement | Coverage | Status |
 |---|---|---|
-| follow-up modes | followup_queued_in_order, live_steer_applied, interrupt_ack_then_terminal (M) | planned |
-| refusal at admission | steer_refused_at_admission (M) | planned |
-| declined / missed steer re-dispatch | steer_missed_becomes_followup (M); tagged decline (S, Cursor-only in v1) | planned |
-| Codex turn/steer RPC error | steer_rpc_error_codex (M) | planned |
+| follow-up modes | followup_queued_in_order, live_steer_applied, interrupt_ack_then_terminal (M) | v1 PASS |
+| refusal at admission | steer_refused_at_admission (M) | v1 PASS |
+| declined / missed steer re-dispatch | steer_missed_becomes_followup (M); tagged decline (S, Cursor-only in v1) | v1 PASS |
+| Codex turn/steer RPC error | steer_rpc_error_codex (S on v1, owner 2026-11-29; GOAT 2 rule unit-tested in goat2-engine-codex and goat2-host) | source-only |
 | Stop with children, no demotion | S | reviewed in wp1 |
-| child wake | child_wake_delegated (M) | planned |
-| restart settlement | restart_idle_resume, restart_active_run_settles (M) | planned |
-| thread.send / wait | thread_tools_send_wait (M) | planned |
-| thread.watch | thread_watch_wake (M on v1; GOAT 2 deferred) | planned |
-| thread.report_result | thread_report_result (M) | planned |
-| queue edit / promote / cancel | queue_edit_then_start, queue_promote_to_steer, queue_cancel_while_active (M) | planned |
+| child wake | child_wake_delegated (M, real v1 Codex recording 2026-11-29) | v1 PASS |
+| restart settlement | restart_idle_resume, restart_active_run_settles (M) | v1 PASS |
+| thread.send / wait | thread_tools_send_wait (M) | v1 PASS |
+| thread.watch | thread_watch_wake (S on v1, owner 2026-11-29; GOAT 2 deferred) | source-only |
+| thread.report_result | thread_report_result (M) | v1 PASS |
+| queue edit / promote / cancel | queue_edit_then_start, queue_promote_to_steer, queue_cancel_while_active (M) | v1 PASS |
 | queue reorder | S | reviewed in wp1 |
 | Claude stream-json subtypes | claude-stream-json.md (S, Part 2) | reviewed in wp1 |
 

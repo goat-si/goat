@@ -454,6 +454,12 @@ pub struct RunFinished {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reason: Option<String>,
+    /// The run's last token usage snapshot (v1 run `tokenUsage`), when the engine reported one.
+    /// Usage is never stored while a run is going (no progress lines), so a run the store
+    /// settles after a host restart has none, and the card keeps its previous `contextUsage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub token_usage: Option<Box<crate::ThreadTokenUsageSnapshot>>,
 }
 
 /// `child.started` (parent log).

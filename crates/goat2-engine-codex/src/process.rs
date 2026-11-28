@@ -61,6 +61,8 @@ impl Launch {
                 "CODEX_SESSION_ID",
                 "CODEX_TOOL_CALL_ID",
                 "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+                // The GOAT 2 host's UI bearer token: agent commands must never see it.
+                "GOAT2_HOST_TOKEN",
             ]
             .map(OsString::from),
         );

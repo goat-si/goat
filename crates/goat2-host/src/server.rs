@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::config::{EngineChoice, HostConfig};
 use crate::core::{Host, HostOptions};
 use crate::engine::EngineFactory;
-use crate::engine::codex::CodexFactory;
+use crate::engine::codex::codex_factory;
 use crate::engine::fake::{FakeEngine, FakeScript};
 use crate::stall::StallRecorder;
 use crate::store::LaneAStore;
@@ -64,17 +64,30 @@ impl HostJsonSnapshots {
         }
     }
 
-    /// Write snapshot `seq` unless a newer one is already written. Returns whether it wrote.
+    /// Write snapshot `seq` unless a newer one is already written. Returns whether it wrote. A
+    /// failed write changes nothing, so a later snapshot (or this one's older sibling, which is
+    /// still newer than the file) is written in its place.
     pub fn write(&self, seq: u64, groups: Vec<GroupRecord>) -> bool {
         let mut guard = self.state.lock().expect("host.json");
         let (json, written) = &mut *guard;
         if seq <= *written {
             return false;
         }
-        *written = seq;
-        json.engine_groups = groups;
-        let _ = write_host_json(&self.path, json);
-        true
+        let next = HostJson {
+            engine_groups: groups,
+            ..json.clone()
+        };
+        match write_host_json(&self.path, &next) {
+            Ok(()) => {
+                *json = next;
+                *written = seq;
+                true
+            }
+            Err(err) => {
+                tracing::warn!(%err, seq, "host.json engine groups not written");
+                false
+            }
+        }
     }
 }
 
@@ -247,7 +260,7 @@ pub async fn start_with_engine(
     let engine: Arc<dyn EngineFactory> = match engine {
         Some(engine) => engine,
         None => match cfg.engine {
-            EngineChoice::Codex => Arc::new(CodexFactory),
+            EngineChoice::Codex => Arc::new(codex_factory(&data_dir, cfg.codex_bin.as_deref())),
             EngineChoice::Fake => Arc::new(FakeEngine::new(FakeScript {
                 turn_ms: 400,
                 ..FakeScript::default()
@@ -397,6 +410,27 @@ mod tests {
         assert_eq!(on_disk.engine_groups, vec![group(10), group(11)]);
     }
 
+    #[test]
+    fn a_failed_write_does_not_count_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let path = data.join("host.json");
+        let snapshots = HostJsonSnapshots::new(path.clone(), HostJson::default());
+        let group = |pgid| GroupRecord {
+            pgid,
+            identity: format!("leader {pgid}"),
+        };
+        // The data dir is missing: snapshot 2 cannot be written.
+        assert!(!snapshots.write(2, vec![group(10), group(11)]));
+        // Snapshot 1 is still newer than anything on disk, so it is written once it can be.
+        std::fs::create_dir(&data).unwrap();
+        assert!(snapshots.write(1, vec![group(10)]));
+        assert_eq!(
+            read_host_json(&path).unwrap().engine_groups,
+            vec![group(10)]
+        );
+    }
+
     #[tokio::test]
     async fn a_second_host_is_refused_before_it_signals_anything() {
         let dir = tempfile::tempdir().unwrap();
@@ -405,6 +439,7 @@ mod tests {
             port: 0,
             ui_token: Some("t".into()),
             engine: EngineChoice::Fake,
+            codex_bin: None,
             exit_on_stdin_close: false,
         };
         let first = start(cfg()).await.unwrap();

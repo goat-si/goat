@@ -154,9 +154,10 @@ struct ActiveRun {
     permit: RunPermit,
     /// Set when an engine request id must map back (key -> request).
     engine_requests: Vec<(String, RequestId)>,
-    /// `signin` requests opened for this run's turn, closed when the run ends. Answered by the
-    /// person, never through the engine, so they are kept apart from `engine_requests`.
+    /// `signin` requests opened for this run, closed when the run ends. Engine handles are
+    /// tracked separately in `signin_keys`.
     signins: Vec<RequestId>,
+    usage: Option<Box<goat2_contracts::ThreadTokenUsageSnapshot>>,
 }
 
 struct Session {
@@ -176,6 +177,13 @@ struct Actor {
     idle_gen: u64,
     /// `signin` requests the engine raised outside any turn, closed when the session ends.
     session_signins: Vec<RequestId>,
+    signin_keys: Vec<(RequestId, String)>,
+    /// Engine sign-in keys whose decline failed: retried at the next run end and before the
+    /// engine stops, so no engine request is left waiting without a retry.
+    undeclined_signin_keys: Vec<String>,
+    /// Engine sign-in keys already answered or declined in this session. Each key is answered
+    /// at most once: later events naming one are ignored.
+    settled_signin_keys: std::collections::HashSet<String>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -198,6 +206,9 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         not_before: None,
         idle_gen: 0,
         session_signins: Vec::new(),
+        signin_keys: Vec::new(),
+        undeclined_signin_keys: Vec::new(),
+        settled_signin_keys: std::collections::HashSet::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
@@ -672,6 +683,7 @@ impl Actor {
                 engine_ref: None,
             }),
             LogEvent::RunFinished(RunFinished {
+                token_usage: None,
                 run_id,
                 outcome: RunOutcome::Failed,
                 reason: Some(reason.to_owned()),
@@ -754,6 +766,7 @@ impl Actor {
                     permit,
                     engine_requests: Vec::new(),
                     signins: Vec::new(),
+                    usage: None,
                 });
             }
             TurnStartResult::RefusedUnowned { reason } => {
@@ -762,6 +775,7 @@ impl Actor {
                 let run_id_for_report = run_id.clone();
                 let mut events = delivered(DeliveryOutcome::Refused);
                 events.push(LogEvent::RunFinished(RunFinished {
+                    token_usage: None,
                     run_id,
                     outcome: RunOutcome::Failed,
                     reason: Some(reason),
@@ -779,6 +793,7 @@ impl Actor {
                 let run_id_for_report = run_id.clone();
                 let mut events = delivered(DeliveryOutcome::Declined);
                 events.push(LogEvent::RunFinished(RunFinished {
+                    token_usage: None,
                     run_id,
                     outcome: RunOutcome::Failed,
                     reason: Some(reason),
@@ -797,6 +812,7 @@ impl Actor {
                     permit,
                     engine_requests: Vec::new(),
                     signins: Vec::new(),
+                    usage: None,
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
             }
@@ -915,11 +931,20 @@ impl Actor {
                     self.finish_run(outcome, reason).await;
                 }
             }
+            EngineEvent::TokenUsage { turn_id, usage } => {
+                if let Phase::Running(run) = &mut self.phase
+                    && turn_id.as_ref().is_none_or(|id| id == &run.turn_id)
+                {
+                    run.usage = Some(Box::new(usage.clone()));
+                    self.host.usage_update(&self.id, usage);
+                }
+            }
             EngineEvent::AuthRequired {
+                key,
                 turn_id,
                 url,
                 message,
-            } => self.on_auth_required(turn_id, url, message),
+            } => self.on_auth_required(turn_id, key, url, message).await,
             EngineEvent::SubagentUpdate { subagent_id, .. } => {
                 // Progress of an unfinished native subagent: not stored (PRD storage.md: no
                 // progress updates in the log). The finished subagent arrives as an item. There
@@ -957,15 +982,57 @@ impl Actor {
     /// sign-in naming a turn belongs to that run and only while it runs; one naming a turn that
     /// is no longer running is dropped (the next turn asks again). One without a turn belongs to
     /// the engine session. Each scope keeps at most one open sign-in; a repeat refreshes its link.
-    fn on_auth_required(&mut self, turn_id: Option<String>, url: Option<String>, message: String) {
+    async fn on_auth_required(
+        &mut self,
+        turn_id: Option<String>,
+        key: Option<String>,
+        url: Option<String>,
+        message: String,
+    ) {
+        // Each engine key is answered at most once per session (keys are unique per engine
+        // request): a later event naming a settled key is ignored, with no request and no answer.
+        if let Some(key) = &key
+            && self.settled_signin_keys.contains(key)
+        {
+            tracing::debug!(thread = %self.id, "sign-in for a key already answered: ignored");
+            return;
+        }
         let run_id = match (&turn_id, &self.phase) {
-            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => Some(run.run_id.clone()),
-            (Some(_), _) => {
-                tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
-                return;
+            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => {
+                Some(Some(run.run_id.clone()))
             }
-            (None, _) => None,
+            (Some(_), _) => None,
+            (None, _) => Some(None),
         };
+        let Some(run_id) = run_id else {
+            tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
+            // The engine still waits for an answer to a keyed request: decline it.
+            if let Some(key) = key {
+                self.decline_signin_key(&key, "the sign-in named a turn that is not running")
+                    .await;
+            }
+            return;
+        };
+        // One engine key has at most one sign-in request: a key an open sign-in already holds
+        // refreshes that request, so every answer, decline and close stays one-to-one.
+        if let Some(key) = &key
+            && let Some(existing) = self
+                .signin_keys
+                .iter()
+                .find(|(id, held)| held == key && self.is_open(id))
+                .map(|(id, _)| id.clone())
+        {
+            match url.filter(|u| !u.trim().is_empty()) {
+                Some(url) => self.host.set_signin_link(crate::core::SigninLink {
+                    thread_id: self.id.clone(),
+                    request_id: existing,
+                    url,
+                    message,
+                }),
+                None => self.host.forget_signin_link(&existing),
+            }
+            return;
+        }
         let scope: &[RequestId] = match (&run_id, &self.phase) {
             (Some(_), Phase::Running(run)) => &run.signins,
             _ => &self.session_signins,
@@ -975,7 +1042,7 @@ impl Actor {
             Some(request_id) => request_id,
             None => {
                 let request_id = RequestId::new(new_id("req"));
-                self.append(vec![LogEvent::RequestOpened(RequestOpened {
+                let recorded = self.append(vec![LogEvent::RequestOpened(RequestOpened {
                     request_id: request_id.clone(),
                     run_id: run_id.clone(),
                     item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
@@ -985,6 +1052,15 @@ impl Actor {
                     options: None,
                     recommended: None,
                 })]);
+                if recorded.is_none() {
+                    // Nobody can see or answer an unrecorded request: decline the engine's
+                    // request now instead of holding its key.
+                    if let Some(key) = &key {
+                        self.decline_signin_key(key, "the sign-in request could not be recorded")
+                            .await;
+                    }
+                    return;
+                }
                 match (&run_id, &mut self.phase) {
                     (Some(_), Phase::Running(run)) => run.signins.push(request_id.clone()),
                     _ => self.session_signins.push(request_id.clone()),
@@ -992,6 +1068,24 @@ impl Actor {
                 request_id
             }
         };
+        if let Some(key) = key {
+            // A repeat with a new key replaces the earlier engine request: decline that one so it
+            // does not wait forever.
+            if let Some(index) = self
+                .signin_keys
+                .iter()
+                .position(|(id, _)| id == &request_id)
+            {
+                let (_, old) = self.signin_keys.remove(index);
+                if old != key {
+                    self.decline_signin_key(&old, "a newer sign-in request replaced it")
+                        .await;
+                }
+            }
+            // A key that is live again is no longer waiting for a retried decline.
+            self.undeclined_signin_keys.retain(|k| k != &key);
+            self.signin_keys.push((request_id.clone(), key));
+        }
         match url.filter(|u| !u.trim().is_empty()) {
             Some(url) => self.host.set_signin_link(crate::core::SigninLink {
                 thread_id: self.id.clone(),
@@ -1045,11 +1139,21 @@ impl Actor {
                 }));
             }
         }
+        for request_id in &run.signins {
+            if let Some(index) = self.signin_keys.iter().position(|(id, _)| id == request_id) {
+                let (_, key) = self.signin_keys.remove(index);
+                if self.is_open(request_id) {
+                    self.decline_signin_key(&key, "the run ended").await;
+                }
+            }
+        }
+        self.retry_undeclined_signin_keys().await;
         events.extend(self.close_signins(&run.signins, "the run ended"));
         events.push(LogEvent::RunFinished(RunFinished {
             run_id: run.run_id.clone(),
             outcome,
             reason,
+            token_usage: run.usage.clone(),
         }));
         if outcome == RunOutcome::Unknown {
             events.push(LogEvent::RequestOpened(RequestOpened {
@@ -1249,7 +1353,16 @@ impl Actor {
                     | RequestOutcome::Decline
                     | RequestOutcome::Cancel
             ),
-            RequestKind::Question | RequestKind::Signin => {
+            RequestKind::Signin => matches!(
+                r.outcome,
+                RequestOutcome::Accept
+                    | RequestOutcome::AcceptForSession
+                    | RequestOutcome::AcceptAlways
+                    | RequestOutcome::Answered
+                    | RequestOutcome::Cancel
+                    | RequestOutcome::Decline
+            ),
+            RequestKind::Question => {
                 matches!(
                     r.outcome,
                     RequestOutcome::Answered | RequestOutcome::Cancel | RequestOutcome::Decline
@@ -1275,6 +1388,45 @@ impl Actor {
             } else {
                 None
             };
+        if request.kind == RequestKind::Signin
+            && let Some(index) = self
+                .signin_keys
+                .iter()
+                .position(|(id, _)| id == &r.request_id)
+        {
+            let key = self.signin_keys[index].1.clone();
+            let session = self
+                .session
+                .as_ref()
+                .ok_or_else(|| Refusal::new(Reason::NotAllowed, "the engine has stopped"))?;
+            let outcome = if matches!(r.outcome, RequestOutcome::Decline | RequestOutcome::Cancel) {
+                RequestOutcome::Decline
+            } else {
+                RequestOutcome::Accept
+            };
+            session
+                .session
+                .answer_request(
+                    &key,
+                    RequestAnswer {
+                        outcome,
+                        text: None,
+                        answers: None,
+                    },
+                )
+                .await
+                // The engine's error text can name the key; neither the reply nor the log carries it.
+                .map_err(|_| {
+                    tracing::warn!(thread = %self.id, "the engine did not take the sign-in answer");
+                    Refusal::new(
+                        Reason::Internal,
+                        "the engine did not take the sign-in answer",
+                    )
+                })?;
+            self.signin_keys.remove(index);
+            self.undeclined_signin_keys.retain(|k| k != &key);
+            self.settled_signin_keys.insert(key);
+        }
         // Engine request of the running turn: answer the engine first.
         let engine_key = match &self.phase {
             Phase::Running(run) => run
@@ -1440,7 +1592,50 @@ impl Actor {
         });
     }
 
+    /// Decline one engine sign-in request while the session lives. The engine's error text can
+    /// name the key, so only the reason is logged.
+    /// A failed decline keeps the key for [Self::retry_undeclined_signin_keys].
+    /// Callers remove their own entry first; a key that another open sign-in still holds (the
+    /// session and a run can share one) is never declined.
+    async fn decline_signin_key(&mut self, key: &str, why: &str) {
+        if self.signin_keys.iter().any(|(_, live)| live == key)
+            || self.settled_signin_keys.contains(key)
+        {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let answer = RequestAnswer {
+            outcome: RequestOutcome::Decline,
+            text: None,
+            answers: None,
+        };
+        if session.session.answer_request(key, answer).await.is_err() {
+            tracing::warn!(thread = %self.id, why, "failed to decline a sign-in; will retry");
+            if !self.undeclined_signin_keys.iter().any(|k| k == key) {
+                self.undeclined_signin_keys.push(key.to_owned());
+            }
+        } else {
+            self.undeclined_signin_keys.retain(|k| k != key);
+            self.settled_signin_keys.insert(key.to_owned());
+        }
+    }
+
+    /// Retry the declines that failed earlier; a key that fails again stays for the next try.
+    async fn retry_undeclined_signin_keys(&mut self) {
+        for key in std::mem::take(&mut self.undeclined_signin_keys) {
+            // Never decline a key that belongs to an open sign-in again.
+            if self.signin_keys.iter().any(|(_, live)| live == &key) {
+                continue;
+            }
+            self.decline_signin_key(&key, "retrying an earlier decline")
+                .await;
+        }
+    }
+
     fn drop_session(&mut self) {
+        self.signin_keys.clear();
+        self.undeclined_signin_keys.clear();
+        self.settled_signin_keys.clear();
         let signins = std::mem::take(&mut self.session_signins);
         let closed = self.close_signins(&signins, "the engine stopped");
         if !closed.is_empty() {
@@ -1458,7 +1653,33 @@ impl Actor {
     }
 
     async fn stop_session(&mut self, why: &str) {
+        // Last chance for declines that failed earlier; the session ends after this.
+        self.retry_undeclined_signin_keys().await;
         if let Some(s) = &self.session {
+            let mut declined: Vec<&String> = Vec::new();
+            for (id, key) in &self.signin_keys {
+                // Each key is declined once; the engine's error text can name it, so it is not
+                // logged.
+                if declined.contains(&key) || self.settled_signin_keys.contains(key) {
+                    continue;
+                }
+                declined.push(key);
+                if self.is_open(id)
+                    && s.session
+                        .answer_request(
+                            key,
+                            RequestAnswer {
+                                outcome: RequestOutcome::Decline,
+                                text: None,
+                                answers: None,
+                            },
+                        )
+                        .await
+                        .is_err()
+                {
+                    tracing::warn!(thread = %self.id, "failed to decline a sign-in before stopping the engine");
+                }
+            }
             tracing::info!(thread = %self.id, why, "stopping engine process");
             s.session.shutdown().await;
         }
