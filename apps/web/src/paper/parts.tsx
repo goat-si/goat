@@ -558,8 +558,8 @@ export function RoutineLine({ text }: { text: ReactNode }) {
 /** 2R-1 0.0.1.1.1.0.0.0.1 */
 export function BotMessage({ text }: { text: ReactNode }) {
   return (
-    <div style={{ boxSizing: 'border-box', maxWidth: '680px', paddingBlock: '2px', paddingInline: '4px' }}>
-      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', lineHeight: '26px' }}>
+    <div style={{ alignSelf: 'start', backgroundColor: '#F0F0F0', borderRadius: '18px', boxSizing: 'border-box', maxWidth: '560px', paddingBlock: '9px', paddingInline: '14px' }}>
+      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '15px', lineHeight: '23px' }}>
         {text}
       </div>
     </div>
@@ -569,8 +569,8 @@ export function BotMessage({ text }: { text: ReactNode }) {
 /** 2R-1 0.0.1.1.1.0.0.0.2 */
 export function ChildRow({ text, root }: { text: ReactNode; root: El }) {
   return (
-    <div style={{ borderBottomColor: '#ECECEC99', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', paddingBottom: '8px', paddingTop: '4px' }}>
-      <div {...root} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', paddingInline: '4px' }}>
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+      <div {...root} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', justifyContent: 'center', paddingInline: '4px' }}>
         <svg width="12" height="12" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
           <path d="m9 18 6-6-6-6" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -585,7 +585,7 @@ export function ChildRow({ text, root }: { text: ReactNode; root: El }) {
 /** 2R-1 0.0.1.1.1.0.0.0.3 */
 export function DecisionCard({ title, body, buttons }: { title: ReactNode; body: ReactNode; buttons: ReactNode }) {
   return (
-    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px, #0000000D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBlock: '14px', paddingInline: '16px' }}>
+    <div style={{ alignSelf: 'start', backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px, #0000000D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '560px', paddingBlock: '14px', paddingInline: '16px', width: '100%' }}>
       <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
         <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
           <circle cx="12" cy="12" r="10" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -636,7 +636,7 @@ export function DecisionSecondary({ label, button }: { label: ReactNode; button:
 }
 
 /** 2R-1 0.0.1.1.1.0.0.1 */
-export function Composer({ input, plus, picker }: { input: ReactNode; plus: El; picker: ReactNode }) {
+export function Composer({ input, plus, picker, send }: { input: ReactNode; plus: El; picker: ReactNode; send: El }) {
   return (
     <div style={{ boxSizing: 'border-box', maxWidth: '700px', paddingBottom: '18px', paddingInline: '24px', paddingTop: '12px', width: '100%' }}>
       <div style={{ alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: '24px', boxShadow: '#00000014 0px 0px 0px 1px inset, #0000000A 0px 1px 3px', boxSizing: 'border-box', display: 'flex', gap: '8px', minHeight: '48px', padding: '4px' }}>
@@ -650,7 +650,12 @@ export function Composer({ input, plus, picker }: { input: ReactNode; plus: El; 
           </svg>
         </div>
         {picker}
-        <div style={{ boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }} />
+        <div {...send} style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '28px', justifyContent: 'center', width: '28px' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+            <path d="M12 19V5" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" />
+            <path d="m5 12 7-7 7 7" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
       </div>
     </div>
   );

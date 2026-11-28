@@ -227,8 +227,8 @@ P("DecisionCard", B, CHAT + ".0.3", "Merge PR #7712", "title: ReactNode; body: R
 P("DecisionButtons", B, CHAT + ".0.3.2", "Fix first", "children: ReactNode", slots={"0": "{children}"}, drop=["1", "2"])
 P("DecisionPrimary", B, CHAT + ".0.3.2.0", "Merge", "label: ReactNode; button: object", texts={"Merge": "{label}"}, attrs={"": "{...button}"})
 P("DecisionSecondary", B, CHAT + ".0.3.2.1", "Fix first", "label: ReactNode; button: object", texts={"Fix first": "{label}"}, attrs={"": "{...button}"})
-P("Composer", B, CHAT + ".1", "Message Reviewer", "input: ReactNode; plus: object; picker: ReactNode",
-  slots={"0.0.0": "{input}", "0.2": "{picker}"}, attrs={"0.1": "{...plus}"})
+P("Composer", B, CHAT + ".1", "Message Reviewer", "input: ReactNode; plus: object; picker: ReactNode; send: object",
+  slots={"0.0.0": "{input}", "0.2": "{picker}"}, attrs={"0.1": "{...plus}", "0.3": "{...send}"})
 P("ModelChip", B, CHAT + ".1.0.2", "gpt-6.1-sol", "glyph: ReactNode; model: ReactNode; button: object",
   slots={"0": "{glyph}"}, texts={"gpt-6.1-sol": "{model}"}, attrs={"": "{...button}"})
 
