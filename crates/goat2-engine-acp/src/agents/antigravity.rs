@@ -43,6 +43,19 @@ use crate::{
 
 /// v1 `ANTIGRAVITY_DEFAULT_MODEL` (contracts model.ts:136): the account default.
 pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "antigravity-default";
+/// The ACP runtime started when no installation is resolved (v1 `names.executable`,
+/// AntigravityInstallationRecords.ts:63-66, as this crate names it).
+pub const RUNTIME_PROGRAM: &str = if cfg!(windows) {
+    "agy_acp_server.exe"
+} else {
+    "agy_acp_server"
+};
+/// v1 `names.harness` (AntigravityInstallationRecords.ts:65-66): the harness beside the runtime.
+pub const HARNESS_FILE: &str = if cfg!(windows) {
+    "localharness_external.exe"
+} else {
+    "localharness_external"
+};
 /// v1 `ACP_SESSION_MODE_OPTION_ID`: a picked session mode, written apart from config options.
 const ACP_SESSION_MODE_OPTION_ID: &str = "_t3/session-mode";
 /// v1 `PROMPT_STEERING_RELEASE` (AntigravityAcpSupport.ts:102-103): 1.5.0 steers with the next
@@ -127,6 +140,34 @@ pub struct AntigravityInstallation {
     pub version: Option<String>,
     /// Installed and updated by GOAT (v1 `source: "managed"`), or the person's own executable.
     pub managed: bool,
+}
+
+impl AntigravityInstallation {
+    /// A runtime the person installed (v1 `fromExternal`, AntigravityInstallation.ts:229-270,
+    /// without managed releases): the `agy` or `antigravity` CLI runs on its own
+    /// (`isAntigravityCli`, AntigravityInstallationRecords.ts:70-74); any other executable runs
+    /// with the harness beside it. The version is learned at `initialize`.
+    pub fn external(executable: PathBuf) -> Self {
+        let name = executable
+            .file_name()
+            .map(|n| n.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let stem = [".exe", ".cmd", ".bat"]
+            .iter()
+            .find_map(|ext| name.strip_suffix(ext))
+            .unwrap_or(&name);
+        let harness_path = (!matches!(stem, "agy" | "antigravity")).then(|| {
+            executable
+                .parent()
+                .map_or_else(|| PathBuf::from(HARNESS_FILE), |d| d.join(HARNESS_FILE))
+        });
+        Self {
+            executable_path: executable,
+            harness_path,
+            version: None,
+            managed: false,
+        }
+    }
 }
 
 /// How GOAT starts the runtime for one instance.
@@ -284,14 +325,7 @@ impl AcpFlavor for Antigravity {
             return Err(EngineError::Unavailable(issue.to_owned()));
         }
         let Some(launch) = &self.launch else {
-            let mut command = LaunchCommand::new(
-                if cfg!(windows) {
-                    "agy_acp_server.exe"
-                } else {
-                    "agy_acp_server"
-                },
-                Vec::<String>::new(),
-            );
+            let mut command = LaunchCommand::new(RUNTIME_PROGRAM, Vec::<String>::new());
             command.env_remove = REMOVED_ENVIRONMENT_KEYS.map(str::to_owned).to_vec();
             match self.auth.auth_method {
                 antigravity_auth::AntigravityAuthMethod::GeminiApiKey => {
@@ -348,6 +382,33 @@ impl AcpFlavor for Antigravity {
             .lock()
             .expect("antigravity sessions")
             .remove(session_id);
+    }
+    /// A second account's profile lives in the instance's private home (v1 keeps one profile per
+    /// instance, `instance_directories`; GOAT 2's host owns the folder): the same runtime, the
+    /// profile prepared there (0700 folders, `settings.json` naming the sign-in method) and its
+    /// temp inside it. Without a resolved launch there is no profile to move.
+    fn with_home(
+        &self,
+        home: &std::path::Path,
+    ) -> Result<Option<std::sync::Arc<dyn AcpFlavor>>, EngineError> {
+        let Some(launch) = &self.launch else {
+            return Ok(None);
+        };
+        let profile = AntigravityProfile::new(home, launch.profile.browser_command.clone());
+        profile
+            .prepare(&self.auth)
+            .map_err(|message| EngineError::Unavailable(message.to_owned()))?;
+        Ok(Some(std::sync::Arc::new(Antigravity {
+            auth: self.auth.clone(),
+            launch: Some(AntigravityLaunch {
+                profile,
+                runtime_temp_directory: None,
+                ..launch.clone()
+            }),
+            default_model: self.default_model.clone(),
+            attachments_dir: self.attachments_dir.clone(),
+            sessions: AntigravitySessions::default(),
+        })))
     }
     /// v1 `runtimeIncompatibility` (AntigravityDriver.ts:346-371, 408-427): a resolved runtime
     /// older than 1.5.1 only serves allowlisted editors. The compatibility advisory of the

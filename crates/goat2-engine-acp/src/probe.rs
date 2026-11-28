@@ -253,6 +253,38 @@ pub async fn probe_provider(factory: &crate::engine::AcpEngineFactory) -> Provid
     }
 }
 
+/// `EngineFactory::probe_instance`: [probe_provider] for one provider instance. `target.launch`
+/// applies over [ProbeConfig::launch] the way `SessionSpec.launch` applies to a session's
+/// command (binary replaces, non-empty args replace, env adds); `target.home` selects the
+/// flavor's per-account state ([crate::flavor::AcpFlavor::with_home]). Neither path is returned.
+pub async fn probe_instance(
+    factory: &crate::engine::AcpEngineFactory,
+    target: &goat2_engine_api::ProviderTarget,
+) -> Result<ProviderProbeResult, goat2_engine_api::EngineError> {
+    let mut factory = factory.for_target(Some(target))?.into_owned();
+    if let Some(over) = &target.launch {
+        let mut config = factory.probe_config().clone();
+        config.launch = Some(overlay_launch(config.launch.take(), over));
+        factory = factory.with_probe_config(config);
+    }
+    Ok(probe_provider(&factory).await)
+}
+
+/// `over` applied on `base` with the session merge rules of the driver's `launch_for`.
+pub(crate) fn overlay_launch(base: Option<LaunchSpec>, over: &LaunchSpec) -> LaunchSpec {
+    let mut launch = base.unwrap_or_default();
+    if let Some(binary) = &over.binary {
+        launch.binary = Some(binary.clone());
+    }
+    if !over.args.is_empty() {
+        launch.args = over.args.clone();
+    }
+    launch
+        .env
+        .extend(over.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    launch
+}
+
 /// RFC 3339 UTC with milliseconds (v1 `DateTime.formatIso`).
 pub(crate) fn checked_at_now() -> String {
     crate::items::rfc3339_ms(crate::items::now_ms())
