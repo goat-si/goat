@@ -2,4 +2,7 @@
 import type { AcpRegistryDistribution } from "./AcpRegistryDistribution.ts";
 import type { AcpRegistryIntegrity } from "./AcpRegistryIntegrity.ts";
 
+/**
+ * v1 `AcpRegistrySearchAgent`.
+ */
 export type AcpRegistrySearchAgent = { id: string, name: string, version: string, description: string, authors: Array<string>, license: string | null, website: string | null, repository: string | null, icon: string | null, distribution: AcpRegistryDistribution, integrity: AcpRegistryIntegrity, };
