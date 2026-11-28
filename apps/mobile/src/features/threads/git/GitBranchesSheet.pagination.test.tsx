@@ -172,10 +172,9 @@ function setup() {
   };
   const rows = () =>
     new Map(
-      [...container.querySelectorAll("button:not([data-sheet-action])")].map((button) => [
-        button.querySelectorAll("span")[0]?.textContent ?? "",
-        button,
-      ]),
+      [...container.querySelectorAll<HTMLButtonElement>("button:not([data-sheet-action])")].map(
+        (button) => [button.querySelectorAll("span")[0]?.textContent ?? "", button],
+      ),
     );
   const actionButton = (label: string) =>
     container.querySelector<HTMLButtonElement>(`button[data-sheet-action="${label}"]`);
