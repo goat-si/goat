@@ -2,4 +2,7 @@
 import type { ProviderInstallPhase } from "./ProviderInstallPhase.ts";
 import type { ProviderInstallSource } from "./ProviderInstallSource.ts";
 
+/**
+ * v1 `ProviderInstallState` (`provider_install_*` results).
+ */
 export type ProviderInstallState = { driver: string, operationId: string | null, phase: ProviderInstallPhase, downloadedBytes: number, totalBytes: number | null, version: string | null, installedVersion: string | null, executablePath?: string | null, source?: ProviderInstallSource | null, canRemove: boolean, message: string | null, };
