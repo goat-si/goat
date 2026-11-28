@@ -54,6 +54,22 @@ fn card_json(card: &ThreadCard) -> serde_json::Value {
 }
 
 impl Host {
+    /// Writes commit only while the caller's run is still the thread's active run (the MCP
+    /// layer checks the caller once at admission; this fences a call that outlived its run).
+    fn fence(&self, caller: &Caller) -> Result<(), Box<SurfaceResult>> {
+        let active = self
+            .runtime_of(&caller.thread_id)
+            .and_then(|rt| rt.active_run);
+        if active.as_ref() != Some(&caller.run_id) {
+            return Err(Box::new(err(
+                ErrorCode::FailedPrecondition,
+                "no_active_run",
+                "the calling run has ended, so nothing was written",
+            )));
+        }
+        Ok(())
+    }
+
     /// The caller's own child, or a refusal.
     fn own_child(
         &self,
@@ -85,8 +101,23 @@ impl Host {
     ) -> SurfaceResult {
         let max = self.inner.opts.max_wait;
         let timeout = timeout_ms.map_or(max, |ms| Duration::from_millis(ms).min(max));
+        // Register first, then check: a child finishing in between cannot be missed.
         let rx = self.add_waiter(child, caller.run_id.clone());
-        match tokio::time::timeout(timeout, rx).await {
+        if !self.runtime_of(child).is_some_and(|rt| rt.busy) {
+            drop(rx);
+            self.prune_waiters(child);
+            let card = self.inner.store.card(child);
+            return SurfaceResult::ok(
+                json!({ "released": "idle", "card": card.as_ref().map(card_json) }),
+            );
+        }
+        let parked = self.inner.sched.park();
+        let waited = tokio::time::timeout(timeout, rx).await;
+        drop(parked);
+        if waited.is_err() {
+            self.prune_waiters(child);
+        }
+        match waited {
             Ok(Ok(outcome)) => SurfaceResult::ok(
                 json!({ "released": "completed", "result": outcome_json(&outcome) }),
             ),
@@ -164,7 +195,11 @@ impl McpHost for Host {
                 "task is larger than 64 KB",
             );
         }
-        if self.busy_children(&caller.thread_id) >= self.inner.opts.max_children {
+        if let Err(e) = self.fence(caller) {
+            return *e;
+        }
+        // Held until the child's first input made it busy, so parallel starts cannot pass the cap.
+        let Some(reservation) = self.reserve_child(&caller.thread_id) else {
             return SurfaceResult::err(
                 ErrorCode::ResourceExhausted,
                 "child_budget",
@@ -174,7 +209,7 @@ impl McpHost for Host {
                 ),
                 true,
             );
-        }
+        };
         let Some(parent) = self.inner.store.card(&caller.thread_id) else {
             return internal("caller thread missing");
         };
@@ -227,8 +262,12 @@ impl McpHost for Host {
             return internal(e);
         }
         let wait = args.mode == Some(StartMode::Wait);
-        // Register the waiter before the child can finish.
-        let rx = wait.then(|| self.add_waiter(&child.id, caller.run_id.clone()));
+        // Register the waiter before the child can finish; the run owns this child as a
+        // wait-mode child until it ends, even if the wait times out.
+        let rx = wait.then(|| {
+            self.record_wait_mode(&caller.run_id, &child.id);
+            self.add_waiter(&child.id, caller.run_id.clone())
+        });
         let input = NewInput {
             from: InputSource::System,
             text: args.task,
@@ -239,6 +278,7 @@ impl McpHost for Host {
         if let Err(r) = ask(self, &child.id, |tx| Msg::Input(input, tx)).await {
             return internal(r.message);
         }
+        drop(reservation);
         let started = json!({
             "childThreadId": child.id,
             "title": child.title,
@@ -255,7 +295,13 @@ impl McpHost for Host {
         let timeout = args
             .timeout_ms
             .map_or(max, |ms| Duration::from_millis(ms).min(max));
-        match tokio::time::timeout(timeout, rx).await {
+        let parked = self.inner.sched.park();
+        let waited = tokio::time::timeout(timeout, rx).await;
+        drop(parked);
+        if waited.is_err() {
+            self.prune_waiters(&child.id);
+        }
+        match waited {
             Ok(Ok(outcome)) => SurfaceResult::ok(
                 json!({ "started": started, "released": "completed", "result": outcome_json(&outcome) }),
             ),
@@ -278,15 +324,25 @@ impl McpHost for Host {
                 "text is larger than 64 KB",
             );
         }
-        let child_busy = self.runtime_of(&child.id).is_some_and(|rt| rt.busy);
-        if !child_busy && self.busy_children(&caller.thread_id) >= self.inner.opts.max_children {
-            return SurfaceResult::err(
-                ErrorCode::ResourceExhausted,
-                "child_budget",
-                "this thread already runs 4 children",
-                true,
-            );
+        if let Err(e) = self.fence(caller) {
+            return *e;
         }
+        let child_busy = self.runtime_of(&child.id).is_some_and(|rt| rt.busy);
+        let _reservation = if child_busy {
+            None
+        } else {
+            match self.reserve_child(&caller.thread_id) {
+                Some(r) => Some(r),
+                None => {
+                    return SurfaceResult::err(
+                        ErrorCode::ResourceExhausted,
+                        "child_budget",
+                        "this thread already runs 4 children",
+                        true,
+                    );
+                }
+            }
+        };
         let input = NewInput {
             from: InputSource::System,
             text: args.text,
@@ -354,9 +410,6 @@ impl McpHost for Host {
             Ok(c) => c,
             Err(e) => return *e,
         };
-        if !self.runtime_of(&card.id).is_some_and(|rt| rt.busy) {
-            return SurfaceResult::ok(json!({ "released": "idle", "card": card_json(&card) }));
-        }
         self.wait_child(caller, &card.id, args.timeout_ms).await
     }
 
@@ -384,6 +437,9 @@ impl McpHost for Host {
                 "only a worker thread reports a result to its parent",
             );
         }
+        if let Err(e) = self.fence(caller) {
+            return *e;
+        }
         let summary = goat2_contracts::text::clamp_bytes(
             &args.summary,
             goat2_contracts::limits::CHILD_SUMMARY_MAX_BYTES,
@@ -397,6 +453,9 @@ impl McpHost for Host {
     }
 
     async fn user_send(&self, caller: &Caller, args: UserSendArgs) -> SurfaceResult {
+        if let Err(e) = self.fence(caller) {
+            return *e;
+        }
         let mut first = false;
         self.runtime_update(&caller.thread_id, |rt| {
             first = rt.notified.insert(args.kind)
@@ -422,6 +481,9 @@ impl McpHost for Host {
     }
 
     async fn request_ask(&self, caller: &Caller, args: RequestAskArgs) -> SurfaceResult {
+        if let Err(e) = self.fence(caller) {
+            return *e;
+        }
         let kind = match args.kind {
             AskKind::Question => RequestKind::Question,
             AskKind::Approval => RequestKind::Approval,

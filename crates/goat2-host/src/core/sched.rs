@@ -44,6 +44,17 @@ impl std::fmt::Debug for RunPermit {
     }
 }
 
+/// See [Scheduler::park].
+pub struct Parked {
+    sched: Arc<Scheduler>,
+}
+
+impl Drop for Parked {
+    fn drop(&mut self) {
+        self.sched.state.lock().expect("sched").running += 1;
+    }
+}
+
 impl Drop for RunPermit {
     fn drop(&mut self) {
         if let Some(sched) = self.sched.take() {
@@ -111,6 +122,17 @@ impl Scheduler {
             .acquire_owned()
             .await
             .expect("start semaphore never closes")
+    }
+
+    /// A run blocked on a child (`thread.wait`, `thread.start {mode: wait}`) lends its slot
+    /// while it waits and takes it back on drop, which may exceed the cap for a moment (a parked
+    /// run uses no CPU). Without this, four parents waiting on children hold every slot and
+    /// the children never start.
+    pub fn park(self: &Arc<Self>) -> Parked {
+        self.release();
+        Parked {
+            sched: self.clone(),
+        }
     }
 
     pub fn running(&self) -> usize {

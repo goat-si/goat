@@ -355,6 +355,16 @@ impl Actor {
     // ------------------------------------------------------------------ inputs
 
     async fn accept(&mut self, input: NewInput) -> Result<InputAck, Refusal> {
+        self.accept_with(input, Vec::new()).await
+    }
+
+    /// Accept an input, writing `pre` in the same append (a child's `child.reported` and its
+    /// wake input land together, so a crash cannot keep one without the other).
+    async fn accept_with(
+        &mut self,
+        input: NewInput,
+        pre: Vec<LogEvent>,
+    ) -> Result<InputAck, Refusal> {
         let card = self
             .host
             .inner
@@ -364,7 +374,9 @@ impl Actor {
         let mode = input
             .mode
             .unwrap_or_else(|| input_mode_for(card.follow_up_mode));
-        if matches!(input.from, InputSource::User) {
+        // A person's input or a parent's `thread.send` releases a Stop hold (v1: the next send
+        // releases it); child results and answers do not.
+        if matches!(input.from, InputSource::User | InputSource::System) {
             self.held = false;
         }
         let input_id = InputId::new(new_id("in"));
@@ -376,9 +388,12 @@ impl Actor {
             attachments: input.attachments.clone(),
             client_request_id: input.client_request_id,
         };
+        let mut events = pre;
+        events.push(LogEvent::InputAccepted(accepted));
         self.host
-            .append(&self.id, vec![LogEvent::InputAccepted(accepted)])
+            .append(&self.id, events)
             .map_err(|e| self.store_err(e))?;
+        self.host.runtime_update(&self.id, |rt| rt.busy = true);
         let queued = QueuedInput {
             input_id: input_id.clone(),
             text: input.text,
@@ -389,17 +404,13 @@ impl Actor {
         let mut run_id = None;
         match mode {
             InputMode::Steer => {
-                if let Some(run) = self.steer_now(&queued).await {
-                    run_id = Some(run);
-                }
+                run_id = self.steer_now(&queued).await?;
             }
             InputMode::Interrupt => {
                 if let Phase::Running(run) = &self.phase {
                     let (turn, run_id) = (run.turn_id.clone(), run.run_id.clone());
                     self.stop_wait_children(&run_id);
-                    if let Some(s) = &self.session {
-                        let _ = s.session.interrupt(&turn).await;
-                    }
+                    self.interrupt_or_fence(&turn).await;
                 }
             }
             InputMode::Collect => {
@@ -417,33 +428,87 @@ impl Actor {
         Ok(InputAck { input_id, run_id })
     }
 
-    /// Steer a queued input into the running turn. Returns the run it joined.
-    async fn steer_now(&mut self, q: &QueuedInput) -> Option<RunId> {
+    /// Steer a queued input into the running turn. `Ok(Some(run))` = joined that run;
+    /// `Ok(None)` = stays queued for the next turn (not running, or declined after admission,
+    /// v1 `EffectWorker.ts:310-360`); `Err` = refused, fails closed (v1
+    /// `CodexTurnStartGuard.ts:113-172`).
+    async fn steer_now(&mut self, q: &QueuedInput) -> Result<Option<RunId>, Refusal> {
         let Phase::Running(run) = &self.phase else {
-            return None; // Not running: it starts the next turn.
+            return Ok(None); // Not running: it starts the next turn.
         };
-        if self.resend_blocked() {
-            return None;
+        if self.resend_blocked() || run.turn_id.is_empty() {
+            return Ok(None);
         }
         let (run_id, turn_id) = (run.run_id.clone(), run.turn_id.clone());
-        let session = self.session.as_ref()?.session.clone();
-        let result = session.steer(&turn_id, vec![to_engine(q)]).await;
-        let outcome = match &result {
-            SteerResult::Accepted => DeliveryOutcome::Accepted,
-            // Declined after admission: stays queued, runs next with the same inputId.
-            SteerResult::Declined { .. } => DeliveryOutcome::Declined,
-            // Refused as unowned or no answer: never re-sent automatically.
-            SteerResult::RefusedUnowned { .. } | SteerResult::Unknown { .. } => {
-                DeliveryOutcome::Unknown
-            }
+        let Some(session) = self.session.as_ref().map(|s| s.session.clone()) else {
+            return Ok(None);
         };
-        self.append(vec![LogEvent::InputDelivered(InputDelivered {
-            input_id: q.input_id.clone(),
-            run_id: run_id.clone(),
-            delivered_as: DeliveredAs::Steer,
-            outcome,
-        })]);
-        (outcome == DeliveryOutcome::Accepted).then_some(run_id)
+        let delivered = |outcome| {
+            LogEvent::InputDelivered(InputDelivered {
+                input_id: q.input_id.clone(),
+                run_id: run_id.clone(),
+                delivered_as: DeliveredAs::Steer,
+                outcome,
+            })
+        };
+        match session.steer(&turn_id, vec![to_engine(q)]).await {
+            SteerResult::Accepted => {
+                self.append(vec![delivered(DeliveryOutcome::Accepted)]);
+                Ok(Some(run_id))
+            }
+            SteerResult::Declined { .. } => {
+                self.append(vec![delivered(DeliveryOutcome::Declined)]);
+                Ok(None)
+            }
+            SteerResult::RefusedUnowned { reason } => {
+                // Fails closed: the input leaves the queue and is never delivered. (Until
+                // DeliveryOutcome::refused lands in goat2-contracts this is written as a cancel.)
+                self.append(vec![LogEvent::InputChanged(InputChanged {
+                    input_id: q.input_id.clone(),
+                    text: None,
+                    mode: None,
+                    cancelled: Some(true),
+                    position: None,
+                })]);
+                Err(Refusal::new(CommandErrorCode::SteerRefused, reason))
+            }
+            SteerResult::Unknown { .. } => {
+                // Maybe delivered: held for a person to resend or drop, never re-sent by itself.
+                let request_id = crate::store::resend_request_id(&run_id);
+                let mut events = vec![delivered(DeliveryOutcome::Unknown)];
+                if !self.is_open(&request_id) {
+                    events.push(LogEvent::RequestOpened(RequestOpened {
+                        request_id,
+                        run_id: Some(run_id.clone()),
+                        item_id: None,
+                        kind: RequestKind::Resend,
+                        summary: "Not sure a message reached the agent. Resend or drop it?"
+                            .to_owned(),
+                        options: None,
+                        recommended: None,
+                    }));
+                }
+                self.append(events);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Interrupt the running turn; if the engine cannot, stop its process so the old turn
+    /// cannot keep running, and end the run.
+    async fn interrupt_or_fence(&mut self, turn_id: &str) {
+        let ok = match &self.session {
+            Some(s) => s.session.interrupt(turn_id).await.is_ok(),
+            None => false,
+        };
+        if !ok {
+            self.stop_session("interrupt failed").await;
+            self.finish_run(
+                RunOutcome::Interrupted,
+                Some("interrupt failed; engine stopped".to_owned()),
+            )
+            .await;
+        }
     }
 
     // ------------------------------------------------------------------ scheduling
@@ -861,6 +926,7 @@ impl Actor {
         ) {
             self.stop_wait_children(&run.run_id);
         }
+        self.host.forget_wait_mode(&run.run_id);
         self.host.stream_clear(&self.id);
         let run_id = run.run_id.clone();
         drop(run);
@@ -919,18 +985,18 @@ impl Actor {
             summary: clamp_bytes(&summary, CHILD_SUMMARY_MAX_BYTES),
             cursor,
         };
-        let delivered_in_wait = self.host.deliver_to_waiters(&outcome);
+        // The parent records the result first, then releases waiters (child_result).
         self.host.send(
             &parent,
             Msg::ChildResult {
                 outcome,
-                delivered_in_wait,
+                delivered_in_wait: false,
             },
         );
     }
 
     /// Parent side: record `child.reported` first, then wake with an input (PRD runtime.md).
-    async fn child_result(&mut self, outcome: ChildOutcome, delivered_in_wait: bool) {
+    async fn child_result(&mut self, outcome: ChildOutcome, _delivered_in_wait: bool) {
         let child_title = self
             .host
             .inner
@@ -945,13 +1011,31 @@ impl Actor {
             summary: outcome.summary.clone(),
             child_cursor: outcome.cursor.clone(),
         };
-        if self
-            .append(vec![LogEvent::ChildReported(reported)])
-            .is_none()
-            || delivered_in_wait
-        {
+        // A wait still blocked on this child gets the result in its tool call, so no extra wake
+        // input (owner 2026-11-28). Record first, then release the waiter.
+        if self.host.has_live_waiter(&outcome.child_thread_id) {
+            if self
+                .append(vec![LogEvent::ChildReported(reported.clone())])
+                .is_some()
+                && self.host.deliver_to_waiters(&outcome)
+            {
+                return;
+            }
+            // The waiter went away in between: fall through to a normal wake.
+            let _ = self
+                .accept_with(self.wake_input(&outcome, &child_title), Vec::new())
+                .await;
             return;
         }
+        let _ = self
+            .accept_with(
+                self.wake_input(&outcome, &child_title),
+                vec![LogEvent::ChildReported(reported)],
+            )
+            .await;
+    }
+
+    fn wake_input(&self, outcome: &ChildOutcome, child_title: &str) -> NewInput {
         let status = serde_json::to_value(outcome.status)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
@@ -960,7 +1044,7 @@ impl Actor {
             "[child thread {} \"{}\" finished: {}]\n{}",
             outcome.child_thread_id, child_title, status, outcome.summary
         );
-        let input = NewInput {
+        NewInput {
             from: InputSource::Child {
                 thread_id: outcome.child_thread_id.clone(),
             },
@@ -975,14 +1059,13 @@ impl Actor {
                     .as_ref()
                     .map_or("restart", |r| r.as_str())
             ),
-        };
-        let _ = self.accept(input).await;
+        }
     }
 
     // ------------------------------------------------------------------ stop / requests / queue
 
     fn stop_wait_children(&self, run_id: &RunId) {
-        for child in self.host.waited_children(run_id) {
+        for child in self.host.wait_mode_children(run_id) {
             self.host.send(
                 &child,
                 Msg::Stop {
@@ -998,20 +1081,32 @@ impl Actor {
         if hold {
             self.held = true;
         }
-        let Phase::Running(run) = &self.phase else {
-            return None;
-        };
-        let (run_id, turn_id) = (run.run_id.clone(), run.turn_id.clone());
-        self.stop_wait_children(&run_id);
-        let interrupted = match &self.session {
-            Some(s) => s.session.interrupt(&turn_id).await.is_ok(),
-            None => false,
-        };
-        if !interrupted {
-            self.finish_run(RunOutcome::Interrupted, Some("stopped".to_owned()))
-                .await;
+        match &self.phase {
+            Phase::Idle => None,
+            // Not running yet: do not start (v1 ChildNeedsStop.ts:10 counts queued, preparing and
+            // starting work). Inputs stay queued under a hold; a late permit or process start is
+            // ignored (phase/pgen fence).
+            Phase::WaitingPermit | Phase::Starting(_) => {
+                self.held = true;
+                if matches!(self.phase, Phase::Starting(_)) {
+                    self.pgen += 1;
+                    self.host.revoke_tokens(&self.id);
+                }
+                self.phase = Phase::Idle;
+                None
+            }
+            Phase::Running(run) => {
+                let (run_id, turn_id) = (run.run_id.clone(), run.turn_id.clone());
+                self.stop_wait_children(&run_id);
+                if turn_id.is_empty() {
+                    self.finish_run(RunOutcome::Interrupted, Some("stopped".to_owned()))
+                        .await;
+                } else {
+                    self.interrupt_or_fence(&turn_id).await;
+                }
+                Some(run_id)
+            }
         }
-        Some(run_id)
     }
 
     async fn resolve(&mut self, r: Resolution) -> Result<(), Refusal> {
@@ -1212,7 +1307,7 @@ impl Actor {
                     mode: InputMode::Steer,
                     ..q
                 })
-                .await;
+                .await?;
                 return Ok(());
             }
         };

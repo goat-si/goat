@@ -225,6 +225,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
         } => {
             let cwd = cwd.unwrap_or_else(|| host.inner.opts.default_cwd.clone());
             let title = title.unwrap_or_else(|| first_line_title(text.as_deref().unwrap_or("")));
+            let mut reservation = None;
             let parent_ref = match (kind, parent) {
                 (ThreadKind::Worker, Some(parent)) => {
                     let parent_card = store.card(&parent).ok_or_else(|| {
@@ -236,7 +237,8 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                             "a worker cannot have children (depth 1)",
                         ));
                     }
-                    if host.busy_children(&parent) >= host.inner.opts.max_children {
+                    reservation = host.reserve_child(&parent);
+                    if reservation.is_none() {
                         return Err(command_error(
                             CommandErrorCode::LimitReached,
                             "the parent already runs 4 children",
@@ -280,7 +282,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 )
                 .map_err(store_error)?;
             }
-            match text.filter(|t| !t.trim().is_empty()) {
+            let reply = match text.filter(|t| !t.trim().is_empty()) {
                 Some(text) => {
                     send_input(
                         host,
@@ -296,7 +298,10 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                     .await
                 }
                 None => Ok(thread_value(&card.id)),
-            }
+            };
+            // The child slot stays reserved until its first input made it busy.
+            drop(reservation);
+            reply
         }
         Command::StopThread { thread_id, .. } => {
             let run_id = ask(host, &thread_id, |tx| Msg::Stop {

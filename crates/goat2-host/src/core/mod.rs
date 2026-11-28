@@ -139,6 +139,11 @@ pub(crate) struct Inner {
     pub runtime: Mutex<HashMap<ThreadId, Runtime>>,
     pub tokens: Mutex<HashMap<String, McpGrant>>,
     pub waiters: Mutex<HashMap<ThreadId, Vec<Waiter>>>,
+    /// Children started with `mode: wait` by a run, kept until the run ends: Stop or interrupt
+    /// of that run stops them even after the wait call timed out (v1 task mode).
+    pub wait_mode: Mutex<HashMap<RunId, HashSet<ThreadId>>>,
+    /// Child slots reserved by in-flight starts, per parent (atomic cap check).
+    pub child_reservations: Mutex<HashMap<ThreadId, usize>>,
     pub sessions: Mutex<HashMap<ThreadId, LiveSession>>,
     pub bots: Mutex<Vec<BotProfile>>,
     pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
@@ -179,6 +184,8 @@ impl Host {
                 runtime: Mutex::new(HashMap::new()),
                 tokens: Mutex::new(HashMap::new()),
                 waiters: Mutex::new(HashMap::new()),
+                wait_mode: Mutex::new(HashMap::new()),
+                child_reservations: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 bots: Mutex::new(Vec::new()),
                 dedupe: Mutex::new(HashMap::new()),
@@ -389,9 +396,10 @@ impl Host {
             .count()
     }
 
-    /// Children whose result the given parent run is blocked on (wait mode).
-    pub(crate) fn waited_children(&self, parent_run: &RunId) -> Vec<ThreadId> {
-        self.inner
+    /// Children the given parent run is blocked on (live waits) or started in wait mode.
+    pub(crate) fn wait_mode_children(&self, parent_run: &RunId) -> Vec<ThreadId> {
+        let mut children: HashSet<ThreadId> = self
+            .inner
             .waiters
             .lock()
             .expect("waiters")
@@ -401,7 +409,71 @@ impl Host {
                     .any(|w| &w.parent_run == parent_run && !w.tx.is_closed())
             })
             .map(|(child, _)| child.clone())
-            .collect()
+            .collect();
+        if let Some(owned) = self
+            .inner
+            .wait_mode
+            .lock()
+            .expect("wait_mode")
+            .get(parent_run)
+        {
+            children.extend(owned.iter().cloned());
+        }
+        children.into_iter().collect()
+    }
+
+    pub(crate) fn record_wait_mode(&self, parent_run: &RunId, child: &ThreadId) {
+        self.inner
+            .wait_mode
+            .lock()
+            .expect("wait_mode")
+            .entry(parent_run.clone())
+            .or_default()
+            .insert(child.clone());
+    }
+
+    pub(crate) fn forget_wait_mode(&self, parent_run: &RunId) {
+        self.inner
+            .wait_mode
+            .lock()
+            .expect("wait_mode")
+            .remove(parent_run);
+    }
+
+    /// A wait call is still blocked on this child.
+    pub(crate) fn has_live_waiter(&self, child: &ThreadId) -> bool {
+        self.inner
+            .waiters
+            .lock()
+            .expect("waiters")
+            .get(child)
+            .is_some_and(|ws| ws.iter().any(|w| !w.tx.is_closed()))
+    }
+
+    /// Drop waiters whose call already returned (timeout).
+    pub(crate) fn prune_waiters(&self, child: &ThreadId) {
+        let mut waiters = self.inner.waiters.lock().expect("waiters");
+        if let Some(ws) = waiters.get_mut(child) {
+            ws.retain(|w| !w.tx.is_closed());
+            if ws.is_empty() {
+                waiters.remove(child);
+            }
+        }
+    }
+
+    /// Reserve one child slot under the parent's cap, atomically with the busy count. The slot
+    /// is released when the guard drops (after the child's first input made it busy).
+    pub(crate) fn reserve_child(&self, parent: &ThreadId) -> Option<ChildReservation> {
+        let mut reserved = self.inner.child_reservations.lock().expect("reservations");
+        let pending = reserved.get(parent).copied().unwrap_or(0);
+        if self.busy_children(parent) + pending >= self.inner.opts.max_children {
+            return None;
+        }
+        *reserved.entry(parent.clone()).or_default() += 1;
+        Some(ChildReservation {
+            host: self.clone(),
+            parent: parent.clone(),
+        })
     }
 
     /// Release every waiter of a parent run without a result (Stop / interrupt).
@@ -518,6 +590,29 @@ impl Host {
                     "memory_warning",
                     serde_json::json!({ "thread": id, "rssBytes": bytes, "limitBytes": limit }),
                 );
+            }
+        }
+    }
+}
+
+/// A reserved child slot; see [Host::reserve_child].
+pub(crate) struct ChildReservation {
+    host: Host,
+    parent: ThreadId,
+}
+
+impl Drop for ChildReservation {
+    fn drop(&mut self) {
+        let mut reserved = self
+            .host
+            .inner
+            .child_reservations
+            .lock()
+            .expect("reservations");
+        if let Some(n) = reserved.get_mut(&self.parent) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                reserved.remove(&self.parent);
             }
         }
     }

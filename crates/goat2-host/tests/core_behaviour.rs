@@ -870,3 +870,229 @@ async fn restart_settles_runs_and_wakes_parents() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
+// ---------------------------------------------------------------- review round 1 regressions
+
+#[tokio::test]
+async fn stop_cancels_a_wait_child_that_has_not_started_yet() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "pre-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    // Child processes now take a while to start.
+    t.fake.set_script(FakeScript {
+        auto_finish: false,
+        start_ms: 300,
+        ..FakeScript::default()
+    });
+    let host = t.host.clone();
+    let call = tokio::spawn(async move {
+        host.thread_start(
+            &me,
+            ThreadStartArgs {
+                task: "slow".into(),
+                mode: Some(StartMode::Wait),
+                ..Default::default()
+            },
+        )
+        .await
+    });
+    eventually("child exists", || {
+        t.host
+            .store()
+            .cards()
+            .iter()
+            .any(|c| c.kind == ThreadKind::Worker)
+    })
+    .await;
+    let child = t
+        .host
+        .store()
+        .cards()
+        .into_iter()
+        .find(|c| c.kind == ThreadKind::Worker)
+        .unwrap()
+        .id;
+    t.host
+        .command(ClientFrame::StopThread {
+            req_id: "r".into(),
+            client_request_id: "stop-pre".into(),
+            thread_id: bot.clone(),
+        })
+        .await
+        .unwrap();
+    let _ = call.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        turns(&t, &child).is_empty(),
+        "a stopped child must not start its turn later"
+    );
+    assert!(!running(&t, &child));
+}
+
+#[tokio::test]
+async fn parallel_child_starts_cannot_pass_the_cap() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "par-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    let calls: Vec<_> = (0..8)
+        .map(|i| {
+            let (host, me) = (t.host.clone(), me.clone());
+            tokio::spawn(async move {
+                host.thread_start(
+                    &me,
+                    ThreadStartArgs {
+                        task: format!("t{i}"),
+                        ..Default::default()
+                    },
+                )
+                .await
+            })
+        })
+        .collect();
+    let mut ok = 0;
+    let mut budget = 0;
+    for call in calls {
+        match call.await.unwrap() {
+            SurfaceResult::Ok { .. } => ok += 1,
+            SurfaceResult::Error { error } if error.reason == "child_budget" => budget += 1,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!((ok, budget), (4, 4));
+}
+
+#[tokio::test]
+async fn four_parents_waiting_on_children_do_not_starve_them() {
+    let t = setup(manual()).await;
+    let mut parents = Vec::new();
+    for i in 0..4 {
+        parents.push(start_user_thread(&t, &format!("park-{i}"), Some("go")).await);
+    }
+    eventually("four parents running", || {
+        parents.iter().all(|p| running(&t, p))
+    })
+    .await;
+    let mut calls = Vec::new();
+    for p in &parents {
+        let me = caller(&t, p).await;
+        let host = t.host.clone();
+        calls.push(tokio::spawn(async move {
+            host.thread_start(
+                &me,
+                ThreadStartArgs {
+                    task: "child".into(),
+                    mode: Some(StartMode::Wait),
+                    ..Default::default()
+                },
+            )
+            .await
+        }));
+    }
+    eventually("four children running", || {
+        t.host
+            .store()
+            .cards()
+            .iter()
+            .filter(|c| c.kind == ThreadKind::Worker && running(&t, &c.id))
+            .count()
+            == 4
+    })
+    .await;
+    for c in t
+        .host
+        .store()
+        .cards()
+        .into_iter()
+        .filter(|c| c.kind == ThreadKind::Worker)
+    {
+        t.fake.finish_turn(&c.id, "done");
+    }
+    for call in calls {
+        let result = call.await.unwrap();
+        assert!(
+            matches!(&result, SurfaceResult::Ok { value } if value["released"] == "completed"),
+            "{result:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn refused_steer_fails_closed_and_unknown_steer_asks_a_person() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "sr", Some("first")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.push_steer_result(
+        &id,
+        SteerResult::RefusedUnowned {
+            reason: "not ours".into(),
+        },
+    );
+    let refused = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "sr-1".into(),
+            thread_id: id.clone(),
+            text: "x".into(),
+            mode: InputMode::Steer,
+            attachments: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, CommandErrorCode::SteerRefused);
+    assert!(
+        t.host.store().fold(&id).unwrap().queued_inputs.is_empty(),
+        "refused input left the queue"
+    );
+    t.fake.push_steer_result(
+        &id,
+        SteerResult::Unknown {
+            reason: "timeout".into(),
+        },
+    );
+    send(&t, &id, "sr-2", "maybe", InputMode::Steer).await;
+    let fold = t.host.store().fold(&id).unwrap();
+    assert_eq!(fold.held_inputs.len(), 1);
+    assert!(
+        fold.open_requests
+            .iter()
+            .any(|r| r.kind == RequestKind::Resend),
+        "a person decides"
+    );
+}
+
+#[tokio::test]
+async fn child_report_and_wake_input_are_written_together() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "tog-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    let child = child_id(
+        &t.host
+            .thread_start(
+                &me,
+                ThreadStartArgs {
+                    task: "c".into(),
+                    ..Default::default()
+                },
+            )
+            .await,
+    );
+    t.fake.finish_turn(&bot, "ok");
+    eventually("child running", || running(&t, &child)).await;
+    t.fake.finish_turn(&child, "result");
+    eventually("wake", || count(&t, &bot, "child.reported") == 1).await;
+    let lines = t.host.store().read_after(&bot, 0).unwrap();
+    let report = lines
+        .iter()
+        .position(|l| matches!(l.event, LogEvent::ChildReported(_)))
+        .unwrap();
+    assert!(
+        matches!(&lines[report + 1].event, LogEvent::InputAccepted(i) if matches!(i.from, InputSource::Child { .. }))
+    );
+}

@@ -87,7 +87,12 @@ pub(crate) async fn settle_and_resume(host: &Host) -> StoreResult<()> {
             else {
                 continue;
             };
-            if child_fold.active_run_id.is_some() || !child_fold.queued_inputs.is_empty() {
+            // A run settled now is reported even if the child has queued follow-ups; otherwise
+            // a busy child reports after its next run.
+            let settled_now = restarted.contains(child_id);
+            if !settled_now
+                && (child_fold.active_run_id.is_some() || !child_fold.queued_inputs.is_empty())
+            {
                 continue;
             }
             let status = if restarted.contains(child_id) {
