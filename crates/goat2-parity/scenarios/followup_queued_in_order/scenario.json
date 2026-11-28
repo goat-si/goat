@@ -134,8 +134,7 @@
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "supported"
     },
     "goat2": {
       "status": "pending",
