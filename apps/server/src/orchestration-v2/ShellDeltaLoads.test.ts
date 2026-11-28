@@ -112,3 +112,24 @@ it.effect("closing the shared scope interrupts pending and later callers", () =>
     expect(Exit.isFailure(lateExit) && Cause.hasInterrupts(lateExit.cause)).toBe(true);
   }),
 );
+
+it.effect("a projection that throws synchronously releases its event for a later attempt", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const loads = yield* makeShellDeltaLoads<number, never>().pipe(
+      Effect.provideService(Scope.Scope, scope),
+    );
+    const failed = yield* Effect.exit(
+      loads.run([{ sequence: 8 }], () => {
+        throw new Error("projection failed");
+      }),
+    );
+    expect(Exit.isFailure(failed)).toBe(true);
+    const next = yield* loads
+      .run([{ sequence: 8 }], () => Effect.succeed([8]))
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Effect.yieldNow;
+    yield* Scope.close(scope, Exit.void);
+    expect(yield* Fiber.await(next)).toEqual(Exit.succeed([8]));
+  }),
+);

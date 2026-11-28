@@ -68,7 +68,7 @@ export const makeShellDeltaLoads = Effect.fn("ShellDeltaLoads.make")(function* <
           return { done } as const;
         });
         if (owned.length > 0) {
-          yield* load(owned.map(({ event }) => event)).pipe(
+          yield* Effect.suspend(() => load(owned.map(({ event }) => event))).pipe(
             Effect.flatMap((items) =>
               Effect.gen(function* () {
                 if (items.length !== owned.length)
