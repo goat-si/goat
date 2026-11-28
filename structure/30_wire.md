@@ -15,6 +15,8 @@ WebSocket on 127.0.0.1 with a token. JSON frames, `type` tag, camelCase fields.
 | `stop_thread`, `resume_queue {threadId}` | command (next user send also releases a hold) |
 | `resolve_request {threadId, requestId, outcome, text?, answers?}` | command; unknown runs: kind `resend`, outcome `resend\|dropped` |
 | `archive_thread`, `rename_thread`, `create_bot {name, purpose, face, engine}` | command |
+| `change_thread {threadId, model?, runtimeMode?, followUpMode?}` | command → `thread.changed`, from the next run |
+| request kind `decision` | `request.opened` with options `{id, label, consequence?}`; answered by `resolve_request {optionId}`; silence never approves |
 | every command: `reqId` + `clientRequestId` (idempotent) | being added by lane C |
 
 | Host → client | |
