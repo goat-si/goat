@@ -70,3 +70,14 @@ test("Settings > GOAT Bot: the same picker changes the main bot's model", async 
   await expect(page.getByRole("button", { name: "GOAT model: gpt-6-luna" })).toBeVisible();
   expect(await sent(page, "change_thread")).toEqual([expect.objectContaining({ threadId: "t-main", modelSelection: { instanceId: "codex", model: "gpt-6-luna" } })]);
 });
+
+test("settings nav (v1 SettingsSidebarNav): sections move the GOAT 2 settings page; unbuilt ones say so", async ({ page }) => {
+  await page.goto("/?fake=1PBB-2");
+  const nav = page.locator("[data-settings-nav]");
+  await nav.getByText("GOAT Bot", { exact: true }).click();
+  await expect(settings(page)).toContainText("GOAT Bot answers your messages and starts work for you.");
+  await nav.getByText("General", { exact: true }).click();
+  await expect(settings(page)).toContainText("Planned");
+  await nav.getByText("Providers", { exact: true }).click();
+  await expect(settings(page).getByRole("button", { name: "Select Codex", exact: true })).toBeVisible();
+});

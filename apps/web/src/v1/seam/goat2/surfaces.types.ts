@@ -54,6 +54,9 @@ export interface ProviderPortShape {
 /** Installs (or with null removes) the port the lifted provider screens read through. */
 export declare const installProviderPort: (port: ProviderPortShape | null) => void;
 
+/** v1's settings sidebar nav (sections + settings search) inside v1's sidebar context; moves through setV1Navigator. */
+export declare const SettingsSidebarNav: ComponentType<{ pathname: string; placement?: "page" | "app-sidebar" }>;
+
 /** Settings > Providers (v1 ProviderSettingsPanel for GOAT 2's environment); instanceId focuses one provider. */
 export declare const ProvidersSettingsScreen: ComponentType<{ instanceId?: string }>;
 

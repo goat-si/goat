@@ -15,7 +15,7 @@ import { NewBotDialog } from "./bot-home/NewBot.tsx";
 import { ThreadMode } from "./threads/ThreadMode.tsx";
 import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
 import { SettingsMode } from "./settings/SettingsMode.tsx";
-import { BotModelSettings, ModelPicker, V1Boundary, installProviderPort } from "@v1/surfaces";
+import { BotModelSettings, ModelPicker, SettingsSidebarNav, V1Boundary, installProviderPort } from "@v1/surfaces";
 import { hostProviderPort } from "./providers/hostProviderPort.ts";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
@@ -123,7 +123,10 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   if (ui.mode === "settings") {
     return (
       <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
-        <SettingsMode ui={ui} setUi={setUi} top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail} nav={null}
+        <SettingsMode ui={ui} setUi={setUi} top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail}
+          nav={<V1Boundary data-settings-nav="" style={{ width: 256, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto", background: "var(--sidebar)" }}>
+            <SettingsSidebarNav pathname={ui.settingsPath ?? "/settings/providers"} placement="page" />
+          </V1Boundary>}
           botPage={(botId) => <BotSettingsPage bot={rows.find((r) => r.botId === botId) ?? main} />} />
       </div>
     );
