@@ -208,6 +208,8 @@ function makeEncoderPage() {
     atob,
     Blob,
     performance,
+    setInterval,
+    clearInterval,
   };
   sandbox.window = sandbox;
   const context = NodeVM.createContext(sandbox);
