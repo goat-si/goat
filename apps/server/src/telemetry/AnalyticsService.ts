@@ -1,3 +1,4 @@
+import { isCiEnvironment } from "@goat/shared/otelEnvironment";
 /**
  * Nothing is recorded or sent until the person grants `telemetryConsent` or the server's environment
  * sets GOAT_TELEMETRY_ENABLED; the environment wins either way. Events go to GOAT's ingest (infra/ingest at ingest.trygoat.ai), which stores
@@ -186,7 +187,9 @@ export const make = Effect.gen(function* () {
   );
   const telemetryEnabled = Effect.flatMap(environmentOverride, (override) =>
     override === undefined
-      ? Effect.map(consent, (answer) => answer === "granted")
+      ? isCiEnvironment(hostEnvironment)
+        ? Effect.succeed(false)
+        : Effect.map(consent, (answer) => answer === "granted")
       : Effect.succeed(override === "enabled"),
   );
   const httpClient = yield* HttpClient.HttpClient;

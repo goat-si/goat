@@ -318,6 +318,28 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
   Effect.orDie,
 );
 
+const CI_VARIABLES = [
+  "CI",
+  "GITHUB_ACTIONS",
+  "GITLAB_CI",
+  "CIRCLECI",
+  "TRAVIS",
+  "BUILDKITE",
+  "JENKINS_URL",
+  "TEAMCITY_VERSION",
+  "TF_BUILD",
+  "BITBUCKET_BUILD_NUMBER",
+  "CODEBUILD_BUILD_ID",
+  "DRONE",
+  "APPVEYOR",
+] as const;
+
+export const isCiEnvironment = (env: Readonly<Record<string, string | undefined>>) =>
+  CI_VARIABLES.some((name) => {
+    const value = env[name]?.trim().toLowerCase();
+    return value !== undefined && value !== "" && value !== "false" && value !== "0";
+  });
+
 /** GOAT Connect relay spans leave the machine, so they need an explicit opt-in. */
 export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
   Config.all({

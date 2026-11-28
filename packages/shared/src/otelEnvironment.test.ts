@@ -442,6 +442,17 @@ describe("OtelEnvironment", () => {
   });
 });
 
+describe("isCiEnvironment", () => {
+  it("recognizes CI providers and ignores false values", () => {
+    assert.isFalse(OtelEnvironment.isCiEnvironment({}));
+    assert.isTrue(OtelEnvironment.isCiEnvironment({ GITHUB_ACTIONS: "true" }));
+    assert.isTrue(OtelEnvironment.isCiEnvironment({ CI: "false", TF_BUILD: "True" }));
+    for (const value of ["", " ", "false", "FALSE", "0"]) {
+      assert.isFalse(OtelEnvironment.isCiEnvironment({ CI: value }));
+    }
+  });
+});
+
 describe("isRelayTracingEnabled", () => {
   it("stays off until GOAT_TELEMETRY_ENABLED=true opts in, then honors the SDK kill switches", () => {
     assert.isFalse(OtelEnvironment.isRelayTracingEnabled({}));

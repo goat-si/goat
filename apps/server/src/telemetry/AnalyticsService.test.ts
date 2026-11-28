@@ -249,6 +249,33 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       }),
   );
 
+  it.effect("CI suppresses consented analytics unless explicitly enabled", () =>
+    Effect.gen(function* () {
+      for (const [override, expected] of [
+        [undefined, 0],
+        ["true", 1],
+        ["false", 0],
+      ] as const) {
+        const { bodies, client } = recordingClient();
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+          yield* analytics.flush;
+        }).pipe(
+          Effect.provide(
+            layerWithConsent(
+              client,
+              "granted",
+              override ? { GOAT_TELEMETRY_ENABLED: override } : {},
+            ),
+          ),
+          Effect.provideService(HostProcess.Environment, { CI: "true" }),
+        );
+        assert.equal(bodies.length, expected);
+      }
+    }),
+  );
+
   it.effect("a granted install sends under its random install id", () =>
     Effect.gen(function* () {
       const { bodies, client } = recordingClient();
