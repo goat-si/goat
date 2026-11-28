@@ -21,7 +21,23 @@ use crate::store::StoreResult;
 pub(crate) async fn settle_and_resume(host: &Host, settled: &[ThreadId]) -> StoreResult<()> {
     let store = host.inner.store.clone();
     let restarted: HashSet<&ThreadId> = settled.iter().collect();
-    for parent in settled {
+    // Every start re-checks every parent whose last run ended without completing (settled now or
+    // by an earlier start whose recovery a crash cut short), until each lost result has a
+    // durable wake input. Results that already have one are skipped.
+    let mut recheck: Vec<ThreadId> = settled.to_vec();
+    for card in store.cards() {
+        if let Some(fold) = store.fold(&card.id)
+            && fold.active_run_id.is_none()
+            && matches!(
+                fold.last_run_outcome,
+                Some(RunOutcome::Interrupted | RunOutcome::Unknown | RunOutcome::Failed)
+            )
+            && !recheck.contains(&card.id)
+        {
+            recheck.push(card.id.clone());
+        }
+    }
+    for parent in &recheck {
         rewake_lost_wait_results(host, parent).await;
     }
     for parent in store.cards() {
@@ -122,7 +138,10 @@ async fn rewake_lost_wait_results(host: &Host, parent: &ThreadId) {
             summary: reported.summary.clone(),
             cursor: reported.child_cursor.clone(),
         };
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        host.send(parent, Msg::Input(wake_input(&outcome, &title), tx));
+        // Wait until the wake input is written before going on.
+        let input = wake_input(&outcome, &title);
+        if let Err(refusal) = super::commands::ask(host, parent, |tx| Msg::Input(input, tx)).await {
+            tracing::warn!(thread = %parent, message = %refusal.message, "lost child result wake failed");
+        }
     }
 }

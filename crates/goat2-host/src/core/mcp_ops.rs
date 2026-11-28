@@ -84,24 +84,28 @@ impl Host {
         rt.run_slot.map(|slot| slot.park())
     }
 
-    /// An earlier input to `thread` with this clientRequestId, from its recent log.
+    /// The whole log of a thread (keyed retries only; runs in spawn_blocking).
+    async fn whole_log(&self, thread: &ThreadId) -> Vec<goat2_contracts::LogLine> {
+        let store = self.inner.store.clone();
+        let thread = thread.clone();
+        tokio::task::spawn_blocking(move || store.read_after(&thread, 0).unwrap_or_default())
+            .await
+            .unwrap_or_default()
+    }
+
+    /// An earlier input to `thread` with this clientRequestId, from its whole log.
     async fn input_with_key(
         &self,
         thread: &ThreadId,
         key: &str,
     ) -> Option<goat2_contracts::InputId> {
-        let store = self.inner.store.clone();
-        let (thread, key) = (thread.clone(), key.to_owned());
-        tokio::task::spawn_blocking(move || {
-            let (lines, _) = store.read_page(&thread, u64::MAX, 512).ok()?;
-            lines.into_iter().rev().find_map(|l| match l.event {
+        self.whole_log(thread)
+            .await
+            .into_iter()
+            .find_map(|l| match l.event {
                 LogEvent::InputAccepted(i) if i.client_request_id == key => Some(i.input_id),
                 _ => None,
             })
-        })
-        .await
-        .ok()
-        .flatten()
     }
 
     /// The caller's own child, or a refusal.
@@ -243,6 +247,54 @@ impl McpHost for Host {
             ))
         });
         if let Some(existing) = child_id.as_ref().and_then(|id| self.inner.store.card(id)) {
+            // A crash may have stopped an earlier attempt between its steps (child created,
+            // parent `child.started`, child's first input). Finish the missing ones before
+            // answering, so a retry never reports a start that did not happen.
+            let recorded = self.whole_log(&caller.thread_id).await.iter().any(|l| {
+                matches!(&l.event, LogEvent::ChildStarted(c) if c.child_thread_id == existing.id)
+            });
+            let start_key = format!("mcp:{}:start", existing.id);
+            let input = self.input_with_key(&existing.id, &start_key).await;
+            let mut completed = Vec::new();
+            if !recorded {
+                let by_item_id = existing
+                    .parent
+                    .as_ref()
+                    .map(|p| p.by_item_id.clone())
+                    .unwrap_or_else(|| ItemId::new(format!("mcp:{}:thread.start", caller.run_id)));
+                if let Err(e) = self.append(
+                    &caller.thread_id,
+                    vec![LogEvent::ChildStarted(ChildStarted {
+                        child_thread_id: existing.id.clone(),
+                        task: args.task.clone(),
+                        by_item_id,
+                    })],
+                ) {
+                    return internal(e);
+                }
+                completed.push("child.started");
+            }
+            if input.is_none() {
+                let Some(_reservation) = self.reserve_child(&caller.thread_id) else {
+                    return SurfaceResult::err(
+                        ErrorCode::ResourceExhausted,
+                        "child_budget",
+                        "this thread already runs 4 children; wait for one to finish",
+                        true,
+                    );
+                };
+                let first = NewInput {
+                    from: InputSource::System,
+                    text: args.task.clone(),
+                    attachments: Vec::new(),
+                    mode: None,
+                    client_request_id: start_key,
+                };
+                if let Err(r) = ask(self, &existing.id, |tx| Msg::Input(first, tx)).await {
+                    return internal(r.message);
+                }
+                completed.push("first input");
+            }
             return SurfaceResult::ok(json!({
                 "started": {
                     "childThreadId": existing.id,
@@ -250,6 +302,7 @@ impl McpHost for Host {
                     "link": format!("[{}](goat-thread://v1/{})", existing.title, existing.id),
                 },
                 "deduplicated": true,
+                "completedSteps": completed,
             }));
         }
         // Held until the child's first input made it busy, so parallel starts cannot pass the cap.
@@ -606,15 +659,9 @@ impl McpHost for Host {
             {
                 return handoff(&request_id, "open");
             }
-            let store = self.inner.store.clone();
-            let (thread, id) = (caller.thread_id.clone(), request_id.clone());
-            let seen = tokio::task::spawn_blocking(move || {
-                store.read_page(&thread, u64::MAX, 512).ok().is_some_and(|(lines, _)| {
-                    lines.iter().any(|l| matches!(&l.event, LogEvent::RequestOpened(r) if r.request_id == id))
-                })
-            })
-            .await
-            .unwrap_or(false);
+            let seen = self.whole_log(&caller.thread_id).await.iter().any(
+                |l| matches!(&l.event, LogEvent::RequestOpened(r) if r.request_id == request_id),
+            );
             if seen {
                 return handoff(&request_id, "resolved");
             }

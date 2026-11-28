@@ -27,9 +27,24 @@ pub struct HostJson {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    /// Engine process groups alive at the last write; killed by the next start.
+    /// The host's own group identity (leader start time + executable), checked before a later
+    /// start signals that group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    /// Engine process groups alive at the last write, with their identity; the next start kills
+    /// a group only if its leader still has exactly this identity.
     #[serde(default)]
-    pub engine_groups: Vec<i32>,
+    pub engine_groups: Vec<GroupRecord>,
+}
+
+/// A process group and the identity of its leader when it was recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupRecord {
+    pub pgid: i32,
+    /// `ps -o lstart= -o comm=` of the leader: start time and executable. A reused group id
+    /// has a different start time.
+    pub identity: String,
 }
 
 /// The ready line printed to stdout once.
@@ -96,46 +111,53 @@ fn own_pgid() -> i32 {
     0
 }
 
-/// The command name of a process group's leader, if it is alive.
+/// Identity of a process (group leader): its start time and executable, from `ps`. `None` when
+/// it is not alive.
 #[cfg(unix)]
-fn leader_command(pgid: i32) -> Option<String> {
+pub(crate) fn process_identity(pid: i32) -> Option<String> {
     let out = std::process::Command::new("ps")
-        .args(["-o", "comm=", "-p", &pgid.to_string()])
+        .args(["-o", "lstart=", "-o", "comm=", "-p", &pid.to_string()])
         .output()
         .ok()?;
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    (!name.is_empty()).then_some(name)
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!line.is_empty()).then_some(line)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn process_identity(_pid: i32) -> Option<String> {
+    None
 }
 
 /// Kill process groups a previous host left behind. Called only after this host holds the
-/// store lock (so the previous host is gone), never for our own group, and only for groups
-/// whose leader is still the program that was recorded (a Codex engine or a goat2-host), so a
-/// reused group id is left alone. Returns what was killed and skipped, for the stall log.
+/// store lock (so the previous host is gone), never for our own group, and only for a group
+/// whose leader still has exactly the identity recorded with it (start time + executable), so a
+/// reused group id is never signalled. Returns what was killed and skipped, for the stall log.
 #[cfg(unix)]
 fn kill_leftovers(previous: &HostJson) -> serde_json::Value {
     let own = own_pgid();
-    let mut groups: Vec<(i32, &str)> = previous
-        .engine_groups
-        .iter()
-        .map(|g| (*g, "codex"))
-        .collect();
-    if previous.pid != std::process::id() {
-        groups.push((previous.pgid, "goat2-host"));
+    let mut groups: Vec<GroupRecord> = previous.engine_groups.clone();
+    if previous.pid != std::process::id()
+        && let Some(identity) = &previous.identity
+    {
+        groups.push(GroupRecord {
+            pgid: previous.pgid,
+            identity: identity.clone(),
+        });
     }
     let (mut killed, mut skipped) = (Vec::new(), Vec::new());
-    for (pgid, expected) in groups {
-        if pgid <= 1 || pgid == own {
+    for group in groups {
+        if group.pgid <= 1 || group.pgid == own {
             continue;
         }
-        match leader_command(pgid) {
-            Some(name) if name.contains(expected) => {
-                // SAFETY: kill with a negative pid signals a process group; errors are ignored.
-                unsafe {
-                    libc::kill(-pgid, libc::SIGKILL);
-                }
-                killed.push(json!({ "pgid": pgid, "command": name }));
+        let now = process_identity(group.pgid);
+        if now.as_deref() == Some(group.identity.as_str()) {
+            // SAFETY: kill with a negative pid signals a process group; errors are ignored.
+            unsafe {
+                libc::kill(-group.pgid, libc::SIGKILL);
             }
-            other => skipped.push(json!({ "pgid": pgid, "command": other })),
+            killed.push(json!({ "pgid": group.pgid, "identity": group.identity }));
+        } else {
+            skipped.push(json!({ "pgid": group.pgid, "recorded": group.identity, "now": now }));
         }
     }
     json!({ "killed": killed, "skipped": skipped })
@@ -218,6 +240,7 @@ pub async fn start_with_engine(
         port,
         generation,
         token: generated_token.then(|| ui_token.clone()),
+        identity: process_identity(own_pgid()),
         engine_groups: Vec::new(),
     };
     write_host_json(&host_json, &base).map_err(|e| format!("host.json: {e}"))?;
@@ -225,9 +248,22 @@ pub async fn start_with_engine(
     {
         let (state, path) = (state.clone(), host_json.clone());
         host.on_engine_groups(move |groups| {
-            let mut s = state.lock().expect("host.json");
-            s.engine_groups = groups;
-            let _ = write_host_json(&path, &s);
+            // Identities are read with `ps` off the async runtime.
+            let (state, path) = (state.clone(), path.clone());
+            std::thread::spawn(move || {
+                let records: Vec<GroupRecord> = groups
+                    .into_iter()
+                    .filter_map(|pgid| {
+                        Some(GroupRecord {
+                            pgid,
+                            identity: process_identity(pgid)?,
+                        })
+                    })
+                    .collect();
+                let mut s = state.lock().expect("host.json");
+                s.engine_groups = records;
+                let _ = write_host_json(&path, &s);
+            });
         });
     }
 
@@ -286,15 +322,22 @@ mod tests {
     }
 
     #[test]
-    fn leftover_groups_are_killed_only_when_the_leader_is_what_was_recorded() {
+    fn leftover_groups_are_killed_only_when_the_leader_identity_matches() {
         let dir = tempfile::tempdir().unwrap();
         let mut codex = group_named(dir.path(), "codex");
         let mut other = group_named(dir.path(), "sleepy");
         std::thread::sleep(std::time::Duration::from_millis(100));
+        let record = |child: &std::process::Child| GroupRecord {
+            pgid: child.id() as i32,
+            identity: process_identity(child.id() as i32).unwrap(),
+        };
+        // `other` stands for a reused group id: same pgid, different leader identity.
+        let mut reused = record(&other);
+        reused.identity = format!("{} (recorded earlier)", reused.identity);
         let previous = HostJson {
             pid: 1,
             pgid: 1,
-            engine_groups: vec![codex.id() as i32, other.id() as i32],
+            engine_groups: vec![record(&codex), reused],
             ..HostJson::default()
         };
         let report = kill_leftovers(&previous);
@@ -302,7 +345,7 @@ mod tests {
         assert!(!alive(&mut codex), "recorded engine group killed: {report}");
         assert!(
             alive(&mut other),
-            "a reused group id is left alone: {report}"
+            "a group whose identity changed is left alone: {report}"
         );
         let _ = other.kill();
     }
@@ -322,7 +365,10 @@ mod tests {
         let mut engine = group_named(dir.path(), "codex");
         std::thread::sleep(std::time::Duration::from_millis(100));
         let mut recorded = read_host_json(&dir.path().join("host.json")).unwrap();
-        recorded.engine_groups = vec![engine.id() as i32];
+        recorded.engine_groups = vec![GroupRecord {
+            pgid: engine.id() as i32,
+            identity: process_identity(engine.id() as i32).unwrap(),
+        }];
         write_host_json(&dir.path().join("host.json"), &recorded).unwrap();
         let second = start(cfg()).await;
         // A SIGKILL lands asynchronously; give it time before looking.

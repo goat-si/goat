@@ -119,11 +119,14 @@ impl RunSlot {
         }
     }
 
+    /// Take the slot back before this wait returns control to the run. Every finished wait does
+    /// this, also while other waits of the same run are still parked: a run that runs again
+    /// always holds a slot. (A later park only lends the slot again when it is the run's first.)
     async fn unpark(self: Arc<Self>) {
         let need = {
             let mut st = self.st.lock().expect("slot");
             st.parks = st.parks.saturating_sub(1);
-            st.parks == 0 && !st.finished && !st.holding
+            !st.finished && !st.holding
         };
         if !need {
             return;
@@ -133,7 +136,7 @@ impl RunSlot {
         };
         let take = {
             let mut st = self.st.lock().expect("slot");
-            if st.parks == 0 && !st.finished && !st.holding {
+            if !st.finished && !st.holding {
                 st.holding = true;
                 true
             } else {
@@ -315,15 +318,21 @@ mod tests {
         assert_eq!(sched.running(), 0);
         let child = sched.acquire(Priority::Child).await.unwrap();
         assert_eq!(sched.running(), 1);
-        drop(a); // still parked by b
-        tokio::task::yield_now().await;
-        assert_eq!(sched.running(), 1);
-        // Resuming waits for capacity: the child holds the only slot.
-        let resume = tokio::spawn(b.resume());
+        // The first wait to finish takes the slot back before it returns, even though the
+        // other wait is still parked: it waits for capacity, the child holds the only slot.
+        let resume_a = tokio::spawn(a.resume());
         tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(!resume.is_finished());
+        assert!(!resume_a.is_finished());
         drop(child);
-        resume.await.unwrap();
+        resume_a.await.unwrap();
+        assert_eq!(sched.running(), 1);
+        // The second wait finishing finds the slot held and changes nothing.
+        b.resume().await;
+        assert_eq!(sched.running(), 1);
+        // A new wait while the run holds the slot and no other wait is parked lends it again.
+        let c = slot.park();
+        assert_eq!(sched.running(), 0);
+        c.resume().await;
         assert_eq!(sched.running(), 1);
         // Finishing the run releases exactly once.
         drop(permit);

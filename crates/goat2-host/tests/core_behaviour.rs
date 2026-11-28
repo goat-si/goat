@@ -1291,3 +1291,124 @@ async fn mcp_keys_survive_a_restart() {
     assert_eq!(value["deduplicated"], true);
     drop(keep);
 }
+
+// ---------------------------------------------------------------- final review round 3 regressions
+
+#[tokio::test]
+async fn a_keyed_retry_finishes_a_half_made_child() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "half-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    // An earlier attempt created the child and crashed before child.started and its first input.
+    let child = ThreadId::new(format!(
+        "thr_{}",
+        goat2_host::util::stable_id(&[bot.as_str(), "thread.start", "half-key"])
+    ));
+    let parent_card = t.host.store().card(&bot).unwrap();
+    t.host
+        .store()
+        .create(
+            &child,
+            goat2_contracts::ThreadCreated {
+                kind: ThreadKind::Worker,
+                title: "half".into(),
+                project_id: None,
+                bot_id: parent_card.bot_id.clone(),
+                parent: Some(goat2_contracts::ParentRef {
+                    thread_id: bot.clone(),
+                    by_item_id: "mcp:old:thread.start:half-key".into(),
+                }),
+                engine: parent_card.engine.clone(),
+                follow_up_mode: goat2_contracts::FollowUpMode::Steer,
+            },
+        )
+        .unwrap();
+    let retry = t
+        .host
+        .thread_start(
+            &me,
+            ThreadStartArgs {
+                task: "the task".into(),
+                client_request_id: Some("half-key".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+    let SurfaceResult::Ok { value } = &retry else {
+        panic!("{retry:?}")
+    };
+    assert_eq!(
+        value["completedSteps"],
+        serde_json::json!(["child.started", "first input"])
+    );
+    assert!(
+        events(&t, &bot)
+            .iter()
+            .any(|e| matches!(e, LogEvent::ChildStarted(c) if c.child_thread_id == child))
+    );
+    eventually("the child runs its task", || turns(&t, &child).len() == 1).await;
+}
+
+#[tokio::test]
+async fn recovery_cut_short_by_a_crash_is_finished_by_the_next_start() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let (bot, child) = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let bot = main_bot(&t);
+            send(&t, &bot, "cs-1", "work", InputMode::Followup).await;
+            eventually("bot running", || running(&t, &bot)).await;
+            let me = caller(&t, &bot).await;
+            let host = t.host.clone();
+            let call = tokio::spawn(async move {
+                host.thread_start(
+                    &me,
+                    ThreadStartArgs {
+                        task: "c".into(),
+                        mode: Some(StartMode::Wait),
+                        ..Default::default()
+                    },
+                )
+                .await
+            });
+            eventually("child", || {
+                t.host
+                    .store()
+                    .cards()
+                    .iter()
+                    .any(|c| c.kind == ThreadKind::Worker)
+            })
+            .await;
+            let child = t
+                .host
+                .store()
+                .cards()
+                .into_iter()
+                .find(|c| c.kind == ThreadKind::Worker)
+                .unwrap()
+                .id;
+            eventually("child running", || running(&t, &child)).await;
+            t.fake.finish_turn(&child, "kept result");
+            let _ = call.await.unwrap();
+            eventually("reported", || count(&t, &bot, "child.reported") == 1).await;
+            (bot, child)
+        })
+    });
+    // Second start: the store opens and settles the bot's run, then the host "crashes" before
+    // its recovery writes the wake input.
+    {
+        let (store, report) = LaneAStore::open(&path).unwrap();
+        assert!(report.settled.iter().any(|s| s.thread_id == bot.as_str()));
+        drop(store);
+    }
+    // Third start: the bot is no longer "settled now", but its lost result still wakes it.
+    let t = open_at(&path, None, FakeEngine::new(manual()), 3).await;
+    eventually("parent woken with the lost result", || {
+        events(&t, &bot).iter().any(|e| matches!(e,
+            LogEvent::InputAccepted(i) if matches!(&i.from, InputSource::Child { thread_id } if thread_id == &child) && i.text.contains("kept result")))
+    })
+    .await;
+    drop(keep);
+}
