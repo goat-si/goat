@@ -300,6 +300,20 @@ test("Cursor completes a finished turn while cancellation is unresponsive", asyn
   } finally { h.child.kill(); }
 });
 
+test("Cursor reports interruption when wait rejects before cancellation succeeds", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const turn = (await h.request("turn.start", { inputs: input("wait-error-cancel-hang"), settings })).result;
+    assert.deepEqual((await h.request("turn.interrupt", { turnId: turn.turnId })).result, {});
+    const finished = await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
+    assert.equal(finished.event.outcome.type, "interrupted");
+    const next = (await h.request("turn.start", { inputs: input("continue"), settings })).result;
+    assert.equal(next.status, "accepted");
+    assert.equal((await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === next.turnId)).event.outcome.type, "done");
+  } finally { h.child.kill(); }
+});
+
 test("Cursor SDK diagnostics cannot leak credentials across writes", async () => {
   const h = helper({ GOAT_TEST_DIAGNOSTIC: "1" });
   try {
@@ -346,8 +360,20 @@ test("Cursor refuses overlapping probe and initialize before changing environmen
     server.on("request", (req, response) => response.end(JSON.stringify(req.url === "/v1/me" ? { apiKeyName: "" } : { items: [] })));
     const result = await probe;
     assert.equal(result.result?.auth.status, "authenticated");
-    assert.equal((await h.request("initialize", init)).result?.engineRef, "cursor-new");
+    assert.equal((await h.request("initialize", { ...init, launch: { env: { CURSOR_BACKEND_URL: backend, CURSOR_API_KEY: "fake-key" } } })).result?.engineRef, "cursor-new");
   } finally { for (const entry of held) if (!entry.response.writableEnded) entry.response.end(); h.child.kill(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+test("Cursor SDK loaded for one backend refuses another backend before opening a session", async () => {
+  const h = helper({ GOAT2_ENGINE_HELPER_SDK_CURSOR: "", CURSOR_API_KEY: "" });
+  try {
+    const first = await h.request("probe", { protocol: 1, engine: "cursor", cwd: null, launch: { env: { CURSOR_BACKEND_URL: "http://127.0.0.1:1" } } });
+    assert.equal(first.result?.auth.status, "unknown");
+    const next = await h.request("initialize", { ...init, launch: { env: { CURSOR_BACKEND_URL: "http://127.0.0.1:2", CURSOR_API_KEY: "synthetic-key" } } });
+    assert.equal(next.error?.code, "unavailable");
+    assert.match(next.error.message, /another backend/);
+    assert.ok(!JSON.stringify(h.lines).includes("synthetic-key"));
+  } finally { h.child.kill(); }
 });
 
 test("Cursor applies an in-session model change to the next SDK send", async () => {

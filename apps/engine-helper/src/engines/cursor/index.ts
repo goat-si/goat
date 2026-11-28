@@ -59,6 +59,12 @@ function safeHost(host: EngineHost, secrets: ReadonlyArray<string>): EngineHost 
 type Sdk = typeof import("@cursor/sdk");
 let contained = false;
 let diagnosticsGuarded = false;
+let loadedBackend: string | undefined;
+function backendIdentity(value: string | undefined) {
+  const normalized = value?.trim() || "https://api2.cursor.sh";
+  try { const url = new URL(normalized); return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`; }
+  catch { return normalized.replace(/\/+$/, ""); }
+}
 function guardDiagnostics(host: EngineHost) {
   if (diagnosticsGuarded) return;
   diagnosticsGuarded = true;
@@ -75,6 +81,9 @@ function guardDiagnostics(host: EngineHost) {
   });
 }
 async function sdk(): Promise<Sdk> {
+  const backend = backendIdentity(process.env.CURSOR_BACKEND_URL);
+  if (loadedBackend !== undefined && loadedBackend !== backend) throw new HelperError("unavailable", "Cursor SDK was already loaded for another backend; use a new helper process.");
+  loadedBackend ??= backend;
   if (!contained) { containRejections(classifyCursorRejection); contained = true; }
   return loadSdk<Sdk>("cursor", "@cursor/sdk");
 }
@@ -93,14 +102,9 @@ function setupEnvironment(params: Pick<InitializeParams, "launch">) {
   }
   previouslyOverridden.clear();
   for (const name of Object.keys(env)) previouslyOverridden.add(name);
-  const identity = (value: string | undefined) => {
-    const normalized = value?.trim() || "https://api2.cursor.sh";
-    try { const url = new URL(normalized); return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`; }
-    catch { return normalized.replace(/\/+$/, ""); }
-  };
   const own = (name: string) => Object.hasOwn(env, name);
-  const backendChanged = own("CURSOR_BACKEND_URL") && identity(env.CURSOR_BACKEND_URL) !== identity(process.env.CURSOR_BACKEND_URL);
-  const endpointChanged = own("CURSOR_API_ENDPOINT") && identity(env.CURSOR_API_ENDPOINT) !== identity(process.env.CURSOR_API_ENDPOINT);
+  const backendChanged = own("CURSOR_BACKEND_URL") && backendIdentity(env.CURSOR_BACKEND_URL) !== backendIdentity(process.env.CURSOR_BACKEND_URL);
+  const endpointChanged = own("CURSOR_API_ENDPOINT") && backendIdentity(env.CURSOR_API_ENDPOINT) !== backendIdentity(process.env.CURSOR_API_ENDPOINT);
   if (backendChanged && !own("CURSOR_API_KEY")) delete process.env.CURSOR_API_KEY;
   if ((backendChanged || endpointChanged) && !own("CURSOR_AUTH_TOKEN")) delete process.env.CURSOR_AUTH_TOKEN;
   Object.assign(process.env, env);
@@ -202,6 +206,7 @@ class CursorSession implements EngineSession {
     let outcome: { type: "done" } | { type: "failed"; reason: string } | { type: "interrupted" };
     try {
       const result = await active.run.wait();
+      if (result.status === "error") await this.waitForCancellation(active);
       if (active.finalized) return;
       if (result.status === "finished") active.projection.fallback(result.result);
       if (active.interrupted || result.status === "cancelled") {
@@ -217,6 +222,7 @@ class CursorSession implements EngineSession {
         outcome = { type: "failed", reason: failure.message };
       }
     } catch (cause) {
+      await this.waitForCancellation(active);
       if (active.finalized) return;
       const failure = cursorFailure(cause);
       if (failure.auth && !active.interrupted) this.host.emit({ type: "auth_required", turnId: active.run.id, url: null, message: failure.message });
@@ -224,6 +230,13 @@ class CursorSession implements EngineSession {
       if (active.interrupted) this.interruptedPrompt = active.prompt;
     }
     this.finalize(active, outcome);
+  }
+  private async waitForCancellation(active: NonNullable<CursorSession["active"]>) {
+    if (!active.cancelPending) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([active.cancelPending, new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000); })]);
+    } finally { if (timer) clearTimeout(timer); }
   }
   private finalize(active: NonNullable<CursorSession["active"]>, outcome: { type: "done" } | { type: "failed"; reason: string } | { type: "interrupted" }) {
     if (active.finalized) return;
@@ -300,7 +313,7 @@ export const cursorEngine: EngineModule = {
     setupEnvironment(params);
     guardDiagnostics(host);
     const checkedAt = host.now();
-    try { await sdk(); } catch { return { installed: false, version: null, status: "error", auth: { status: "unknown" }, models: [], checkedAt, message: "Cursor SDK could not be loaded." }; }
+    try { await sdk(); } catch (error) { if (error instanceof HelperError) throw error; return { installed: false, version: null, status: "error", auth: { status: "unknown" }, models: [], checkedAt, message: "Cursor SDK could not be loaded." }; }
     const key = process.env.CURSOR_API_KEY?.trim();
     if (!key) return { installed: true, version: "1.2.0", status: "warning", auth: { status: "unknown" }, models: [], checkedAt, message: "Cursor sign-in state could not be determined without an API key." };
     try {
