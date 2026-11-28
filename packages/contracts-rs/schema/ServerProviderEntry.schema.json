@@ -126,6 +126,7 @@
         "maxRecommendedHandoffChars": {
           "description": "v1 `NullOr(PositiveInt)`: zero is rejected.",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 1,
           "type": [
             "integer",
@@ -313,6 +314,10 @@
               "type": "string"
             },
             "url": {
+              "description": "v1 `SignInUrl`: http(s) only.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
               "type": "string"
             }
           },
@@ -334,6 +339,10 @@
               "type": "string"
             },
             "url": {
+              "description": "v1 `SignInUrl`: http(s) only.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
               "type": "string"
             },
             "userCode": {
@@ -357,7 +366,9 @@
               "type": "string"
             },
             "outputOffset": {
-              "format": "uint32",
+              "description": "v1 non-negative integer, within the safe wire integer range.",
+              "format": "uint64",
+              "maximum": 9007199254740991,
               "minimum": 0,
               "type": [
                 "integer",
@@ -465,6 +476,11 @@
       "description": "v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.",
       "properties": {
         "authorizationUrl": {
+          "default": null,
+          "description": "v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.",
+          "maxLength": 16384,
+          "minLength": 1,
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
           "type": [
             "string",
             "null"

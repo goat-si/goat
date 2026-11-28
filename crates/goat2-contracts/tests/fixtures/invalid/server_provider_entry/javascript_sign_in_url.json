@@ -1,0 +1,185 @@
+{
+  "instanceId": "codex",
+  "driver": "codex",
+  "enabled": true,
+  "capabilities": {
+    "approvals": {
+      "approvalCallbacksAreLiveOnly": true,
+      "approvalsCanOriginateFromSubagents": true,
+      "approvalsHaveNativeRequestIds": true,
+      "supportsApplyPatchApproval": true,
+      "supportsCommandApproval": true,
+      "supportsFileChangeApproval": true,
+      "supportsFileReadApproval": false
+    },
+    "checkpointing": {
+      "appCanCheckpointFilesystem": true,
+      "providerCanReadConversationSnapshot": true,
+      "providerCanRollbackConversation": true,
+      "providerRollbackReturnsSnapshot": false,
+      "supportsNestedCheckpointScopes": false
+    },
+    "context": {
+      "acceptsDeveloperContext": true,
+      "acceptsSyntheticUserContext": true,
+      "acceptsSystemContext": false,
+      "canConsumeHandoffSummaries": true,
+      "canGenerateSummaries": true,
+      "maxRecommendedHandoffChars": null,
+      "supportsDeltaHandoff": true,
+      "supportsFullThreadHandoff": true
+    },
+    "identity": {
+      "nativeItemIds": "strong",
+      "nativeRequestIds": "strong",
+      "nativeThreadIds": "strong",
+      "nativeTurnIds": "strong"
+    },
+    "planning": {
+      "emitsPlanUpdated": true,
+      "emitsProposedPlan": true,
+      "emitsTodoList": true,
+      "planDeltasHaveItemIds": true,
+      "supportsStructuredQuestions": true
+    },
+    "runtimePolicy": {
+      "enforcement": "client-boundary"
+    },
+    "sessions": {
+      "executionLocation": "local",
+      "followUp": {
+        "supported": true,
+        "reason": "available"
+      },
+      "pendingRequestsSurviveRestart": false,
+      "sourceRestriction": "published-ref",
+      "supportsModelSwitchInSession": true,
+      "supportsMultipleProviderThreadsPerSession": false,
+      "supportsProviderSwitchingViaHandoff": false,
+      "supportsRuntimeModeSwitchInSession": true,
+      "ownsProcess": true
+    },
+    "streaming": {
+      "emitsMessageCompleted": true,
+      "streamsAssistantText": true,
+      "streamsPlanText": true,
+      "streamsReasoning": true,
+      "streamsToolOutput": true
+    },
+    "subagents": {
+      "canCloseSubagents": true,
+      "canForkSubagentThread": false,
+      "canWaitForSubagents": true,
+      "emitsSubagentLifecycle": true,
+      "exposesSubagentThreadIds": true,
+      "supportsSubagents": true
+    },
+    "threads": {
+      "canCreateEmptyThread": true,
+      "canForkFromSubagentThread": false,
+      "canForkFromTurn": false,
+      "canForkThread": true,
+      "canReadThreadSnapshot": true,
+      "canRollbackThread": true,
+      "exposesNativeThreadId": true,
+      "canForkWhileSourceRunning": true,
+      "forkHonorsTargetCwd": true
+    },
+    "tools": {
+      "emitsToolCompleted": true,
+      "emitsToolOutput": true,
+      "emitsToolStarted": true,
+      "exposesToolItemIds": true,
+      "supportsDynamicToolCallbacks": true,
+      "supportsMcpTools": true
+    },
+    "turns": {
+      "emitsTurnCompleted": true,
+      "emitsTurnStarted": true,
+      "exposesNativeTurnId": true,
+      "supportsActiveSteering": true,
+      "supportsInterrupt": true,
+      "supportsQueuedMessages": true,
+      "supportsSteeringByInterruptRestart": true,
+      "terminalStatusQuality": "strong",
+      "supportsNativeGoals": true,
+      "supportsNativeResume": true,
+      "activeSteeringInterruptsTools": true,
+      "activeSteeringAcceptsAttachments": true,
+      "activeSteeringDuringCompaction": true
+    },
+    "memory": {
+      "snapshot": true,
+      "mcp": true,
+      "resolveMemoryConflict": true,
+      "generateMemorySummary": true
+    }
+  },
+  "probe": {
+    "installed": true,
+    "version": "2.1.4",
+    "cli": "present",
+    "binaryPath": "/opt/homebrew/bin/claude",
+    "status": "ready",
+    "auth": {
+      "status": "authenticated",
+      "type": "subscription",
+      "label": "Claude Max",
+      "email": "user@example.com",
+      "canLogout": true
+    },
+    "models": [
+      {
+        "slug": "claude-opus-5-5",
+        "name": "Claude Opus 5.5",
+        "shortName": "Opus 5.5",
+        "isCustom": false,
+        "isDefault": true,
+        "capabilities": {
+          "optionDescriptors": [
+            {
+              "type": "select",
+              "id": "effort",
+              "label": "Effort",
+              "options": [
+                {
+                  "id": "high",
+                  "label": "High",
+                  "isDefault": true
+                },
+                {
+                  "id": "max",
+                  "label": "Max"
+                }
+              ],
+              "currentValue": "high",
+              "role": "reasoning"
+            },
+            {
+              "type": "boolean",
+              "id": "fastMode",
+              "label": "Fast mode",
+              "currentValue": false
+            }
+          ]
+        }
+      },
+      {
+        "slug": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "badge": "new",
+        "isCustom": false,
+        "capabilities": null
+      }
+    ],
+    "checkedAt": "2026-11-28T13:00:00Z"
+  },
+  "authFlow": {
+    "instanceId": "codex",
+    "phase": "waiting",
+    "flowId": "flow-1",
+    "authorizationUrl": "javascript:alert(1)",
+    "expiresAt": null,
+    "message": null
+  }
+}

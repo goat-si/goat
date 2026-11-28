@@ -94,6 +94,7 @@
         "maxRecommendedHandoffChars": {
           "description": "v1 `NullOr(PositiveInt)`: zero is rejected.",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 1,
           "type": [
             "integer",
