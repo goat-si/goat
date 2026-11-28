@@ -14,7 +14,8 @@ import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import { readProviderReplayTranscript, materializeReplayTranscriptWorkspace } from "@goat/provider-testing/replayTranscript";
 import { pathToFileURL } from "node:url";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CodexOrchestratorReplayHarness } from "../../Adapters/CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "../../Adapters/CodexAdapterV2.testkit.ts";
 import { withThreadNames, withThreadSetupReads } from "../../Adapters/CodexReplay.testkit.ts";
@@ -30,10 +31,19 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const scenario = JSON.parse(readFileSync(join(dir, "scenario.json"), "utf8"));
   // Use the runtime policy v1 registers for the Codex fixture this scenario's transcript was
   // recorded from (fixtures/index.ts), rather than choosing one per scenario.
+  // The runner is copied to apps/server/src/orchestration-v2/testkit/<dir>/, six levels below
+  // the export root. Match the normalized repo-relative path. At least one fixture must match,
+  // and every match must register the same policy (v1 reuses some transcripts across fixtures).
+  const v1Root = join(dirname(fileURLToPath(import.meta.url)), "../../../../../..");
   const source = scenario.streams.codex.provenance?.source as string | undefined;
-  const fixtureProvider = ORCHESTRATOR_REPLAY_FIXTURES.flatMap((f) => f.providers).find((p) =>
-    p.driver === "codex" && source !== undefined && p.transcriptFile.pathname.endsWith(`/${source}`));
-  const runtimePolicy = fixtureProvider?.runtimePolicyOverride ?? {};
+  if (source === undefined) throw new Error("scenario has no codex provenance source");
+  const wanted = posix.normalize(source);
+  const fixtureProviders = ORCHESTRATOR_REPLAY_FIXTURES.flatMap((f) => f.providers).filter((p) =>
+    p.driver === "codex" && relative(v1Root, fileURLToPath(p.transcriptFile)).split("\\").join("/") === wanted);
+  if (fixtureProviders.length === 0) throw new Error(`no v1 codex fixture registers ${wanted}`);
+  const policies = new Set(fixtureProviders.map((p) => JSON.stringify(p.runtimePolicyOverride ?? {})));
+  if (policies.size !== 1) throw new Error(`v1 fixtures registering ${wanted} disagree on runtime policy`);
+  const runtimePolicy = fixtureProviders[0].runtimePolicyOverride ?? {};
   const threadAliases = new Set(scenario.steps.map((s: any) => s.thread).filter(Boolean));
   if (threadAliases.size !== 1) throw new Error(`single-thread runner got threads ${[...threadAliases]}`);
   const sends = scenario.steps.filter((s: any) => s.do === "send");
@@ -52,20 +62,26 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     if (index < 0 || !["start", "queue"].includes(sends[index].mode)) throw new Error(`run alias ${alias} not created by a start/queue send`);
     return index + 1;
   };
-  // Fixture steps carry only the sends; each await is re-inserted after the dispatch of
-  // the send that precedes it, so it keeps its position and its own run.
+  // Each await is re-inserted right after the dispatch of the send it directly follows, so it
+  // keeps its position and its own run. An await after any other step kind (queue edit/cancel,
+  // interrupt, ...) has no supported placement and is refused instead of being dropped.
   const awaitsAfterSend = new Map<number, any[]>();
   const fixtureSteps: any[] = [];
+  let sendCount = 0;
+  let previous: string | undefined;
   for (const s of scenario.steps) {
-    if (s.do === "send" && s.mode === "start") fixtureSteps.push({type: "message", text: s.text});
-    else if (s.do === "send" && s.mode === "queue") fixtureSteps.push({type: "queue_message", text: s.text});
+    if (s.do === "send" && s.mode === "start") { fixtureSteps.push({type: "message", text: s.text}); sendCount += 1; }
+    else if (s.do === "send" && s.mode === "queue") { fixtureSteps.push({type: "queue_message", text: s.text}); sendCount += 1; }
     else if (s.do === "queue_edit" || s.do === "queue_cancel") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
     else if (s.do === "interrupt" && s.run === "r1") fixtureSteps.push({type: "interrupt", targetRunIndex: 1});
-    else if (s.do === "await" && s.until === "run_status" && fixtureSteps.length > 0) {
-      const list = awaitsAfterSend.get(fixtureSteps.length - 1) ?? [];
+    else if (s.do === "await" && s.until === "run_status") {
+      if (previous !== "send") throw new Error(`await ${s.id} after a ${previous ?? "start of scenario"} step is unsupported`);
+      const list = awaitsAfterSend.get(sendCount - 1) ?? [];
       list.push(s);
-      awaitsAfterSend.set(fixtureSteps.length - 1, list);
+      awaitsAfterSend.set(sendCount - 1, list);
+      continue;
     } else throw new Error(`unsupported scenario step: ${JSON.stringify(s)}`);
+    previous = s.do;
   }
   const workspace = yield* checkpointWorkspace(scenario.name);
   const raw = yield* readProviderReplayTranscript(pathToFileURL(join(dir, scenario.streams.codex.transcript)));
