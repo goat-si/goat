@@ -526,14 +526,24 @@ impl SubagentTracker {
                 }
             }
             "agent_message_chunk" | "agent_message" => {
-                if turn.is_none() {
-                    return;
-                }
                 let displayable = match kind {
                     "agent_message_chunk" => content_text(update.get("content")).is_some(),
                     _ => update.get("content").is_some_and(|c| !c.is_null()),
                 };
                 if !displayable {
+                    return;
+                }
+                // v1 `projectNativeChildFrame` (adapter.ts:2298-2333): after its turn, a child
+                // still projects into the subagent its completed turn left running (carryover),
+                // so its later end carries the reply (final review finding 8). Children of an
+                // interrupted turn the agent kept running (quiet) and unclaimed children are not
+                // followed outside a turn.
+                if turn.is_none()
+                    && !index.is_some_and(|i| {
+                        let subagent = &self.subagents[i];
+                        !is_terminal(subagent.status) && !subagent.quiet
+                    })
+                {
                     return;
                 }
                 match index {
