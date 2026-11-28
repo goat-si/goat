@@ -15,9 +15,9 @@ use goat2_contracts::{
     TurnItem,
 };
 use goat2_engine_api::{
-    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnOutcome, TurnSettings,
-    TurnStartResult,
+    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession, LaunchSpec,
+    ProviderTarget, RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnOutcome,
+    TurnSettings, TurnStartResult,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -187,13 +187,7 @@ impl HelperFactory {
                 "firstMessagePreamble": instructions.first_message_preamble,
             })
         });
-        let launch = spec.launch.as_ref().map(|launch| {
-            json!({
-                "binary": launch.binary.as_ref().map(|path| path.to_string_lossy().into_owned()),
-                "args": launch.args,
-                "env": launch.env,
-            })
-        });
+        let launch = launch_json(spec.launch());
         json!({
             "protocol": PROTOCOL_VERSION,
             "engine": self.engine.wire_name(),
@@ -276,12 +270,31 @@ impl EngineFactory for HelperFactory {
     /// model checks) and exits. A `capabilities` field next to the probe result replaces the
     /// static capabilities until the next successful probe says otherwise.
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
+        self.probe_with(None).await
+    }
+
+    /// Probe one provider instance with its launch settings (binary, args, env), so a
+    /// non-default instance's install and sign-in are what it reports (the host probes every
+    /// instance this way). The helper engines read them from the probe's `launch` field.
+    async fn probe_instance(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<ProviderProbeResult, EngineError> {
+        self.probe_with(target.launch.as_ref()).await
+    }
+}
+
+impl HelperFactory {
+    async fn probe_with(
+        &self,
+        launch: Option<&LaunchSpec>,
+    ) -> Result<ProviderProbeResult, EngineError> {
         let (mut process, client, _inbound) = self.spawn(None)?;
         let params = json!({
             "protocol": PROTOCOL_VERSION,
             "engine": self.engine.wire_name(),
             "cwd": Value::Null,
-            "launch": Value::Null,
+            "launch": launch_json(launch),
         });
         let answer = client.call("probe", params, PROBE_TIMEOUT).await;
         let _ = client.call("shutdown", json!({}), SHUTDOWN_TIMEOUT).await;
@@ -490,6 +503,18 @@ fn turn_start_result(answer: Result<Value, CallError>) -> TurnStartResult {
         Err(error) => TurnStartResult::Unknown {
             reason: error.to_string(),
         },
+    }
+}
+
+/// The `launch` field the helper reads (InitializeParams and ProbeParams): null for the default.
+fn launch_json(launch: Option<&LaunchSpec>) -> Value {
+    match launch {
+        Some(launch) => json!({
+            "binary": launch.binary.as_ref().map(|path| path.to_string_lossy().into_owned()),
+            "args": launch.args,
+            "env": launch.env,
+        }),
+        None => Value::Null,
     }
 }
 

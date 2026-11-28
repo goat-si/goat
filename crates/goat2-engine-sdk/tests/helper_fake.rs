@@ -47,8 +47,18 @@ fn spec(thread: &str) -> SessionSpec {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     }
+}
+
+/// The default "cursor" instance with these launch settings (no private home).
+fn target(launch: goat2_engine_api::LaunchSpec) -> Option<goat2_engine_api::ProviderTarget> {
+    Some(goat2_engine_api::ProviderTarget {
+        instance_id: ProviderInstanceId::from("cursor"),
+        launch: Some(launch),
+        home: None,
+        shared_home: None,
+    })
 }
 
 fn settings() -> TurnSettings {
@@ -263,7 +273,7 @@ async fn set_config_applies_or_reports_unsupported() {
     handle.session.shutdown().await;
 
     let mut fixed = spec("thread-config-fixed");
-    fixed.launch = Some(goat2_engine_api::LaunchSpec {
+    fixed.instance = target(goat2_engine_api::LaunchSpec {
         binary: None,
         args: Vec::new(),
         env: [("GOAT2_FAKE_NO_SET_CONFIG".to_string(), "1".to_string())].into(),
@@ -423,7 +433,7 @@ async fn continuations_and_session_requests_cross_the_helper() {
 #[tokio::test]
 async fn start_failure_and_missing_engine_map_to_engine_errors() {
     let mut failing = spec("thread-fail");
-    failing.launch = Some(goat2_engine_api::LaunchSpec {
+    failing.instance = target(goat2_engine_api::LaunchSpec {
         binary: None,
         args: Vec::new(),
         env: [("GOAT2_FAKE_START_FAIL".to_string(), "1".to_string())].into(),
@@ -620,6 +630,23 @@ async fn probe_reported_capabilities_replace_the_static_ones() {
     let plain = HelperFactory::fake(EngineDriver::Cursor, launch());
     plain.probe().await.expect("probe");
     assert_eq!(plain.capabilities(), fixed);
+}
+
+/// probe_instance hands the instance's launch settings to the helper's probe; the plain probe
+/// runs with none.
+#[tokio::test]
+async fn probe_instance_runs_with_the_instance_launch_settings() {
+    let factory = HelperFactory::fake(EngineDriver::Cursor, launch());
+    let plain = factory.probe().await.expect("probe");
+    assert_eq!(plain.version.as_deref(), Some("0.0.0-fake"));
+    let instance = target(goat2_engine_api::LaunchSpec {
+        binary: None,
+        args: Vec::new(),
+        env: [("GOAT2_FAKE_PROBE_VERSION".to_string(), "9.9.9".to_string())].into(),
+    })
+    .expect("target");
+    let probed = factory.probe_instance(&instance).await.expect("probe");
+    assert_eq!(probed.version.as_deref(), Some("9.9.9"));
 }
 
 /// A probe that answers status error (v1 OpenCode: version, server or catalog failure) keeps the

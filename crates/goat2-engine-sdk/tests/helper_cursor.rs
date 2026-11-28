@@ -60,7 +60,7 @@ fn setup(thread: &str) -> (HelperFactory, SessionSpec, TurnSettings) {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     };
     let settings = TurnSettings {
         model_selection: model,

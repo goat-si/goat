@@ -12,6 +12,7 @@ use std::{collections::HashSet, path::Path, time::Duration};
 pub(super) async fn probe(
     binary: &Path,
     profile: PiProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<ProviderProbeResult, EngineError> {
     let checked_at = super::events::now();
     let mut command = tokio::process::Command::new(binary);
@@ -25,6 +26,8 @@ pub(super) async fn probe(
             command.env_remove(key);
         }
     }
+    // The instance's own environment (EngineFactory::probe_instance), as its sessions get it.
+    command.envs(env);
     let output = tokio::time::timeout(Duration::from_secs(10), command.output())
         .await
         .map_err(|_| EngineError::Transport("Pi version probe timed out".into()))?;
@@ -67,6 +70,9 @@ pub(super) async fn probe(
     }
     let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     let mut launch = base_launch(binary.to_path_buf(), profile);
+    launch
+        .env_set
+        .extend(env.iter().map(|(k, v)| (k.into(), v.into())));
     launch.args.extend([
         "--mode".into(),
         "rpc".into(),

@@ -47,13 +47,26 @@ fn spec(id: &str) -> SessionSpec {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: Some(LaunchSpec {
-            binary: Some(env!("CARGO_BIN_EXE_goat2-fake-pi").into()),
-            args: vec![],
-            env: Default::default(),
+        instance: Some(goat2_engine_api::ProviderTarget {
+            instance_id: "pi".into(),
+            launch: Some(LaunchSpec {
+                binary: Some(env!("CARGO_BIN_EXE_goat2-fake-pi").into()),
+                args: vec![],
+                env: Default::default(),
+            }),
+            home: None,
+            shared_home: None,
         }),
     }
 }
+/// The launch settings of a spec built by [spec] (always present there).
+fn launch_mut(spec: &mut SessionSpec) -> &mut LaunchSpec {
+    spec.instance
+        .as_mut()
+        .and_then(|target| target.launch.as_mut())
+        .expect("spec() sets launch settings")
+}
+
 fn input(text: &str) -> Vec<EngineInput> {
     vec![EngineInput {
         input_id: InputId::from("input"),
@@ -885,23 +898,17 @@ async fn resume_uses_persisted_session_path() {
 async fn reserved_args_rejected_and_mcp_extension_materialized() {
     for arg in ["--mode", "--session=bad", "--no-session"] {
         let mut s = spec("pi-reserved");
-        s.launch.as_mut().unwrap().args.push(arg.into());
+        launch_mut(&mut s).args.push(arg.into());
         assert!(
             factory(PiProfile::Pi).start(s).await.is_err(),
             "accepted {arg}"
         );
     }
     let mut config = spec("pi-mcp");
-    config
-        .launch
-        .as_mut()
-        .unwrap()
+    launch_mut(&mut config)
         .env
         .insert("GOAT_MCP_URL".into(), "http://wrong.invalid".into());
-    config
-        .launch
-        .as_mut()
-        .unwrap()
+    launch_mut(&mut config)
         .env
         .insert("GOAT_MCP_BEARER_TOKEN".into(), "wrong".into());
     let mut h = factory(PiProfile::Pi)
@@ -948,16 +955,10 @@ fn fake_version_probe() {
 #[tokio::test]
 async fn omo_profile_supplies_its_rpc_environment() {
     let mut config = spec("omo-env");
-    config
-        .launch
-        .as_mut()
-        .unwrap()
+    launch_mut(&mut config)
         .env
         .insert("SENPI_RPC_HOST_IDLE_EXIT_MS".into(), "999".into());
-    config
-        .launch
-        .as_mut()
-        .unwrap()
+    launch_mut(&mut config)
         .env
         .insert("SENPI_RPC_HOST_EMPTY_EXIT_MS".into(), "999".into());
     let mut h = factory(PiProfile::Omo)
@@ -980,6 +981,27 @@ async fn factory_probe_uses_fake_binary() {
     assert!(probe.installed);
     assert_eq!(probe.version.as_deref(), Some("0.0.0-fake"));
     assert!(!probe.models.is_empty());
+}
+
+/// probe_instance uses the instance's own binary: a factory whose default binary is missing still
+/// reports the instance's install.
+#[tokio::test]
+async fn probe_instance_uses_the_instance_binary() {
+    let factory = PiFactory::new(PiProfile::Pi).with_binary("/nonexistent/goat2-test/pi");
+    assert!(!factory.probe().await.expect("probe").installed);
+    let instance = goat2_engine_api::ProviderTarget {
+        instance_id: "pi_work".into(),
+        launch: Some(LaunchSpec {
+            binary: Some(env!("CARGO_BIN_EXE_goat2-fake-pi").into()),
+            args: vec![],
+            env: Default::default(),
+        }),
+        home: None,
+        shared_home: None,
+    };
+    let probe = factory.probe_instance(&instance).await.expect("probe");
+    assert!(probe.installed);
+    assert_eq!(probe.version.as_deref(), Some("0.0.0-fake"));
 }
 
 /// A missing CLI answers at once (installed: false, cli missing) for both profiles. The host's

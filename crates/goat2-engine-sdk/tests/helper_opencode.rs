@@ -41,7 +41,7 @@ async fn opencode_turn_projects_valid_items() {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     };
     let mut handle = factory.start(spec).await.expect("session starts");
     let input = vec![EngineInput {
@@ -124,7 +124,7 @@ async fn compaction_item_crosses_helper_before_turn_completion() {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     };
     let mut handle = factory.start(spec).await.expect("session starts");
     let result = handle

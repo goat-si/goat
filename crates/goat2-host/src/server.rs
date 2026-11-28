@@ -489,9 +489,26 @@ mod tests {
             exit_on_stdin_close: false,
         };
         let real = super::built_in_factories(&cfg(EngineChoice::Codex), dir.path());
+        // Codex, Claude, the ACP engines and the SDK engines that need no helper (Pi, OmO) always register;
+        // Cursor, OpenCode and Muse only when GOAT2_ENGINE_HELPER_ENTRY is set (engine::sdk tests
+        // cover both cases without reading this process's environment).
+        let helper = std::env::var_os("GOAT2_ENGINE_HELPER_ENTRY").is_some();
+        let mut expected = vec![
+            "antigravity",
+            "claudeAgent",
+            "codex",
+            "fx",
+            "grok",
+            "omo",
+            "pi",
+        ];
+        if helper {
+            expected.extend(["cursor", "muse", "opencode"]);
+            expected.sort();
+        }
         assert_eq!(
-            real.keys().collect::<Vec<_>>(),
-            vec!["antigravity", "claudeAgent", "codex", "fx", "grok"]
+            real.keys().map(String::as_str).collect::<Vec<_>>(),
+            expected
         );
         assert_eq!(
             real["claudeAgent"].capabilities(),

@@ -12,7 +12,8 @@ use goat2_contracts::{
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnSettings, TurnStartResult,
+    ProviderTarget, RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnSettings,
+    TurnStartResult,
 };
 use serde_json::{Value, json};
 use std::{
@@ -886,21 +887,17 @@ pub(super) fn base_launch(binary: PathBuf, profile: PiProfile) -> Launch {
 impl EngineFactory for PiFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
         let args = resolve_launch_args(
-            spec.launch
-                .as_ref()
-                .map(|l| l.args.as_slice())
-                .unwrap_or(&[]),
+            spec.launch().map(|l| l.args.as_slice()).unwrap_or(&[]),
             self.profile.name(),
         )
         .map_err(EngineError::StartFailed)?;
         let binary = spec
-            .launch
-            .as_ref()
+            .launch()
             .and_then(|l| l.binary.clone())
             .unwrap_or_else(|| self.binary.clone());
         let mut launch = base_launch(binary, self.profile);
         launch.cwd = Some(PathBuf::from(&spec.engine.cwd));
-        if let Some(config) = &spec.launch {
+        if let Some(config) = spec.launch() {
             launch
                 .env_set
                 .extend(config.env.iter().map(|(k, v)| (k.into(), v.into())));
@@ -1109,7 +1106,21 @@ impl EngineFactory for PiFactory {
         crate::capabilities::for_driver(&self.profile.driver()).expect("Pi capabilities")
     }
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
-        super::probe::probe(&self.binary, self.profile).await
+        super::probe::probe(&self.binary, self.profile, &Default::default()).await
+    }
+
+    /// Probe one provider instance with its own binary and environment (the host probes every
+    /// instance this way), so a non-default instance's install and sign-in are what it reports.
+    async fn probe_instance(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<ProviderProbeResult, EngineError> {
+        let launch = target.launch.as_ref();
+        let binary = launch
+            .and_then(|l| l.binary.clone())
+            .unwrap_or_else(|| self.binary.clone());
+        let env = launch.map(|l| l.env.clone()).unwrap_or_default();
+        super::probe::probe(&binary, self.profile, &env).await
     }
 }
 #[async_trait]

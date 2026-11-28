@@ -259,7 +259,7 @@ class FakeSession implements EngineSession {
 }
 
 export const fakeEngine: EngineModule = {
-  async probe(_params, host) {
+  async probe(params, host) {
     // GOAT2_FAKE_PROBE_FILE names a JSON file {status?, capabilities?} read at each probe, so one
     // factory can see different answers; GOAT2_FAKE_PROBE_CAPABILITIES is a fixed capabilities JSON.
     const file = process.env["GOAT2_FAKE_PROBE_FILE"];
@@ -268,7 +268,8 @@ export const fakeEngine: EngineModule = {
     const capabilities = scripted.capabilities ?? (fixed === undefined ? undefined : JSON.parse(fixed));
     return {
       installed: true,
-      version: "0.0.0-fake",
+      // An instance probe (EngineFactory::probe_instance) passes its launch settings.
+      version: params.launch?.env?.["GOAT2_FAKE_PROBE_VERSION"] ?? "0.0.0-fake",
       status: (scripted.status ?? "ready") as "ready",
       auth: { status: "authenticated" },
       models: [{ slug: "fake-model", name: "Fake", isCustom: false, capabilities: null }],
