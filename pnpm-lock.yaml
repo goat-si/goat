@@ -238,6 +238,9 @@ importers:
       '@base-ui/react':
         specifier: 1.9.0
         version: 1.9.0(@types/react@19.3.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@effect/atom-react':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.3)(react@19.3.0)(scheduler@0.28.0)
       '@goat2/bot-face':
         specifier: workspace:*
         version: link:../../packages/bot-face
@@ -416,6 +419,13 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
+
+  '@effect/atom-react@4.1.2':
+    resolution: {integrity: sha512-XRAm4lks2kzNFQIz9QTGKR02CaDTR9VJNRXDjDAR8OzM15ybrK4YkB7OlFZ9U+hxXe3DXJZx7RU1/xI2Em2PGQ==}
+    peerDependencies:
+      effect: ^4.1.2
+      react: '>=19.0.0 <20.0.0'
+      scheduler: '>=0.25.0 <0.29.0'
 
   '@electron-internal/extract-zip@1.0.10':
     resolution: {integrity: sha512-3ZpfrVbqRKZ1/K0BjUfziapy3aZQzDeJX70SbsO8tc+gGlzJYnFAgZGE8LtxMV19RsoF8+Uwvd04FtIiMD4KyA==}
@@ -1359,6 +1369,12 @@ snapshots:
       use-sync-external-store: 1.7.0(react@19.3.0)
     optionalDependencies:
       '@types/react': 19.3.3
+
+  '@effect/atom-react@4.1.2(effect@4.1.3)(react@19.3.0)(scheduler@0.28.0)':
+    dependencies:
+      effect: 4.1.3
+      react: 19.3.0
+      scheduler: 0.28.0
 
   '@electron-internal/extract-zip@1.0.10': {}
 

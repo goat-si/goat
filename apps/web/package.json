@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
+    "@effect/atom-react": "4.1.2",
     "@goat2/bot-face": "workspace:*",
     "@goat2/contracts": "workspace:*",
     "@goat2/contracts-rs": "workspace:*",

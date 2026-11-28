@@ -1,0 +1,35 @@
+import { useSyncExternalStore } from "react";
+
+import {
+  formatRelativeElapsed,
+  msUntilRelativeTimeChange,
+  relativeTimeElapsedMs,
+  type RelativeTimeState,
+} from "../timestampFormat";
+
+export function useRelativeElapsedMs(isoDate: string | null): number | null {
+  const subscribe = (onChange: () => void) => {
+    if (isoDate === null) return () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      const delayMs = msUntilRelativeTimeChange(isoDate);
+      if (delayMs === null) return;
+      timer = setTimeout(() => {
+        onChange();
+        schedule();
+      }, delayMs);
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  };
+  const getSnapshot = () => (isoDate === null ? null : relativeTimeElapsedMs(isoDate));
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function useRelativeTimeState(isoDate: string | null): RelativeTimeState {
+  const elapsedMs = useRelativeElapsedMs(isoDate);
+
+  if (isoDate === null) return { status: "missing" };
+  if (elapsedMs === null) return { status: "invalid" };
+  return { status: "relative", ...formatRelativeElapsed(elapsedMs) };
+}

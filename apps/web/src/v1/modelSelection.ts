@@ -1,0 +1,452 @@
+import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
+import {
+  DEFAULT_TEXT_GENERATION_MODEL,
+  defaultInstanceIdForDriver,
+  type ModelSelection,
+  type ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerSettings,
+} from "@goat/contracts";
+import {
+  type CustomModelDefinition,
+  createModelSelection,
+  normalizeCustomModelSlug,
+  readCustomModelEntries,
+  resolveSelectableModel,
+} from "@goat/shared/model";
+import { getComposerProviderState } from "./components/chat/composerProviderState";
+import { type ClientSettings, UnifiedSettings } from "@goat/contracts/settings";
+import { resolveModelPreferences, resolveTextGenerationRoute } from "@goat/shared/serverSettings";
+import * as Arr from "effect/Array";
+import * as Equal from "effect/Equal";
+import * as Result from "effect/Result";
+import {
+  getDefaultServerModel,
+  getProviderModels,
+  hasRuntimeModelCatalog,
+  isRuntimeModelDefaultAlias,
+  resolveSelectableProvider,
+} from "./providerModels";
+import { ModelEsque } from "./components/chat/providerIconUtils";
+import {
+  type ProviderInstanceEntry,
+  deriveProviderInstanceEntries,
+  applyProviderInstanceSettings,
+  sortProviderInstanceEntries,
+  resolveSelectableProviderInstanceEntry,
+  getDefaultProviderInstanceModel,
+  NO_PROVIDER_MODEL_SELECTION,
+  resolveDefaultProviderModelSelection,
+} from "./providerInstances";
+import { sortModelsForProviderInstance } from "./modelOrdering";
+
+export const MAX_CUSTOM_MODEL_LENGTH = 256;
+const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
+
+// Legacy per-driver buckets would leak custom-instance models into stock instances.
+export function readInstanceCustomModels(
+  settings: UnifiedSettings,
+  instanceId: ProviderInstanceId,
+  driverKind: ProviderDriverKind,
+): ReadonlyArray<CustomModelDefinition> {
+  if (driverKind === "antigravity") return [];
+  const instance = settings.providerInstances?.[instanceId];
+  const config = instance?.config;
+  if (config !== null && typeof config === "object") {
+    const value = (config as Record<string, unknown>).customModels;
+    if (Array.isArray(value)) {
+      return readCustomModelEntries(value);
+    }
+  }
+  return [];
+}
+
+export interface AppModelOption {
+  slug: string;
+  name: string;
+  shortName?: string;
+  subProvider?: string;
+  aliases?: ReadonlyArray<string>;
+  badge?: "new";
+  isCustom: boolean;
+  isDefault?: boolean;
+  isLegacy?: boolean;
+  isUnavailable?: boolean;
+}
+
+function appendUnavailableDynamicModelSelection(
+  options: AppModelOption[],
+  rawModels: ReadonlyArray<ServerProvider["models"][number]>,
+  provider: ProviderDriverKind,
+  selectedModel: string | null | undefined,
+  hiddenModels: ReadonlyArray<string>,
+): AppModelOption[] {
+  if (!hasRuntimeModelCatalog(provider)) {
+    return options;
+  }
+  const slug = normalizeCustomModelSlug(selectedModel);
+  if (!slug) return options;
+  if (isRuntimeModelDefaultAlias(provider, slug)) return options;
+
+  if (resolveSelectableModel(provider, slug, rawModels) !== null) return options;
+  if (hiddenModels.includes(slug)) return options;
+  if (options.some((option) => option.slug === slug)) return options;
+
+  return [...options, { slug, name: slug, isCustom: false, isUnavailable: true }];
+}
+
+function toAppModelOption(
+  model: ServerProvider["models"][number],
+  driver: ProviderDriverKind,
+): AppModelOption {
+  const option: AppModelOption = {
+    slug: model.slug,
+    name: model.name,
+    isCustom: model.isCustom,
+  };
+  const shortName = resolveModelShortName(model, driver);
+  if (shortName) option.shortName = shortName;
+  if (model.subProvider) option.subProvider = model.subProvider;
+  if (model.aliases) option.aliases = model.aliases;
+  if (model.badge) option.badge = model.badge;
+  if (model.isDefault) option.isDefault = true;
+  if (model.isLegacy) option.isLegacy = true;
+  return option;
+}
+
+function readInstanceModelPreferences(
+  settings: UnifiedSettings,
+  instanceId: ProviderInstanceId,
+): { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> } {
+  return (
+    settings.providerModelPreferences?.[instanceId] ?? {
+      hiddenModels: [],
+      modelOrder: [],
+    }
+  );
+}
+
+function applyInstanceModelPreferences(
+  options: ReadonlyArray<AppModelOption>,
+  preferences: {
+    readonly hiddenModels: ReadonlyArray<string>;
+    readonly modelOrder: ReadonlyArray<string>;
+  },
+): AppModelOption[] {
+  const hiddenModels = new Set(preferences.hiddenModels);
+  return sortModelsForProviderInstance(
+    options.filter((option) => option.isCustom || !hiddenModels.has(option.slug)),
+    { modelOrder: preferences.modelOrder },
+  );
+}
+
+function normalizeCustomModelEntries(
+  models: ReadonlyArray<CustomModelDefinition>,
+  builtInModelSlugs: ReadonlySet<string>,
+): CustomModelDefinition[] {
+  const normalizedModels: CustomModelDefinition[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of models) {
+    if (
+      candidate.slug.length > MAX_CUSTOM_MODEL_LENGTH ||
+      builtInModelSlugs.has(candidate.slug) ||
+      seen.has(candidate.slug)
+    ) {
+      continue;
+    }
+
+    seen.add(candidate.slug);
+    normalizedModels.push(candidate);
+  }
+
+  return normalizedModels;
+}
+
+function getAppModelOptions(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  provider: ProviderDriverKind,
+  selectedModel?: string | null,
+): AppModelOption[] {
+  const rawModels = getProviderModels(providers, provider);
+  // Server custom-model snapshots can lag removals; rebuild custom rows from settings.
+  const options: AppModelOption[] = rawModels
+    .filter((model) => !model.isCustom)
+    .map((model) => toAppModelOption(model, provider));
+  const seen = new Set(options.map((option) => option.slug));
+  const builtInModelSlugs = new Set(
+    Arr.filterMap(getProviderModels(providers, provider), (model) =>
+      model.isCustom ? Result.failVoid : Result.succeed(model.slug),
+    ),
+  );
+
+  const defaultInstanceId = defaultInstanceIdForDriver(provider);
+  const customModels = readInstanceCustomModels(settings, defaultInstanceId, provider);
+  for (const entry of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
+    if (seen.has(entry.slug)) {
+      continue;
+    }
+
+    seen.add(entry.slug);
+    const shortName = resolveModelShortName(entry, provider);
+    options.push({ ...entry, isCustom: true, ...(shortName ? { shortName } : {}) });
+  }
+
+  const preferences = readInstanceModelPreferences(settings, defaultInstanceId);
+  return appendUnavailableDynamicModelSelection(
+    applyInstanceModelPreferences(options, preferences),
+    rawModels,
+    provider,
+    selectedModel,
+    preferences.hiddenModels,
+  );
+}
+
+export function getAppModelOptionsForInstance(
+  settings: UnifiedSettings,
+  entry: ProviderInstanceEntry,
+  selectedModel?: string | null,
+): AppModelOption[] {
+  const options: AppModelOption[] = entry.models
+    .filter((model) => !model.isCustom)
+    .map((model) => toAppModelOption(model, entry.driverKind));
+  const seen = new Set(options.map((option) => option.slug));
+  const builtInModelSlugs = new Set(
+    Arr.filterMap(entry.models, (model) =>
+      model.isCustom ? Result.failVoid : Result.succeed(model.slug),
+    ),
+  );
+
+  const customModels = readInstanceCustomModels(settings, entry.instanceId, entry.driverKind);
+  for (const custom of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
+    if (seen.has(custom.slug)) {
+      continue;
+    }
+
+    seen.add(custom.slug);
+    const shortName = resolveModelShortName(custom, entry.driverKind);
+    options.push({ ...custom, isCustom: true, ...(shortName ? { shortName } : {}) });
+  }
+
+  const preferences = readInstanceModelPreferences(settings, entry.instanceId);
+  return appendUnavailableDynamicModelSelection(
+    applyInstanceModelPreferences(options, preferences),
+    entry.models,
+    entry.driverKind,
+    selectedModel,
+    preferences.hiddenModels,
+  );
+}
+
+export function resolveAppModelSelection(
+  provider: ProviderDriverKind,
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  selectedModel: string | null | undefined,
+): string {
+  const resolvedProvider = resolveSelectableProvider(providers, provider);
+  const options = getAppModelOptions(settings, providers, resolvedProvider, selectedModel);
+  return (
+    resolveSelectableModel(resolvedProvider, selectedModel, options) ??
+    getDefaultServerModel(providers, resolvedProvider)
+  );
+}
+
+export function resolveAppModelSelectionForInstance(
+  instanceId: ProviderInstanceId,
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  selectedModel: string | null | undefined,
+  resolutionOptions?: { readonly preserveUnavailableSelection?: boolean },
+): string | null {
+  const entry = deriveProviderInstanceEntries(providers).find(
+    (candidate) => candidate.instanceId === instanceId,
+  );
+  if (!entry) return null;
+  const options = getAppModelOptionsForInstance(
+    settings,
+    entry,
+    resolutionOptions?.preserveUnavailableSelection ? selectedModel : null,
+  );
+  const resolvedSelection = resolveSelectableModel(entry.driverKind, selectedModel, options);
+  if (resolvedSelection) {
+    return resolvedSelection;
+  }
+  if (resolutionOptions?.preserveUnavailableSelection && hasRuntimeModelCatalog(entry.driverKind)) {
+    const unavailableSelection = normalizeCustomModelSlug(selectedModel);
+    const hiddenModels = readInstanceModelPreferences(settings, entry.instanceId).hiddenModels;
+    if (
+      unavailableSelection &&
+      !hiddenModels.includes(unavailableSelection) &&
+      resolveSelectableModel(entry.driverKind, selectedModel, entry.models) === null &&
+      !isRuntimeModelDefaultAlias(entry.driverKind, unavailableSelection)
+    ) {
+      return unavailableSelection;
+    }
+  }
+  return options.find((option) => option.isDefault)?.slug ?? options[0]?.slug ?? null;
+}
+
+// New drafts carry the stored selection; capabilities resolve its raw options later.
+export function resolveEffectiveDefaultModelSelection(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  selection: ModelSelection,
+): ModelSelection {
+  const model = resolveAppModelSelectionForInstance(
+    selection.instanceId,
+    settings,
+    providers,
+    selection.model,
+    { preserveUnavailableSelection: true },
+  );
+  return model === null || model === selection.model ? selection : { ...selection, model };
+}
+
+export function resolveProjectDefaultProviderModelSelection(
+  providers: ReadonlyArray<ServerProvider>,
+  settings: ServerSettings,
+  projectId: ProjectId | null,
+): ModelSelection | null {
+  const entries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, projectId),
+  );
+  const entry =
+    resolveSelectableProviderInstanceEntry(
+      entries.filter((candidate) => candidate.driverKind === entries[0]?.driverKind),
+      undefined,
+    ) ?? resolveSelectableProviderInstanceEntry(entries, undefined);
+  const model = entry ? getDefaultProviderInstanceModel(providers, entry.instanceId) : undefined;
+  return entry && model ? { instanceId: entry.instanceId, model } : null;
+}
+
+export function defaultModelSelectionsAreMixed(
+  clientSettings: ClientSettings,
+  targets: ReadonlyArray<{
+    projectId: ProjectId | null;
+    settings: ServerSettings;
+    providers: ReadonlyArray<ServerProvider>;
+  }>,
+): boolean {
+  const selections = targets.map(({ projectId, settings, providers }) => {
+    const stored = settings.defaultModelSelection;
+    const selection =
+      stored === null
+        ? resolveProjectDefaultProviderModelSelection(providers, settings, projectId)
+        : resolveDefaultProviderModelSelection(providers, stored);
+    return {
+      stored,
+      effective: selection
+        ? resolveEffectiveDefaultModelSelection(
+            {
+              ...clientSettings,
+              ...settings,
+              ...resolveModelPreferences(settings, clientSettings),
+            },
+            providers,
+            selection,
+          )
+        : null,
+    };
+  });
+  return selections.some((selection) => !Equal.equals(selection, selections[0]));
+}
+
+export function getCustomModelOptionsByInstance(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  selectedInstanceId?: ProviderInstanceId | null,
+  selectedModel?: string | null,
+): ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>> {
+  const out = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>();
+  for (const entry of deriveProviderInstanceEntries(providers)) {
+    out.set(
+      entry.instanceId,
+      getAppModelOptionsForInstance(
+        settings,
+        entry,
+        entry.instanceId === selectedInstanceId ? selectedModel : null,
+      ),
+    );
+  }
+  return out;
+}
+
+function getTextGenerationModelOptionsForInstance(
+  settings: UnifiedSettings,
+  entry: ProviderInstanceEntry,
+  selectedModel?: string | null,
+): AppModelOption[] {
+  const unsupported = new Set(
+    entry.models
+      .filter((model) => model.supportsTextGeneration === false)
+      .map((model) => model.slug),
+  );
+  // Filter after custom entries are rebuilt so a display-name override cannot restore a model.
+  return getAppModelOptionsForInstance(settings, entry, selectedModel).filter(
+    (option) => !unsupported.has(option.slug),
+  );
+}
+
+export function getTextGenerationModelOptionsByInstance(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  selectedInstanceId?: ProviderInstanceId | null,
+  selectedModel?: string | null,
+): ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>> {
+  return new Map(
+    deriveProviderInstanceEntries(
+      providers.filter((provider) => provider.supportsTextGeneration !== false),
+    ).map((entry) => [
+      entry.instanceId,
+      getTextGenerationModelOptionsForInstance(
+        settings,
+        entry,
+        entry.instanceId === selectedInstanceId ? selectedModel : null,
+      ),
+    ]),
+  );
+}
+
+export function selectsPlanAgent(options: ModelSelection["options"]): boolean {
+  return options?.some((option) => option.id === "agent" && option.value === "plan") ?? false;
+}
+
+export function resolveAppModelSelectionState(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  projectId: ProjectId | null = null,
+  now: number = Date.now(),
+): ModelSelection {
+  const selection = settings.textGenerationModelSelection ?? {
+    instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
+    model: DEFAULT_TEXT_GENERATION_MODEL,
+  };
+  const route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
+  if (route.reason === "no_fallback") return NO_PROVIDER_MODEL_SELECTION;
+  const { instanceId, model, options } = route.selection;
+  if (
+    Object.hasOwn(settings.textGenerators, instanceId) &&
+    settings.textGenerators[instanceId]?.enabled === true
+  ) {
+    return route.selection;
+  }
+  const entry = deriveProviderInstanceEntries(providers).find(
+    (candidate) => candidate.instanceId === instanceId,
+  );
+  if (!entry) return NO_PROVIDER_MODEL_SELECTION;
+
+  if (!model) return createModelSelection(instanceId, "");
+
+  const { modelOptionsForDispatch } = getComposerProviderState({
+    provider: entry.driverKind,
+    model,
+    models: entry.models,
+    modelOptions: options,
+    planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
+  });
+  return createModelSelection(instanceId, model, modelOptionsForDispatch);
+}

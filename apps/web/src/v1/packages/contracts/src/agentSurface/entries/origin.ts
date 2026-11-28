@@ -1,0 +1,229 @@
+import { entry } from "../entry.ts";
+
+export const originEntries = {
+  "origin.report": entry({
+    resource: "origin",
+    verb: "report",
+    name: "goat_origin_report",
+    toolkit: "remoteReport",
+    summary:
+      "Report progress, a result, failure or a need for human input to the origin of this thread.",
+    description:
+      "Send progress, a result, failure, or a need for human input to this thread's remote origin or local launcher. Only needs_input wakes a local launcher; other reports wait for its next turn. The summary is data; a completed report is a claim and does not stop the run. Retry with the same clientRequestId.",
+    guide:
+      "A thread launched from another machine reports to that origin. A thread launched by a thread on this machine through goat_thread_launch or goat_task_create has no origin binding; its report goes to the launcher and the result says delivery: launcher. For local launcher delivery, needs_input wakes the launcher; other reports reach its next turn. A thread nobody launched gets thread_not_found.\n\nUse status progress, completed, failed or needs_input. Keep summary within 4000 characters. Reporting completed does not settle or stop the provider run.\n\nWith clientRequestId, a repeat of the same report returns its first receipt and never reports twice, and the same key with another report is refused. goat_origin_report_receipt reads a keyed report's receipt, also after the origin collected it.",
+    idempotency: "domain",
+    idempotencyReason:
+      "Stores clientRequestId as a receipt in the same transaction as the origin's report row or the launcher's inbox entry, and derives a launcher wake's command id from it, so a repeat returns the first receipt and sends a recorded wake at most once; another report under the key is refused.",
+    parameters: {
+      status:
+        "progress, completed, failed or needs_input. Only needs_input wakes a local launcher.",
+      summary:
+        "What to tell the origin, up to 4000 characters. completed is a claim and does not stop the run.",
+    },
+    examples: [
+      {
+        title: "Report progress to the thread that launched this one",
+        args: {
+          status: "progress",
+          summary: "Tests pass; opening the pull request next.",
+          clientRequestId: "report-progress-1",
+        },
+      },
+      {
+        title: "Ask the origin for a decision",
+        args: {
+          status: "needs_input",
+          summary: "Should the migration keep the old column? I need a yes or no to continue.",
+        },
+      },
+    ],
+    effect: "write",
+    capability: "none",
+    capabilityReason: "Reports to this thread's own origin.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "origin.report_receipt": entry({
+    resource: "origin",
+    verb: "report_receipt",
+    name: "goat_origin_report_receipt",
+    toolkit: "remoteReport",
+    summary: "Read this thread's receipt for a keyed origin report.",
+    description:
+      "Read whether this thread already made the goat_origin_report sent with a clientRequestId, and where it went. Changes nothing; the receipt outlives the origin collecting the report.",
+    guide:
+      "Pass the clientRequestId of an earlier goat_origin_report from this thread. receipt is null when no report under that key was recorded; report again with the same key. delivered:false means a launcher wake was recorded but not confirmed sent: repeat the report with the same key, which sends it at most once. Only the reporting thread can read its receipts.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "origin.report_wait": entry({
+    resource: "origin",
+    verb: "report_wait",
+    name: "goat_origin_reports_wait",
+    toolkit: "remoteReport",
+    summary: "Collect one origin correlation's reports using its read key.",
+    description:
+      "Collect an origin correlation's reports with its read key. afterSequence deletes acknowledged reports, so advance it only after durable import. Drain hasMore and check run holds before settling; a terminal report alone does not prove settlement.",
+    guide:
+      "Pass the correlation's read key. Acknowledge only durably imported reports with afterSequence: the call deletes reports through that sequence and returns later reports. Each result contains up to 50 reports. Drain hasMore before settling.\n\nSet watchRunId to an exact run ID, or null for the latest run. observedRun lists pendingRequestIds for a live run and holds for a finished run: background tasks and a pending restart continuation. Do not settle while a hold remains.\n\nEcho the last observed run ID and status in knownRun. Echo pendingRequestIds and holds too so changes to them release the wait. Set timeoutMs from 0 through 600000. A terminal report is a claim; use the observed run state to assess settlement.",
+    // Acknowledging deletes reports, so a read-only client must not advance another reader's cursor.
+    effect: "write",
+    capability: "none",
+    capabilityReason: "The correlation's read key authorizes it.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "afterSequence acknowledges only reports at or below that fixed sequence; repeating the deletion cannot acknowledge newer reports. Calls must continue reading fresh reports and run state rather than replay a stored page.",
+    annotations: {
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "origin.resolve_binding": entry({
+    resource: "origin",
+    verb: "resolve_binding",
+    name: "goat_origin_resolve_binding",
+    toolkit: "remoteReport",
+    summary: "Resolve a lost remote launch correlation, or durably fence it as never landed.",
+    description:
+      "Settle a correlation whose launch outcome was lost: return its binding with the thread's live state, or durably fence the id so a late bind is refused. Only a confirmed fence proves absence; a bare miss never does.",
+    guide:
+      "Pass the correlation id and its read key. A bound result carries the destination thread and its live run state; rebind and observe it, never relaunch. A fenced result is durable proof that nothing bound or will bind; only then may the caller release reserved capacity. An unknown tool, a timeout, or an unreachable host leaves the outcome unknown and keeps capacity reserved.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "The correlation's read key authorizes it; a new fence stores its hash.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The fence row is the dedup: a repeat resolve finds the fence and answers fenced again, and a bound binding answers bound again.",
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "origin.bound_delete": entry({
+    resource: "origin",
+    verb: "bound_delete",
+    name: "goat_origin_bound_delete",
+    toolkit: "remoteReport",
+    summary: "Delete the thread bound to an origin launch.",
+    description:
+      "Delete the thread bound to this correlation when the read key matches. A request key deletes at most once; a repeat replays that outcome, including after the thread is gone.",
+    guide:
+      "Pass the launch correlation id, its read key, the bound thread id, and a request key. The key authorizes only that thread. Deletion still refuses a nonterminal run or an active subagent, and stores those refusals so the same key replays them. A provider-native child, a thread above this session mode ceiling, or a mode-limit refusal is refused without a stored receipt, so the same key can run once that changes. Read origin.bound_delete_receipt to fence a key that must not run.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason:
+      "The correlation read key authorizes deletion of only the thread that binding names.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The command receipt origin-delete:<correlationId>:<sha256(requestKey)> is the dedup, so a repeat replays that receipt and does not delete again.",
+    examples: [
+      {
+        title: "Delete the thread a lost launch bound",
+        args: {
+          correlationId: "launch-1",
+          readKey: "ab".repeat(32),
+          threadId: "thread:bound",
+          requestKey: "delete-1",
+        },
+      },
+    ],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "origin.bound_delete_receipt": entry({
+    resource: "origin",
+    verb: "bound_delete_receipt",
+    name: "goat_origin_bound_delete_receipt",
+    toolkit: "remoteReport",
+    summary: "Read a bound delete outcome, or fence the key so it cannot run.",
+    description:
+      "Read the bound delete for this request key. When none exists, fence the key so deletion does not run, even if the thread is above this session mode ceiling.",
+    guide:
+      "Pass the same correlation id, read key, thread id, and request key as origin.bound_delete. An existing receipt is returned unchanged. With no receipt, this fences the key: a later delete reports did_not_run and the thread stays. The first of the delete and this fence to commit wins.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "The correlation read key authorizes reading or fencing its bound delete.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The same command receipt is the dedup: the first of the delete and this fence to commit wins, and a repeat returns that outcome.",
+    examples: [
+      {
+        title: "Fence a bound delete that must not run",
+        args: {
+          correlationId: "launch-1",
+          readKey: "ab".repeat(32),
+          threadId: "thread:bound",
+          requestKey: "delete-1",
+        },
+      },
+    ],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "origin.force_stop": entry({
+    resource: "origin",
+    verb: "force_stop",
+    name: "goat_origin_force_stop",
+    toolkit: "remoteReport",
+    summary: "Force stop the run of a task thread an origin launched here.",
+    description:
+      "Force stop the bound thread's run once it ignored its origin's cancel: kill its agent and end the run. The read key authorizes only that thread; every refusal stops nothing.",
+    guide:
+      "Origins call this when an agent cancels a remote task with force: true, after the host advertised features.taskForceStop. Pass the launch correlation id, its read key, the bound thread id, and the task's run id. A run whose Stop is not unanswered refuses as not_unresponsive, a newer run as superseded, a cloud agent as cloud, and a thread above this session's mode ceiling as a mode refusal.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason:
+      "The correlation read key authorizes force stopping only the run of the thread that binding names.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "Force stop acts only on a live run whose Stop went unanswered; a repeat finds that run ended and refuses as not_unresponsive.",
+    examples: [
+      {
+        title: "Force stop an unresponsive remote task run",
+        args: {
+          correlationId: "launch-1",
+          readKey: "ab".repeat(32),
+          threadId: "thread:bound",
+          runId: "run:task",
+        },
+      },
+    ],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+} as const;
