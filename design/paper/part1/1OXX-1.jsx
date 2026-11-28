@@ -486,7 +486,7 @@
           <div style={{ backgroundColor: '#28C840', borderColor: '#0000001F', borderRadius: '50%', borderStyle: 'solid', borderWidth: '0.5px', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '12px', width: '12px' }} />
         </div>
         <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '900px', left: '44px', position: 'absolute', top: '0px', width: '256px' }}>
-          <div style={{ backgroundColor: '#F7F7F7', borderTopLeftRadius: '12px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
+          <div style={{ backgroundColor: '#F7F7F7', borderBottomLeftRadius: '14px', borderTopLeftRadius: '14px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
           <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
             <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '8px', height: '40px', paddingRight: '12px' }}>
               <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '8px', height: '32px', minWidth: '0px' }}>
@@ -750,7 +750,7 @@
             </div>
           </div>
         </div>
-        <div style={{ borderLeftColor: '#ECECEC', borderLeftStyle: 'solid', borderLeftWidth: '1px', borderTopColor: '#ECECEC', borderTopLeftRadius: '12px', borderTopStyle: 'solid', borderTopWidth: '1px', bottom: '0px', boxSizing: 'border-box', left: '44px', position: 'absolute', right: '0px', top: '39px' }} />
+        <div style={{ borderBottomLeftRadius: '14px', borderLeftColor: '#ECECEC', borderLeftStyle: 'solid', borderLeftWidth: '1px', borderTopColor: '#ECECEC', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '1px', bottom: '0px', boxSizing: 'border-box', left: '44px', position: 'absolute', right: '0px', top: '39px' }} />
         <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', height: '28px', justifyContent: 'center', left: '91px', position: 'absolute', top: '6px', width: '28px' }}>
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
             <path d="M22 11C22 7.229 22 5.343 20.828 4.172C19.657 3 17.771 3 14 3H10C6.229 3 4.343 3 3.172 4.172C2 5.343 2 7.229 2 11V13C2 16.771 2 18.657 3.172 19.828C4.343 21 6.229 21 10 21H14C17.771 21 19.657 21 20.828 19.828C22 18.657 22 16.771 22 13V11Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
