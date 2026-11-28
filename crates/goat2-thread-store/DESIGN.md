@@ -51,9 +51,9 @@ set loaded from the index.
    batched until `flush` or the run ends. Before a row is stored with `dirty=0` the log is synced up to
    the card's `appliedSeq`. Any failure keeps `dirty=1`.
 4. `run.finished` is followed by an automatic `checkpoint {card, fold}` line in the same write.
-5. Create: row dirty=1 -> mkdir -> goat.jsonl header + thread.created (sync) -> dir sync -> card.json ->
-   row dirty=0. Delete: row dirty=1 -> rename folder to `threads/.trash-<id>-<hex>` -> dir sync -> row
-   removed -> remove_dir_all.
+5. Create: row {dirty=1, creating=1} (FULL) -> mkdir -> goat.jsonl header + thread.created (sync) ->
+   dir sync -> card.json -> row {dirty=0, creating=0}. Delete: row dirty=1 -> rename folder to
+   `threads/.trash-<id>-<hex>` -> dir sync -> row removed -> remove_dir_all.
 
 ## Startup
 
@@ -61,15 +61,18 @@ set loaded from the index.
    `card.json` of every folder and verify each log's last line; other errors fail `open`).
 2. Load every row (one row per thread). New index epoch for every start.
 3. Only rows with `dirty=1` or an active run: verify the log tail, refold lines after `appliedSeq`,
-   drop incomplete creates (no folder, no header, no `thread.created`), settle active runs:
+   abandon incomplete creates (only rows with `creating=1`; the same damage on an existing thread
+   marks it corrupt and keeps it), settle active runs:
    `run.finished` `interrupted` when the run reached the engine (`run.accepted`, an item, a request,
    or an accepted turn delivery for it), else `unknown` (+ resend request, never re-sent).
 4. `StartupReport`: thread count, index outcome (loaded / rebuilt + reason), logs opened, settled runs,
    repaired tails, per-phase timings.
 
-Tail repair: everything after the last valid line (unterminated, unparseable or zero-filled) is copied
-to `goat.jsonl.torn-<n>` and truncated. A bad line followed by a valid line, or a seq gap, is
-`CorruptLog` (no automatic repair). A line with `v > 1` or an unknown `type` marks the thread
+Tail repair touches only a demonstrably incomplete tail: bytes after the last newline that do not form a
+complete valid line, or a trailing region made only of NUL bytes (zero-filled growth). They are copied
+to `goat.jsonl.torn-<n>` and truncated; a valid unterminated last line with the next seq gets its
+newline. A newline-terminated malformed line, a bad `v`/`seq` or a seq gap is `CorruptLog` and the
+file is left as is. A line with `v > 1` or an unknown `type` marks the thread
 unsupported: append / read / read_page / settle return `UnsupportedEvent`; `read_raw` still works.
 
 ## Cursor contract
@@ -101,8 +104,16 @@ Contract omissions are enforced (command / dynamic tool output and file_change p
 `read_blob` accepts exactly `blobs/<name>` and opens it relative to the blobs directory without
 following symlinks.
 
-## Open with lane C
+## Fold
 
-Fold fields needed so a checkpoint can be continued without earlier lines: activeRunInputIds,
-activeRunReachedEngine, heldInputs, runningChildIds, lastRunOutcome (requested 2026-11-28).
+`Fold` has the shape in `structure/20_data.md`: activeRunId, activeRunInputIds,
+activeRunReachedEngine, queuedInputIds, heldInputs, openRequests, runningChildIds, lastRunOutcome,
+counters. Until lane C merges the added fields, `src/contract.rs` defines that exact shape and
+re-exports everything else from `goat2-contracts`. Rules: input.accepted -> queue; input.delivered
+accepted -> leaves the queue; declined -> stays queued and leaves activeRunInputIds; unknown -> held
+under `resend:<runId>`. run.finished: run inputs still queued are delivered if the run reached the
+engine, held if the outcome is unknown, else stay queued. An unknown outcome opens request
+`resend:<runId>` (kind resend); resolving it with `resend` puts the held inputs back at the front of
+the queue, `dropped` discards them. One `child.started` per child thread (refused while running, or
+when the child's card is missing or has another parent).
 
