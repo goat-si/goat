@@ -516,3 +516,167 @@ fn a_create_whose_cache_write_fails_announces_nothing() {
     let (store, _) = open(dir.path());
     assert!(store.card(&tid("g")).unwrap().is_some());
 }
+
+// Review round 4.
+#[test]
+fn repeated_flush_and_close_keep_reporting_a_failed_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("f", "/w"))
+        .unwrap();
+    store
+        .append(
+            &t,
+            vec![input("i1", "x"), started("r1", &["i1"]), accepted("r1")],
+        )
+        .unwrap();
+    store
+        .append(&t, vec![answer("r1", "a1", "partial")])
+        .unwrap();
+    testing::set_faults(
+        &store,
+        Faults {
+            fail_log_syncs: true,
+            ..Default::default()
+        },
+    );
+    assert!(store.flush().is_err());
+    testing::set_faults(&store, Faults::default());
+    assert!(
+        store.flush().is_err(),
+        "second flush still reports the unflushed thread"
+    );
+    assert!(store.close().is_err(), "close reports it too");
+}
+
+#[test]
+fn concurrent_creates_are_never_skipped_by_a_card_cursor_and_keep_later_appends() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(
+        Store::open(
+            dir.path(),
+            StoreOptions {
+                fsync: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .0,
+    );
+    let done = Arc::new(AtomicBool::new(false));
+    // A reader follows the card cursor the whole time.
+    let reader = {
+        let store = store.clone();
+        let done = done.clone();
+        std::thread::spawn(move || {
+            let mut seen = std::collections::HashSet::new();
+            let mut cursor = None;
+            loop {
+                let finished = done.load(Ordering::SeqCst);
+                let read = store.cards_after(cursor.as_ref());
+                assert!(read.reset.is_none(), "{:?}", read.reset);
+                for card in read.cards {
+                    seen.insert(card.id.to_string());
+                }
+                cursor = Some(read.cursor);
+                if finished {
+                    return seen;
+                }
+            }
+        })
+    };
+    let writers: Vec<_> = (0..4)
+        .map(|w| {
+            let store = store.clone();
+            std::thread::spawn(move || {
+                for i in 0..50 {
+                    let id = tid(&format!("w{w}-{i}"));
+                    store
+                        .create_thread(Some(id.clone()), created("c", "/w"))
+                        .unwrap();
+                    store.append(&id, vec![renamed("after create")]).unwrap();
+                }
+            })
+        })
+        .collect();
+    for w in writers {
+        w.join().unwrap();
+    }
+    done.store(true, Ordering::SeqCst);
+    let seen = reader.join().unwrap();
+    assert_eq!(seen.len(), 200, "a card cursor skipped a created thread");
+    for card in store.find(&Default::default()) {
+        assert_eq!(card.title, "after create", "{} lost its append", card.id);
+    }
+}
+
+#[test]
+fn a_card_cursor_taken_during_a_create_still_sees_the_new_card() {
+    use std::sync::{Arc, Barrier};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(open(dir.path()).0);
+    store
+        .create_thread(Some(tid("before")), created("b", "/w"))
+        .unwrap();
+    let reached = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    testing::pause_creates_before_announce(&store, Some((reached.clone(), release.clone())));
+    let creator = {
+        let store = store.clone();
+        std::thread::spawn(move || {
+            store
+                .create_thread(Some(tid("new")), created("n", "/w"))
+                .unwrap()
+        })
+    };
+    reached.wait();
+    // The create is paused just before its announcement.
+    let during = store.cards_after(None);
+    assert!(during.cards.iter().all(|c| c.id.as_str() != "new"));
+    release.wait();
+    creator.join().unwrap();
+    testing::pause_creates_before_announce(&store, None);
+    let after = store.cards_after(Some(&during.cursor));
+    assert!(
+        after.cards.iter().any(|c| c.id.as_str() == "new"),
+        "resuming from a cursor taken mid-create skipped the new card"
+    );
+}
+
+#[test]
+fn an_append_racing_a_create_is_not_overwritten_by_the_announcement() {
+    use std::sync::{Arc, Barrier};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(open(dir.path()).0);
+    let reached = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    testing::pause_creates_before_announce(&store, Some((reached.clone(), release.clone())));
+    let creator = {
+        let store = store.clone();
+        std::thread::spawn(move || {
+            store
+                .create_thread(Some(tid("new")), created("old title", "/w"))
+                .unwrap()
+        })
+    };
+    reached.wait();
+    let appender = {
+        let store = store.clone();
+        std::thread::spawn(move || store.append(&tid("new"), vec![renamed("appended")]))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    release.wait();
+    creator.join().unwrap();
+    appender.join().unwrap().unwrap();
+    testing::pause_creates_before_announce(&store, None);
+    let card = store.find(&Default::default()).pop().unwrap();
+    assert_eq!(
+        card.title, "appended",
+        "the create's announcement overwrote a newer card"
+    );
+    assert_eq!(store.cards_after(None).cards[0].title, "appended");
+}

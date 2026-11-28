@@ -332,6 +332,8 @@ pub struct Store {
     logs_opened: std::sync::atomic::AtomicU64,
     faults: Mutex<Faults>,
     index_complete: std::sync::atomic::AtomicBool,
+    /// Test hook: `create_thread` waits on both barriers right before it announces the card.
+    create_pause: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
 }
 
 fn ms(since: Instant) -> f64 {
@@ -437,6 +439,7 @@ impl Store {
             logs_opened: std::sync::atomic::AtomicU64::new(0),
             faults: Mutex::new(initial_faults),
             index_complete: std::sync::atomic::AtomicBool::new(true),
+            create_pause: Mutex::new(None),
         };
         let mut report = StartupReport {
             threads: 0,
@@ -1272,17 +1275,24 @@ impl Store {
         slot.header_end = header_end;
         slot.len = len;
         slot.synced_len = len;
-        // Nothing is announced until the cache is written and the thread is installed; a failure
-        // here leaves the committed log for the next start to finish (creating row).
-        lock(&self.shared).assign_seq(&mut slot.card);
+        // Nothing is visible until the cache is written; a failure here leaves the committed log for
+        // the next start to finish (creating row). The thread is installed with its lock held, so an
+        // append or delete on it waits until the card is announced, and the cardSeq is assigned in
+        // the same step as the announcement, so no card cursor can pass over it.
         self.persist(&mut slot)?;
-        let card = slot.card.clone();
+        let entry = Arc::new(Mutex::new(slot));
+        let mut installed = lock(&entry);
         self.slots
             .write()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(id, Arc::new(Mutex::new(slot)));
-        lock(&self.shared).announce(&card);
-        Ok(card)
+            .insert(id, entry.clone());
+        let pause = lock(&self.create_pause).clone();
+        if let Some((reached, release)) = pause {
+            reached.wait();
+            release.wait();
+        }
+        lock(&self.shared).publish(&mut installed.card);
+        Ok(installed.card.clone())
     }
 
     /// Append events to a thread. Assigns seq and time, validates, moves large item fields to
@@ -1554,13 +1564,31 @@ impl Store {
             .values()
             .cloned()
             .collect();
+        let mut first_error = None;
         for slot in slots {
             let mut slot = lock(&slot);
-            if slot.stale && matches!(slot.health, Health::Ready) {
-                self.persist(&mut slot)?;
+            if !slot.stale {
+                continue;
+            }
+            let result = match &slot.health {
+                Health::Ready => self.persist(&mut slot),
+                // A thread whose earlier write failed still has unflushed state: keep reporting it.
+                Health::Poisoned(detail) => Err(StoreError::Poisoned {
+                    thread: slot.id.to_string(),
+                    detail: detail.clone(),
+                }),
+                _ => Ok(()),
+            };
+            if let Err(e) = result
+                && first_error.is_none()
+            {
+                first_error = Some(e);
             }
         }
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Flush and release the store.
@@ -2002,6 +2030,15 @@ impl Drop for Store {
 /// Fault hooks for crash tests and benchmarks. Not part of the API.
 pub mod testing {
     use super::*;
+
+    /// Make every `create_thread` wait on `reached` and then `release` right before it announces
+    /// the new card (`None` turns the pause off).
+    pub fn pause_creates_before_announce(
+        store: &Store,
+        barriers: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    ) {
+        *lock(&store.create_pause) = barriers;
+    }
 
     /// Change the injected faults of a running store.
     pub fn set_faults(store: &Store, faults: Faults) {
