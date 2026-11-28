@@ -7,7 +7,7 @@ State: `real` = has working code, `stub` = placeholder, `legacy` = superseded, t
 | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | - | Rust workspace (edition 2024, toolchain 1.95), no `[patch]`; `Cargo.lock` committed (binary workspace) | owner | real |
 | `crates/goat2-contracts` | Rust | Wire + disk types (card, 14 log events, frames, TurnItem subset, capability flags, limits). Generates TS + JSON Schema into `packages/contracts-rs/` | C | real |
 | `crates/goat2-thread-store` | Rust | `~/.goat2*/threads/<id>/` folders, `goat.jsonl` append, card fold, `cards.sqlite` index, `(epoch, seq)` reads, pages, blobs | A | stub on goat2 (work on `goat2_thread_store`) |
-| `crates/goat2-engine-api` | Rust | Engine seam: trait + types every driver implements (start, start_turn, steer, interrupt, answer_request, group RSS, events) | E | planned (moving out of goat2-host) |
+| `crates/goat2-engine-api` | Rust | Engine seam: trait + types every driver implements (start, start_turn, steer, interrupt, answer_request, group RSS, events) | E | real (`ff774d5`) |
 | `crates/goat2-engine-codex` | Rust | Codex app-server driver on pinned JSON Schema (`schema/codex-0.167.0/`), process group, steer/turn results | B | stub on goat2 |
 | `crates/goat2-parity` | Rust | v1 behaviour scenarios (recorded sessions) runnable against v1 and GOAT 2 | D | stub on goat2 |
 | `crates/goat2-host` | Rust (bin `goat2-host`) | The host: mailbox/lane, caps, follow-ups, child wake, restart settlement, MCP (`rmcp`), WebSocket API | E | stub |
