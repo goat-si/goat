@@ -35,7 +35,9 @@ fn handshake_with_route(codex_home: Option<&str>, route_config: Value) -> Vec<En
         frame: json!({"id": 90, "method": "config/read", "params": {"cwd": "<cwd>", "includeLayers": false}}),
         wildcards: vec!["/params/cwd".into()],
     });
-    entries.push(emit(json!({"id": 90, "result": {"config": route_config}})));
+    entries.push(emit(
+        json!({"id": 90, "result": {"config": route_config, "origins": {}}}),
+    ));
     entries
 }
 
@@ -127,7 +129,7 @@ async fn an_api_key_login_lists_every_page_with_configured_defaults() {
         json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
     ));
     e.push(emit(json!({"id": 3, "result": {"config": {"service_tier": "fast", "openai_base_url": "http://127.0.0.1:8080/v1",
-        "features": {"api_key_cyber_access_programs": false}}}})));
+        "features": {"api_key_cyber_access_programs": false}}, "origins": {}}})));
     e.push(expect(
         json!({"id": 4, "method": "model/list", "params": {}}),
     ));
@@ -250,7 +252,7 @@ async fn a_route_away_from_openai_needs_no_openai_login() {
         json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
     ));
     e.push(emit(
-        json!({"id": 3, "result": {"config": {"openai_base_url": "http://127.0.0.1:9999/v1"}}}),
+        json!({"id": 3, "result": {"config": {"openai_base_url": "http://127.0.0.1:9999/v1"}, "origins": {}}}),
     ));
     e.push(expect(
         json!({"id": 4, "method": "model/list", "params": {}}),
@@ -279,7 +281,9 @@ async fn a_refused_model_list_is_a_failure_not_a_late_catalog() {
     e.push(expect(
         json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
     ));
-    e.push(emit(json!({"id": 3, "result": {"config": {}}})));
+    e.push(emit(
+        json!({"id": 3, "result": {"config": {}, "origins": {}}}),
+    ));
     e.push(expect(
         json!({"id": 4, "method": "model/list", "params": {}}),
     ));
@@ -309,7 +313,9 @@ fn api_key_catalog(page: Value) -> Vec<Entry> {
     e.push(expect(
         json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
     ));
-    e.push(emit(json!({"id": 3, "result": {"config": {}}})));
+    e.push(emit(
+        json!({"id": 3, "result": {"config": {}, "origins": {}}}),
+    ));
     e.push(expect(
         json!({"id": 4, "method": "model/list", "params": {}}),
     ));
@@ -352,12 +358,8 @@ async fn a_malformed_account_answer_fails_the_probe() {
             json!({"account": {"type": "chatgpt", "planType": "pro"}, "requiresOpenaiAuth": true}),
         ),
         (
-            "chatgpt with an unknown plan",
-            json!({"account": {"type": "chatgpt", "email": null, "planType": "galaxy"}, "requiresOpenaiAuth": true}),
-        ),
-        (
-            "incomplete workspace routing",
-            json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true, "workspaceRouting": {"backendOrigin": "x"}}),
+            "chatgpt with a numeric plan",
+            json!({"account": {"type": "chatgpt", "email": null, "planType": 3}, "requiresOpenaiAuth": true}),
         ),
         (
             "string requiresOpenaiAuth",
@@ -381,6 +383,53 @@ async fn a_malformed_account_answer_fails_the_probe() {
         let message = p.message.unwrap();
         assert!(message.contains("unreadable account"), "{name}: {message}");
     }
+}
+
+/// Final review r2: the route read is used only when the answer matches the pinned
+/// `ConfigReadResponse` (here it lacks `origins`), so an unverified custom route with no login
+/// stays "sign in", as in v1; a mistyped config field the probe never reads does not matter.
+#[tokio::test]
+async fn a_route_from_a_malformed_config_answer_is_not_trusted() {
+    let away = json!({"openai_base_url": "http://127.0.0.1:9999/v1"});
+    let mut e = handshake_with_route(None, away.clone());
+    if let Entry::EmitInbound { frame, .. } = e.last_mut().unwrap() {
+        frame["result"].as_object_mut().unwrap().remove("origins");
+    }
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": null, "requiresOpenaiAuth": true}}),
+    ));
+    let p = factory(e).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert_eq!(p.auth.status, ServerProviderAuthStatus::Unauthenticated);
+
+    // The same route with an unrelated mistyped field is still read: no login needed.
+    let mut with_noise = away;
+    with_noise["approval_policy"] = json!(42);
+    let mut e = handshake_with_route(None, with_noise);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": null, "requiresOpenaiAuth": true}}),
+    ));
+    e.push(expect(
+        json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
+    ));
+    e.push(emit(
+        json!({"id": 3, "result": {"config": {}, "origins": {}}}),
+    ));
+    e.push(expect(
+        json!({"id": 4, "method": "model/list", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 4, "result": {"data": [model("gpt-6.1-terra", true, json!({}))]}}),
+    ));
+    let p = factory(e).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.auth.endpoint.as_deref(), Some("http://127.0.0.1:9999"));
 }
 
 #[tokio::test]

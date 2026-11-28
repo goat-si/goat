@@ -180,17 +180,18 @@ struct AccountResponse {
     requires_openai_auth: bool,
 }
 
-/// The pinned `GetAccountResponse` (schema/codex-0.167.0/v2/GetAccountResponse.json), checked whole as
-/// v1 decodes it: `requiresOpenaiAuth` required, `account` one of the four tagged variants with
-/// their fields (a ChatGPT account must carry `email` and a known `planType`), and
-/// `workspaceRouting` complete when present. Unknown fields are tolerated.
+/// `account/read` checked by the pinned `GetAccountResponse` (schema/codex-0.167.0/v2/
+/// GetAccountResponse.json) for what the probe reads, as v1 decodes it (packages/effect-codex-app-server/
+/// src/client.ts:276-288): `requiresOpenaiAuth` required, `account` null or one of the tagged variants,
+/// a ChatGPT account with `email` present (may be null) and a string `planType`. Written difference
+/// (owner decision): any `planType` string and unchecked workspace fields, as v1's older decoder; the
+/// 0.167.0 `gcp` account, which v1's decoder predates, is accepted. Unknown fields are tolerated.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct AccountResponseShape {
     account: Option<AccountShape>,
     requires_openai_auth: bool,
-    workspace_routing: Option<WorkspaceRoutingShape>,
 }
 
 #[derive(Deserialize)]
@@ -203,8 +204,7 @@ enum AccountShape {
         /// Required, may be null.
         #[serde(deserialize_with = "present_nullable")]
         email: Option<String>,
-        plan_type: PlanTypeShape,
-        workspace_name: Option<String>,
+        plan_type: String,
     },
     #[serde(rename_all = "camelCase")]
     AmazonBedrock {
@@ -223,61 +223,43 @@ where
     Option::<T>::deserialize(deserializer)
 }
 
-/// The pinned `PlanType` values.
+/// `config/read` checked by the pinned `ConfigReadResponse` (schema/codex-0.167.0/v2/
+/// ConfigReadResponse.json) for its required fields (`config` object, `origins` with each layer's `name`
+/// and `version`) and the typed config fields the probe reads (`model_provider`, `service_tier`). An
+/// answer that fails counts as an unread config, as v1's failed decode does. Written difference
+/// (owner decision): config fields the probe never reads are not type-checked, so a mistyped
+/// unrelated field cannot change the sign-in state. `openai_base_url`, `model_providers` and `features`
+/// are not in the pinned schema; v1 reads them leniently and so does the route code.
 #[derive(Deserialize)]
-#[serde(try_from = "String")]
-struct PlanTypeShape;
-
-impl TryFrom<String> for PlanTypeShape {
-    type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        const PLANS: [&str; 20] = [
-            "free",
-            "go",
-            "plus",
-            "pro",
-            "prolite",
-            "promax",
-            "team",
-            "self_serve_business_prolite",
-            "self_serve_business_usage_based",
-            "business",
-            "ent26",
-            "enterprise_cbp_automation",
-            "enterprise_cbp_usage_based",
-            "enterprise",
-            "edu",
-            "edu_plus",
-            "edu_pro",
-            "sci",
-            "sci_plus",
-            "unknown",
-        ];
-        if PLANS.contains(&value.as_str()) {
-            Ok(PlanTypeShape)
-        } else {
-            Err(format!("unknown planType {value:?}"))
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-struct WorkspaceRoutingShape {
-    account_routing_override: AccountRoutingOverrideShape,
-    backend_origin: String,
-    chatgpt_account_id: String,
+struct ConfigReadShape {
+    config: ConfigShape,
+    origins: std::collections::HashMap<String, ConfigLayerMetadataShape>,
 }
 
 #[derive(Deserialize)]
-enum AccountRoutingOverrideShape {
-    #[serde(rename = "NO_CONSTRAINT")]
-    NoConstraint,
-    #[serde(rename = "us")]
-    Us,
-    #[serde(rename = "us_cr")]
-    UsCr,
+#[allow(dead_code)]
+struct ConfigShape {
+    model_provider: Option<String>,
+    service_tier: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct ConfigLayerMetadataShape {
+    name: Value,
+    version: String,
+}
+
+/// The `config` of a `config/read` answer that matches `ConfigReadShape`; `None` otherwise.
+fn read_config(answer: Value) -> Option<Value> {
+    if !answer.get("config").is_some_and(Value::is_object)
+        || !answer.get("origins").is_some_and(Value::is_object)
+    {
+        return None;
+    }
+    serde_json::from_value::<ConfigReadShape>(answer.clone()).ok()?;
+    answer.get("config").cloned()
 }
 
 impl AccountResponse {
@@ -312,7 +294,7 @@ async fn discover(
         )
         .await
         .ok()
-        .and_then(|v| v.get("config").cloned());
+        .and_then(read_config);
     let effective_base_url = route_config
         .as_ref()
         .and_then(|c| read_effective_base_url(c, openai_base_url_env(options).as_deref()));
@@ -346,7 +328,7 @@ async fn discover(
         .await
         .ok()
         .and_then(Result::ok)
-        .and_then(|v| v.get("config").cloned())
+        .and_then(read_config)
     };
     let model_list = async {
         if account.account_type() == Some("chatgpt") {
@@ -1655,6 +1637,10 @@ mod tests {
             json!({"account": {"type": "amazonBedrock"}, "requiresOpenaiAuth": false}),
             json!({"account": {"type": "gcp"}, "requiresOpenaiAuth": false}),
             json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true, "workspaceRouting": {"accountRoutingOverride": "us_cr", "backendOrigin": "https://x", "chatgptAccountId": "id"}}),
+            // v1's leniency where the value is unused (owner decision): any plan, workspace
+            // fields unchecked.
+            json!({"account": {"type": "chatgpt", "email": null, "planType": "galaxy", "workspaceName": 7}, "requiresOpenaiAuth": true}),
+            json!({"account": null, "requiresOpenaiAuth": true, "workspaceRouting": {"backendOrigin": "x"}}),
         ] {
             assert!(ok(good.clone()), "{good}");
         }
@@ -1666,9 +1652,35 @@ mod tests {
             json!({"account": {"type": "chatgpt", "email": 3, "planType": "pro"}, "requiresOpenaiAuth": true}),
             json!({"account": {"type": "amazonBedrock", "usesCodexManagedCredentials": null}, "requiresOpenaiAuth": true}),
             json!({"account": "apiKey", "requiresOpenaiAuth": true}),
-            json!({"account": null, "requiresOpenaiAuth": true, "workspaceRouting": {"accountRoutingOverride": "eu", "backendOrigin": "x", "chatgptAccountId": "y"}}),
+            json!({"account": {"type": "chatgpt", "email": null, "planType": 3}, "requiresOpenaiAuth": true}),
         ] {
             assert!(!ok(bad.clone()), "{bad}");
+        }
+    }
+
+    #[test]
+    fn config_answers_follow_the_pinned_schema() {
+        let origins =
+            json!({"model": {"name": {"type": "user", "file": "/x/config.toml"}, "version": "v1"}});
+        let read = |v: Value| read_config(v);
+        assert_eq!(
+            read(
+                json!({"config": {"model_provider": "azure", "service_tier": null, "approval_policy": 5}, "origins": origins})
+            ),
+            Some(json!({"model_provider": "azure", "service_tier": null, "approval_policy": 5}))
+        );
+        assert!(read(json!({"config": {}, "origins": {}, "layers": null})).is_some());
+        for bad in [
+            json!({"config": {"model_provider": "azure"}}),
+            json!({"origins": {}}),
+            json!({"config": [null, null], "origins": {}}),
+            json!({"config": {}, "origins": []}),
+            json!({"config": {"model_provider": 3}, "origins": {}}),
+            json!({"config": {"service_tier": true}, "origins": {}}),
+            json!({"config": {}, "origins": {"model": {"version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": {"name": {}, "version": 1}}}),
+        ] {
+            assert_eq!(read(bad.clone()), None, "{bad}");
         }
     }
 
