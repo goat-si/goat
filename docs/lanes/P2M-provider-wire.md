@@ -48,3 +48,14 @@ AcpRegistryPrepareResult, ServerProviderEntry; frames above. All additive.
 - Port flows from v1 server code: rpc.ts server.refreshProviders, providerInstall.*, providerAuth.*, server.*AcpRegistry*.
 
 - Starts after lane C merges the types.
+
+## Host behaviours the lifted v1 screens need (P2-M, 2026-11-29; within the approved wire)
+
+1. ACP registry entries: once the agent's auth methods are known (v1 discovers them through ACP initialize), send the
+   entry with authFlow = {phase: 'idle', flowId: null, authorizationUrl: null, expiresAt: null, message: null,
+   methods: [ProviderAuthMethod...]}. Without methods, v1's wizard and provider card stay on "Discovering sign-in
+   methods..." forever (v1 ProviderAuthenticationSection.tsx:68-73, AddProviderInstanceDialog.logic.ts:63).
+2. refresh_providers: always send a providers frame after a refresh, even if nothing changed (checkedAt moves); the UI
+   resolves the refresh on the next providers frame.
+- The UI shows v1's cloud defaults (Claude/Cursor/Devin Cloud) as switched off locally; the host never reports them.
+- Fake-host reference: apps/web/src/host/fakeProviders.ts on origin/goat2_providers_ui.
