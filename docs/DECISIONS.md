@@ -77,3 +77,9 @@ Newest at the bottom.
   behaviour (thread.send/wait/watch/report_result, queue edit/promote-to-steer, child wakes, follow-up
   modes, restart settlement) is ported with equal behaviour, checked against v1's capability flags
   and recorded-session scenarios. Builds run through GOAT v1 on other hosts, not in Aside.
+- **Top bar 40px (supersedes "macOS top bar 52px").** The rail is 44px, so the top bar is 40px on every
+  desktop screen. Paper boards updated 2026-11-28 ~21:35 KST and re-exported to `design/paper/part1/`.
+- **Thread timeline = GOAT v1's rendering.** Working row ("Working for <timer>"), work-log groups and
+  "Worked for {duration}" folds are lifted from v1 `apps/web/src/components/chat/`, not redrawn from Paper.
+- **The old prototype UI is obsolete.** The Dev app and the published prototype must show the Paper UI
+  (lane F), not the pre-rail prototype.

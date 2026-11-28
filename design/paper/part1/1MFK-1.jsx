@@ -1,7 +1,7 @@
 (
     <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', fontSize: '12px', fontSynthesis: 'none', lineHeight: '16px', MozOsxFontSmoothing: 'grayscale', overflow: 'clip', overflowWrap: 'anywhere', WebkitFontSmoothing: 'antialiased' }}>
       <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, height: '900px', minHeight: '0px', overflow: 'clip', width: '1440px' }}>
-        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '52px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '40px', minHeight: '40px' }}>
           <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', gap: '10px', paddingLeft: '16px', paddingRight: '10px', width: '300px' }}>
             <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
               <div style={{ backgroundColor: '#FF5F57', borderRadius: 'calc(infinity * 1px)', boxShadow: '#0000001F 0px 0px 0px 0.5px inset', boxSizing: 'border-box', flexShrink: 0, height: '12px', width: '12px' }} />

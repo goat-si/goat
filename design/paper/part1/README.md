@@ -20,5 +20,17 @@ in-page API: `get_jsx({nodeId, includeNodeIds:false})` -> `<id>.jsx`, `get_scree
 | C2Y-0 T1 스레드 Chat | thread view with the GOAT chat renderer |
 | 1MFK-1 T4 대기 메시지 | queued messages banner above the composer (v1 QueuedRunsControl): header list icon + "Queued" + count + chevron; rows grip, truncated text, Edit, Send now (promote to steer), Delete |
 
+Re-exported 2026-11-28 ~21:35 KST after the top bar went to **40px** on every desktop board (owner: the
+rail is 44px, so the top bar is 40px; supersedes the earlier 52px rule).
+
 Rule overrides newer than some boards: one blue dot `#0169CC` + black rail counts (no red `--color-decide`
-/ green `--color-done`), moving face instead of spinners, English copy first, macOS top bar 52px.
+/ green `--color-done`), moving face instead of spinners, English copy first, top bar 40px.
+
+**Thread timeline rendering is GOAT v1's, not redrawn:** the working row, work-log groups and fold labels
+in C2Y-0 / 1MFK-1 are illustrations. Lift v1's components as-is (`~/Developer/goat` `origin/dev`
+`apps/web/src/components/chat/`: `TimelineWorkGroupRows.tsx` `WorkingTimelineRow` ("Working for <timer>",
+shimmer, bottom border), work-log entry rows, `TurnFoldLabel.tsx` ("Worked for {duration}")), record them in
+`docs/PROVENANCE.md`. The boards decide layout around the timeline, v1 decides how the timeline looks.
+
+**The old prototype UI** (apps/web before lane F: 290px list sidebar, no rail, red "Needs you") is obsolete.
+These exports are the latest UI.
