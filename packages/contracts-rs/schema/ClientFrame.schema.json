@@ -250,7 +250,7 @@
               "propertyNames": {
                 "maxLength": 128,
                 "minLength": 1,
-                "pattern": "^[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff](?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
+                "pattern": "\\S",
                 "type": "string"
               },
               "type": "object"
@@ -746,7 +746,7 @@
         "flowId": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff](?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
+          "pattern": "\\S",
           "type": "string"
         },
         "instanceId": {
@@ -755,7 +755,7 @@
         "interactionId": {
           "maxLength": 128,
           "minLength": 1,
-          "pattern": "^[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff](?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
+          "pattern": "\\S",
           "type": "string"
         },
         "reqId": {

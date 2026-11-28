@@ -315,6 +315,32 @@ fn provider_auth_response_debug_redacts_secrets() {
     }
 }
 
+/// v1 trims credential field names (SetupOperationId) before use; two names that trim to the same
+/// field are refused by serde (a JSON Schema cannot express this, so it is not an invalid fixture).
+#[test]
+fn credential_names_that_trim_to_one_field_are_refused() {
+    let frame = |values: Value| {
+        serde_json::json!({"type":"provider_auth_respond", "reqId":"r", "clientRequestId":"c",
+            "instanceId":"codex", "flowId":"flow", "interactionId":"i",
+            "response":{"type":"credentials", "values":values}})
+    };
+    let err = decode(
+        "client_frame",
+        frame(serde_json::json!({"apiKey":"a", " apiKey\t":"b"})),
+    )
+    .unwrap_err();
+    assert!(err.contains("duplicate credential field name"), "{err}");
+    let ok = decode(
+        "client_frame",
+        frame(serde_json::json!({" apiKey ":"a", "org":"b"})),
+    )
+    .unwrap();
+    assert_eq!(
+        ok["response"]["values"],
+        serde_json::json!({"apiKey":"a", "org":"b"})
+    );
+}
+
 #[test]
 fn auth_response_lengths_count_utf16() {
     let mut frame = serde_json::json!({"type":"provider_auth_respond", "reqId":"r", "clientRequestId":"c", "instanceId":"codex", "flowId":"flow", "interactionId":"i", "response":{"type":"terminal", "data":""}});
