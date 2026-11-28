@@ -885,6 +885,19 @@
       },
       "type": "object"
     },
+    "ContentStreamKind": {
+      "description": "Kind of content streamed for an unfinished item (v1 RuntimeContentStreamKind).",
+      "enum": [
+        "assistant_text",
+        "reasoning_text",
+        "reasoning_summary_text",
+        "plan_text",
+        "command_output",
+        "file_change_output",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ContextCapabilities": {
       "description": "v1 `OrchestrationV2ContextCapabilities`.",
       "properties": {
@@ -5311,6 +5324,17 @@
           "maximum": 9007199254740991,
           "minimum": 0,
           "type": "integer"
+        },
+        "streamKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContentStreamKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Omitted for assistant_text, which is the default."
         },
         "subId": {
           "type": "string"

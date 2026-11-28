@@ -29,3 +29,5 @@ All rows below are "ported to Rust" (serde + ts-rs + schemars); field names and 
 
 - `usage.rs` `ThreadTokenUsageSnapshot`, `TokenUsageCost`: v1 `packages/contracts/src/providerRuntime.ts:260-284`, ported to Rust; safe integer limits match the JavaScript wire range.
 - `log.rs` `RunFinished.tokenUsage`, `card.rs` `ThreadCard.contextUsage`: v1 run and provider-thread usage projections; `subscribe.rs` `thread_usage` models live usage with host receipt time, analogous to `packages/client-runtime/src/state/contextWindow.ts:46-90`.
+
+- `subscribe.rs` `ContentStreamKind`: v1 `packages/contracts/src/providerRuntime.ts:83-91`, ported to Rust with identical wire literals.

@@ -20,6 +20,19 @@ use crate::{
     ProviderAuthState, ProviderInstallState, ProviderInstanceId, ServerProviderEntry,
 };
 
+/// Kind of content streamed for an unfinished item (v1 RuntimeContentStreamKind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentStreamKind {
+    AssistantText,
+    ReasoningText,
+    ReasoningSummaryText,
+    PlanText,
+    CommandOutput,
+    FileChangeOutput,
+    Unknown,
+}
+
 /// Position in one thread's `goat.jsonl`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -641,6 +654,10 @@ pub enum HostFrame {
         #[ts(as = "u64")]
         #[schemars(with = "u64")]
         offset: u64,
+        /// Omitted for assistant_text, which is the default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        stream_kind: Option<ContentStreamKind>,
         text: String,
     },
     /// Answer to [ClientFrame::ReadPage], oldest line first.

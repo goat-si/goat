@@ -967,6 +967,16 @@ export const host_frame__text_append = {
   "type": "text_append"
 } satisfies HostFrame;
 
+export const host_frame__text_append_reasoning = {
+  "itemId": "example",
+  "offset": 1,
+  "streamKind": "reasoning_text",
+  "subId": "example",
+  "text": "example",
+  "threadId": "example",
+  "type": "text_append"
+} satisfies HostFrame;
+
 export const host_frame__thread_caught_up = {
   "cursor": {
     "epoch": "example",
