@@ -16,7 +16,6 @@ name = "goat2-host"
 path = "src/main.rs"
 
 [dependencies]
-sha2 = "0.10"
 goat2-contracts = { path = "../goat2-contracts" }
 goat2-engine-api = { path = "../goat2-engine-api" }
 goat2-engine-claude = { path = "../goat2-engine-claude" }
@@ -30,6 +29,7 @@ async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rand = "0.9"
+sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 axum = { version = "0.8", features = ["ws"] }

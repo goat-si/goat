@@ -132,12 +132,39 @@ fn args_of(frame: &Command) -> Value {
     value
 }
 
-/// SHA-256 of a command's arguments, for the dedupe of a frame that must not be kept.
+/// What the dedupe cache keeps of a command's arguments. A sign-in answer carries secrets (an
+/// API key, terminal input): only a keyed digest is kept, enough to tell a retry from a
+/// different answer.
+fn dedupe_args(frame: &Command) -> Value {
+    let args = args_of(frame);
+    if matches!(frame, Command::ProviderAuthRespond { .. }) {
+        digest_of(&args)
+    } else {
+        args
+    }
+}
+
+/// SHA-256 over a random per-process key and the arguments: a short answer (such as y) cannot be
+/// recovered from the cache by trying candidates.
 fn digest_of(args: &Value) -> Value {
+    use rand::RngCore;
     use sha2::Digest;
-    let bytes = serde_json::to_vec(args).unwrap_or_default();
-    let hash = sha2::Sha256::digest(&bytes);
-    Value::String(hash.iter().map(|b| format!("{b:02x}")).collect())
+    static KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        key
+    });
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(key);
+    hasher.update(serde_json::to_vec(args).unwrap_or_default());
+    Value::String(
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
 }
 
 /// Run one command with the dedupe rule.
@@ -151,21 +178,8 @@ pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
             "clientRequestId is empty",
         ));
     }
-    // Do not retain secret-bearing auth responses in the generic idempotency cache.
-    if matches!(&frame, Command::ProviderAuthRespond { .. }) {
-        return Err(command_error(
-            Reason::NotAvailable,
-            "provider_auth_respond is not available in this host build yet",
-        ));
-    }
     let _guard = host.inner.command_lock.lock().await;
-    // A sign-in answer carries secrets (an API key, terminal input): the dedupe cache keeps
-    // only a digest of its arguments, enough to tell a retry from a different answer.
-    let args = if matches!(&frame, Command::ProviderAuthRespond { .. }) {
-        digest_of(&args_of(&frame))
-    } else {
-        args_of(&frame)
-    };
+    let args = dedupe_args(&frame);
     if let Some(entry) = host.inner.dedupe.lock().expect("dedupe").get(&key).cloned() {
         if entry.args.as_ref().is_some_and(|a| a != &args) {
             return Err(command_error(
@@ -842,5 +856,43 @@ impl WsHost for Host {
 
     fn stalled_ms_since(&self, since: std::time::Instant) -> u64 {
         self.inner.stall.stalled_ms_since(since)
+    }
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+
+    fn respond(secret: &str) -> Command {
+        Command::ProviderAuthRespond {
+            req_id: "r".into(),
+            client_request_id: "k".into(),
+            instance_id: "codex".into(),
+            flow_id: "flow-1".into(),
+            interaction_id: "creds-1".into(),
+            response: goat2_contracts::ProviderAuthResponse::Credentials {
+                values: [("apiKey".to_owned(), secret.to_owned())].into(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_sign_in_answer_is_kept_only_as_a_keyed_digest() {
+        let kept = dedupe_args(&respond("sk-SECRET-1"));
+        let Value::String(digest) = &kept else {
+            panic!("not a digest: {kept}");
+        };
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!kept.to_string().contains("sk-SECRET-1"));
+        // A retry matches; another answer does not.
+        assert_eq!(kept, dedupe_args(&respond("sk-SECRET-1")));
+        assert_ne!(kept, dedupe_args(&respond("sk-SECRET-2")));
+        // Not a bare hash of the arguments: the per-process key is mixed in.
+        use sha2::Digest;
+        let bare =
+            sha2::Sha256::digest(serde_json::to_vec(&args_of(&respond("sk-SECRET-1"))).unwrap());
+        let bare: String = bare.iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(digest, &bare);
     }
 }

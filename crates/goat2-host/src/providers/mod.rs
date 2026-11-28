@@ -360,6 +360,23 @@ impl Providers {
         response: goat2_contracts::ProviderAuthResponse,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
+        // Only the instance's running flow takes an answer: a secret never reaches the driver
+        // for a flow that ended, was replaced, or did not survive a restart.
+        let current = self
+            .state
+            .lock()
+            .expect("providers")
+            .auth
+            .get(instance_id)
+            .cloned();
+        if !current
+            .as_ref()
+            .is_some_and(|c| c.flow_id.as_deref() == Some(flow_id) && auth_running(&c.phase))
+        {
+            return Err(ProviderRefusal::NotFound(format!(
+                "No running sign-in flow {flow_id} for provider instance {instance_id}."
+            )));
+        }
         let target = self
             .target_of(&instance)
             .map_err(ProviderRefusal::Internal)?;
@@ -367,8 +384,9 @@ impl Providers {
             instance_id,
             bounded(factory.auth_respond(&target, flow_id, interaction_id, response)).await?,
         );
+        // Stored only while that flow still runs: a terminal update recorded meanwhile wins.
         self.record_auth_if(host, instance_id, state.clone(), |current| {
-            current.is_none_or(|c| c.flow_id.as_deref() == Some(flow_id))
+            current.is_some_and(|c| c.flow_id.as_deref() == Some(flow_id) && auth_running(&c.phase))
         })?;
         Ok(state)
     }

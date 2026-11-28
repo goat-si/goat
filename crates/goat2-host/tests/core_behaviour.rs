@@ -4582,6 +4582,38 @@ async fn an_api_key_reaches_the_driver_and_is_never_kept() {
         .await
         .unwrap_err();
     assert_eq!(conflict.reason, "idempotency_conflict");
+    // An answer for another flow is refused before it reaches the driver.
+    let stale = t
+        .host
+        .command(auth_respond_frame("key-3", "flow-0", "sk-for-an-old-flow"))
+        .await
+        .unwrap_err();
+    assert_eq!(stale.reason, "provider_not_found");
+    assert_eq!(t.fake.auth_responses().len(), 1);
+    // The flow finished meanwhile: a late answer for it is refused and the result stays.
+    t.fake
+        .auth_updates()
+        .unwrap()
+        .send(auth_state("codex", "succeeded", None))
+        .unwrap();
+    eventually_provider(&t, |e| {
+        e.auth_flow
+            .as_ref()
+            .is_some_and(|a| a.phase == goat2_contracts::ProviderAuthPhase::Succeeded)
+    })
+    .await;
+    let late = t
+        .host
+        .command(auth_respond_frame("key-4", "flow-1", secret))
+        .await
+        .unwrap_err();
+    assert_eq!(late.reason, "provider_not_found");
+    assert_eq!(t.fake.auth_responses().len(), 1);
+    let codex = eventually_provider(&t, |_| true).await;
+    assert_eq!(
+        codex.auth_flow.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Succeeded
+    );
     // Nothing the host wrote holds the key.
     let mut files = Vec::new();
     files_under(t._dir.as_ref().unwrap().path(), &mut files);
