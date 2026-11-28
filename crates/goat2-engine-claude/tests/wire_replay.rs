@@ -1693,11 +1693,12 @@ async fn a_started_subagent_task_blocks_a_reopen_until_it_finishes() {
     handle.session.shutdown().await;
 }
 
-/// Final review 9 finding 1 (lane C contract: Completed = read, Cancelled = left unread): on a CLI
-/// without `command_lifecycle`, a steer Claude finished the turn without echoing or continuing
-/// with is Cancelled before TurnFinished, so the host requeues it.
+/// Owner decision 2026-11-29 (deliberate difference from v1, which steers blindly): a CLI without
+/// `command_lifecycle` cannot say whether it read a steer, so a steer is Declined and never
+/// written; the host queues it as the next turn's followup with the same inputId, so it is
+/// neither lost nor repeated.
 #[tokio::test]
-async fn an_unread_steer_on_a_cli_without_lifecycle_is_cancelled() {
+async fn a_steer_on_a_cli_without_lifecycle_is_declined_and_not_sent() {
     let run = Run::new("wire/no_lifecycle_steer_unread.ndjson");
     let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
     let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
@@ -1707,16 +1708,19 @@ async fn an_unread_steer_on_a_cli_without_lifecycle_is_cancelled() {
         .session
         .steer(&turn_id, input_as("steer-a", "Also this."))
         .await;
-    assert_eq!(steer, SteerResult::Accepted);
+    assert!(matches!(steer, SteerResult::Declined { .. }), "{steer:?}");
     let events = until_finished(&mut handle).await;
     assert_eq!(finished(&events), TurnOutcome::Done);
-    let updates = steer_updates(&events);
-    assert_eq!(updates.len(), 1, "{updates:?}");
     assert!(
-        matches!(updates[0].2, SteerStatus::Cancelled { .. }),
-        "{updates:?}"
+        steer_updates(&events).is_empty(),
+        "{:?}",
+        steer_updates(&events)
     );
     handle.session.shutdown().await;
+    assert!(
+        !run.stdin_frames().iter().any(|f| f["priority"] == "next"),
+        "the declined steer reached Claude"
+    );
     run.assert_replayed(1);
 }
 

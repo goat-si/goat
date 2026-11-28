@@ -428,38 +428,24 @@ async fn subagents_report_progress_and_results() {
     run.assert_replayed(1);
 }
 
+/// v1's 2.1.111 steering recording: that CLI sends no `command_lifecycle`, so (owner decision
+/// 2026-11-29, a deliberate difference from v1) the steer is Declined and never written; the host
+/// queues it as the next turn's followup. The recording, which expects the steer, cannot finish.
 #[tokio::test]
-async fn steer_joins_the_running_turn() {
+async fn steer_on_a_cli_without_lifecycle_is_declined() {
     let run = Run::new("v1/message_steering.ndjson");
     let prompts = prompts(&run);
-    let mut handle = run
+    let handle = run
         .start("claude-sonnet-4-6", RuntimeMode::FullAccess, None)
         .await;
     let turn = start_turn(&handle, &prompts[0], RuntimeMode::FullAccess).await;
     let steer = handle.session.steer(&turn, input(&prompts[1])).await;
-    assert_eq!(steer, SteerResult::Accepted);
-    let events = until_finished(&mut handle).await;
-    assert_eq!(
-        outcome(&events),
-        TurnOutcome::Done,
-        "the steer's abort result is not the turn's end"
-    );
-    assert_eq!(
-        final_answers(&events),
-        vec!["steering fixture observed".to_string()]
-    );
-    // 2.1.111 sends no lifecycle or echo; v1 finalizeActiveTurn reports the pending steer
-    // completed with the completed turn (ClaudeAdapterV2.ts:5296-5305).
-    let updates: Vec<_> = events
-        .iter()
-        .filter_map(|e| match e {
-            EngineEvent::SteerUpdated { status, .. } => Some(status.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(updates, vec![goat2_engine_api::SteerStatus::Completed]);
+    assert!(matches!(steer, SteerResult::Declined { .. }), "{steer:?}");
     handle.session.shutdown().await;
-    run.assert_replayed(1);
+    assert!(
+        !run.stdin_frames().iter().any(|f| f["priority"] == "next"),
+        "the declined steer reached Claude"
+    );
 }
 
 #[tokio::test]
