@@ -832,6 +832,84 @@ async fn names_the_npm_shim_when_npm_cannot_install_into_the_managed_prefix() {
     );
 }
 
+/// Final review 6 finding C2 (v1 AcpRegistrySupport.ts:760-790 puts the manager's path and the raw
+/// stderr tail in the message): a failed npm install names the manager `npm` and its stderr is
+/// cleaned before it is kept: the home directory becomes `~`, tokens and sign-in links are
+/// replaced.
+#[tokio::test]
+async fn failed_install_messages_hide_the_manager_path_home_and_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().display().to_string();
+    let server = Server::start().await;
+    server.registry(&example(json!({"npx": {"package": "@example/acp@1.2.3"}})));
+    let npm = fake_npm(dir.path());
+    let real = dir.path().join("real/npm");
+    executable(&real, NPM_FIXTURE);
+    executable(
+        &dir.path().join("fake-node/bin/npm"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = install ]; then\n  printf '%s\\n' \"npm error log: $HOME/.npm/_logs/debug.log\" 'npm error auth: Bearer synthetic-token-0123456789' 'npm error sign in at https://accounts.google.com/o/oauth2/auth?code=synthetic-code' >&2\n  exit 1\nfi\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    );
+    let mut env = npm.environment.clone();
+    env.insert("HOME".into(), home.clone());
+    let c = catalog(dir.path(), &server, env.clone());
+    let error = c
+        .resolve(
+            &settings(),
+            Path::new("/w"),
+            Some(&env),
+            &ResolveOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason, Reason::InstallFailed);
+    let detail = &error.detail;
+    assert!(
+        detail.starts_with("ACP Registry install command 'npm' exited with code 1: "),
+        "{detail}"
+    );
+    assert!(!detail.contains(&home), "{detail}");
+    assert!(detail.contains("~/.npm/_logs/debug.log"), "{detail}");
+    assert!(!detail.contains("synthetic-token"), "{detail}");
+    assert!(detail.contains("Bearer [redacted]"), "{detail}");
+    assert!(!detail.contains("synthetic-code"), "{detail}");
+    assert!(detail.contains("[sign-in-url]"), "{detail}");
+}
+
+/// C2: the shim message names both prefixes from `~` when they are under the home directory.
+#[tokio::test]
+async fn the_shim_message_names_home_prefixes_from_tilde() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().display().to_string();
+    let server = Server::start().await;
+    server.registry(&example(json!({"npx": {"package": "@example/acp@1.2.3"}})));
+    let npm = fake_npm(dir.path());
+    let mut env = npm.environment.clone();
+    env.insert("FAKE_NPM_IGNORE_PREFIX".into(), "1".into());
+    env.insert("HOME".into(), home.clone());
+    let c = catalog(dir.path(), &server, env.clone());
+    let error = c
+        .resolve(
+            &settings(),
+            Path::new("/w"),
+            Some(&env),
+            &ResolveOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    let detail = &error.detail;
+    assert!(detail.contains("shim"), "{detail}");
+    assert!(!detail.contains(&home), "{detail}");
+    assert!(
+        detail.starts_with(
+            "'npm' reported global prefix ~/external-npm-global instead of GOAT's managed prefix ~/"
+        ),
+        "{detail}"
+    );
+}
+
 // v1 AcpRegistrySupport.test.ts:498-529.
 #[tokio::test]
 async fn keeps_only_the_end_of_a_failed_install_output() {
