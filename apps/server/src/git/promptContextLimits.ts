@@ -11,5 +11,6 @@ export function limitContext(value: string, maxChars: number): string {
 export function limitCommandOutput(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   if (item.type !== "command_execution" || item.output === undefined) return item;
   if (item.output.length <= PR_THREAD_COMMAND_OUTPUT_CHARS) return item;
-  return { ...item, output: `[truncated]\n${item.output.slice(-PR_THREAD_COMMAND_OUTPUT_CHARS)}` };
+  const tail = item.output.slice(-PR_THREAD_COMMAND_OUTPUT_CHARS).replace(/^[\uDC00-\uDFFF]/u, "");
+  return { ...item, output: `[truncated]\n${tail}` };
 }
