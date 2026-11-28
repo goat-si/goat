@@ -18,7 +18,7 @@ import {
   ensureServerMachineNonce,
   serverMachineNonceDirectory,
 } from "../environment/ServerEnvironmentMachine.ts";
-import { awaitLauncherLoss } from "../launcherWatch.ts";
+import { stopOnLauncherLoss } from "../launcherWatch.ts";
 import { holdWorkspaceLeaseRegistry } from "../workspace/workspaceLeaseRegistry.ts";
 import {
   acquireServerOwnerLock,
@@ -125,15 +125,7 @@ const runServerCommand = Effect.fnUntraced(function* (
       yield* holdWorkspaceLeaseRegistry();
       const run = runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
       const desktop = config.mode === "desktop" && config.desktopBootstrapToken !== undefined;
-      const running = desktop
-        ? Effect.raceFirst(
-            run,
-            awaitLauncherLoss().pipe(
-              // End like SIGTERM does (interrupt-only exit, so the runtime forces process exit).
-              Effect.andThen(Effect.interrupt),
-            ),
-          )
-        : run;
+      const running = desktop ? stopOnLauncherLoss(run) : run;
       return yield* running.pipe(
         Effect.onExit((exit) =>
           Effect.gen(function* () {
