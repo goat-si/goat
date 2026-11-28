@@ -39,9 +39,9 @@ use agent_client_protocol::{Agent, Client, Lines, Responder, UntypedMessage};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use goat2_contracts::{
-    ApprovalDecision, ChatAttachment, ChatAttachmentType, EngineRef, ItemId, ModelSelection,
-    ProviderCapabilities, ProviderRequestKind, RequestId, RequestKind, RequestOutcome, ThreadId,
-    TurnItem, TurnItemBody, TurnItemStatus,
+    ChatAttachment, ChatAttachmentType, EngineRef, ItemId, ModelSelection, ProviderCapabilities,
+    ProviderRequestKind, RequestId, RequestKind, RequestOutcome, ThreadId, TurnItem, TurnItemBody,
+    TurnItemStatus,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
@@ -965,7 +965,13 @@ impl Shared {
             if let Some(turn) = state.turn.as_mut() {
                 turn.projector.close_segments(&mut out);
             }
-            let key = format!("question:{native_id}");
+            // An id the agent reuses while its first request is open gets a unique key, so it
+            // never replaces that request (final review 7-1 finding 3).
+            let mut key = format!("question:{native_id}");
+            if state.pending.contains_key(&key) {
+                state.request_counter += 1;
+                key = format!("{key}:{}", state.request_counter);
+            }
             let item = self.request_item(
                 &mut state,
                 &turn_id,
@@ -1039,6 +1045,10 @@ impl Shared {
             }
             state.request_counter += 1;
             let key = match &native_id {
+                // A reused id while the first is open gets a unique key (final review 7-1 finding 3).
+                Some(id) if state.pending.contains_key(&format!("elicitation:{id}")) => {
+                    format!("elicitation:{id}:{}", state.request_counter)
+                }
                 Some(id) => format!("elicitation:{id}"),
                 None => format!("elicitation:{}", state.request_counter),
             };
@@ -1825,35 +1835,55 @@ impl Shared {
 /// characters (v1 counts UTF-16 units; this counts Unicode scalar values).
 const MAX_FRAME_CHARS: usize = 16 * 1024 * 1024;
 
-/// Read one stdout line (newline included), at most [MAX_FRAME_CHARS] characters: a longer line
-/// fails the connection before it is held whole (final review finding 5). Invalid UTF-8 is
-/// replaced, as v1's `TextDecoder` does. None at end of file.
+/// A line's bytes are capped at four times [MAX_FRAME_CHARS] while it is read, so memory stays
+/// bounded however the bytes decode (final review 7-1 finding 1).
+const MAX_FRAME_BYTES: usize = 4 * MAX_FRAME_CHARS;
+
+/// Characters `String::from_utf8_lossy` makes of `bytes`: each valid character, plus one U+FFFD per
+/// invalid sequence, as v1's `TextDecoder` output that strictParser counts.
+fn lossy_char_count(bytes: &[u8]) -> usize {
+    bytes
+        .utf8_chunks()
+        .map(|chunk| chunk.valid().chars().count() + usize::from(!chunk.invalid().is_empty()))
+        .sum()
+}
+
+/// Read one stdout line (newline included), at most [MAX_FRAME_CHARS] characters as decoded: a
+/// longer line fails the connection (final review finding 5; v1 effect-acp strictParser.ts:17-30
+/// decodes, then counts). Invalid UTF-8 is replaced, as v1's `TextDecoder` does, and counts as one
+/// character per invalid sequence. None at end of file.
 pub(crate) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
 ) -> std::io::Result<Option<String>> {
+    let too_big = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ACP frame exceeds the maximum size",
+        )
+    };
     let mut line: Vec<u8> = Vec::new();
-    let mut chars = 0usize;
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
-            return Ok((!line.is_empty()).then(|| String::from_utf8_lossy(&line).into_owned()));
+            if line.is_empty() {
+                return Ok(None);
+            }
+            if lossy_char_count(&line) > MAX_FRAME_CHARS {
+                return Err(too_big());
+            }
+            return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
         }
         let newline = available.iter().position(|b| *b == b'\n');
         let take = newline.map_or(available.len(), |i| i + 1);
-        // UTF-8 continuation bytes do not start a character.
-        chars += available[..newline.unwrap_or(take)]
-            .iter()
-            .filter(|b| (**b & 0xC0) != 0x80)
-            .count();
-        if chars > MAX_FRAME_CHARS {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "ACP frame exceeds the maximum size",
-            ));
+        if line.len() + take > MAX_FRAME_BYTES + 1 {
+            return Err(too_big());
         }
         line.extend_from_slice(&available[..take]);
         reader.consume(take);
         if newline.is_some() {
+            if lossy_char_count(&line[..line.len() - 1]) > MAX_FRAME_CHARS {
+                return Err(too_big());
+            }
             return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
         }
     }
@@ -2110,6 +2140,13 @@ impl EngineSession for AcpSession {
             state.prompt_counter += 1;
             let next = state.prompt_counter;
             match state.turn.as_mut() {
+                // A prompt already answered and waiting to finish (deferred finalize) takes no steer:
+                // its next prompt's answer would be ignored (final review 7-1 finding 4).
+                Some(turn) if turn.turn_id == turn_id && turn.prompt_settled.is_some() => {
+                    return SteerResult::Declined {
+                        reason: format!("turn {turn_id} is finishing"),
+                    };
+                }
                 Some(turn) if turn.turn_id == turn_id && !turn.interrupted => {
                     turn.prompt_seq = next;
                     next
@@ -2753,8 +2790,17 @@ impl AcpEngineFactory {
                 }
             }) as crate::process::StderrHook
         };
-        let mut child = ChildProcess::spawn_with_stderr(&launch, Some(stderr_hook))
-            .map_err(|e| EngineError::Unavailable(format!("{}: {e}", launch.program.display())))?;
+        let mut child =
+            ChildProcess::spawn_with_stderr(&launch, Some(stderr_hook)).map_err(|e| {
+                // Home folders as ~ (final review 7-1 finding 2; the D2 rule for probe errors).
+                EngineError::Unavailable(format!(
+                    "{}: {e}",
+                    crate::probe::support::redact_home(
+                        &launch.program.display().to_string(),
+                        &crate::stderr::home_directories(),
+                    )
+                ))
+            })?;
         if let Ok(pgid) = i32::try_from(child.pid()) {
             let _ = shared.pgid.set(pgid);
         }
@@ -3263,16 +3309,5 @@ impl AcpEngineFactory {
             driver: flavor.engine_driver(),
             id: session_id,
         })
-    }
-}
-
-#[allow(dead_code)]
-fn approval_decision_label(decision: ApprovalDecision) -> &'static str {
-    match decision {
-        ApprovalDecision::Accept => "accept",
-        ApprovalDecision::AcceptForSession => "acceptForSession",
-        ApprovalDecision::AcceptAlways => "acceptAlways",
-        ApprovalDecision::Decline => "decline",
-        ApprovalDecision::Cancel => "cancel",
     }
 }

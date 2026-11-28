@@ -1403,3 +1403,51 @@ async fn short_stderr_without_newline_reaches_the_exit_reason() {
         "{reasons:?}"
     );
 }
+
+/// Final review 7-1 finding 1 (v1 strictParser.ts:17-30 decodes, then counts): a line of UTF-8
+/// continuation bytes counts one character per byte once decoded, so it cannot slip past the
+/// frame cap.
+#[tokio::test]
+async fn continuation_byte_flood_cannot_bypass_the_frame_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let flood = (20 * 1024 * 1024).to_string();
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_FLOOD_STDOUT", flood.as_str()),
+        ("GOAT_ACP_FLOOD_STDOUT_BYTE", "128"),
+    ]);
+    let error = match factory(flavor)
+        .with_timeouts(AcpTimeouts {
+            request: Duration::from_secs(10),
+            session_load: Duration::from_secs(10),
+            cancel: Duration::from_secs(2),
+        })
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+    {
+        Ok(_) => panic!("started"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("ACP frame exceeds the maximum size"),
+        "{error}"
+    );
+}
+
+/// Final review 7-1 finding 2: a program that cannot start is named with ~ for the home folder.
+#[tokio::test]
+async fn spawn_failure_shows_home_as_tilde() {
+    let home = std::env::var("HOME").expect("HOME");
+    let dir = tempfile::tempdir().unwrap();
+    let mut spec = spec(dir.path(), RuntimeMode::FullAccess);
+    spec.launch = Some(goat2_engine_api::LaunchSpec {
+        binary: Some(std::path::Path::new(&home).join("goat2-missing-acp-agent-7-1")),
+        args: vec![],
+        env: BTreeMap::new(),
+    });
+    let error = match factory(MockFlavor::new(&[])).start(spec).await {
+        Ok(_) => panic!("started a missing program"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("~/goat2-missing-acp-agent-7-1"), "{error}");
+    assert!(!error.contains(&home), "{error}");
+}

@@ -44,6 +44,7 @@
 //!   first; with `GOAT_ACP_CRASH_STDERR_PARTIAL=1` (GOAT 2) without a newline.
 //! - `GOAT_ACP_STDERR_HOLDER=1` (GOAT 2): start a child of the agent that keeps its stderr open and never exits
 //!   (it ends with the process group), so the agent's exit does not close stderr.
+//! - `GOAT_ACP_FLOOD_STDOUT_BYTE=<0-255>` (GOAT 2): flood with this byte instead of `x`.
 //! - `GOAT_ACP_FLOOD_STDOUT=<bytes>` (GOAT 2): print this many `x` on stdout without a newline at start, then
 //!   work normally.
 //! - `GOAT_ACP_URL_ELICITATION_ONCE_PATH=<file>` (GOAT 2): with `GOAT_ACP_URL_ELICITATION_ON_NEW=1`, only a
@@ -1019,7 +1020,10 @@ fn main() {
     }
     if let Some(bytes) = env("GOAT_ACP_FLOOD_STDOUT").and_then(|v| v.parse::<usize>().ok()) {
         let mut out = agent.out.lock().unwrap();
-        let block = vec![b'x'; 64 * 1024];
+        let byte = env("GOAT_ACP_FLOOD_STDOUT_BYTE")
+            .and_then(|v| v.parse::<u8>().ok())
+            .unwrap_or(b'x');
+        let block = vec![byte; 64 * 1024];
         let mut left = bytes;
         while left > 0 {
             let n = left.min(block.len());
