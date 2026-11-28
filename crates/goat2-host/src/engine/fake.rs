@@ -183,6 +183,28 @@ impl FakeEngine {
             .is_some_and(|tx| tx.send(event).is_ok())
     }
 
+    /// Emit a content delta for the current turn.
+    pub fn content_delta(
+        &self,
+        thread_id: &ThreadId,
+        item_id: ItemId,
+        stream_kind: goat2_contracts::ContentStreamKind,
+        text: &str,
+    ) -> bool {
+        let Some(turn_id) = self.active_turn(thread_id) else {
+            return false;
+        };
+        self.emit(
+            thread_id,
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text: text.to_owned(),
+            },
+        )
+    }
+
     /// Finish the running turn with a final answer.
     pub fn finish_turn(&self, thread_id: &ThreadId, answer: &str) -> bool {
         let Some(turn_id) = self.active_turn(thread_id) else {
