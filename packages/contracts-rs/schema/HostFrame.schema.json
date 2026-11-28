@@ -99,6 +99,10 @@
         "version",
         "description",
         "authors",
+        "license",
+        "website",
+        "repository",
+        "icon",
         "distribution",
         "integrity"
       ],
@@ -120,7 +124,7 @@
       "type": "object"
     },
     "AcpRegistryUrlAuthAction": {
-      "description": "v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the\nperson to open, answered by its elicitation id.\n\nv1's length checks on these strings are not carried: the registry driver bounds what it reads,\nand serde and the JSON Schema accept the same values.",
+      "description": "v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the\nperson to open, answered by its elicitation id.\n\n`url` is a v1 `SignInUrl` (trimmed, http(s) only, at most 16384 characters), checked by serde\nand the schema alike because clients open it. v1's length checks on the other strings are not\ncarried: the registry driver bounds what it reads, and serde and the schema accept the same values.",
       "properties": {
         "createdAt": {
           "type": [
@@ -141,6 +145,9 @@
           "type": "string"
         },
         "url": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
           "type": "string"
         }
       },
@@ -324,7 +331,7 @@
           "$ref": "#/$defs/BotFace"
         },
         "instructions": {
-          "description": "v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes (bytes checked by serde only).",
+          "description": "v1 `BotInstructions`: at most 16384 characters, checked by serde and schema alike. v1's\n16384 UTF-8 byte cap is enforced by the host's bot store, not by this contract.",
           "maxLength": 16384,
           "type": [
             "string",
@@ -418,6 +425,7 @@
       },
       "required": [
         "index",
+        "date",
         "text"
       ],
       "type": "object"
@@ -441,6 +449,7 @@
         }
       },
       "required": [
+        "revision",
         "notes",
         "truncated"
       ],
@@ -2217,6 +2226,7 @@
       "required": [
         "id",
         "name",
+        "description",
         "type"
       ],
       "type": "object"
@@ -2247,7 +2257,6 @@
       "description": "v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.",
       "properties": {
         "authorizationUrl": {
-          "default": null,
           "description": "v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.",
           "maxLength": 16384,
           "minLength": 1,
@@ -2313,7 +2322,11 @@
       },
       "required": [
         "instanceId",
-        "phase"
+        "phase",
+        "flowId",
+        "authorizationUrl",
+        "expiresAt",
+        "message"
       ],
       "type": "object"
     },
@@ -2533,7 +2546,6 @@
           ]
         },
         "totalBytes": {
-          "default": null,
           "format": "uint64",
           "maximum": 9007199254740991,
           "minimum": 0,
@@ -2551,9 +2563,14 @@
       },
       "required": [
         "driver",
+        "operationId",
         "phase",
         "downloadedBytes",
-        "canRemove"
+        "totalBytes",
+        "version",
+        "installedVersion",
+        "canRemove",
+        "message"
       ],
       "type": "object"
     },

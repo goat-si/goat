@@ -87,7 +87,7 @@ pub enum ClientFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         default_model_selection: Option<ModelSelection>,
-        /// v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes.
+        /// v1 `BotInstructions`: at most 16384 characters (as `BotProfile.instructions`).
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",

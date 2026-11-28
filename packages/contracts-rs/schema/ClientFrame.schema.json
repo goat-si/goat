@@ -370,7 +370,7 @@
           ]
         },
         "instructions": {
-          "description": "v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes.",
+          "description": "v1 `BotInstructions`: at most 16384 characters (as `BotProfile.instructions`).",
           "maxLength": 16384,
           "type": [
             "string",

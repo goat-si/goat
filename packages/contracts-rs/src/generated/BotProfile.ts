@@ -18,6 +18,7 @@ sessionThreadId: ThreadId,
  */
 defaultModelSelection: ModelSelection, 
 /**
- * v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes (bytes checked by serde only).
+ * v1 `BotInstructions`: at most 16384 characters, checked by serde and schema alike. v1's
+ * 16384 UTF-8 byte cap is enforced by the host's bot store, not by this contract.
  */
 instructions?: string, };

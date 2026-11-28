@@ -21,6 +21,36 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// For v1 `Schema.NullOr(T)` fields (key required, value may be `null`): with
+/// `deserialize_with` and no `default`, serde reports a missing key instead of reading `None`.
+/// Pair with `#[schemars(required)]` so the schema requires the key too.
+pub fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+/// Schema stand-in for a required nullable field: the `Option<T>` schema (`T` or `null`), but
+/// not reported as optional, so the key is listed in `required`. Use with
+/// `#[schemars(with = "crate::serde_util::Nullable<T>")]` next to [required_nullable].
+pub struct Nullable<T>(std::marker::PhantomData<T>);
+
+impl<T: schemars::JsonSchema> schemars::JsonSchema for Nullable<T> {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        format!("Nullable_{}", T::schema_name()).into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <Option<T> as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
 /// Enforces [crate::limits::MAX_SAFE_WIRE_INTEGER] on a `u64` wire field in both directions, so
 /// Rust never writes or accepts a counter JavaScript cannot represent exactly. Use with
 /// `#[serde(with = "crate::serde_util::safe_u64")]`.
@@ -154,19 +184,18 @@ mod tests {
     }
 }
 
-/// v1 `BotInstructions`: at most 16384 characters and 16384 UTF-8 bytes, checked when reading and
-/// writing. JSON Schema can only express the character limit; the byte limit is serde-only.
+/// v1 `BotInstructions` character limit ([crate::limits::BOT_INSTRUCTIONS_MAX_CHARS]), checked when
+/// reading and writing, the same rule as the JSON Schema `maxLength`. v1's UTF-8 byte cap is the
+/// host bot store's ([crate::limits::BOT_INSTRUCTIONS_MAX_BYTES]).
 pub mod instructions {
     use serde::{Deserialize, Deserializer, Serializer, de, ser};
 
-    use crate::limits::BOT_INSTRUCTIONS_MAX_BYTES;
+    use crate::limits::BOT_INSTRUCTIONS_MAX_CHARS;
 
     fn check(value: &str) -> Result<(), String> {
-        if value.chars().count() > BOT_INSTRUCTIONS_MAX_BYTES
-            || value.len() > BOT_INSTRUCTIONS_MAX_BYTES
-        {
+        if value.chars().count() > BOT_INSTRUCTIONS_MAX_CHARS {
             return Err(format!(
-                "bot instructions must fit in {BOT_INSTRUCTIONS_MAX_BYTES} characters and UTF-8 bytes"
+                "bot instructions must fit in {BOT_INSTRUCTIONS_MAX_CHARS} characters"
             ));
         }
         Ok(())
@@ -321,8 +350,10 @@ mod part2_tests {
     }
 
     #[test]
-    fn instructions_enforce_characters_and_bytes_both_ways() {
-        let at_limit = "a".repeat(crate::limits::BOT_INSTRUCTIONS_MAX_BYTES);
+    fn instructions_enforce_the_character_limit_both_ways() {
+        use crate::limits::BOT_INSTRUCTIONS_MAX_CHARS;
+        // Multibyte text at the character limit is accepted (the byte cap is the host store's).
+        let at_limit = "\u{e9}".repeat(BOT_INSTRUCTIONS_MAX_CHARS);
         let json = serde_json::to_value(bot(Some(at_limit.clone()))).unwrap();
         assert_eq!(
             serde_json::from_value::<BotProfile>(json)
@@ -330,12 +361,10 @@ mod part2_tests {
                 .instructions,
             Some(at_limit)
         );
-
-        // 8193 two-byte characters: within the character limit the schema checks, over the byte limit.
-        let multibyte = "\u{e9}".repeat(8193);
-        assert!(serde_json::to_value(bot(Some(multibyte.clone()))).is_err());
+        let over = "a".repeat(BOT_INSTRUCTIONS_MAX_CHARS + 1);
+        assert!(serde_json::to_value(bot(Some(over.clone()))).is_err());
         let mut json = serde_json::to_value(bot(None)).unwrap();
-        json["instructions"] = serde_json::Value::String(multibyte);
+        json["instructions"] = serde_json::Value::String(over);
         assert!(serde_json::from_value::<BotProfile>(json).is_err());
     }
 

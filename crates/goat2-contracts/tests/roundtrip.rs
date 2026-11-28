@@ -211,14 +211,74 @@ fn decision_reason_counts_utf16_units_like_v1() {
 }
 
 #[test]
-fn bot_instructions_enforce_utf8_byte_limit() {
+fn bot_instructions_limit_agrees_in_serde_and_schema() {
     let mut value = common::fixtures()
         .into_iter()
         .find(|f| f.root == "bot_profile")
         .unwrap()
         .value;
-    value["instructions"] = serde_json::json!("é".repeat(8192));
-    assert!(serde_json::from_value::<BotProfile>(value.clone()).is_ok());
-    value["instructions"] = serde_json::json!("é".repeat(8193));
-    assert!(serde_json::from_value::<BotProfile>(value).is_err());
+    for (text, ok) in [
+        ("\u{e9}".repeat(limits::BOT_INSTRUCTIONS_MAX_CHARS), true),
+        ("a".repeat(limits::BOT_INSTRUCTIONS_MAX_CHARS + 1), false),
+        (
+            "\u{e9}".repeat(limits::BOT_INSTRUCTIONS_MAX_CHARS + 1),
+            false,
+        ),
+    ] {
+        value["instructions"] = serde_json::json!(text);
+        assert_eq!(
+            serde_json::from_value::<BotProfile>(value.clone()).is_ok(),
+            ok
+        );
+        assert_eq!(validator("bot_profile").is_valid(&value), ok);
+    }
+}
+
+#[test]
+fn sign_in_urls_are_http_only_in_serde_and_schema() {
+    let base = serde_json::json!({"elicitationId": "e1", "url": "https://auth.example.invalid/x", "message": "Sign in"});
+    for (url, ok) in [
+        ("https://auth.example.invalid/x", true),
+        ("HTTP://auth.example.invalid/x", true),
+        ("javascript:alert(1)", false),
+        ("vscode://auth/cb", false),
+        (" https://padded.invalid", false),
+    ] {
+        let mut action = base.clone();
+        action["url"] = serde_json::json!(url);
+        assert_eq!(
+            serde_json::from_value::<AcpRegistryUrlAuthAction>(action).is_ok(),
+            ok,
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn required_nullable_keys_must_be_present() {
+    let install = serde_json::json!({
+        "driver": "codex", "operationId": null, "phase": "idle", "downloadedBytes": 0,
+        "totalBytes": null, "version": null, "installedVersion": null, "canRemove": false,
+        "message": null
+    });
+    assert!(serde_json::from_value::<ProviderInstallState>(install.clone()).is_ok());
+    for key in [
+        "operationId",
+        "totalBytes",
+        "version",
+        "installedVersion",
+        "message",
+    ] {
+        let mut missing = install.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            serde_json::from_value::<ProviderInstallState>(missing).is_err(),
+            "{key} may not be omitted"
+        );
+    }
+    let note = serde_json::json!({"index": 0, "date": null, "text": "x"});
+    assert!(serde_json::from_value::<ChannelBotNote>(note.clone()).is_ok());
+    let mut missing = note;
+    missing.as_object_mut().unwrap().remove("date");
+    assert!(serde_json::from_value::<ChannelBotNote>(missing).is_err());
 }
