@@ -132,7 +132,8 @@ def main(check):
                 problems.append(f"lifted file differs from v1: {f}")
         else:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if os.path.exists(dest) and open(dest, "rb").read() != src and "--force" not in sys.argv:
+            stale_bridge = os.path.exists(dest) and open(dest, "rb").read().startswith(b"// Bridge: v1 ")
+            if os.path.exists(dest) and not stale_bridge and open(dest, "rb").read() != src and "--force" not in sys.argv:
                 sys.exit(f"v1-lift: {f} was changed locally; lifted files stay byte-identical (use --force to re-copy)")
             open(dest, "wb").write(src)
         text = src.decode(errors="replace")
