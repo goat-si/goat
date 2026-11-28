@@ -56,3 +56,18 @@ names and literals kept. Full table: `crates/goat2-contracts/PROVENANCE.md`. Gen
 
 New in GOAT 2 (no source): goat2-contracts events, Fold, CardFile, subscribe frames and cursors, command frames, limits,
 codegen and tests (design: goat2-design prd-src/part1, goat2 structure/).
+
+## GOAT v1 UI lift (source 916b5ccc1b2)
+
+| GOAT 2 path | Source path @916b5cc | How / dropped |
+|---|---|---|
+| apps/web/src/v1/v1.css | apps/web/src/index.css | adapted light theme and tokens; dark colors, preflight and global shell styles dropped |
+| apps/web/src/v1/cn.ts | apps/web/src/lib/utils.ts | adapted cn; unrelated utilities and runtime imports dropped |
+| apps/web/src/v1/Icons.tsx | apps/web/src/components/solar/solar.generated.ts | adapted selected Solar Linear paths; other icons dropped |
+| apps/web/src/v1/WorkGroup.tsx | apps/web/src/components/chat/TimelineWorkGroupRows.tsx, TurnFoldLabel.tsx, WorkLog.tsx | adapted work labels and rows; context, virtualization, worktree and rich details dropped |
+| apps/web/src/v1/Messages.tsx | apps/web/src/components/chat/TimelineUserMessageRow.tsx, MessagesTimeline.tsx | adapted plain text rows; markdown, media, attribution and actions dropped |
+| apps/web/src/v1/QueuedBanner.tsx | apps/web/src/components/chat/QueuedRunsControl.tsx, ComposerBanner.tsx | adapted queue controls; optimistic state, sender, attachments, async errors, shortcuts and steer dropped |
+| apps/web/src/v1/ThreadComposer.tsx | apps/web/src/components/chat/ChatComposer.tsx, ComposerSurface.tsx, ComposerVoiceButton.tsx | adapted composer; rich editor, model menus, uploads, dictation and runtime integration dropped |
+| apps/web/src/v1/SidebarThreadRow.tsx | apps/web/src/components/sidebar/SidebarThreadRow.tsx, apps/web/src/components/ui/spinner.tsx | adapted row and spinner; menus, drag, pin, tooltips and runtime dropped |
+| apps/web/src/v1/ChatHeader.tsx | apps/web/src/components/chat/ChatHeader.tsx | adapted breadcrumb; title editing, menus, navigation and window actions dropped |
+| apps/web/src/v1/ActivitySidebar.tsx | apps/web/src/components/Sidebar.tsx, apps/web/src/components/sidebar/SidebarPriorityHeader.tsx | adapted sections; virtualization, bulk actions, pinning and runtime dropped |

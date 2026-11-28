@@ -1,0 +1,20 @@
+/* Adapted from design/paper/part1/1OXX-1.jsx@f5908df — dropped: real host, navigation and unrelated shell actions. */
+import { useState } from "react";
+import { ChatHeader } from "./ChatHeader.tsx";
+import { ActivitySidebar } from "./ActivitySidebar.tsx";
+import { WorkGroup } from "./WorkGroup.tsx";
+import { UserMessageBubble, AssistantMessage } from "./Messages.tsx";
+import { QueuedBanner } from "./QueuedBanner.tsx";
+import { ThreadComposer } from "./ThreadComposer.tsx";
+import { SidebarThreadRow } from "./SidebarThreadRow.tsx";
+export function Preview() {
+ const [value,setValue]=useState(""); const [editing,setEditing]=useState<string|null>(null);
+ const [items,setItems]=useState([{inputId:"1",text:"Also add a regression test for the sidebar key change",editable:true}]);
+ const banner=<QueuedBanner items={items} editingId={editing} onEdit={setEditing} onCancelEdit={()=>setEditing(null)} onSendNow={id=>setItems(items.filter(i=>i.inputId!==id))} onDelete={id=>setItems(items.filter(i=>i.inputId!==id))} onReorder={ids=>setItems(ids.map(id=>items.find(i=>i.inputId===id)!))}/>;
+ const row=(title:string, project:string, status:"needs"|"unread"|"running"|"idle"|"settled", selected=false)=><SidebarThreadRow title={title} providerIcon={<span style={{display:"block",width:14,height:14,borderRadius:3,background:"#6d6d6d"}}/>} project={project} meta="" status={status} selected={selected} onClick={()=>{}}/>;
+ return <div style={{display:"flex",height:"100vh",fontFamily:'-apple-system,BlinkMacSystemFont,system-ui,sans-serif',fontSize:14,background:"white",color:"#0d0d0d"}}>
+ <div style={{width:44,background:"#f7f7f7",borderRight:"1px solid #ececec",display:"flex",alignItems:"center",flexDirection:"column",gap:22,paddingTop:14}}><span>●</span><span>⌂</span><span>···</span><span>⌁</span><span>☷</span></div>
+ <div style={{width:256,background:"#f7f7f7"}}><ActivitySidebar priorityCount={2} priority={<>{row("Fix flaky auth re...","web-dashboard","needs")}{row("Add CSV export to r...","web-dashboard","needs")}</>} threads={<>{row("Refactor billing webhooks","api-server","unread",true)}{row("Migrate cron jobs to queue","api-server","idle")}{row("Update onboarding copy","web-dashboard","idle")}</>} working={<>{row("Investigate memory l...","","running")}{row("Write migration for in...","","running")}</>}/></div>
+ <main style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}><header style={{height:40,display:"flex",alignItems:"center",paddingInline:20,borderBottom:"1px solid #ececec"}}><ChatHeader title="Refactor billing webhooks" project="api-server"/></header>
+ <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",padding:"16px 24px 20px",minHeight:0}}><div style={{width:"100%",maxWidth:672,display:"flex",flexDirection:"column",gap:14,flex:1}}><UserMessageBubble text="The sidebar flickers when I switch threads quickly. Can you find out why and fix it?"/><WorkGroup status="worked" duration="4m 12s" defaultOpen steps={[{key:"1",verb:"Explored",detail:"3 files, 2 searches",status:"completed"},{key:"2",verb:"Edited",detail:"Sidebar.tsx",extra:"+118 −22",status:"completed"},{key:"3",verb:"Ran",detail:"bun run typecheck",status:"completed"},{key:"4",verb:"Failed",detail:"bun test sidebar.test.ts",status:"failed"}]}/><AssistantMessage text="The flicker came from the sidebar list re-keying every row when the active thread changed, so React remounted the whole list on each switch. I keyed rows by thread id and memoized the row renderer; typecheck passes."/><WorkGroup status="working" duration="22s" defaultOpen steps={[{key:"5",verb:"Running",detail:"bun test sidebar.test.ts",status:"running"}]}/></div><div style={{width:"100%",maxWidth:672}}><ThreadComposer value={value} onChange={setValue} onSubmit={()=>setValue("")} onStop={()=>{}} running placeholder="Ask anything. @ files, $ skills, / commands" accessLabel="Full access" modelLabel="GPT-5.5" effortLabel="High" providerIcon={<span>●</span>} plusProps={{disabled:true}} micProps={{disabled:true}} banner={banner}/></div></div></main></div>;
+}

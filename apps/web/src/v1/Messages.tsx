@@ -1,0 +1,3 @@
+/* Adapted from apps/web/src/components/chat/TimelineUserMessageRow.tsx@916b5cc and MessagesTimeline.tsx@916b5cc — dropped: markdown, attachments, attribution, selection actions and timestamps. */
+export function UserMessageBubble({ text }: { text: string }) { return <div className="v1 group flex flex-col items-end gap-1"><div className="relative min-w-0 rounded-2xl text-message-foreground bg-message max-w-[70%] px-4 py-2.5"><div className="whitespace-pre-wrap break-words">{text}</div></div></div>; }
+export function AssistantMessage({ text, streaming = false }: { text: string; streaming?: boolean }) { return <div className="v1 group/assistant min-w-0" aria-live={streaming ? "polite" : undefined}><div className="whitespace-pre-wrap break-words">{text}</div></div>; }
