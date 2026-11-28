@@ -835,12 +835,12 @@ impl Actor {
                     self.host
                         .runtime_update(&self.id, |rt| rt.last_answer = text);
                 }
-                self.append(vec![LogEvent::ItemCompleted(Box::new(ItemCompleted {
+                self.append(vec![LogEvent::ItemCompleted(ItemCompleted {
                     run_id,
                     item,
                     engine_locator: locator,
                     blob: None,
-                }))]);
+                })]);
                 self.host.stream_done(&self.id, &item_id);
             }
             EngineEvent::RequestOpened {
@@ -869,12 +869,12 @@ impl Actor {
                     let mut item = *item;
                     item.run_id = Some(run_id.clone());
                     item.thread_id = self.id.clone();
-                    events.push(LogEvent::ItemCompleted(Box::new(ItemCompleted {
+                    events.push(LogEvent::ItemCompleted(ItemCompleted {
                         run_id: run_id.clone(),
                         item,
                         engine_locator: None,
                         blob: None,
-                    })));
+                    }));
                 }
                 events.push(LogEvent::RequestOpened(RequestOpened {
                     request_id,
@@ -1098,7 +1098,7 @@ impl Actor {
             run_id: run.run_id.clone(),
             outcome,
             reason,
-            token_usage: run.usage.as_deref().cloned(),
+            token_usage: run.usage.clone(),
         }));
         if outcome == RunOutcome::Unknown {
             events.push(LogEvent::RequestOpened(RequestOpened {
