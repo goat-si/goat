@@ -101,8 +101,8 @@ edge `inset 0 0 0 1px` ink at 7%, lift `0 10px 32px` ink at 8%. Content (rows, b
 decision card) stays on opaque white cards. Muse: the home starts with a bot strip where the
 avatar ring carries state (red = needs you, dashed ink = working, solid ink = idle / GOAT).
 
-Mobile composer: text, provider chip (`gpt-6.1-sol ▾`, the same SVG chip as desktop) and send.
-Nothing else.
+Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
+no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
 
 Mobile decisions: the decision card is the last item in the transcript, above the floating
 composer (thumb zone). Two pill buttons only: Merge (filled ink) and Fix first (tint); "Not
