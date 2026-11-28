@@ -104,3 +104,46 @@ test("Cursor failure classes follow SDK error codes", async () => {
   assert.equal(cursorFailure({ name: "AuthenticationError" }).auth, true);
   assert.equal(cursorFailure({ code: "unavailable" }).kind, "transport_error");
 });
+
+test("Cursor projects reasoning, commands, edits, todos and subagent lifecycle", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const turn = (await h.request("turn.start", { inputs: input("projects"), settings })).result;
+    await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
+    const events = h.lines.flatMap(l => l.event ? [l.event] : []);
+    const items = events.filter(e => e.type === "item_completed").map(e => e.item);
+    for (const kind of ["assistant_message", "reasoning", "command_execution", "file_change", "todo_list", "subagent", "dynamic_tool"]) assert.ok(items.some(i => i.type === kind), kind);
+    assert.equal(items.find(i => i.type === "command_execution").outputOmitted, true);
+    assert.equal(items.find(i => i.type === "file_change").patchOmitted, true);
+    assert.deepEqual(events.filter(e => e.type === "subagent_update").map(e => e.status), ["running", "completed"]);
+    assert.equal(new Set(items.map(i => i.id)).size, items.length);
+    await h.request("shutdown", {});
+  } finally { h.child.kill(); }
+});
+
+test("Cursor resume cancels a paginated abandoned run before retrying", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", { ...init, resume: "existing" });
+    const result = (await h.request("turn.start", { inputs: input("recover"), settings })).result;
+    assert.equal(result.status, "accepted");
+    const finish = await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === result.turnId);
+    assert.equal(finish.event.outcome.type, "done");
+    await h.request("shutdown", {});
+  } finally { h.child.kill(); }
+});
+
+test("Cursor redacts credentials split across streamed text", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const turn = (await h.request("turn.start", { inputs: input("secret"), settings })).result;
+    await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
+    const events = h.lines.flatMap(l => l.event ? [l.event] : []);
+    assert.equal(events.filter(e => e.type === "text_delta").map(e => e.text).join(""), "[redacted]");
+    assert.equal(events.find(e => e.type === "item_completed" && e.item.type === "assistant_message").item.text, "[redacted]");
+    assert.ok(!JSON.stringify(events).includes("fake-key"));
+    await h.request("shutdown", {});
+  } finally { h.child.kill(); }
+});
