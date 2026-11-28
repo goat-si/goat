@@ -1,0 +1,111 @@
+{
+  "v": 1,
+  "name": "interrupt_ack_then_terminal",
+  "summary": "interrupt ack then terminal",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/codex_output.ts:20"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/turn_interrupt/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "cdd4561a331f36d57540a40487533c717e58212dea8deeadce020a91a9c9b7b9",
+        "sha256": "cdd4561a331f36d57540a40487533c717e58212dea8deeadce020a91a9c9b7b9"
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Do not answer immediately. First run the local shell command `sleep 30`, then respond with exactly: interrupt fixture should not finish naturally.",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "running",
+      "thread": "t1",
+      "until": "run_status",
+      "run": "r1",
+      "status": "running"
+    },
+    {
+      "do": "interrupt",
+      "id": "interrupt",
+      "thread": "t1",
+      "run": "r1"
+    }
+  ],
+  "expect": {
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
+      "run.finished",
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
+    ],
+    "threads": {
+      "t1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Do not answer immediately. First run the local shell command `sleep 30`, then respond with exactly: interrupt fixture should not finish naturally."
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r1",
+          "status": "interrupted"
+        }
+      ]
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}

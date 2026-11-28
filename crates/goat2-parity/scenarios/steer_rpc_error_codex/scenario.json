@@ -1,0 +1,98 @@
+{
+  "v": 1,
+  "name": "steer_rpc_error_codex",
+  "summary": "steer rpc error codex",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/message_steering/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/message_steering/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/message_steering/codex_output.ts:20"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/message_steering/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "ebf1ecfb96a664c4687f83de47f3d863d91a6017077baa9716260d3bab246ccb",
+        "sha256": "4f8f4b083970348e4a9749de8d7f31fae4cd1da43e8359c21de44440c2942dbe",
+        "transform": "Keep lines 1-18, replace line 19 result with JSON-RPC error -32600 synthetic steer rejection, keep 20-32, drop 33-41, keep 42-45 and replace line 44 turn.items[0] with line 31 first answer item."
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Respond with exactly: steering fixture initial response",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "steerable",
+      "thread": "t1",
+      "until": "steerable",
+      "run": "r1"
+    },
+    {
+      "do": "send",
+      "id": "send2",
+      "thread": "t1",
+      "input": "i2",
+      "text": "Actually, respond with exactly: steering fixture observed",
+      "mode": "steer",
+      "run": "r1"
+    }
+  ],
+  "expect": {
+    "complete": false,
+    "exhaustive": [
+      "input.accepted",
+      "run.started"
+    ],
+    "threads": {
+      "t1": [
+        {
+          "id": "accepted1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Respond with exactly: steering fixture initial response"
+        },
+        {
+          "id": "started1",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        }
+      ]
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}
