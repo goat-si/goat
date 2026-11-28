@@ -6,7 +6,7 @@ use goat2_contracts::{
 };
 use goat2_engine_api::{
     EngineEvent, EngineFactory, EngineHandle, EngineInput, LaunchSpec, McpEndpoint, RequestAnswer,
-    SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
+    SessionSpec, SteerResult, SteerStatus, TurnOutcome, TurnSettings, TurnStartResult,
 };
 use goat2_engine_sdk::pi::{PiFactory, PiProfile};
 use std::future::Future;
@@ -60,6 +60,48 @@ fn input(text: &str) -> Vec<EngineInput> {
         text: text.into(),
         attachments: vec![],
     }]
+}
+
+async fn check_steer_settlement(message: &str, interrupt: bool, completed: bool) {
+    let mut h = start("pi-steer-settlement").await;
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    let mut inputs = input(message);
+    inputs[0].input_id = InputId::from("steer-1");
+    let mut second = input("second").remove(0);
+    second.input_id = InputId::from("steer-2");
+    // A single input for fake command selection; interrupt case verifies multiple IDs.
+    if interrupt {
+        inputs.push(second);
+    }
+    assert_eq!(h.session.steer(&turn, inputs).await, SteerResult::Accepted);
+    if interrupt {
+        h.session.interrupt(&turn).await.unwrap();
+    }
+    let events = finished(&mut h).await;
+    let ids = if interrupt {
+        vec![InputId::from("steer-1"), InputId::from("steer-2")]
+    } else {
+        vec![InputId::from("steer-1")]
+    };
+    assert!(events.iter().any(|event| matches!(event, EngineEvent::SteerUpdated { turn_id, input_ids, status } if turn_id == &turn && input_ids == &ids && if completed { matches!(status, SteerStatus::Completed) } else { matches!(status, SteerStatus::Cancelled { .. }) })), "{events:?}");
+    assert!(matches!(
+        events.last(),
+        Some(EngineEvent::TurnFinished { .. })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn steer_read_is_completed_before_finish() {
+    check_steer_settlement("read-steer", false, true).await;
+}
+#[tokio::test]
+async fn steer_unread_is_cancelled_before_interrupt_finish() {
+    check_steer_settlement("queued", true, false).await;
+}
+#[tokio::test]
+async fn steer_unread_is_cancelled_before_normal_finish() {
+    check_steer_settlement("finish-unread", false, false).await;
 }
 
 #[tokio::test]

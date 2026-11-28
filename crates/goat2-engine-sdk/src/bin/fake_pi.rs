@@ -170,7 +170,17 @@ fn main() {
                         json!({"type":"response","id":request["id"],"command":"prompt","success":false,"error":"steer refused"}),
                     );
                 } else {
-                    response(&request, json!({}));
+                    response(&request, json!({"disposition":"queued"}));
+                    if request["message"] == "read-steer" {
+                        emit(
+                            json!({"type":"message_start","message":{"role":"user","content":[]}}),
+                        );
+                        finish("read", false);
+                        active = false;
+                    } else if request["message"] == "finish-unread" {
+                        finish("unread", false);
+                        active = false;
+                    }
                 }
             }
             "steer" => response(&request, json!({})),

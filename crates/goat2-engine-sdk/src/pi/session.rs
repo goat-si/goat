@@ -7,12 +7,12 @@ use crate::{
 };
 use async_trait::async_trait;
 use goat2_contracts::{
-    EngineDriver, EngineRef, ProviderCapabilities, ProviderOptionSelectionValue,
+    EngineDriver, EngineRef, InputId, ProviderCapabilities, ProviderOptionSelectionValue,
     ProviderProbeResult, RequestOutcome, RuntimeMode, ThreadId,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, TurnSettings, TurnStartResult,
+    RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnSettings, TurnStartResult,
 };
 use serde_json::{Value, json};
 use std::{
@@ -185,6 +185,8 @@ struct Shared {
     approvals: HashSet<(String, String)>,
     custom: CustomAnswers,
     pending_prompts: HashMap<String, PendingPrompt>,
+    steer_inputs: HashMap<String, Vec<InputId>>,
+    unread_steers: VecDeque<Vec<InputId>>,
     idle_probe: Option<String>,
     probe_attempt: u8,
     probe_failed: bool,
@@ -196,6 +198,21 @@ struct Shared {
     abort_pending: bool,
     barriers: HashMap<String, oneshot::Sender<bool>>,
     translator: Translator,
+}
+impl Shared {
+    fn cancel_unread(&mut self, tx: &mpsc::UnboundedSender<EngineEvent>) {
+        if let Some(turn_id) = &self.turn {
+            for input_ids in self.unread_steers.drain(..) {
+                let _ = tx.send(EngineEvent::SteerUpdated {
+                    turn_id: turn_id.clone(),
+                    input_ids,
+                    status: SteerStatus::Cancelled {
+                        reason: "Pi turn ended before reading the steer".into(),
+                    },
+                });
+            }
+        }
+    }
 }
 fn compact_command(message: &str) -> Option<Option<String>> {
     let text = message.trim();
@@ -239,6 +256,7 @@ fn watch_start_ack(shared: Arc<Mutex<Shared>>, tx: mpsc::UnboundedSender<EngineE
             }
             state.pending_prompts.clear();
             state.probe_failed = true;
+            state.cancel_unread(&tx);
             let process = state.process.clone();
             drop(state);
             let _ = tx.send(EngineEvent::Exited {
@@ -369,6 +387,7 @@ fn retry_probe(
         if attempt >= PROBE_ATTEMPTS {
             state.idle_probe = None;
             state.probe_failed = true;
+            state.cancel_unread(&tx);
             let process = state.process.clone();
             drop(state);
             let _ = tx.send(EngineEvent::Exited {
@@ -449,6 +468,7 @@ async fn pump(
         match msg {
             Inbound::Closed(reason) => {
                 let mut state = shared.lock().await;
+                state.cancel_unread(&tx);
                 state.idle_probe = None;
                 state.requests.clear();
                 state.custom.clear();
@@ -471,6 +491,7 @@ async fn pump(
                         state.barriers.clear();
                         state.pending_prompts.clear();
                         state.requests.clear();
+                        state.cancel_unread(&tx);
                         let process = state.process.clone();
                         drop(state);
                         let _ = tx.send(EngineEvent::Exited {
@@ -499,6 +520,22 @@ async fn pump(
                     }
                     if let Some(pending) = state.pending_prompts.remove(id) {
                         let success = record.get("success").and_then(Value::as_bool) == Some(true);
+                        if let Some(input_ids) = state.steer_inputs.remove(id)
+                            && success
+                            && let Some(turn_id) = state.turn.clone()
+                        {
+                            if record.pointer("/data/disposition").and_then(Value::as_str)
+                                == Some("queued")
+                            {
+                                state.unread_steers.push_back(input_ids);
+                            } else {
+                                let _ = tx.send(EngineEvent::SteerUpdated {
+                                    turn_id,
+                                    input_ids,
+                                    status: SteerStatus::Completed,
+                                });
+                            }
+                        }
                         let is_start =
                             matches!(pending, PendingPrompt::Start | PendingPrompt::CompactStart);
                         let is_compact = matches!(
@@ -537,6 +574,7 @@ async fn pump(
                                         .translator
                                         .translate(&json!({"type":"agent_settled"}), &turn),
                                 );
+                                state.cancel_unread(&tx);
                                 state.turn = None;
                                 state.requests.clear();
                                 state.custom.clear();
@@ -601,6 +639,7 @@ async fn pump(
                                 .take()
                                 .unwrap_or_else(|| json!({"type":"agent_settled"}));
                             let events = state.translator.translate(&settled, &turn);
+                            state.cancel_unread(&tx);
                             state.turn = None;
                             state.requests.clear();
                             state.custom.clear();
@@ -640,6 +679,16 @@ async fn pump(
                     return;
                 }
                 if let Some(turn) = state.turn.clone() {
+                    if record.get("type").and_then(Value::as_str) == Some("message_start")
+                        && record.pointer("/message/role").and_then(Value::as_str) == Some("user")
+                        && let Some(input_ids) = state.unread_steers.pop_front()
+                    {
+                        let _ = tx.send(EngineEvent::SteerUpdated {
+                            turn_id: turn.clone(),
+                            input_ids,
+                            status: SteerStatus::Completed,
+                        });
+                    }
                     if record.get("type").and_then(Value::as_str) == Some("agent_start") {
                         state.saw_activity = true;
                         state.idle_probe = None;
@@ -690,6 +739,7 @@ async fn pump(
                                     .cloned()
                                     .expect("nonempty custom queue");
                                 if let Err(error) = client.conn.send(&json!({"type":"extension_ui_response","id":id,"value":answer})).await {
+                                    state.cancel_unread(&tx);
                                     let _ = tx.send(EngineEvent::Exited { reason: error.to_string() });
                                     return;
                                 }
@@ -718,6 +768,7 @@ async fn pump(
                         );
                         if method == "confirm" && state.approvals.contains(&approval_key) {
                             if let Err(error) = client.conn.send(&json!({"type":"extension_ui_response","id":id,"confirmed":true})).await {
+                                state.cancel_unread(&tx);
                                 let _ = tx.send(EngineEvent::Exited { reason: error.to_string() });
                                 return;
                             }
@@ -777,6 +828,7 @@ async fn pump(
                     let output = state.translator.translate(&record, &turn);
                     for event in output {
                         if matches!(event, EngineEvent::TurnFinished { .. }) {
+                            state.cancel_unread(&tx);
                             state.turn = None;
                             state.requests.clear();
                             state.custom.clear();
@@ -978,6 +1030,8 @@ impl EngineFactory for PiFactory {
             approvals: HashSet::new(),
             custom: CustomAnswers::default(),
             pending_prompts: HashMap::new(),
+            steer_inputs: HashMap::new(),
+            unread_steers: VecDeque::new(),
             idle_probe: None,
             probe_attempt: 0,
             probe_failed: false,
@@ -1212,6 +1266,10 @@ impl EngineSession for PiSession {
         }
         let id = self.client.next_id();
         let (ack_tx, ack_rx) = oneshot::channel();
+        state.steer_inputs.insert(
+            id.clone(),
+            inputs.iter().map(|input| input.input_id.clone()).collect(),
+        );
         state.idle_probe = None;
         state.pending_prompts.insert(
             id.clone(),
@@ -1266,6 +1324,7 @@ impl EngineSession for PiSession {
                 state.pending_prompts.clear();
                 state.requests.clear();
                 state.custom.clear();
+                state.cancel_unread(&self.events);
                 state.turn = None;
                 let events = state
                     .translator
@@ -1408,9 +1467,11 @@ async fn finish_uncertain_steer(
     let Some(pending) = state.pending_prompts.remove(id) else {
         return;
     };
+    state.steer_inputs.remove(id);
     if matches!(pending, PendingPrompt::CompactSteer(_)) {
         state.probe_failed = true;
         state.pending_prompts.clear();
+        state.cancel_unread(tx);
         let process = state.process.clone();
         drop(state);
         let _ = tx.send(EngineEvent::Exited {
@@ -1498,6 +1559,7 @@ impl PiSession {
                 state.probe_failed = true;
                 state.pending_prompts.clear();
                 state.requests.clear();
+                state.cancel_unread(&self.events);
                 let process = state.process.clone();
                 drop(state);
                 let _ = self.events.send(EngineEvent::Exited {
@@ -1870,6 +1932,8 @@ mod dialog_lifecycle_tests {
             approvals: HashSet::new(),
             custom: CustomAnswers::default(),
             pending_prompts: HashMap::new(),
+            steer_inputs: HashMap::new(),
+            unread_steers: VecDeque::new(),
             idle_probe: None,
             probe_attempt: 0,
             probe_failed: false,
@@ -2048,6 +2112,8 @@ mod dialog_lifecycle_tests {
             approvals: HashSet::new(),
             custom: CustomAnswers::default(),
             pending_prompts: HashMap::from([("steer".into(), PendingPrompt::Steer(ack_tx))]),
+            steer_inputs: HashMap::new(),
+            unread_steers: VecDeque::new(),
             idle_probe: None,
             probe_attempt: 0,
             probe_failed: false,
