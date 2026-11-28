@@ -1,0 +1,9 @@
+{
+  "name": "@goat2/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": { "dev": "electron .", "typecheck": "tsc -p tsconfig.json" },
+  "devDependencies": { "@types/node": "catalog:", "electron": "catalog:", "typescript": "catalog:" }
+}

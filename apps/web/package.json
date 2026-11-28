@@ -1,0 +1,21 @@
+{
+  "name": "@goat2/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "vite build", "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@goat2/contracts": "workspace:*",
+    "@goat2/provider-icons": "workspace:*",
+    "@goat2/runtime-stamp": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

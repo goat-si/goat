@@ -1,0 +1,64 @@
+node_modules
+.bun
+.turbo
+.DS_Store
+*.log
+*.tsbuildinfo
+apps/*/dist
+apps/*/dist-exe
+infra/*/dist
+.astro
+packages/*/dist
+.env
+.env.local
+build/
+.logs/
+release/
+release-mock/
+.t3
+.goat
+.idea/
+apps/web/.playwright
+apps/web/playwright-report
+apps/web/src/components/__screenshots__
+.vitest-*
+__screenshots__/
+.tanstack
+squashfs-root/
+.vercel
+.gstack/
+.plans/
+/audits/
+dist-electron/
+.electron-runtime/
+.showcase/
+apps/mobile/.showcase/
+apps/mobile/.generated/
+apps/mobile/.android-cache/
+/.generated/
+artifacts/app-store/screenshots/
+artifacts/mobile-e2e/
+.github/pr-assets/
+# PR screenshots live on the orphan pr-assets branch (scripts/pr-assets.ts), never on dev.
+/pr-assets/
+# Personal Cursor state; the repository's agent rules live in AGENTS.md and .agents/skills.
+/.cursor/
+native/**/target/
+node_modules/
+.alchemy/
+*.log
+.env*
+!.env.example
+
+# pnpm content-addressable store; never belongs in the repo.
+.pnpm-store/
+
+# devlog/ is tracked. This overrides a machine-local "devlog/" in .git/info/exclude or a global
+# gitignore, which would make git add, lint-staged and vp fmt skip it. Patterns that match paths
+# inside it, such as "devlog/*", still apply.
+!/devlog/
+
+# Locally built computer use helpers (scripts/build-computer-use-helper*.ts)
+apps/desktop/.computer-use-helper/
+# Locally built Linux computer use helper (scripts/build-computer-use-helper-linux.ts)
+apps/server/.computer-use-helper-linux/
