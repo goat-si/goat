@@ -245,15 +245,19 @@ pub mod drive {
                 AwaitCond::Steerable { run } => self
                     .run(run)
                     .is_some_and(|(id, o)| o.is_none() && self.accepted_runs.contains(id)),
-                AwaitCond::RunStatus { run, status } => self.run(run).is_some_and(|(_, o)| {
-                    matches!(
-                        (status.as_str(), o),
-                        ("running", None)
-                            | ("completed", Some(RunOutcome::Completed))
-                            | ("interrupted", Some(RunOutcome::Interrupted))
-                            | ("failed", Some(RunOutcome::Failed))
-                    )
-                }),
+                // "running" is the run's own engine turn running (README), i.e. run.accepted.
+                AwaitCond::RunStatus { run, status } => {
+                    self.run(run)
+                        .is_some_and(|(id, o)| match (status.as_str(), o) {
+                            ("running", None) => self.accepted_runs.contains(id),
+                            (status, o) => matches!(
+                                (status, o),
+                                ("completed", Some(RunOutcome::Completed))
+                                    | ("interrupted", Some(RunOutcome::Interrupted))
+                                    | ("failed", Some(RunOutcome::Failed))
+                            ),
+                        })
+                }
             }
         }
     }
@@ -642,8 +646,12 @@ pub mod drive {
         };
         for step in &scenario.scenario.steps {
             if let Step::RestartHost { .. } = step {
-                // Stop the host (its engines with it), then start it again on the same data dir.
-                session.host = None;
+                // A crash, as v1's restart scenarios model it (snapshot before teardown): kill the
+                // host without letting it settle anything, then start it on the same data dir.
+                if let Some(mut host) = session.host.take() {
+                    let _ = host.child.kill();
+                    let _ = host.child.wait();
+                }
                 session.host = Some(start_host(base, &transcript)?);
                 let after = session.latest;
                 session.seen.push(Seen::Restarted { after });

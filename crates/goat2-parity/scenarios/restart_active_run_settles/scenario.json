@@ -108,8 +108,60 @@
       "status": "supported"
     },
     "goat2": {
-      "status": "pending",
-      "reason": "GOAT 2 settles an accepted run interrupted (owner decision; docs/parity/restart-settlement.md accepted_turn_restart_settlement); needs the goat2 target and the Codex driver"
+      "status": "supported",
+      "expect": {
+        "complete": true,
+        "exhaustive": [
+          "input.accepted",
+          "input.refused",
+          "queue.changed",
+          "run.started",
+          "steer.applied",
+          "run.finished",
+          "child.started",
+          "child.reported",
+          "parent.woken",
+          "tool.result",
+          "host.restarted"
+        ],
+        "threads": {
+          "t1": [
+            {
+              "id": "e1",
+              "kind": "input.accepted",
+              "thread": "t1",
+              "input": "i1",
+              "from": "user",
+              "mode": "start",
+              "text": "Respond with the following text: fixture simple ok"
+            },
+            {
+              "id": "e2",
+              "kind": "run.started",
+              "thread": "t1",
+              "run": "r1",
+              "inputs": [
+                "i1"
+              ]
+            },
+            {
+              "id": "e3",
+              "kind": "host.restarted",
+              "thread": "t1"
+            },
+            {
+              "id": "e4",
+              "kind": "run.finished",
+              "thread": "t1",
+              "run": "r1",
+              "status": "interrupted",
+              "cause": "The host restarted before the run finished."
+            }
+          ]
+        },
+        "happensBefore": []
+      },
+      "decision": "Deliberate difference (owner 2026-11-28 Q3; goat2-design prd-src/part1/runtime.md:98-105; docs/parity/restart-settlement.md): after a crash GOAT 2 settles a run the engine accepted (run.accepted) as interrupted, where v1 records cancelled with server_restart (ProviderRuntimeRecoveryService.ts:379-496). The runner kills the host (no graceful settle) once the run's engine turn is running."
     }
   }
 }

@@ -52,6 +52,13 @@ fn answers(events: &[EngineEvent], phase: AssistantMessagePhase) -> Vec<String> 
         .collect()
 }
 
+fn assert_no_steer_written(run: &Run) {
+    assert!(
+        !run.stdin_frames().iter().any(|f| f["priority"] == "next"),
+        "a steer frame reached the CLI"
+    );
+}
+
 fn finished(events: &[EngineEvent]) -> TurnOutcome {
     match events.last() {
         Some(EngineEvent::TurnFinished { outcome, .. }) => outcome.clone(),
@@ -934,10 +941,11 @@ async fn a_stale_eof_does_not_settle_the_reopened_session() {
     handle.session.shutdown().await;
 }
 
-/// Review round 6 finding 2: on a CLI without `command_lifecycle`, a steer whose write is still
-/// blocked when the turn ends, and then fails, is neither reported nor answered Accepted.
+/// Review round 6 finding 2, now under the owner's no-lifecycle rule: on a CLI known to send no
+/// `command_lifecycle`, even a steer larger than a pipe buffer is Declined before any write, so
+/// it is neither reported nor sent.
 #[tokio::test]
-async fn a_steer_whose_write_never_lands_is_not_accepted() {
+async fn a_large_steer_on_a_cli_without_lifecycle_is_declined_unwritten() {
     let run = Run::new("wire/steer_write_blocked_turn_ends.ndjson");
     let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
     let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
@@ -965,8 +973,8 @@ async fn a_steer_whose_write_never_lands_is_not_accepted() {
     };
     let (steered, seen) = tokio::join!(steer, collect);
     assert!(
-        !matches!(steered, SteerResult::Accepted),
-        "a steer that never reached Claude was accepted"
+        matches!(steered, SteerResult::Declined { .. }),
+        "{steered:?}"
     );
     assert!(
         steer_updates(&seen).is_empty(),
@@ -974,6 +982,7 @@ async fn a_steer_whose_write_never_lands_is_not_accepted() {
         steer_updates(&seen)
     );
     handle.session.shutdown().await;
+    assert_no_steer_written(&run);
 }
 
 /// Review round 6 finding 3: a lifecycle CLI queued the steer and finished the turn without
@@ -1000,11 +1009,11 @@ async fn a_queued_steer_left_unstarted_by_a_successful_turn_is_cancelled() {
     run.assert_replayed(1);
 }
 
-/// Review round 7 finding 1: the steer's write is still blocked when the CLI's first frame shows
-/// it has no `command_lifecycle`; the steer is accepted only once its write lands, so a write that
-/// never lands is neither reported nor accepted.
+/// Review round 7 finding 1, now under the owner's no-lifecycle rule: a steer sent before the
+/// CLI's first frame waits for it; the first frame shows no `command_lifecycle`, so the steer is
+/// Declined and never written.
 #[tokio::test]
-async fn a_steer_blocked_before_lifecycle_is_known_is_not_accepted_unwritten() {
+async fn a_steer_before_the_first_frame_of_a_cli_without_lifecycle_is_declined_unwritten() {
     let run = Run::new("wire/steer_blocked_before_first_frame.ndjson");
     let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
     let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
@@ -1028,13 +1037,17 @@ async fn a_steer_blocked_before_lifecycle_is_known_is_not_accepted_unwritten() {
         }
     };
     let (steered, seen) = tokio::join!(steer, collect);
-    assert!(!matches!(steered, SteerResult::Accepted), "{steered:?}");
+    assert!(
+        matches!(steered, SteerResult::Declined { .. }),
+        "{steered:?}"
+    );
     assert!(
         steer_updates(&seen).is_empty(),
         "an unwritten steer was reported: {:?}",
         steer_updates(&seen)
     );
     handle.session.shutdown().await;
+    assert_no_steer_written(&run);
 }
 
 /// Review round 7 finding 2: a frame the old process sent is received, then held (frame hook)
@@ -1747,4 +1760,150 @@ async fn a_subagent_finished_before_its_start_does_not_block_a_reopen() {
     assert_eq!(finished(&events), TurnOutcome::Done);
     assert_eq!(run.starts().len(), 2);
     handle.session.shutdown().await;
+}
+
+/// Context usage follows the current root request (v1 emitContextUsage): a placeholder without
+/// input is skipped, message_delta completes message_start, a snapshot of a measured message adds
+/// nothing, a subagent's message is ignored, a compaction resets to its post size, and the result
+/// carries Claude's total_cost_usd, all before TurnFinished.
+#[tokio::test]
+async fn token_usage_follows_the_current_request() {
+    let run = Run::new("wire/token_usage.ndjson");
+    let home = run.dir.join("claude-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut spec = run.spec(MODEL, RuntimeMode::ApprovalRequired, None);
+    let env = &mut spec.launch.as_mut().unwrap().env;
+    env.insert("CLAUDE_CONFIG_DIR".into(), home.display().to_string());
+    env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), "400000".into());
+    env.insert("DISABLE_COMPACT".into(), "0".into());
+    env.insert("DISABLE_AUTO_COMPACT".into(), "0".into());
+    let mut handle = goat2_engine_api::EngineFactory::start(&run.factory(), spec)
+        .await
+        .expect("start");
+    let turn_id = turn(
+        &handle,
+        "Count the files.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    let events = until_finished(&mut handle).await;
+    assert!(matches!(finished(&events), TurnOutcome::Done));
+    let usages: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::TokenUsage { turn_id: t, usage } => {
+                assert_eq!(t.as_deref(), Some(turn_id.as_str()));
+                Some(usage.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let used: Vec<u64> = usages.iter().map(|u| u.used_tokens).collect();
+    assert_eq!(used, vec![2050, 900, 3501, 3501], "{usages:?}");
+    for usage in &usages {
+        assert_eq!(usage.max_tokens, Some(1_000_000));
+        assert_eq!(usage.auto_compact_threshold, Some(367_000));
+    }
+    let first = &usages[0];
+    assert_eq!(first.input_tokens, Some(2000));
+    assert_eq!(first.cached_input_tokens, Some(800));
+    assert_eq!(first.output_tokens, Some(50));
+    assert_eq!(first.last_used_tokens, Some(2050));
+    assert_eq!(first.last_input_tokens, Some(2000));
+    assert_eq!(first.cost, None);
+    assert_eq!(
+        usages[1].input_tokens, None,
+        "a compaction reports its size only"
+    );
+    assert_eq!(usages[2].cost, None);
+    let cost = usages[3].cost.as_ref().expect("result cost");
+    assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.amount.as_f64(), Some(0.0123));
+    let last_usage = events
+        .iter()
+        .rposition(|e| matches!(e, EngineEvent::TokenUsage { .. }))
+        .unwrap();
+    let finished_at = events
+        .iter()
+        .position(|e| matches!(e, EngineEvent::TurnFinished { .. }))
+        .unwrap();
+    assert!(last_usage < finished_at);
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Thinking streams live (v1 reasoningDeltas, ClaudeAdapterV2.ts:6793-6830): each thinking_delta
+/// is a ContentDelta with ReasoningText on the reasoning item's id, before the snapshot completes
+/// that item under the same id; answer text keeps TextDelta on its own id.
+#[tokio::test]
+async fn thinking_streams_as_reasoning_deltas_on_the_reasoning_item() {
+    let run = Run::new("wire/thinking_stream.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let turn_id = turn(
+        &handle,
+        "Think, then answer.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let reasoning: Vec<(usize, String)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(at, event)| match event {
+            EngineEvent::ContentDelta {
+                turn_id: t,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                assert_eq!(t, &turn_id);
+                assert_eq!(item_id.as_str(), "msg_t:0");
+                assert_eq!(
+                    *stream_kind,
+                    goat2_contracts::ContentStreamKind::ReasoningText
+                );
+                Some((at, text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>(),
+        vec!["The user wants ", "a short answer."]
+    );
+    let completed = events
+        .iter()
+        .position(|event| {
+            matches!(event, EngineEvent::ItemCompleted { item, .. }
+                if item.id.as_str() == "msg_t:0"
+                    && matches!(&item.body, TurnItemBody::Reasoning { text, .. }
+                        if text == "The user wants a short answer."))
+        })
+        .expect("the reasoning item completes under the streamed id");
+    assert!(reasoning.iter().all(|(at, _)| *at < completed));
+    let text_deltas: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::TextDelta { item_id, text, .. } => {
+                Some((item_id.as_str().to_string(), text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text_deltas,
+        vec![("msg_t:1".to_string(), "Done.".to_string())]
+    );
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["Done."]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
 }

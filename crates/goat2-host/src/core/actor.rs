@@ -714,14 +714,14 @@ impl Actor {
         self.phase = Phase::Starting(permit);
         let host = self.host.clone();
         let tx = self.tx.clone();
+        let instance = card.engine.provider_instance_id.to_string();
         tokio::spawn(async move {
             let _slot = host.inner.sched.start_slot().await;
-            let result = host
-                .inner
-                .engine
-                .start(spec)
-                .await
-                .map_err(|e| e.to_string());
+            // The thread's provider instance picks the driver (the factory registry).
+            let result = match host.inner.providers.factory_for_start(&instance) {
+                Ok(factory) => factory.start(spec).await.map_err(|e| e.to_string()),
+                Err(reason) => Err(reason),
+            };
             let _ = tx.send(Msg::Started { pgen, result });
         });
     }
@@ -947,7 +947,23 @@ impl Actor {
             } => {
                 // Live text only for the running turn; a late item arrives whole.
                 if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
-                    self.host.stream_text(&self.id, &item_id, &text);
+                    self.host.stream_text(
+                        &self.id,
+                        &item_id,
+                        goat2_contracts::ContentStreamKind::AssistantText,
+                        &text,
+                    );
+                }
+            }
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
+                    self.host
+                        .stream_text(&self.id, &item_id, stream_kind, &text);
                 }
             }
             EngineEvent::ItemCompleted {
@@ -1187,6 +1203,18 @@ impl Actor {
                     self.requeue_cancelled_steer(&turn_id, input_ids, &reason);
                 }
             },
+            // Engine work outside a GOAT-started turn (Muse, Pi, OpenCode background turns).
+            // Host support is lane E's work item after the providers module and E-WF; until it
+            // lands drivers do not emit these, and anything that arrives is logged and ignored.
+            EngineEvent::SessionRequestOpened { kind, .. } => {
+                tracing::warn!(thread = %self.id, ?kind, "a request outside any turn is not handled yet: ignored");
+            }
+            EngineEvent::ContinuationRequested { .. } => {
+                tracing::warn!(thread = %self.id, "an engine continuation is not handled yet: ignored");
+            }
+            EngineEvent::ContinuationWithdrawn { .. } => {
+                tracing::warn!(thread = %self.id, "an engine continuation withdrawal is not handled yet: ignored");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
@@ -1890,6 +1918,8 @@ impl Actor {
         if self.session.is_some() {
             self.stop_session("the thread log could not be written")
                 .await;
+            // Text that was streaming will never complete: later subscribers must not see it.
+            self.host.stream_clear(&self.id);
         }
         if !matches!(self.phase, Phase::Idle) {
             // Dropping the permit (Running, Starting) or abandoning the wait releases the slot.

@@ -13,7 +13,9 @@ use std::path::PathBuf;
 
 use goat2_contracts::{
     ChatAttachment, EngineConfig, EngineItemLocator, EngineRef, InputId, ItemId,
-    ProviderCapabilities, ProviderProbeResult, RequestKind, ThreadId, TurnItem, TurnItemStatus,
+    ProviderAuthMethod, ProviderAuthState, ProviderCapabilities, ProviderInstallState,
+    ProviderInstanceId, ProviderProbeResult, ProviderSetup, RequestKind, ThreadId, TurnItem,
+    TurnItemStatus,
 };
 use tokio::sync::mpsc;
 
@@ -57,12 +59,28 @@ pub struct Instructions {
 
 /// Executable, arguments and environment for one engine process (v1 provider settings
 /// `binaryPath`, `launchArgs`, instance env; ACP registry commands per runtime mode).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// `Debug` prints environment keys only: an instance env can hold API keys.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct LaunchSpec {
     /// None = the driver's default binary name, looked up on PATH.
     pub binary: Option<PathBuf>,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for LaunchSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let env: BTreeMap<&str, &str> = self
+            .env
+            .keys()
+            .map(|k| (k.as_str(), "<redacted>"))
+            .collect();
+        f.debug_struct("LaunchSpec")
+            .field("binary", &self.binary)
+            .field("args", &self.args)
+            .field("env", &env)
+            .finish()
+    }
 }
 
 /// One input handed to the engine.
@@ -142,10 +160,18 @@ pub struct RequestAnswer {
 /// Events from a running engine process, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
-    /// Streaming text for an unfinished item. Never stored.
+    /// Assistant text shorthand for ContentDelta with AssistantText. Never stored.
     TextDelta {
         turn_id: String,
         item_id: ItemId,
+        text: String,
+    },
+    /// Streaming text for an unfinished item of the given kind. Never stored.
+    /// Reasoning deltas use the reasoning item id, followed by ItemCompleted with that id.
+    ContentDelta {
+        turn_id: String,
+        item_id: ItemId,
+        stream_kind: goat2_contracts::ContentStreamKind,
         text: String,
     },
     /// A finished item.
@@ -169,6 +195,42 @@ pub enum EngineEvent {
     },
     /// The engine resolved or withdrew a request by itself.
     RequestClosed { key: String },
+    /// A request the engine raised outside any GOAT-started turn: a background subagent's
+    /// approval (Muse, v1 `provider-muse adapter.ts:1053-1069`, `subagentOrigin`) or an extension
+    /// dialog (Pi, v1 `provider-pi adapter.ts:1693-1700` session-scoped `extension_ui_request`, handled at `:1991-1993`). It is explicit, so a late in-turn
+    /// `RequestOpened` with a stale `turn_id` never becomes one by accident.
+    ///
+    /// The host files it on the thread with no run (`run_id` None). It counts in
+    /// `card.openAsks` and reaches the inbox like any open request, so the person sees it. It
+    /// lives until the person answers it (`answer_request(key, ..)`), the engine closes it
+    /// (`RequestClosed`), or the session ends. Keys follow the sign-in rules: one request per
+    /// key, each key answered at most once per session. Sent by Muse and Pi; OpenCode only for
+    /// its background turns; never by Codex, Claude or Cursor.
+    /// Host support is lane E's work item (after the providers module and E-WF); until then
+    /// the host logs and ignores it, so drivers keep failing visibly instead of emitting it.
+    SessionRequestOpened {
+        key: String,
+        item_id: Option<ItemId>,
+        kind: RequestKind,
+        summary: String,
+        item: Option<Box<TurnItem>>,
+    },
+    /// The engine finished background work and holds a turn of its own that it wants to run
+    /// (v1 wake offers: `provider-muse adapter.ts:1308-1334`, `wakeOffers.ts:9-35`,
+    /// `provider-core ProviderContinuationRequests.ts:15-59`). The host records it like a child
+    /// wake: `input.accepted { from: system, text, clientRequestId: "continuation:<key>" }`,
+    /// shown in the timeline as a quiet system line, not as a person's message. It runs through
+    /// the normal queue when the thread is free, started with [EngineSession::start_continuation].
+    /// A later `ContinuationRequested` for the thread replaces a pending one (the earlier input
+    /// is cancelled while still queued). That is GOAT 2's rule: v1's queue keeps distinct offers
+    /// and replaces only one with the same key. Sent by Muse and Pi; OpenCode
+    /// only for its background turns. Host support: as for [EngineEvent::SessionRequestOpened].
+    ContinuationRequested { key: String, text: String },
+    /// The engine withdrew a pending continuation it no longer holds: the host cancels its input
+    /// while still queued; once its run has started this is ignored. A GOAT 2 event: v1 Muse
+    /// drops a held wake when it is consumed, fails or its session closes, and v1 OpenCode keeps
+    /// a wake it already offered (`backgroundTurns.ts:215-221`); here a driver says so explicitly.
+    ContinuationWithdrawn { key: String },
     /// The engine needs the person to sign in (Antigravity authorization URL, ACP authenticate,
     /// Claude "not logged in"). The host records it as `request.opened` kind `signin` on the run
     /// named by `turn_id` when there is one.
@@ -267,6 +329,78 @@ pub trait EngineFactory: Send + Sync + 'static {
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
         Err(EngineError::Unsupported("probe".into()))
     }
+
+    // Provider sign-in and install (v1 providerAuth.* / providerInstall.*, provider wire). The
+    // driver owns the provider-specific steps; the host routes commands, shows the latest state
+    // on the provider entry and re-probes after a success. Stream rule for every flow: the
+    // returned value is the state at start; every later phase change goes on `updates`; the
+    // driver drops the sender after a terminal phase (succeeded, failed, cancelled). The host
+    // never invents phases and drops a flow on restart (v1 marks it failed). An
+    // `authorizationUrl` stays in host memory and on the providers frame, never in a log.
+
+    /// v1 provider setup flags: whether GOAT can sign in to or install this provider.
+    fn setup(&self) -> ProviderSetup {
+        ProviderSetup {
+            can_authenticate: false,
+            can_install: false,
+            documentation_url: None,
+        }
+    }
+    /// The sign-in methods the provider offers for this instance.
+    async fn auth_methods(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<Vec<ProviderAuthMethod>, EngineError> {
+        let _ = target;
+        Err(EngineError::Unsupported("auth_methods".into()))
+    }
+    /// Start a sign-in. Every state returned or sent carries `target.instance_id`.
+    async fn auth_start(
+        &self,
+        target: &ProviderTarget,
+        method_id: Option<String>,
+        updates: mpsc::UnboundedSender<ProviderAuthState>,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let _ = (target, method_id, updates);
+        Err(EngineError::Unsupported("auth_start".into()))
+    }
+    async fn auth_cancel(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let _ = (target, flow_id);
+        Err(EngineError::Unsupported("auth_cancel".into()))
+    }
+    async fn auth_logout(&self, target: &ProviderTarget) -> Result<ProviderAuthState, EngineError> {
+        let _ = target;
+        Err(EngineError::Unsupported("auth_logout".into()))
+    }
+    /// Install or update the provider (per driver: `ProviderInstallState.driver` is this
+    /// factory's kind).
+    async fn install_start(
+        &self,
+        launch: Option<&LaunchSpec>,
+        updates: mpsc::UnboundedSender<ProviderInstallState>,
+    ) -> Result<ProviderInstallState, EngineError> {
+        let _ = (launch, updates);
+        Err(EngineError::Unsupported("install_start".into()))
+    }
+    async fn install_cancel(
+        &self,
+        operation_id: &str,
+    ) -> Result<ProviderInstallState, EngineError> {
+        let _ = operation_id;
+        Err(EngineError::Unsupported("install_cancel".into()))
+    }
+}
+
+/// The provider instance a sign-in is for: several instances can share one driver kind, each
+/// with its own binary and environment (e.g. its `CODEX_HOME`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderTarget {
+    pub instance_id: ProviderInstanceId,
+    pub launch: Option<LaunchSpec>,
 }
 
 /// Controls one engine process.
@@ -280,6 +414,22 @@ pub trait EngineSession: Send + Sync {
         settings: &TurnSettings,
     ) -> TurnStartResult;
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult;
+    /// Run a continuation the engine offered ([EngineEvent::ContinuationRequested]): resume the
+    /// turn it holds under `key`, with `inputs` (the continuation's own input). A driver that
+    /// no longer holds `key` (a restart, a later offer replaced it, the workflow ended) answers
+    /// `Declined`; the host then drops that input and never sends its text as a fresh prompt.
+    /// The default declines, for engines that never offer continuations.
+    async fn start_continuation(
+        &self,
+        key: &str,
+        inputs: Vec<EngineInput>,
+        settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let _ = (key, inputs, settings);
+        TurnStartResult::Declined {
+            reason: "continuation no longer available".into(),
+        }
+    }
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError>;
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError>;
     /// Change model or runtime mode inside the running session (Claude `set_model` /
@@ -308,4 +458,31 @@ pub trait EngineSession: Send + Sync {
     }
     /// Stop the process group (lane B `kill_group()`). Idempotent.
     async fn shutdown(&self);
+}
+
+#[cfg(test)]
+mod launch_spec_tests {
+    use super::{LaunchSpec, ProviderTarget};
+
+    #[test]
+    fn debug_never_prints_environment_values() {
+        let spec = LaunchSpec {
+            binary: Some("/usr/local/bin/codex".into()),
+            args: vec!["--profile".into(), "work".into()],
+            env: [("OPENAI_API_KEY".to_owned(), "sk-SECRET-VALUE".to_owned())].into(),
+        };
+        let target = ProviderTarget {
+            instance_id: "codex".into(),
+            launch: Some(spec.clone()),
+        };
+        for printed in [
+            format!("{spec:?}"),
+            format!("{target:?}"),
+            format!("{target:#?}"),
+        ] {
+            assert!(!printed.contains("sk-SECRET-VALUE"), "{printed}");
+            assert!(printed.contains("OPENAI_API_KEY"), "{printed}");
+            assert!(printed.contains("/usr/local/bin/codex"), "{printed}");
+        }
+    }
 }

@@ -9,6 +9,7 @@ pub mod launch;
 pub mod probe;
 pub mod process;
 pub mod protocol;
+pub mod usage;
 pub mod util;
 
 pub use capabilities::claude_capabilities;
