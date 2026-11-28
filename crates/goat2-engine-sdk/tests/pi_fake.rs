@@ -982,6 +982,23 @@ async fn factory_probe_uses_fake_binary() {
     assert!(!probe.models.is_empty());
 }
 
+/// A missing CLI answers at once (installed: false, cli missing) for both profiles. The host's
+/// first provider list waits for every instance's probe, and Pi/OmO rows exist for every user,
+/// so this must never wait on a timeout.
+#[tokio::test]
+async fn missing_cli_probe_answers_not_installed_without_waiting() {
+    for profile in [PiProfile::Pi, PiProfile::Omo] {
+        let factory = PiFactory::new(profile).with_binary("/nonexistent/goat2-test/pi");
+        let probe = tokio::time::timeout(Duration::from_secs(2), factory.probe())
+            .await
+            .expect("a missing CLI answers well inside the 10s version timeout")
+            .expect("probe answers");
+        assert!(!probe.installed);
+        assert_eq!(probe.cli, Some(goat2_contracts::ServerProviderCli::Missing));
+        assert_eq!(probe.status, goat2_contracts::ServerProviderState::Error);
+    }
+}
+
 #[tokio::test]
 async fn model_and_thinking_selection_reach_the_runtime() {
     let mut h = start("pi-config").await;
