@@ -277,6 +277,29 @@ test("a failed cancellation does not mark a later completed turn interrupted", a
   } finally { h.child.kill(); }
 });
 
+test("Cursor retries cancellation after the previous attempt failed", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const turn = (await h.request("turn.start", { inputs: input("cancel-retry-hang"), settings })).result;
+    assert.equal((await h.request("turn.interrupt", { turnId: turn.turnId })).error?.code, "transport");
+    assert.deepEqual((await h.request("turn.interrupt", { turnId: turn.turnId })).result, {});
+    assert.equal((await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId)).event.outcome.type, "interrupted");
+  } finally { h.child.kill(); }
+});
+
+test("Cursor completes a finished turn while cancellation is unresponsive", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const turn = (await h.request("turn.start", { inputs: input("wait-done-cancel-hang"), settings })).result;
+    void h.request("turn.interrupt", { turnId: turn.turnId }).catch(() => {});
+    assert.equal((await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId)).event.outcome.type, "done");
+    const next = (await h.request("turn.start", { inputs: input("plain"), settings })).result;
+    assert.equal(next.status, "accepted");
+  } finally { h.child.kill(); }
+});
+
 test("Cursor SDK diagnostics cannot leak credentials across writes", async () => {
   const h = helper({ GOAT_TEST_DIAGNOSTIC: "1" });
   try {

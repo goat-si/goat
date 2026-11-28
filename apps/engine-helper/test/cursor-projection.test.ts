@@ -65,3 +65,11 @@ test("uses streamed shell output when the final result contains none", () => {
   assert.ok(item && item.type === "command_execution");
   assert.equal(item.output, "streamed");
 });
+
+test("preserves assistant messages from task conversation steps", () => {
+  const { update, items } = setup();
+  update("tool-call-completed", "task", { type: "task", args: { description: "Work", prompt: "Go" }, result: { status: "success", value: { conversationSteps: [{ type: "assistantMessage", message: { text: "first" } }, { assistantMessage: { text: "second" } }], resultSuffix: "done" } } });
+  const task = items()[0];
+  assert.ok(task && task.type === "subagent");
+  assert.equal(task.result, "first\nsecond\ndone");
+});

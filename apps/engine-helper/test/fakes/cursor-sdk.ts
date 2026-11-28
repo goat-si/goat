@@ -28,9 +28,12 @@ export class CursorAgentPlatform {
       if (message === "recover" && !platform.cancelled) throw new Error("already has active run");
       if (message === "reject") throw new Error("scripted failure");
       const id = `run-${++counter}`;
+      let cancelCount = 0;
       let resolve: (value: any) => void = () => {};
       const finished = new Promise(r => { resolve = r; });
       const run = { id, agentId, async wait() { return finished; }, async cancel() {
+        if (message === "cancel-retry-hang" && ++cancelCount === 1) throw new Error("temporary cancel failure");
+        if (message === "wait-done-cancel-hang") { resolve({ id, status: "finished" }); return new Promise<void>(() => {}); }
         if (message === "cancel-fails-hang") { resolve({ id, status: "finished" }); await new Promise<void>(r => setImmediate(r)); throw new Error("cancel failed"); }
         resolve({ id, status: "cancelled" });
       }, async steer(text: string) { return text === "refuse" ? "revert_to_followup" : "complete_delivered"; } };

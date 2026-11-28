@@ -202,7 +202,6 @@ class CursorSession implements EngineSession {
     let outcome: { type: "done" } | { type: "failed"; reason: string } | { type: "interrupted" };
     try {
       const result = await active.run.wait();
-      if (active.cancelPending) await active.cancelPending;
       if (active.finalized) return;
       if (result.status === "finished") active.projection.fallback(result.result);
       if (active.interrupted || result.status === "cancelled") {
@@ -218,7 +217,6 @@ class CursorSession implements EngineSession {
         outcome = { type: "failed", reason: failure.message };
       }
     } catch (cause) {
-      if (active.cancelPending) await active.cancelPending;
       if (active.finalized) return;
       const failure = cursorFailure(cause);
       if (failure.auth && !active.interrupted) this.host.emit({ type: "auth_required", turnId: active.run.id, url: null, message: failure.message });
@@ -246,7 +244,10 @@ class CursorSession implements EngineSession {
     const active = this.active;
     if (!active || active.run.id !== turnId) return;
     const pending = active.cancelPending ??= Promise.resolve().then(() => active.run.cancel()).then(() => { active.interrupted = true; return true; }, () => false);
-    if (!await pending) throw new HelperError("transport", "Cursor could not interrupt the run.");
+    if (!await pending) {
+      if (active.cancelPending === pending) delete active.cancelPending;
+      throw new HelperError("transport", "Cursor could not interrupt the run.");
+    }
     // v1 adapter.ts:1750-1772: settle even if the SDK never resolves wait after cancel.
     setTimeout(() => { if (!active.finalized) { this.interruptedPrompt = active.prompt; this.finalize(active, { type: "interrupted" }); } }, 10_000).unref();
   }

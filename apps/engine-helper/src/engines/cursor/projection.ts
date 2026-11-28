@@ -4,6 +4,17 @@ import { assistantMessage, item, reasoning } from "../../items.ts";
 import type { HelperItem } from "../../protocol.ts";
 import { CursorTransportFailure } from "./transportFailure.ts";
 
+// v1 conversationSteps.ts:23-39: both SDK and native envelopes carry assistant text.
+function conversationTexts(steps: readonly unknown[]): string[] {
+  return steps.flatMap(step => {
+    if (typeof step !== "object" || step === null) return [];
+    const row = step as Record<string, unknown>;
+    const value = row.type === "assistantMessage" ? row.message : row.assistantMessage;
+    if (typeof value !== "object" || value === null || !("text" in value) || typeof value.text !== "string") return [];
+    return value.text.trim() ? [value.text] : [];
+  });
+}
+
 // Adapted from v1 adapter.ts:240-282, 729-856 and turnProjection.ts:290-390.
 export class CursorProjection {
   #current: { kind: "assistant" | "reasoning"; id: string; text: string } | undefined;
@@ -114,7 +125,11 @@ export class CursorProjection {
         const steps = todos.filter(t => t.status !== "cancelled" && t.content.trim()).map((t, i) => ({ id: `todo-${i + 1}`, text: t.content, status: t.status === "inProgress" ? "running" as const : t.status === "completed" ? "completed" as const : "pending" as const }));
         result = item(base, "todo_list", { planId: id, steps }); break;
       }
-      case "task": result = item(base, "subagent", { subagentId: call.args.agentId ?? callId, origin: "provider_native", driver: "cursor", providerInstanceId: this.instanceId, childThreadId: null, prompt: call.args.prompt, result: call.result?.status === "success" ? call.result.value.resultSuffix ?? null : null }); break;
+      case "task": {
+        const value = call.result?.status === "success" ? call.result.value : undefined;
+        const parts = [...conversationTexts(value?.conversationSteps ?? []), ...(value?.resultSuffix ? [value.resultSuffix] : [])].filter(part => part.trim());
+        result = item(base, "subagent", { subagentId: call.args.agentId ?? callId, origin: "provider_native", driver: "cursor", providerInstanceId: this.instanceId, childThreadId: null, prompt: call.args.prompt, result: parts.length ? parts.join("\n") : null }); break;
+      }
       default: {
         const name = call.type === "read" ? "Read" : call.type === "mcp" ? `mcp__${call.args.providerIdentifier ?? "mcp"}__${call.args.toolName ?? "unknown"}` : call.type;
         const output = call.result?.status === "success" && call.type === "mcp"
