@@ -3,16 +3,32 @@ import {
   EnvironmentRegistry,
   type SupervisorConnectionState,
 } from "@goat/client-runtime/connection";
-import { EnvironmentId, WS_METHODS } from "@goat/contracts";
+import { type ClientActivityReportInput, EnvironmentId, WS_METHODS } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
+
+const capturedRequests = vi.hoisted(
+  () => [] as Array<{ readonly method: string; readonly input: unknown }>,
+);
+vi.mock(import("@goat/client-runtime/rpc"), async (original) => {
+  const actual = await original();
+  const wrappedRequest = (...args: Parameters<typeof actual.request>) => {
+    capturedRequests.push({ method: args[0], input: args[1] });
+    return actual.request(...args);
+  };
+  return {
+    ...actual,
+    request: wrappedRequest as typeof actual.request,
+  };
+});
 
 import {
   layer,
@@ -76,6 +92,7 @@ describe("wasRecentlyInteracted", () => {
 
 describe("layer", () => {
   beforeEach(() => {
+    capturedRequests.length = 0;
     const target = new EventTarget();
     const listeners = {
       addEventListener: target.addEventListener.bind(target),
@@ -256,13 +273,161 @@ describe("layer", () => {
 
       yield* Deferred.succeed(release, undefined);
       yield* TestClock.adjust("1 millis");
-      // Next scheduled pass runs once the previous attempt has settled.
-      yield* TestClock.adjust("25 seconds");
+      // The focus trigger queued during the in-flight attempt fires one follow-up immediately.
       for (const envId of envIds) {
         expect(callsByEnv.get(envId)).toBe(2);
         expect(peakByEnv.get(envId)).toBe(1);
       }
+
+      // Next scheduled periodic pass runs after the interval.
+      yield* TestClock.adjust("25 seconds");
+      for (const envId of envIds) {
+        expect(callsByEnv.get(envId)).toBe(3);
+        expect(peakByEnv.get(envId)).toBe(1);
+      }
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "runs a follow-up report with updated focus and scopes when activity changes while a report is in flight",
+    () =>
+      Effect.gen(function* () {
+        let focused = false;
+        const target = new EventTarget();
+        const listeners = {
+          addEventListener: target.addEventListener.bind(target),
+          removeEventListener: target.removeEventListener.bind(target),
+          dispatchEvent: target.dispatchEvent.bind(target),
+        };
+        vi.stubGlobal("window", {
+          ...listeners,
+          localStorage: { getItem: () => "client", setItem: () => undefined },
+        });
+        vi.stubGlobal("document", {
+          ...listeners,
+          visibilityState: "visible",
+          hasFocus: () => focused,
+        });
+
+        const envId = EnvironmentId.make("env-followup");
+        const entries = yield* SubscriptionRef.make(new Map([[envId, { enabled: true }]]));
+        const releaseFirst = yield* Deferred.make<void>();
+        let callCount = 0;
+
+        const registry = EnvironmentRegistry.EnvironmentRegistry.of({
+          entries,
+          state: () =>
+            Effect.succeed<SupervisorConnectionState>({
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "connected",
+            }),
+          run: () => {
+            callCount += 1;
+            return callCount === 1 ? Deferred.await(releaseFirst) : Effect.void;
+          },
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+
+        yield* Layer.build(
+          layer.pipe(
+            Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry)),
+          ),
+        );
+
+        // Initial report starts with focused=false and only baseline scope.
+        yield* TestClock.adjust("1 second");
+        expect(callCount).toBe(1);
+        expect(capturedRequests).toHaveLength(1);
+        expect(capturedRequests[0]?.input).toMatchObject<Partial<ClientActivityReportInput>>({
+          environmentId: envId,
+          focused: false,
+          scopes: [{ type: "provider-status" }],
+        });
+
+        // While the first report is still in flight, window gains focus and a vcs-status scope is retained.
+        focused = true;
+        const releaseScope = yield* observeBackgroundActivitySubscription({
+          environmentId: envId,
+          method: WS_METHODS.subscribeVcsStatus,
+          input: { cwd: "/repo/live" },
+        });
+        window.dispatchEvent(new Event("focus"));
+        yield* TestClock.adjust("500 millis");
+        // Still only 1 concurrent in-flight call.
+        expect(callCount).toBe(1);
+
+        // Once the first attempt settles, one follow-up fires immediately with the updated payload.
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* TestClock.adjust("1 millis");
+        expect(callCount).toBe(2);
+        expect(capturedRequests).toHaveLength(2);
+        expect(capturedRequests[1]?.input).toMatchObject<Partial<ClientActivityReportInput>>({
+          environmentId: envId,
+          focused: true,
+          scopes: [{ type: "provider-status" }, { type: "vcs-status", cwd: "/repo/live" }],
+        });
+
+        yield* releaseScope;
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "triggers a report promptly when an enabled environment transitions into connected and cleans up watchers on removal",
+    () =>
+      Effect.gen(function* () {
+        const envId = EnvironmentId.make("env-connecting");
+        const entries = yield* SubscriptionRef.make(new Map([[envId, { enabled: true }]]));
+        const connState = yield* SubscriptionRef.make<SupervisorConnectionState>({
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connecting",
+        });
+        let reportCount = 0;
+        let activeWatchers = 0;
+
+        const registry = EnvironmentRegistry.EnvironmentRegistry.of({
+          entries,
+          state: () => SubscriptionRef.get(connState),
+          stateChanges: () =>
+            Stream.unwrap(
+              Effect.acquireRelease(
+                Effect.sync(() => {
+                  activeWatchers += 1;
+                }),
+                () =>
+                  Effect.sync(() => {
+                    activeWatchers -= 1;
+                  }),
+              ).pipe(Effect.as(SubscriptionRef.changes(connState))),
+            ),
+          run: () =>
+            Effect.sync(() => {
+              reportCount += 1;
+            }),
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+
+        yield* Layer.build(
+          layer.pipe(
+            Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry)),
+          ),
+        );
+
+        // Connecting environment does not report on startup.
+        yield* TestClock.adjust("1 second");
+        expect(reportCount).toBe(0);
+        expect(activeWatchers).toBe(1);
+
+        // Transitioning into connected reports promptly without waiting for the 25s timer.
+        yield* SubscriptionRef.set(connState, {
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected" as const,
+        });
+        yield* TestClock.adjust("1 millis");
+        expect(reportCount).toBe(1);
+
+        // Removing the environment interrupts its stateChanges watcher cleanly.
+        yield* SubscriptionRef.set(entries, new Map());
+        yield* TestClock.adjust("1 millis");
+        expect(activeWatchers).toBe(0);
+      }).pipe(Effect.scoped),
   );
 
   it.effect(
