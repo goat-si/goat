@@ -24,11 +24,14 @@ pub struct BotState {
     pub(crate) guards: Mutex<guards::Guards>,
 }
 
-/// Whether the host's engine can steer a message into a running turn. The Part 1 host runs one
-/// factory, Codex (v1 `CodexCapabilities.ts` supportsActiveSteering: true); from lane C step 1
-/// this reads `EngineFactory::capabilities().supports_active_steering`.
+/// Whether the engine can steer a message into a running turn (v1 capability flag
+/// supportsActiveSteering; Codex: true, `CodexCapabilities.ts`).
 pub(crate) fn engine_steers(host: &Host) -> bool {
-    host.options().bot_steering
+    host.inner
+        .engine
+        .capabilities()
+        .turns
+        .supports_active_steering
 }
 
 /// Hook (accept): the mode of a person's message to a bot. GOAT 2 decision (owner 2026-11-28):

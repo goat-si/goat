@@ -30,9 +30,6 @@ fn opts(dir: &std::path::Path, generation: u64) -> HostOptions {
         memory_limit_bytes: 1_000,
         memory_sample: Duration::from_secs(3600),
         max_wait: Duration::from_secs(5),
-        // These tests pin the Part 1 queue rules on bot threads (v1 queues behind a running
-        // turn); steering a person's message into a bot turn is covered in bot_runtime.rs.
-        bot_steering: false,
         ..HostOptions::new(
             dir.to_path_buf(),
             generation,
@@ -56,6 +53,9 @@ async fn open_at(
         .collect();
     let store = Arc::new(store);
     let stall = StallRecorder::open(path).unwrap();
+    // These tests pin the Part 1 queue rules on bot threads (v1 queues behind a running turn);
+    // steering a person's message into a bot turn is covered in bot_runtime.rs.
+    fake.without_steering();
     let host = Host::open(opts(path, generation), store, Arc::new(fake.clone()), stall).unwrap();
     host.set_mcp_url("http://127.0.0.1:1/mcp".into());
     host.start(&settled).await.unwrap();

@@ -89,6 +89,7 @@ struct Shared {
     rss: HashMap<ThreadId, u64>,
     pgids: HashMap<ThreadId, i32>,
     turn_texts: HashMap<ThreadId, Vec<String>>,
+    capabilities: Option<goat2_contracts::ProviderCapabilities>,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -104,6 +105,18 @@ impl FakeEngine {
         let engine = Self::default();
         engine.shared.lock().expect("fake").script = script;
         engine
+    }
+
+    /// Report these capability flags instead of Codex's.
+    pub fn set_capabilities(&self, capabilities: goat2_contracts::ProviderCapabilities) {
+        self.shared.lock().expect("fake").capabilities = Some(capabilities);
+    }
+
+    /// Codex's flags with active steering off (an engine that cannot steer).
+    pub fn without_steering(&self) {
+        let mut caps = super::codex::codex_capabilities();
+        caps.turns.supports_active_steering = false;
+        self.set_capabilities(caps);
     }
 
     pub fn set_script(&self, script: FakeScript) {
@@ -283,7 +296,12 @@ struct FakeSession {
 impl EngineFactory for FakeEngine {
     /// The fake stands in for Codex, so it reports v1's Codex capabilities.
     fn capabilities(&self) -> goat2_contracts::ProviderCapabilities {
-        super::codex::codex_capabilities()
+        self.shared
+            .lock()
+            .expect("fake")
+            .capabilities
+            .clone()
+            .unwrap_or_else(super::codex::codex_capabilities)
     }
 
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {

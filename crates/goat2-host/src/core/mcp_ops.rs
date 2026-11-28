@@ -751,9 +751,11 @@ impl McpHost for Host {
             }));
             id
         });
+        // runId null: an agent's own ask is durable (its answer arrives as a new input), so the
+        // store's restart settlement, which cancels the dead run's requests, leaves it open.
         let opened = RequestOpened {
             request_id: request_id.clone(),
-            run_id: Some(caller.run_id.clone()),
+            run_id: None,
             item_id,
             kind,
             summary: summary.clone(),

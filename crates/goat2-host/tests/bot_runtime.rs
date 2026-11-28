@@ -44,9 +44,11 @@ async fn setup_with(steering: bool) -> T {
     let opts = HostOptions {
         idle_stop: Duration::from_secs(30),
         bot_guards: guards(),
-        bot_steering: steering,
         ..HostOptions::new(path.clone(), 1, "ui-token".into(), "/tmp".into())
     };
+    if !steering {
+        fake.without_steering();
+    }
     let host = Host::open(opts, Arc::new(store), Arc::new(fake.clone()), stall).unwrap();
     host.set_mcp_url("http://127.0.0.1:1/mcp".into());
     host.start(&[]).await.unwrap();

@@ -54,8 +54,6 @@ pub struct HostOptions {
     pub max_wait: Duration,
     /// Receipt guard timers for a person's messages to a bot (v1 20 s / 55 s).
     pub bot_guards: crate::bot::guards::GuardOptions,
-    /// The engine steers a message into a running turn (Codex: yes); see [crate::bot::engine_steers].
-    pub bot_steering: bool,
 }
 
 impl HostOptions {
@@ -80,7 +78,6 @@ impl HostOptions {
             memory_sample: Duration::from_secs(ENGINE_MEMORY_SAMPLE_SECS),
             max_wait: Duration::from_secs(60),
             bot_guards: crate::bot::guards::GuardOptions::default(),
-            bot_steering: true,
         }
     }
 }
