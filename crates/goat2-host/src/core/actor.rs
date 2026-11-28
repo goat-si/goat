@@ -176,6 +176,13 @@ struct Actor {
     idle_gen: u64,
     /// `signin` requests the engine raised outside any turn, closed when the session ends.
     session_signins: Vec<RequestId>,
+    /// Turns accepted in the current engine session and their runs (newest last, at most
+    /// [TURN_RUNS_KEPT]): items a driver delivers after their turn ended (background
+    /// subagents) go to their origin run.
+    turn_runs: std::collections::VecDeque<(String, RunId)>,
+    /// Engine-native subagents still running in this session (non-terminal SubagentUpdate):
+    /// the engine is not idle-stopped while any runs (v1 keeps background subagents alive).
+    live_subagents: std::collections::HashSet<String>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -198,6 +205,8 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         not_before: None,
         idle_gen: 0,
         session_signins: Vec::new(),
+        turn_runs: std::collections::VecDeque::new(),
+        live_subagents: std::collections::HashSet::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
@@ -345,6 +354,7 @@ impl Actor {
                 if gen_ == self.idle_gen
                     && matches!(self.phase, Phase::Idle)
                     && self.session.is_some()
+                    && self.live_subagents.is_empty()
                 {
                     self.stop_session("idle").await;
                 }
@@ -748,6 +758,10 @@ impl Actor {
                 })];
                 events.extend(delivered(DeliveryOutcome::Accepted));
                 self.append(events);
+                if self.turn_runs.len() >= TURN_RUNS_KEPT {
+                    self.turn_runs.pop_front();
+                }
+                self.turn_runs.push_back((turn_id.clone(), run_id.clone()));
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id,
@@ -807,20 +821,52 @@ impl Actor {
 
     async fn on_engine(&mut self, event: EngineEvent) {
         match event {
-            EngineEvent::TextDelta { item_id, text, .. } => {
-                if matches!(self.phase, Phase::Running(_)) {
+            EngineEvent::TextDelta {
+                turn_id,
+                item_id,
+                text,
+            } => {
+                // Live text only for the running turn; a late item arrives whole.
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
                     self.host.stream_text(&self.id, &item_id, &text);
                 }
             }
-            EngineEvent::ItemCompleted { item, locator, .. } => {
-                let Some(run_id) = self.active_run_id() else {
+            EngineEvent::ItemCompleted {
+                turn_id,
+                item,
+                locator,
+            } => {
+                // The run of the item's turn: the active run, or the earlier run of this session
+                // a late item (a background subagent finishing after its turn) belongs to. It is
+                // appended after that run's run.finished; the run is not reopened.
+                let active = matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id);
+                let run_id = if active {
+                    self.active_run_id()
+                } else {
+                    self.turn_runs
+                        .iter()
+                        .rev()
+                        .find(|(t, _)| *t == turn_id)
+                        .map(|(_, r)| r.clone())
+                };
+                let Some(run_id) = run_id else {
+                    tracing::warn!(thread = %self.id, "item for a turn this session did not start: dropped");
                     return;
                 };
                 let mut item = *item;
                 item.run_id = Some(run_id.clone());
                 item.thread_id = self.id.clone();
                 let item_id = item.id.clone();
-                if let TurnItemBody::AssistantMessage { phase, text, .. } = &item.body
+                if let TurnItemBody::Subagent { subagent_id, .. } = &item.body
+                    && is_terminal(item.status)
+                    && self.live_subagents.remove(subagent_id)
+                    && self.live_subagents.is_empty()
+                    && matches!(self.phase, Phase::Idle)
+                {
+                    self.arm_idle();
+                }
+                if active
+                    && let TurnItemBody::AssistantMessage { phase, text, .. } = &item.body
                     && !matches!(phase, Some(AssistantMessagePhase::Commentary))
                 {
                     let text = text.clone();
@@ -920,11 +966,26 @@ impl Actor {
                 url,
                 message,
             } => self.on_auth_required(turn_id, url, message),
-            EngineEvent::SubagentUpdate { subagent_id, .. } => {
+            EngineEvent::SubagentUpdate {
+                subagent_id,
+                status,
+                ..
+            } => {
                 // Progress of an unfinished native subagent: not stored (PRD storage.md: no
                 // progress updates in the log). The finished subagent arrives as an item. There
-                // is no live wire frame for it yet (structure/30_wire.md).
+                // is no live wire frame for it yet (structure/30_wire.md). A running one keeps
+                // the engine from being idle-stopped.
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
+                if is_terminal(status) {
+                    if self.live_subagents.remove(&subagent_id)
+                        && self.live_subagents.is_empty()
+                        && matches!(self.phase, Phase::Idle)
+                    {
+                        self.arm_idle();
+                    }
+                } else {
+                    self.live_subagents.insert(subagent_id);
+                }
             }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
@@ -1432,6 +1493,8 @@ impl Actor {
     }
 
     fn drop_session(&mut self) {
+        self.turn_runs.clear();
+        self.live_subagents.clear();
         let signins = std::mem::take(&mut self.session_signins);
         let closed = self.close_signins(&signins, "the engine stopped");
         if !closed.is_empty() {
@@ -1479,6 +1542,18 @@ fn signin_summary(message: &str, url: Option<&str>) -> String {
 }
 
 const SIGNIN_LINK: &str = "the sign-in link";
+
+/// Turns of one engine session remembered for late items.
+const TURN_RUNS_KEPT: usize = 64;
+
+/// A subagent status after which nothing more happens.
+fn is_terminal(status: goat2_contracts::TurnItemStatus) -> bool {
+    use goat2_contracts::TurnItemStatus as S;
+    matches!(
+        status,
+        S::Completed | S::Failed | S::Cancelled | S::Interrupted
+    )
+}
 
 /// `text` with every `scheme://…` URL replaced by [SIGNIN_LINK]. A URL runs to the next
 /// whitespace or closing bracket or quote; trailing sentence punctuation stays in the text.
