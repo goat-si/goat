@@ -1,0 +1,8 @@
+{
+  "id": "pending:thr-worker-1:req-7",
+  "decision": "accept",
+  "answers": {
+    "q1": "yes"
+  },
+  "reason": "Safe in the checkout"
+}

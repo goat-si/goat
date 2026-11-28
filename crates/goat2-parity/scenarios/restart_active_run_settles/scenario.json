@@ -1,0 +1,50 @@
+{
+  "v": 1,
+  "name": "restart_active_run_settles",
+  "summary": "restart active run settles",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_output.ts:20"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e",
+        "sha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e"
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [],
+  "expect": {
+    "complete": false,
+    "exhaustive": [],
+    "threads": {
+      "t1": []
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}

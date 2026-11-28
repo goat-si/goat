@@ -1,0 +1,612 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "ObservedEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "$ref": "#/definitions/Origin"
+            },
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "input.accepted"
+              ],
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/definitions/SendMode"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "input",
+            "kind",
+            "mode",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "input.refused"
+              ],
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "input",
+            "kind",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "queue.changed"
+              ],
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/definitions/QueueOp"
+            },
+            "position": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "input",
+            "kind",
+            "op",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "inputs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "run.started"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "inputs",
+            "kind",
+            "run",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "steer.applied"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "input",
+            "kind",
+            "run",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cause": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "run.finished"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "status": {
+              "$ref": "#/definitions/RunEnd"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "run",
+            "seq",
+            "status",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "child.started"
+              ],
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child",
+            "kind",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "child.reported"
+              ],
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "status": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child",
+            "kind",
+            "seq",
+            "status",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "parent.woken"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "state": {
+              "$ref": "#/definitions/WakeState"
+            },
+            "thread": {
+              "type": "string"
+            },
+            "wake": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child",
+            "kind",
+            "seq",
+            "state",
+            "thread",
+            "wake"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "call": {
+              "type": "string"
+            },
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "tool.result"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "status": {
+              "$ref": "#/definitions/ToolStatus"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "kind",
+            "path",
+            "seq",
+            "status",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "host.restarted"
+              ],
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "seq",
+            "thread"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Origin": {
+      "enum": [
+        "user",
+        "child",
+        "system",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "Outcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "ok"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "unsupported"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "incomplete"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "pending_expectation"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "QueueOp": {
+      "enum": [
+        "enqueued",
+        "edited",
+        "promoted",
+        "cancelled",
+        "reordered",
+        "held",
+        "released"
+      ],
+      "type": "string"
+    },
+    "RunEnd": {
+      "enum": [
+        "done",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "SendMode": {
+      "enum": [
+        "start",
+        "steer",
+        "queue",
+        "interrupt"
+      ],
+      "type": "string"
+    },
+    "StreamReport": {
+      "additionalProperties": false,
+      "properties": {
+        "consumedAll": {
+          "type": "boolean"
+        },
+        "outboundChecked": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "outboundMismatches": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "consumedAll",
+        "outboundChecked",
+        "outboundMismatches"
+      ],
+      "type": "object"
+    },
+    "ToolStatus": {
+      "enum": [
+        "ok",
+        "error",
+        "needs_human"
+      ],
+      "type": "string"
+    },
+    "WakeState": {
+      "enum": [
+        "queued",
+        "started",
+        "steered",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "events": {
+      "items": {
+        "$ref": "#/definitions/ObservedEvent"
+      },
+      "type": "array"
+    },
+    "incomplete": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "$ref": "#/definitions/Outcome"
+    },
+    "scenario": {
+      "type": "string"
+    },
+    "streams": {
+      "additionalProperties": {
+        "$ref": "#/definitions/StreamReport"
+      },
+      "type": "object"
+    },
+    "target": {
+      "type": "string"
+    },
+    "v": {
+      "format": "uint32",
+      "maximum": 1.0,
+      "minimum": 1.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "events",
+    "incomplete",
+    "outcome",
+    "scenario",
+    "streams",
+    "target",
+    "v"
+  ],
+  "title": "ObservedTrace",
+  "type": "object"
+}

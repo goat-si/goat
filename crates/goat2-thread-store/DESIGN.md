@@ -24,8 +24,9 @@ Thread ids are folder names: 1-128 of `A-Z a-z 0-9 . _ -`, not starting with a d
 ```rust
 Store::open(data_dir, StoreOptions) -> Result<(Store, StartupReport)>
 store.create_thread(Option<ThreadId>, ThreadCreated) -> Result<ThreadCard>
-store.append(&ThreadId, Vec<LogEvent>) -> Result<Appended>      // seq/at assigned, validated, folded
+store.append(&ThreadId, Vec<LogEvent>) -> Result<Appended>      // lines, card and fold after the append
 store.card(&ThreadId) -> Result<Option<ThreadCard>>
+store.fold(&ThreadId) -> Result<Option<Fold>>        // queued / held inputs, active run, open requests
 store.find(&CardFilter) -> Vec<ThreadCard>                     // cwd, parent, status, kind, botId, projectId, archived
 store.cards_after(Option<&CardCursor>) -> CardsRead            // changed cards, or every card + reset
 store.subscribe_cards(Option<&CardCursor>) -> (CardsRead, Receiver<CardUpdate>)
@@ -39,6 +40,7 @@ store.delete_thread(&ThreadId) -> Result<()>
 store.flush() -> Result<()>          // batched in-run card writes; the host calls it on a timer
 store.close() -> Result<()>
 store.cache_error(&ThreadId) -> Option<String>
+store.index_complete() -> bool       // false: the last rebuild could not index every folder
 ```
 
 There is no call that reads every thread body. `find` and `cards_after` serve from the card set loaded
@@ -47,19 +49,22 @@ from the index. `append` refuses `thread.created` and `checkpoint` (the store wr
 Validation on append: one active run at a time; `run.accepted` / `run.finished` only for the active
 run; `input.changed` only for a queued input; `child.started` only for an existing child whose card
 names this thread as parent and that is not already running. Text bounds: titles 200 chars, request
-summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text and any non-item event over
-64 KB are refused (`PayloadTooLarge`; the host stores large input as an attachment first).
+summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text, `thread.created` and any
+non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large input as an attachment first).
 
 ## Write protocol
 
 1. Before any append, the thread's index row is committed with `dirty=1` (synchronous=FULL) unless it
    already is durably.
-2. The batch is written with one `write_all`. Batches with `input.accepted`, `input.changed`,
-   `input.delivered`, `run.started`, `run.accepted`, `request.resolved` or `run.finished` are
-   `sync_data`ed before `append` returns. `run.started` is the send boundary: the host sends to the
-   engine only after `append` returns.
-3. Not in a run, or when the status changes, or when a run ends: card.json and the index row are
-   written now. Otherwise they are batched until `flush`. Before a row is stored clean the log is synced
+2. The batch is written with one `write_all` and `sync_data`ed before anything is published or
+   `append` returns, in a run too. A reader's cursor must never pass a line a power loss could drop:
+   startup settlement would reuse those seqs under the same epoch and the reader would resume with no
+   reset. `run.started` is the send boundary: the host sends to the engine only after `append`
+   returns. Cost: about 4 ms per in-run append on Apple (F_FULLFSYNC; `examples/append_bench.rs`).
+3. Not in a run, or when the status changes, or when a run ends, card.json and the index row are
+   written through after the card is published and subscribers notified. A failed log sync returns the
+   error and poisons the thread: nothing is published, and the outcome stays uncertain until a reopen
+   checks the actual tail. In-run card writes are batched until `flush`. Before a row is stored clean the log is synced
    through the card's `appliedSeq`; the row stays `dirty=1` while a run is active. card.json is
    replaced atomically but not synced: startup trusts the index row and refolds a bad card.json on
    rebuild. A failed cache write keeps the row dirty, does not fail the append, and shows in
@@ -67,19 +72,41 @@ summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text and an
 4. `run.finished` is followed by `checkpoint {card, fold}` in the same write; the checkpoint card has
    `appliedSeq` equal to its own seq.
 5. Create: row {dirty=1, creating=1} (FULL) -> mkdir -> goat.jsonl header + `thread.created` (sync) ->
-   directory syncs -> card.json + row (creating cleared). Delete: row dirty=1 -> rename the folder to
-   `threads/.trash-<id>-<hex>` -> directory sync -> row removed -> folder removed.
+   directory syncs -> card.json + row (creating cleared); the card is announced, with its cardSeq, only
+   after that and with the thread lock held. Delete: row dirty=1 -> rename the folder to
+   `threads/.trash-<id>-<hex>`; from the rename on the delete always completes in memory (card removed,
+   subscribers told, callers waiting on the thread get ThreadMissing) and a failed directory sync or row
+   delete is returned afterwards. The row is removed only after the rename is synced; otherwise the dirty
+   row stays so the next start decides from what is on disk (folder gone: finish the delete; folder back
+   after a power loss: keep the thread). The trash contents are removed only after the rename is synced;
+   startup syncs the threads directory before it finishes a delete or clears leftover trash, and at the
+   end of every start sweeps any `.trash-*` left over (a crash after the row delete, or a same-id
+   create after a delete whose rename sync failed); a failed sync keeps the trash. Marking a create clears any cached card left on the row, and a
+   `creating` row is never loaded from a cached card. Only one create per id runs at a time: a second
+   one returns ThreadExists at once, and so does a folder that appears under it.
+
+Lock order: a thread's lock, then the thread map, then the shared lock (card set, index); the thread
+map is never held while a thread lock is taken.
 
 ## Startup
 
-1. Lock; open the index. Missing file, SQLITE_CORRUPT / NOTADB or a schema mismatch rebuilds it from the
-   folders: card.json of every folder (refold from the log when missing, invalid or another version),
-   then every log's tail is verified; `.trash-*` folders are removed. Other errors fail `open`.
+1. Lock; open the index. A missing file, SQLITE_CORRUPT / NOTADB, a schema mismatch or a missing
+   completion marker rebuilds it from the folders. Per folder: verify and repair the log tail, then use
+   card.json if it belongs to this log (same id and epoch, appliedSeq not past the tail) and fold the lines
+   after it, else replay the log; sync the log; `.trash-*` folders are removed. The rows and the
+   completion marker are committed in one transaction, and the marker only when every folder was indexed.
+   Folders that cannot be indexed are kept, listed in `StartupReport.unindexed`, and `index_complete()`
+   is false for the session; the next start rebuilds again. I/O errors fail `open`.
 2. Load every row (one per thread). The index epoch is new for every start.
 3. Only rows marked dirty, creating or with an active run: verify the log tail, fold lines after
-   `appliedSeq` (a card.json newer than the row is used first). A `creating` row whose folder or log is
-   incomplete is abandoned (folder to trash). The same damage on an existing thread marks it corrupt and
-   keeps its card. A dirty row without a folder is a finished delete.
+   `appliedSeq` (a card.json newer than the row is used first), sync the log, write the row. A
+   `creating` row is abandoned (folder to trash) only when the create provably never committed: no
+   folder, no goat.jsonl, or no newline-terminated first event line. Anything else (an invalid but
+   complete header or first line, a newer version) is kept and reported corrupt. I/O errors while probing
+   fail `open`, and so does any card.json read error other than a missing file (an invalid card.json
+   is a cache miss). A dirty row without a folder is a finished delete. Both an abandoned create and
+   a finished delete sync `threads/` before they clear trash or drop the row, because the row may
+   cover an earlier delete whose rename was never synced; a failed sync fails `open` and keeps both.
 4. Settle every active run: its open requests resolve `cancelled`, then `run.finished` is
    `interrupted` when the run reached the engine (`run.accepted`, an item or request for it, or an
    accepted turn delivery) and `unknown` otherwise. An unknown run opens request `resend:<runId>`
@@ -90,10 +117,11 @@ summaries 200 chars, `child.reported` summary 8 KB; `input.accepted` text and an
 Every other thread is checked on first touch (append, read, card): tail verified and lines after
 `appliedSeq` folded.
 
-Tail repair touches only a demonstrably incomplete tail: bytes after the last newline that are not a
-complete next line, and trailing lines made only of NUL bytes. They are copied to
-`goat.jsonl.torn-<n>` and cut. A complete last line without its newline gets one. A complete malformed
-line or a seq gap is `CorruptLog` and the file is left as it is. A write error poisons the thread
+Tail repair touches only a demonstrably incomplete tail: trailing bytes made only of NUL (zero-filled
+growth) and an unterminated last line whose JSON ends early (a torn write). They are copied to
+`goat.jsonl.torn-<n>` and cut. A complete unterminated last line that is the next valid line gets its
+newline (also for v > 1). A complete line that is invalid, has a seq gap or a syntax error before its
+end, terminated or not, is `CorruptLog` and the file is left as it is. A write error poisons the thread
 until the store is reopened.
 
 Format v1 rules (lane C freeze): a v1 line with an unknown `type` is skipped (the fold only advances
@@ -147,8 +175,8 @@ Max (18 cores, macOS, APFS), 41 lines per thread (19.2 MB of logs), 50 threads l
 
 | Case | open() | logs opened |
 |---|---|---|
-| warm, index present (median of 5) | 2.8 ms | 0 |
-| after deleting cards.sqlite (median of 5) | 71 ms | 1,000 (tail check only) |
-| unclean (50 open runs settled: 25 interrupted, 25 unknown) | 223 ms | 50 |
+| warm, index present (median of 5) | 2.9 ms | 0 |
+| after deleting cards.sqlite (median of 5) | 104 ms | 1,000 (tail check + sync) |
+| unclean (50 open runs settled: 25 interrupted, 25 unknown) | 236 ms | 50 |
 
 The unclean case is dominated by one F_FULLFSYNC per settled run (send-boundary durability).

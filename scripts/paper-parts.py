@@ -74,6 +74,12 @@ def subtree_texts(n):
 def block(lines, n):
     return lines[n.start:n.end + 1]
 
+def find_rel(node, rel, name):
+    try:
+        return find(node, rel)
+    except IndexError:
+        sys.exit(f"paper-parts: relative path {rel!r} missing in part {name}")
+
 def render(lines, node, *, texts=None, slots=None, drop=(), attrs=None, before=None, after=None, extra_props=None):
     """Return the part's JSX with substitutions. Paths are relative to node ("" = node itself)."""
     texts = texts or {}; slots = slots or {}; attrs = attrs or {}; before = before or {}; after = after or {}
@@ -123,7 +129,10 @@ def generate(d):
     for name, board, path, anchor, props, opts in PARTS:
         if board not in boards: boards[board] = parse(os.path.join(d, board + ".jsx"))
         lines, root = boards[board]
-        node = find(root, path)
+        try:
+            node = find(root, path)
+        except IndexError:
+            sys.exit(f"paper-parts: path {path} not in {board} ({name}); the board changed, fix PARTS")
         body = "\n".join(block(lines, node))
         if anchor not in body:
             sys.exit(f"paper-parts: anchor {anchor!r} not found in {board} {path} ({name}); the board changed, fix PARTS in scripts/paper-parts.py")
@@ -218,8 +227,8 @@ P("DecisionCard", B, CHAT + ".0.3", "Merge PR #7712", "title: ReactNode; body: R
 P("DecisionButtons", B, CHAT + ".0.3.2", "Fix first", "children: ReactNode", slots={"0": "{children}"}, drop=["1", "2"])
 P("DecisionPrimary", B, CHAT + ".0.3.2.0", "Merge", "label: ReactNode; button: object", texts={"Merge": "{label}"}, attrs={"": "{...button}"})
 P("DecisionSecondary", B, CHAT + ".0.3.2.1", "Fix first", "label: ReactNode; button: object", texts={"Fix first": "{label}"}, attrs={"": "{...button}"})
-P("Composer", B, CHAT + ".1", "Message Reviewer", "input: ReactNode; plus: object; picker: ReactNode",
-  slots={"0.0.0": "{input}", "0.2": "{picker}"}, attrs={"0.1": "{...plus}"})
+P("Composer", B, CHAT + ".1", "Message Reviewer", "input: ReactNode; plus: object; picker: ReactNode; send: object",
+  slots={"0.0.0": "{input}", "0.2": "{picker}"}, attrs={"0.1": "{...plus}", "0.3": "{...send}"})
 P("ModelChip", B, CHAT + ".1.0.2", "gpt-6.1-sol", "glyph: ReactNode; model: ReactNode; button: object",
   slots={"0": "{glyph}"}, texts={"gpt-6.1-sol": "{model}"}, attrs={"": "{...button}"})
 
@@ -275,6 +284,64 @@ P("ThreadPanel", "25D-0", TP, "Go to thread", "back: object; open: object; close
   texts={"Review #7712": "{title}", "Done · 4m 12s · gpt-6.1-sol · Wicked": "{meta}"})
 P("PanelUserBubble", "25D-0", TP + ".3", "Review opencodex", "text: ReactNode", texts={"Review opencodex #7712 when it opens. Run the tests.": "{text}"})
 P("PanelAnswer", "25D-0", TP + ".5", "81", "text: ReactNode", slots={"0.0": "{text}"})
+
+
+# Thread mode (T0 1N65-1, T1 1NEM-1, T4 1OXX-1): boards redrawn from GOAT v1 code (origin/dev 916b5ccc).
+T1 = "1NEM-1"
+TL = "0.0.1.0.0.0"      # timeline column
+TC = "0.0.1.0.1"        # composer
+TSB = "0.0.4.1"         # sidebar column
+TLIST = TSB + ".2.0"
+P("ThreadFrame", T1, "0", "position: 'relative'", "rail: ReactNode; main: ReactNode; header: ReactNode; lights: ReactNode; sidebar: ReactNode; toggle: object; menu: object; bottom: object; panel: object; stamp: ReactNode",
+  slots={"0.0.0": "{rail}", "0.1.0": "{main}", "0.2.0": "{header}", "0.3": "{lights}", "0.4.1": "{sidebar}"},
+  attrs={"": 'data-frame="" data-thread-frame=""', "0.0": 'data-rail-col=""', "0.2": 'data-topbar=""', "0.5": 'data-overlay=""', "0.4.0": 'data-workspace-bg=""', "0.4": 'data-sidebar-col=""', "0.6": "{...toggle}", "0.7.0": "{...menu}", "0.7.1": "{...bottom}", "0.7.2": "{...panel}"},
+  before={"0.7.0": "{stamp}"})
+P("ThreadTrafficLights", T1, "0.0.3", "#FF5F57")
+P("ThreadMain", T1, "0.0.1.0", "justifyContent: 'space-between'", "timeline: ReactNode; composer: ReactNode", slots={"0.0": "{timeline}", "1": "{composer}"})
+P("Timeline", T1, TL, "maxWidth: '672px'", "children: ReactNode; root: object", slots={"1": "{children}"}, drop=[str(i) for i in range(2, 10)], attrs={"": "{...root}"})
+P("TlUser", T1, TL + ".1", "The sidebar flickers", "text: ReactNode", texts={"The sidebar flickers when I switch threads quickly. Can you find out why and fix it?": "{text}"})
+P("TlFold", T1, TL + ".2", "Worked for", "label: ReactNode; root: object; open: boolean", texts={"Worked for 4m 12s": "{label}"}, attrs={"0.0.0": "{...root}"})
+P("TlRowExplored", T1, TL + ".3", "Explored", "text: ReactNode", texts={"Explored 3 files, 2 searches": "{text}"})
+P("TlRowEdited", T1, TL + ".4", "Edited Sidebar.tsx", "text: ReactNode; add: ReactNode; del: ReactNode", texts={"Edited Sidebar.tsx": "{text}", "+118": "{add}", "-22": "{del}"})
+P("TlRowRan", T1, TL + ".5", "Ran bun run typecheck", "text: ReactNode", texts={"Ran bun run typecheck": "{text}"})
+P("TlRowFailed", T1, TL + ".6", "Failed bun test", "text: ReactNode", texts={"Failed bun test sidebar.test.ts": "{text}"})
+P("TlAnswer", T1, TL + ".7", "The flicker came from", "text: ReactNode", slots={"0.0.0.0": "{text}"})
+P("TlWorking", T1, TL + ".8", "Working for", "label: ReactNode", texts={"Working for 22s": "{label}"})
+P("TlRowRunning", T1, TL + ".9", "Running bun test", "text: ReactNode", texts={"Running bun test sidebar.test.ts": "{text}"})
+P("ThreadComposer", T1, TC, "Ask anything", "input: ReactNode; plus: object; access: object; spinner: ReactNode; model: object; modelLabel: ReactNode; effort: object; send: ReactNode; banner: ReactNode",
+  slots={"0.0.0.0.0": "{input}", "0.0.0.1.1.2": "{spinner}", "0.0.0.1.2": "{send}"}, texts={"GPT-5.5": "{modelLabel}"},
+  attrs={"0.0.0.1.0": "{...plus}", "0.0.0.1.1.0": "{...access}", "0.0.0.1.1.3": "{...model}", "0.0.0.1.1.4": "{...effort}"}, before={"0.0.0": "{banner}"})
+P("ComposerStop", T1, TC + ".0.0.0.1.2", "svg", "button: object", attrs={"0": "{...button}"})
+P("ComposerSpinner", T1, TC + ".0.0.0.1.1.2", "svg")
+P("ThreadHeader", T1, "0.0.2.0", "api-server", "icon: ReactNode; project: ReactNode; title: ReactNode", slots={"0.0.0.0.0": "{icon}"}, texts={"api-server": "{project}", "Refactor billing webhooks": "{title}"})
+P("ThreadSidebarCol", T1, TSB, "Priority (2)", "top: ReactNode; search: ReactNode; list: ReactNode", slots={"0": "{top}", "1": "{search}", "2": "{list}"})
+P("ThreadSidebarTop", T1, TSB + ".0", "GOAT", "toggle: object; back: object; forward: object; bell: object; count: ReactNode",
+  attrs={"0.0.0": "{...toggle}", "0.0.1.0": "{...back}", "0.0.1.1": "{...forward}", "1": "{...bell}"}, texts={"2": "{count}"})
+P("ThreadSidebarSearch", T1, TSB + ".1", "Search", "search: object; compose: object", attrs={"0.0": "{...search}", "0.1": "{...compose}"})
+P("ThreadList", T1, TLIST, "Priority (2)", "children: ReactNode", slots={"0": "{children}"}, drop=[str(i) for i in range(1, 11)])
+P("TlsSection", T1, TLIST + ".0", "Priority (2)", "label: ReactNode", texts={"Priority (2)": "{label}"})
+P("TlsSectionThreads", T1, TLIST + ".3", "Threads", "label: ReactNode", texts={"Threads": "{label}"})
+P("TlsRow", T1, TLIST + ".6", "Update onboarding copy", "icon: ReactNode; title: ReactNode; status: ReactNode; project: ReactNode; right: ReactNode; root: object",
+  slots={"0.0.0.0": "{icon}", "0.0.0.2": "{status}", "0.0.1.1": "{right}"}, texts={"Update onboarding copy": "{title}", "web-dashboard": "{project}"}, attrs={"0": "{...root}"})
+P("TlsRowSelected", T1, TLIST + ".4", "Refactor billing webhooks", "icon: ReactNode; title: ReactNode; status: ReactNode; project: ReactNode; right: ReactNode; root: object",
+  slots={"0.0.0.0": "{icon}", "0.0.0.2": "{status}", "0.0.1.1": "{right}"}, texts={"Refactor billing webhooks": "{title}", "api-server": "{project}"}, attrs={"0": "{...root}"})
+P("TlsIcon", T1, TLIST + ".6.0.0.0.0", "")
+P("TlsApproval", T1, TLIST + ".1.0.0.0.2", "Approval", "label: ReactNode", texts={"Approval": "{label}"})
+P("TlsInput", T1, TLIST + ".2.0.0.0.2", "Input", "label: ReactNode", texts={"Input": "{label}"})
+P("TlsDot", T1, TLIST + ".4.0.0.0.2", "")
+P("TlsFailed", T1, TLIST + ".5.0.0.0.2", "svg")
+P("TlsPr", T1, TLIST + ".4.0.0.1.1", "#128", "num: ReactNode", texts={"#128": "{num}"})
+P("TlsMachine", T1, TLIST + ".1.0.0.1.1", "MBP", "name: ReactNode", texts={"MBP": "{name}"})
+P("TlsWorkingHeader", T1, TLIST + ".8", "Working", "count: ReactNode; root: object", texts={"2": "{count}"}, attrs={"": "{...root}"})
+P("TlsWorkingRow", T1, TLIST + ".9", "Investigate memory", "title: ReactNode; time: ReactNode; root: object", texts={"Investigate memory leak in worker": "{title}", "2m": "{time}"}, attrs={"0": "{...root}"})
+P("TlsSpacer", T1, TLIST + ".7", "")
+P("UpdatingLine", "1N65-1", "0.0.2.1.1", "Updating", "text: ReactNode", texts={"Updating · 3 of 5 machines": "{text}"})
+
+QB = "0.0.1.0.1.0.0.0"
+P("QueueBanner", "1OXX-1", QB, "Queued", "count: ReactNode; rows: ReactNode; header: object", texts={"1": "{count}"}, slots={"0.2": "{rows}"}, attrs={"0.1": "{...header}"})
+P("QueueRow", "1OXX-1", QB + ".0.2", "Also add a regression", "text: ReactNode; grip: object; edit: object; steer: object; remove: object; steerLabel: ReactNode",
+  texts={"Also add a regression test for the sidebar key change": "{text}", "Steer": "{steerLabel}"},
+  attrs={"0.0": "{...grip}", "0.2.0": "{...edit}", "0.2.1": "{...steer}", "0.2.2": "{...remove}"})
 
 if __name__ == "__main__":
     if sys.argv[1] == "--tree":

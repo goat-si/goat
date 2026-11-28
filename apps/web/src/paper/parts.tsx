@@ -12,9 +12,9 @@ export function Frame({ top, rail, sidebar, main }: { top: ReactNode; rail: Reac
     <div data-frame="" style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', fontSize: '12px', fontSynthesis: 'none', lineHeight: '16px', MozOsxFontSmoothing: 'grayscale', overflow: 'clip', overflowWrap: 'anywhere', WebkitFontSmoothing: 'antialiased' }}>
       <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, height: '900px', minHeight: '0px', overflow: 'clip', width: '1440px' }}>
         {top}
-        <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px', paddingBottom: '8px', paddingRight: '8px' }}>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px' }}>
           {rail}
-          <div data-card="" style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderRadius: '14px', borderTopColor: '#E2E2E2', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
+          <div data-card="" style={{ backgroundColor: '#FFFFFF', borderBottomLeftRadius: '14px', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
             {sidebar}
             {main}
           </div>
@@ -558,8 +558,8 @@ export function RoutineLine({ text }: { text: ReactNode }) {
 /** 2R-1 0.0.1.1.1.0.0.0.1 */
 export function BotMessage({ text }: { text: ReactNode }) {
   return (
-    <div style={{ boxSizing: 'border-box', maxWidth: '680px', paddingBlock: '2px', paddingInline: '4px' }}>
-      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', lineHeight: '26px' }}>
+    <div style={{ alignSelf: 'start', backgroundColor: '#F0F0F0', borderRadius: '18px', boxSizing: 'border-box', maxWidth: '560px', paddingBlock: '9px', paddingInline: '14px' }}>
+      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '15px', lineHeight: '23px' }}>
         {text}
       </div>
     </div>
@@ -569,8 +569,8 @@ export function BotMessage({ text }: { text: ReactNode }) {
 /** 2R-1 0.0.1.1.1.0.0.0.2 */
 export function ChildRow({ text, root }: { text: ReactNode; root: El }) {
   return (
-    <div style={{ borderBottomColor: '#ECECEC99', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', paddingBottom: '8px', paddingTop: '4px' }}>
-      <div {...root} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', paddingInline: '4px' }}>
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+      <div {...root} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', justifyContent: 'center', paddingInline: '4px' }}>
         <svg width="12" height="12" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
           <path d="m9 18 6-6-6-6" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -585,7 +585,7 @@ export function ChildRow({ text, root }: { text: ReactNode; root: El }) {
 /** 2R-1 0.0.1.1.1.0.0.0.3 */
 export function DecisionCard({ title, body, buttons }: { title: ReactNode; body: ReactNode; buttons: ReactNode }) {
   return (
-    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px, #0000000D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBlock: '14px', paddingInline: '16px' }}>
+    <div style={{ alignSelf: 'start', backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px, #0000000D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '560px', paddingBlock: '14px', paddingInline: '16px', width: '100%' }}>
       <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
         <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
           <circle cx="12" cy="12" r="10" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -636,7 +636,7 @@ export function DecisionSecondary({ label, button }: { label: ReactNode; button:
 }
 
 /** 2R-1 0.0.1.1.1.0.0.1 */
-export function Composer({ input, plus, picker }: { input: ReactNode; plus: El; picker: ReactNode }) {
+export function Composer({ input, plus, picker, send }: { input: ReactNode; plus: El; picker: ReactNode; send: El }) {
   return (
     <div style={{ boxSizing: 'border-box', maxWidth: '700px', paddingBottom: '18px', paddingInline: '24px', paddingTop: '12px', width: '100%' }}>
       <div style={{ alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: '24px', boxShadow: '#00000014 0px 0px 0px 1px inset, #0000000A 0px 1px 3px', boxSizing: 'border-box', display: 'flex', gap: '8px', minHeight: '48px', padding: '4px' }}>
@@ -650,7 +650,12 @@ export function Composer({ input, plus, picker }: { input: ReactNode; plus: El; 
           </svg>
         </div>
         {picker}
-        <div style={{ boxSizing: 'border-box', flexShrink: 0, height: '28px', width: '28px' }} />
+        <div {...send} style={{ alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: '999px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '28px', justifyContent: 'center', width: '28px' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+            <path d="M12 19V5" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" />
+            <path d="m5 12 7-7 7 7" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
       </div>
     </div>
   );
@@ -1115,6 +1120,855 @@ export function PanelAnswer({ text }: { text: ReactNode }) {
     <div style={{ boxSizing: 'border-box', maxWidth: '680px', paddingBlock: '2px', paddingInline: '4px' }}>
       <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13.5px', lineHeight: '21px' }}>
         {text}
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0 */
+export function ThreadFrame({ rail, main, header, lights, sidebar, toggle, menu, bottom, panel, stamp }: { rail: ReactNode; main: ReactNode; header: ReactNode; lights: ReactNode; sidebar: ReactNode; toggle: El; menu: El; bottom: El; panel: El; stamp: ReactNode }) {
+  return (
+    <div data-frame="" data-thread-frame="" style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', fontSize: '12px', fontSynthesis: 'none', lineHeight: '16px', MozOsxFontSmoothing: 'grayscale', overflow: 'clip', overflowWrap: 'anywhere', WebkitFontSmoothing: 'antialiased' }}>
+      <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', flexShrink: 0, height: '900px', minHeight: '0px', overflow: 'clip', position: 'relative', width: '1440px' }}>
+        <div data-rail-col="" style={{ boxSizing: 'border-box', height: '860px', left: '0px', position: 'absolute', top: '40px', width: '44px' }}>
+          {rail}
+        </div>
+        <div style={{ backgroundColor: '#FFFFFF', bottom: '0px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', left: '300px', position: 'absolute', right: '0px', top: '40px' }}>
+          {main}
+        </div>
+        <div data-topbar="" style={{ alignItems: 'center', backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', height: '40px', left: '300px', paddingInline: '20px', position: 'absolute', right: '0px', top: '0px' }}>
+          {header}
+        </div>
+        {lights}
+        <div data-sidebar-col="" style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '900px', left: '44px', position: 'absolute', top: '0px', width: '256px' }}>
+          <div data-workspace-bg="" style={{ backgroundColor: '#F7F7F7', borderTopLeftRadius: '12px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
+          {sidebar}
+        </div>
+        <div data-overlay="" style={{ borderLeftColor: '#ECECEC', borderLeftStyle: 'solid', borderLeftWidth: '1px', borderTopColor: '#ECECEC', borderTopLeftRadius: '12px', borderTopStyle: 'solid', borderTopWidth: '1px', bottom: '0px', boxSizing: 'border-box', left: '44px', position: 'absolute', right: '0px', top: '39px' }} />
+        <div {...toggle} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', height: '28px', justifyContent: 'center', left: '91px', position: 'absolute', top: '6px', width: '28px' }}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+            <path d="M22 11C22 7.229 22 5.343 20.828 4.172C19.657 3 17.771 3 14 3H10C6.229 3 4.343 3 3.172 4.172C2 5.343 2 7.229 2 11V13C2 16.771 2 18.657 3.172 19.828C4.343 21 6.229 21 10 21H14C17.771 21 19.657 21 20.828 19.828C22 18.657 22 16.771 22 13V11Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+            <path d="M9 21L9 3" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+            <path d="M16.783 9L14.211 12L16.783 15" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px', height: '40px', position: 'absolute', right: '13px', top: '0px' }}>
+          {stamp}
+          <div {...menu} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', minWidth: '28px', width: '28px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0', opacity: '0.8' }}>
+              <path d="M20 7L4 7" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M20 12L4 12" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M20 17L4 17" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </div>
+          <div {...bottom} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', minWidth: '28px', width: '28px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0', opacity: '0.8' }}>
+              <path d="M13 2C16.771 2 18.657 2 19.828 3.172C21 4.343 21 6.229 21 10L21 14C21 17.771 21 19.657 19.828 20.828C18.657 22 16.771 22 13 22L11 22C7.229 22 5.343 22 4.172 20.828C3 19.657 3 17.771 3 14L3 10C3 6.229 3 4.343 4.172 3.172C5.343 2 7.229 2 11 2L13 2Z" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M3 15L21 15" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </div>
+          <div {...panel} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', minWidth: '28px', width: '28px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0', opacity: '0.8' }}>
+              <path d="M2 11C2 7.229 2 5.343 3.172 4.172C4.343 3 6.229 3 10 3H14C17.771 3 19.657 3 20.828 4.172C22 5.343 22 7.229 22 11V13C22 16.771 22 18.657 20.828 19.828C19.657 21 17.771 21 14 21H10C6.229 21 4.343 21 3.172 19.828C2 18.657 2 16.771 2 13V11Z" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M15 21L15 3" fill="none" stroke="#0D0D0D" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.3 */
+export function ThreadTrafficLights() {
+  return (
+    <div style={{ boxSizing: 'border-box', display: 'flex', gap: '8px', left: '16px', position: 'absolute', top: '13px' }}>
+      <div style={{ backgroundColor: '#FF5F57', borderColor: '#0000001F', borderRadius: '50%', borderStyle: 'solid', borderWidth: '0.5px', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '12px', width: '12px' }} />
+      <div style={{ backgroundColor: '#FEBC2E', borderColor: '#0000001F', borderRadius: '50%', borderStyle: 'solid', borderWidth: '0.5px', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '12px', width: '12px' }} />
+      <div style={{ backgroundColor: '#28C840', borderColor: '#0000001F', borderRadius: '50%', borderStyle: 'solid', borderWidth: '0.5px', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '12px', width: '12px' }} />
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0 */
+export function ThreadMain({ timeline, composer }: { timeline: ReactNode; composer: ReactNode }) {
+  return (
+    <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between', minHeight: '0px', overflow: 'clip', width: '100%' }}>
+      <div style={{ boxSizing: 'border-box', paddingInline: '48px' }}>
+        {timeline}
+      </div>
+      {composer}
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0 */
+export function Timeline({ children, root }: { children: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ boxSizing: 'border-box', marginLeft: 'auto', marginRight: 'auto', maxWidth: '672px', width: '100%' }}>
+      <div style={{ boxSizing: 'border-box', height: '16px' }} />
+      {children}
+      <div style={{ boxSizing: 'border-box', height: '16px' }} />
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.1 */
+export function TlUser({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingBottom: '16px' }}>
+      <div style={{ alignItems: 'end', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ backgroundColor: '#F3F3F3', borderRadius: '16px', boxSizing: 'border-box', maxWidth: '70%', paddingBlock: '10px', paddingInline: '16px' }}>
+          <div style={{ boxSizing: 'border-box' }}>
+            <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', lineHeight: '22.75px', overflowWrap: 'anywhere' }}>
+              {text}
+            </div>
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', flexShrink: 0, height: '24px', maxWidth: '70%', opacity: '0', width: '100%' }} />
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.2 */
+export function TlFold({ label, root, open }: { label: ReactNode; root: El; open: boolean }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingBottom: '6px' }}>
+      <div style={{ borderBottomColor: '#ECECEC99', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', paddingBottom: '8px', paddingRight: '2px', paddingTop: '4px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+          <div {...root} style={{ alignItems: 'center', borderRadius: '6px', boxSizing: 'border-box', display: 'flex', gap: '4px', paddingInline: '4px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#5D5D5DD9', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontFeatureSettings: '"tnum"', fontSize: '12.5px', lineHeight: '20.3125px' }}>
+              {label}
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M19 9L12 15L5 9" fill="none" stroke="rgb(93 93 93 / 85%)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.3 */
+export function TlRowExplored({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ borderRadius: '6px', boxSizing: 'border-box', padding: '2px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', minHeight: '24px' }}>
+        <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+          <div style={{ boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', width: '24px' }}>
+            <div style={{ boxSizing: 'border-box', display: 'inline-block', height: '24px', overflow: 'clip', verticalAlign: 'calc(0.5cap - 0.75rem)', width: '24px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', height: '100%', justifyContent: 'center', width: '100%' }}>
+                <svg width="11.5" height="11.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                  <path d="M3.275 15.296C2.425 14.191 2 13.639 2 12C2 10.361 2.425 9.809 3.275 8.704C4.972 6.5 7.818 4 12 4C16.182 4 19.028 6.5 20.725 8.704C21.575 9.809 22 10.361 22 12C22 13.639 21.575 14.191 20.725 15.296C19.028 17.5 16.182 20 12 20C7.818 20 4.972 17.5 3.275 15.296Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                  <path d="M15 12C15 13.657 13.657 15 12 15C10.343 15 9 13.657 9 12C9 10.343 10.343 9 12 9C13.657 9 15 10.343 15 12Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                </svg>
+              </div>
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#5D5D5DD9', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12.5px', lineHeight: '20.3125px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+            {text}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.4 */
+export function TlRowEdited({ text, add, del }: { text: ReactNode; add: ReactNode; del: ReactNode }) {
+  return (
+    <div style={{ borderRadius: '6px', boxSizing: 'border-box', padding: '2px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', minHeight: '24px' }}>
+        <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+          <div style={{ boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', width: '24px' }}>
+            <div style={{ boxSizing: 'border-box', display: 'inline-block', height: '24px', overflow: 'clip', verticalAlign: 'calc(0.5cap - 0.75rem)', width: '24px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', height: '100%', justifyContent: 'center', width: '100%' }}>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '16px', justifyContent: 'center', width: '16px' }}>
+                  <svg width="11.5" height="11.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                    <path d="M3 10C3 6.229 3 4.343 4.172 3.172C5.343 2 7.229 2 11 2H13C16.771 2 18.657 2 19.828 3.172C21 4.343 21 6.229 21 10V14C21 17.771 21 19.657 19.828 20.828C18.657 22 16.771 22 13 22H11C7.229 22 5.343 22 4.172 20.828C3 19.657 3 17.771 3 14V10Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M8 12H16" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M8 8H16" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M8 16H13" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip', whiteSpace: 'nowrap' }}>
+            <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
+              <div style={{ boxSizing: 'border-box', color: '#5D5D5DD9', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12.5px', lineHeight: '20.3125px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+                {text}
+              </div>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', flexShrink: '0', gap: '4px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#007A55', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '12px', lineHeight: '20.3125px', whiteSpace: 'pre' }}>
+                  {add}
+                </div>
+                <div style={{ boxSizing: 'border-box', color: '#C10007', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '12px', lineHeight: '20.3125px', whiteSpace: 'pre' }}>
+                  {del}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', width: '16px' }} />
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.5 */
+export function TlRowRan({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ borderRadius: '6px', boxSizing: 'border-box', padding: '2px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', minHeight: '24px' }}>
+        <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+          <div style={{ boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', width: '24px' }}>
+            <div style={{ boxSizing: 'border-box', display: 'inline-block', height: '24px', overflow: 'clip', verticalAlign: 'calc(0.5cap - 0.75rem)', width: '24px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', height: '100%', justifyContent: 'center', width: '100%' }}>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '16px', justifyContent: 'center', width: '16px' }}>
+                  <svg width="11.5" height="11.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                    <path d="M8 8H16V16H8V8Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M16 16.001L19 16C20.657 16 22 17.343 22 19C22.001 20.657 20.658 22 19.001 22C17.344 22.001 16.001 20.658 16 19.001L16 16.001Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M8.001 16.001L5.001 16C3.344 16 2.001 17.343 2 19C2 20.657 3.343 22 5 22C6.657 22.001 8 20.658 8 19.001L8.001 16.001Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M16 8L19 8C20.657 8.001 22 6.658 22 5.001C22.001 3.344 20.658 2.001 19.001 2C17.344 2 16.001 3.343 16 5L16 8Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M8.001 8L5.001 8C3.344 8.001 2.001 6.658 2 5.001C2 3.344 3.343 2.001 5 2C6.657 2 8 3.343 8 5L8.001 8Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#5D5D5DD9', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12.5px', lineHeight: '20.3125px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+            {text}
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', width: '16px' }} />
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.6 */
+export function TlRowFailed({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingBottom: '8px' }}>
+      <div style={{ borderRadius: '6px', boxSizing: 'border-box', padding: '2px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', minHeight: '24px' }}>
+          <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+            <div style={{ boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', width: '24px' }}>
+              <div style={{ boxSizing: 'border-box', display: 'inline-block', height: '24px', overflow: 'clip', verticalAlign: 'calc(0.5cap - 0.75rem)', width: '24px' }}>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', height: '100%', justifyContent: 'center', width: '100%' }}>
+                  <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '16px', justifyContent: 'center', width: '16px' }}>
+                    <svg width="11.5" height="11.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                      <path d="M8 8H16V16H8V8Z" fill="none" stroke="rgb(251 44 54 / 40%)" strokeWidth="1.75" strokeLinecap="round" />
+                      <path d="M16 16.001L19 16C20.657 16 22 17.343 22 19C22.001 20.657 20.658 22 19.001 22C17.344 22.001 16.001 20.658 16 19.001L16 16.001Z" fill="none" stroke="rgb(251 44 54 / 40%)" strokeWidth="1.75" strokeLinecap="round" />
+                      <path d="M8.001 16.001L5.001 16C3.344 16 2.001 17.343 2 19C2 20.657 3.343 22 5 22C6.657 22.001 8 20.658 8 19.001L8.001 16.001Z" fill="none" stroke="rgb(251 44 54 / 40%)" strokeWidth="1.75" strokeLinecap="round" />
+                      <path d="M16 8L19 8C20.657 8.001 22 6.658 22 5.001C22.001 3.344 20.658 2.001 19.001 2C17.344 2 16.001 3.343 16 5L16 8Z" fill="none" stroke="rgb(251 44 54 / 40%)" strokeWidth="1.75" strokeLinecap="round" />
+                      <path d="M8.001 8L5.001 8C3.344 8.001 2.001 6.658 2 5.001C2 3.344 3.343 2.001 5 2C6.657 2 8 3.343 8 5L8.001 8Z" fill="none" stroke="rgb(251 44 54 / 40%)" strokeWidth="1.75" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#5D5D5DD9', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12.5px', lineHeight: '20.3125px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+              {text}
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', width: '16px' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.7 */
+export function TlAnswer({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingBottom: '8px' }}>
+      <div style={{ boxSizing: 'border-box', paddingBlock: '2px', paddingInline: '4px' }}>
+        <div style={{ boxSizing: 'border-box' }}>
+          <div style={{ boxSizing: 'border-box', color: '#0D0D0DEB', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', lineHeight: '22.75px', overflowWrap: 'anywhere' }}>
+            {text}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.8 */
+export function TlWorking({ label }: { label: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingBottom: '6px' }}>
+      <div style={{ borderBottomColor: '#ECECEC99', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', paddingBottom: '8px', paddingTop: '4px' }}>
+        <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '24px', paddingInline: '4px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#5D5D5DD9', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontFeatureSettings: '"tnum"', fontSize: '12.5px', lineHeight: '20.3125px', whiteSpace: 'pre' }}>
+            {label}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.0.0.9 */
+export function TlRowRunning({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingBottom: '8px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', minHeight: '24px' }}>
+        <div style={{ borderRadius: '6px', boxSizing: 'border-box', maxWidth: '100%', minHeight: '24px', minWidth: '0px', overflow: 'clip', width: 'fit-content' }}>
+          <div style={{ boxSizing: 'border-box', padding: '2px' }}>
+            <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', minHeight: '24px' }}>
+              <div style={{ alignItems: 'baseline', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '1px', minWidth: '0px' }}>
+                <div style={{ boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', width: '24px' }}>
+                  <div style={{ boxSizing: 'border-box', display: 'inline-block', height: '24px', overflow: 'clip', verticalAlign: 'calc(0.5cap - 0.75rem)', width: '24px' }}>
+                    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', height: '100%', justifyContent: 'center', width: '100%' }}>
+                      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '16px', justifyContent: 'center', width: '16px' }}>
+                        <svg width="11.5" height="11.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                          <path d="M8 8H16V16H8V8Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                          <path d="M16 16.001L19 16C20.657 16 22 17.343 22 19C22.001 20.657 20.658 22 19.001 22C17.344 22.001 16.001 20.658 16 19.001L16 16.001Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                          <path d="M8.001 16.001L5.001 16C3.344 16 2.001 17.343 2 19C2 20.657 3.343 22 5 22C6.657 22.001 8 20.658 8 19.001L8.001 16.001Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                          <path d="M16 8L19 8C20.657 8.001 22 6.658 22 5.001C22.001 3.344 20.658 2.001 19.001 2C17.344 2 16.001 3.343 16 5L16 8Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                          <path d="M8.001 8L5.001 8C3.344 8.001 2.001 6.658 2 5.001C2 3.344 3.343 2.001 5 2C6.657 2 8 3.343 8 5L8.001 8Z" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ boxSizing: 'border-box', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip', whiteSpace: 'nowrap' }}>
+                  <div style={{ backgroundClip: 'text', backgroundColor: '#5D5D5D', backgroundImage: 'linear-gradient(in oklab 90deg, #00000000 0%, #0D0D0D 50%, #00000000 100%)', boxSizing: 'border-box', color: 'transparent', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12.5px', lineHeight: '20.3125px', whiteSpace: 'pre' }}>
+                    {text}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.1 */
+export function ThreadComposer({ input, plus, access, spinner, model, modelLabel, effort, send, banner }: { input: ReactNode; plus: El; access: El; spinner: ReactNode; model: El; modelLabel: ReactNode; effort: El; send: ReactNode; banner: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', paddingInline: '48px', paddingTop: '8px' }}>
+      <div style={{ boxSizing: 'border-box', marginLeft: 'auto', marginRight: 'auto', maxWidth: '672px', width: '100%' }}>
+        <div style={{ boxSizing: 'border-box', isolation: 'isolate', width: '100%' }}>
+          {banner}
+          <div style={{ backdropFilter: 'blur(18px) saturate(114%)', backgroundColor: '#FFFFFFEB', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px inset, #0000000D 0px 1px 2px', boxSizing: 'border-box', padding: '1px' }}>
+            <div style={{ boxSizing: 'border-box', paddingBottom: '8px', paddingInline: '16px', paddingTop: '16px' }}>
+              {input}
+            </div>
+            <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', paddingLeft: '10px', paddingRight: '16px' }}>
+              <div {...plus} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                  <path d="M4 12L20 12" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                  <path d="M12.02 4L12.021 20" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '4px', minWidth: '0px' }}>
+                <div {...access} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '28px', paddingInline: '5px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                    <path d="M3 10.417C3 7.219 3 5.62 3.378 5.082C3.755 4.545 5.258 4.03 8.265 3.001L8.838 2.805C10.405 2.268 11.189 2 12 2C12.811 2 13.595 2.268 15.162 2.805L15.735 3.001C18.742 4.03 20.245 4.545 20.622 5.082C21 5.62 21 7.219 21 10.417C21 10.9 21 11.423 21 11.991C21 17.629 16.761 20.366 14.101 21.527C13.38 21.842 13.019 22 12 22C10.981 22 10.62 21.842 9.899 21.527C7.239 20.366 3 17.629 3 11.991C3 11.423 3 10.9 3 10.417Z" fill="none" stroke="rgb(187 77 0)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M12 8V12" fill="none" stroke="rgb(187 77 0)" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M12 15H12" fill="none" stroke="rgb(187 77 0)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#BB4D00', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11.2px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '14px', whiteSpace: 'pre' }}>
+                    Full access
+                  </div>
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'inline-block', flexBasis: '0%', flexGrow: '1', minWidth: '8px' }} />
+                {spinner}
+                <div {...model} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '28px', minWidth: '52px', paddingInline: '5px' }}>
+                  <div style={{ backgroundColor: '#0D0D0D', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '16px', width: '16px' }} />
+                  <div style={{ boxSizing: 'border-box', color: '#0D0D0DCC', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11.2px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '14px', whiteSpace: 'pre' }}>
+                    {modelLabel}
+                  </div>
+                </div>
+                <div {...effort} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '28px', paddingInline: '5px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                    <path d="M22 12C22 17.523 17.523 22 12 22C6.477 22 2 17.523 2 12C2 6.477 6.477 2 12 2C17.523 2 22 6.477 22 12Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M19 19L17.5 17.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M19 5L17.5 6.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M5 19L6.5 17.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M5 5L6.5 6.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2 12H4" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M20 12L22 12" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M12 4L12 2" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M15 12C15 13.657 13.657 15 12 15C10.343 15 9 13.657 9 12C9 11.37 9.434 10.495 9.972 9.654C10.776 8.396 11.179 7.767 12 7.767C12.821 7.767 13.224 8.396 14.028 9.654C14.566 10.495 15 11.37 15 12Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                  </svg>
+                  <div style={{ boxSizing: 'border-box', color: '#0D0D0DCC', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11.2px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '14px', whiteSpace: 'pre' }}>
+                    High
+                  </div>
+                  <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                    <path d="M19 9L12 15L5 9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </div>
+              {send}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ boxSizing: 'border-box', height: '20px' }} />
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.1.0.0.0.1.2 */
+export function ComposerStop({ button }: { button: El }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px', marginLeft: '4px' }}>
+      <div {...button} style={{ alignItems: 'center', backgroundColor: '#CD222A', borderRadius: 'calc(infinity * 1px)', boxShadow: '#FFFFFF29 0px 1px 0px inset, #FB2C363D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+          <path d="M2 12C2 7.286 2 4.929 3.464 3.464C4.929 2 7.286 2 12 2C16.714 2 19.071 2 20.535 3.464C22 4.929 22 7.286 22 12C22 16.714 22 19.071 20.535 20.535C19.071 22 16.714 22 12 22C7.286 22 4.929 22 3.464 20.535C2 19.071 2 16.714 2 12Z" fill="rgb(255 255 255)" stroke="rgb(255 255 255)" strokeWidth="1.75" strokeLinecap="round" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.1.0.0.0.1.1.2 */
+export function ComposerSpinner() {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+      <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', rotate: '-90deg', flexShrink: 0, transformOrigin: '50% 50%' }}>
+        <circle cx="12" cy="12" r="9.75" fill="none" stroke="rgb(93 93 93 / 24%)" strokeWidth="3" />
+        <circle cx="12" cy="12" r="9.75" fill="none" stroke="rgb(93 93 93 / 72%)" strokeWidth="3" strokeLinecap="round" strokeDasharray="61.26" strokeDashoffset="39.82" />
+      </svg>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.2.0 */
+export function ThreadHeader({ icon, project, title }: { icon: ReactNode; project: ReactNode; title: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '12px', minWidth: '0px', paddingRight: '96px' }}>
+      <div style={{ boxSizing: 'border-box', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '12px', listStyleImage: 'initial', listStylePosition: 'initial' }}>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', maxWidth: '50%' }}>
+            <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '6px' }}>
+              {icon}
+              <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px' }}>
+                {project}
+              </div>
+            </div>
+          </div>
+          <div style={{ alignContent: 'center', boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', lineHeight: '18px' }}>
+            /
+          </div>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '40px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#0D0D0D', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '18px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+              {title}
+            </div>
+            <div style={{ boxSizing: 'border-box', display: 'inline-block', marginLeft: '4px', opacity: '0' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+                <path d="M19 9L12 15L5 9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1 */
+export function ThreadSidebarCol({ top, search, list }: { top: ReactNode; search: ReactNode; list: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {top}
+      {search}
+      {list}
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.0 */
+export function ThreadSidebarTop({ toggle, back, forward, bell, count }: { toggle: El; back: El; forward: El; bell: El; count: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '8px', height: '40px', paddingRight: '12px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '8px', height: '32px', minWidth: '0px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+          <div {...toggle} style={{ alignItems: 'center', borderRadius: '6px', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '28px', marginLeft: '68px', paddingInline: '6px' }}>
+            <div style={{ backgroundColor: '#0D0D0D', borderRadius: '4px', boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', height: '16px', width: '16px' }} />
+            <div style={{ boxSizing: 'border-box', color: '#0D0D0D', display: 'inline-block', flexShrink: '0', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontWeight: 700, letterSpacing: '0.04em', lineHeight: '18px', whiteSpace: 'pre' }}>
+              GOAT
+            </div>
+          </div>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex' }}>
+            <div {...back} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+                <path d="M20 12H4M10 18L4 12L10 6" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div {...forward} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', opacity: '0.64', width: '28px' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+                <path d="M4 12H20M14 18L20 12L14 6" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div {...bell} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+        <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+            <path d="M18.749 9.71V9.005C18.749 5.136 15.727 2 12 2C8.273 2 5.251 5.136 5.251 9.005V9.71C5.251 10.555 5.01 11.382 4.558 12.085L3.45 13.809C2.439 15.384 3.211 17.525 4.97 18.023C9.573 19.326 14.427 19.326 19.03 18.023C20.789 17.525 21.561 15.384 20.55 13.809L19.442 12.085C18.99 11.382 18.749 10.555 18.749 9.71Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+            <path d="M7.5 19C8.155 20.748 9.922 22 12 22C14.078 22 15.845 20.748 16.5 19" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+          </svg>
+        </div>
+        <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontFeatureSettings: '"tnum"', fontSize: '12px', lineHeight: '16px', minWidth: '16px', textAlign: 'center' }}>
+          {count}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.1 */
+export function ThreadSidebarSearch({ search, compose }: { search: El; compose: El }) {
+  return (
+    <div style={{ boxSizing: 'border-box', padding: '8px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+        <div {...search} style={{ alignItems: 'center', borderRadius: '6px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', gap: '8px', height: '32px', minWidth: '0px', paddingBlock: '6px', paddingInline: '8px' }}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+            <circle cx="11.5" cy="11.5" r="9.5" fill="none" stroke="#747474" strokeWidth="1.75" strokeLinecap="round" />
+            <path d="M18.217 18.218L22 22" fill="none" stroke="#747474" strokeWidth="1.75" strokeLinecap="round" />
+          </svg>
+          <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '150%' }}>
+            Search
+          </div>
+        </div>
+        <div {...compose} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex' }}>
+          <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+              <path d="M22 10.5V12C22 16.714 22 19.071 20.535 20.535C19.071 22 16.714 22 12 22C7.286 22 4.929 22 3.464 20.535C2 19.071 2 16.714 2 12C2 7.286 2 4.929 3.464 3.464C4.929 2 7.286 2 12 2H13.5" fill="none" stroke="#747474" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M16.652 3.455L17.301 2.806C18.376 1.731 20.119 1.731 21.194 2.806C22.269 3.881 22.269 5.624 21.194 6.699L20.545 7.348M16.652 3.455C16.652 3.455 16.733 4.834 17.95 6.05C19.166 7.267 20.545 7.348 20.545 7.348M16.652 3.455L10.687 9.42C10.283 9.824 10.081 10.026 9.907 10.249C9.702 10.511 9.527 10.796 9.383 11.097C9.262 11.351 9.172 11.623 8.991 12.165L8.412 13.9M8.412 13.9L8.038 15.023C7.949 15.29 8.019 15.584 8.217 15.783C8.416 15.981 8.71 16.051 8.977 15.962L10.1 15.588L11.835 15.009C12.377 14.828 12.649 14.738 12.903 14.617C13.204 14.473 13.489 14.297 13.751 14.093C13.974 13.919 14.176 13.717 14.58 13.313L20.545 7.348M10.1 15.588L8.412 13.9" fill="none" stroke="#747474" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0 */
+export function ThreadList({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '1px', paddingInline: '8px' }}>
+      {children}
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.0 */
+export function TlsSection({ label }: { label: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '32px', justifyContent: 'space-between', listStyleImage: 'initial', listStylePosition: 'initial', marginLeft: '2px', marginRight: '2px', paddingInline: '8px' }}>
+      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.3 */
+export function TlsSectionThreads({ label }: { label: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '32px', justifyContent: 'space-between', listStyleImage: 'initial', listStylePosition: 'initial', marginLeft: '2px', marginRight: '2px', marginTop: '16px', paddingInline: '8px' }}>
+      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.6 */
+export function TlsRow({ icon, title, status, project, right, root }: { icon: ReactNode; title: ReactNode; status: ReactNode; project: ReactNode; right: ReactNode; root: El }) {
+  return (
+    <div style={{ boxSizing: 'border-box', listStyleImage: 'initial', listStylePosition: 'initial', paddingBlock: '2px' }}>
+      <div {...root} style={{ borderRadius: '6px', boxSizing: 'border-box', overflow: 'clip' }}>
+        <div style={{ boxSizing: 'border-box', height: '54px', paddingBlock: '8px', paddingInline: '10px' }}>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '20px' }}>
+            {icon}
+            <div style={{ boxSizing: 'border-box', color: '#0D0D0D', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+              {title}
+            </div>
+            {status}
+          </div>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '16px', marginTop: '2px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+              {project}
+            </div>
+            {right}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.4 */
+export function TlsRowSelected({ icon, title, status, project, right, root }: { icon: ReactNode; title: ReactNode; status: ReactNode; project: ReactNode; right: ReactNode; root: El }) {
+  return (
+    <div style={{ boxSizing: 'border-box', listStyleImage: 'initial', listStylePosition: 'initial', paddingBlock: '2px' }}>
+      <div {...root} style={{ backgroundColor: '#E8E8E8', borderRadius: '6px', boxSizing: 'border-box', overflow: 'clip' }}>
+        <div style={{ boxSizing: 'border-box', height: '54px', paddingBlock: '8px', paddingInline: '10px' }}>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '20px' }}>
+            {icon}
+            <div style={{ boxSizing: 'border-box', color: '#0D0D0D', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '20px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+              {title}
+            </div>
+            {status}
+          </div>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '16px', marginTop: '2px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+              {project}
+            </div>
+            {right}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.6.0.0.0.0 */
+export function TlsIcon() {
+  return (
+    <div style={{ backgroundColor: '#0D0D0D', borderRadius: '3px', boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', height: '14px', opacity: '0.6', width: '14px' }} />
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.1.0.0.0.2 */
+export function TlsApproval({ label }: { label: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '20px', marginLeft: 'auto' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '4px' }}>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+          <path d="M3 10.417C3 7.219 3 5.62 3.378 5.082C3.755 4.545 5.258 4.03 8.265 3.001L8.838 2.805C10.405 2.268 11.189 2 12 2C12.811 2 13.595 2.268 15.162 2.805L15.735 3.001C18.742 4.03 20.245 4.545 20.622 5.082C21 5.62 21 7.219 21 10.417C21 10.9 21 11.423 21 11.991C21 17.629 16.761 20.366 14.101 21.527C13.38 21.842 13.019 22 12 22C10.981 22 10.62 21.842 9.899 21.527C7.239 20.366 3 17.629 3 11.991C3 11.423 3 10.9 3 10.417Z" fill="none" stroke="#BB4D00" strokeWidth="1.75" strokeLinecap="round" />
+          <path d="M11.5 16H12.5C13.052 16 13.5 15.552 13.5 15V13.599C14.397 13.08 15 12.11 15 11C15 9.343 13.657 8 12 8C10.343 8 9 9.343 9 11C9 12.11 9.603 13.08 10.5 13.599V15C10.5 15.552 10.948 16 11.5 16Z" fill="none" stroke="#BB4D00" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <div style={{ boxSizing: 'border-box', color: '#0169CC', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+          {label}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.2.0.0.0.2 */
+export function TlsInput({ label }: { label: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '20px', marginLeft: 'auto' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '4px' }}>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+          <path d="M12 22C17.523 22 22 17.523 22 12C22 6.477 17.523 2 12 2C6.477 2 2 6.477 2 12C2 13.6 2.376 15.112 3.043 16.453C3.221 16.809 3.28 17.216 3.177 17.601L2.582 19.827C2.323 20.793 3.207 21.677 4.173 21.419L6.399 20.823C6.784 20.72 7.191 20.779 7.548 20.956C8.888 21.624 10.4 22 12 22Z" fill="none" stroke="#0169CC" strokeWidth="1.75" strokeLinecap="round" />
+          <path d="M10.125 9.375C10.125 8.339 10.964 7.5 12 7.5C13.036 7.5 13.875 8.339 13.875 9.375C13.875 10.062 13.505 10.664 12.953 10.99C12.478 11.271 12 11.698 12 12.25V13.5" fill="none" stroke="#0169CC" strokeWidth="1.75" strokeLinecap="round" />
+          <path d="M12 16.5H12" fill="none" stroke="#0169CC" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <div style={{ boxSizing: 'border-box', color: '#0169CC', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+          {label}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.4.0.0.0.2 */
+export function TlsDot() {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '20px', marginLeft: 'auto' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '4px' }}>
+        <div style={{ backgroundColor: '#0169CC', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '8px', width: '8px' }} />
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.5.0.0.0.2 */
+export function TlsFailed() {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '20px', marginLeft: 'auto' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '4px' }}>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+          <circle cx="12" cy="12" r="10" fill="none" stroke="#C10007" strokeWidth="1.75" strokeLinecap="round" />
+          <path d="M12 7V13" fill="none" stroke="#C10007" strokeWidth="1.75" strokeLinecap="round" />
+          <path d="M12 16H12" fill="none" stroke="#C10007" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.4.0.0.1.1 */
+export function TlsPr({ num }: { num: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', marginLeft: 'auto', maxWidth: '48%' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '2px' }}>
+        <svg width="12" height="12" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+          <circle cx="6" cy="6" r="2.5" fill="none" stroke="#2B6D58" strokeWidth="1.75" strokeLinecap="round" />
+          <circle cx="6" cy="18" r="2.5" fill="none" stroke="#2B6D58" strokeWidth="1.75" strokeLinecap="round" />
+          <circle cx="18" cy="18" r="2.5" fill="none" stroke="#2B6D58" strokeWidth="1.75" strokeLinecap="round" />
+          <path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4" fill="none" stroke="#2B6D58" strokeWidth="1.75" strokeLinecap="round" />
+        </svg>
+        <div style={{ boxSizing: 'border-box', color: '#2B6D58', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontFeatureSettings: '"tnum"', fontSize: '12px', lineHeight: '16px' }}>
+          {num}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.1.0.0.1.1 */
+export function TlsMachine({ name }: { name: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', marginLeft: 'auto', maxWidth: '48%' }}>
+      <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+        {name}
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.8 */
+export function TlsWorkingHeader({ count, root }: { count: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '32px', listStyleImage: 'initial', listStylePosition: 'initial', marginLeft: '2px', marginRight: '2px', paddingInline: '8px' }}>
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
+        <path d="M19 9L12 15L5 9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px' }}>
+        Working
+      </div>
+      <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontFeatureSettings: '"tnum"', fontSize: '12px', lineHeight: '16px' }}>
+        {count}
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.9 */
+export function TlsWorkingRow({ title, time, root }: { title: ReactNode; time: ReactNode; root: El }) {
+  return (
+    <div style={{ boxSizing: 'border-box', listStyleImage: 'initial', listStylePosition: 'initial' }}>
+      <div {...root} style={{ alignItems: 'center', borderRadius: '6px', boxSizing: 'border-box', display: 'flex', gap: '10px', height: '36px', opacity: '0.7', paddingInline: '10px' }}>
+        <div style={{ boxSizing: 'border-box', display: 'flex', filter: 'grayscale(100%)', opacity: '0.4' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#2563EB', borderRadius: '4px', boxSizing: 'border-box', display: 'inline-flex', flexShrink: '0', height: '16px', justifyContent: 'center', width: '16px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#FFFFFF', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '10px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '12px' }}>
+              A
+            </div>
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: '-webkit-box', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '14px', lineHeight: '20px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+          {title}
+        </div>
+        <div style={{ alignContent: 'center', boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontFeatureSettings: '"tnum"', fontSize: '12px', height: '24px', lineHeight: '16px', marginLeft: 'auto', minWidth: '32px', textAlign: 'right' }}>
+          {time}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.4.1.2.0.7 */
+export function TlsSpacer() {
+  return (
+    <div style={{ boxSizing: 'border-box', flexBasis: '0%', flexGrow: '1', listStyleImage: 'initial', listStylePosition: 'initial' }} />
+  );
+}
+
+/** 1N65-1 0.0.2.1.1 */
+export function UpdatingLine({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', paddingInline: '12px' }}>
+      <div style={{ backgroundColor: '#0169CC', borderRadius: '3px', boxSizing: 'border-box', display: 'inline-block', flexShrink: '0', height: '6px', width: '6px' }} />
+      <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+        {text}
+      </div>
+    </div>
+  );
+}
+
+/** 1OXX-1 0.0.1.0.1.0.0.0 */
+export function QueueBanner({ count, rows, header }: { count: ReactNode; rows: ReactNode; header: El }) {
+  return (
+    <div style={{ boxSizing: 'border-box', marginBottom: '-17px', marginLeft: 'auto', marginRight: 'auto', width: 'calc(100% - 44px)' }}>
+      <div style={{ boxSizing: 'border-box', isolation: 'isolate', padding: '4px', position: 'relative' }}>
+        <div style={{ backdropFilter: 'blur(18px) saturate(114%)', backgroundColor: '#FFFFFFEB', borderColor: '#00000014', borderStyle: 'solid', borderTopLeftRadius: '16px', borderTopRightRadius: '16px', borderWidth: '1px', bottom: '0px', boxShadow: '#0000000D 0px 1px 2px', boxSizing: 'border-box', left: '0px', maskImage: 'linear-gradient(to top, transparent 16px, rgb(0, 0, 0) 16px)', position: 'absolute', right: '0px', top: '0px' }} />
+        <div {...header} style={{ alignItems: 'center', boxSizing: 'border-box', columnGap: '4px', display: 'grid', gridTemplateColumns: '24px minmax(0px, 1fr) auto', minHeight: '24px', position: 'relative' }}>
+          <div style={{ boxSizing: 'border-box', display: 'flex', justifyContent: 'center' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M21 6L13 6" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M21 10L13 10" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M21 14L13 14" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M21 18H13" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M5.135 7.514L7.062 6V10" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M5.135 15.055C5.135 14.472 5.566 14 6.098 14C6.63 14 7.062 14.472 7.062 15.055C7.062 15.637 6.851 15.918 6.48 16.433L5.135 18H7.062" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+            Queued
+          </div>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px', minWidth: '24px', textAlign: 'center' }}>
+              {count}
+            </div>
+            <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', flexShrink: 0, height: '24px', justifyContent: 'center', width: '24px' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+                <path d="M19 9L12 15L5 9" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+          </div>
+        </div>
+        {rows}
+        <div style={{ boxSizing: 'border-box', height: '17px', position: 'relative' }} />
+      </div>
+    </div>
+  );
+}
+
+/** 1OXX-1 0.0.1.0.1.0.0.0.0.2 */
+export function QueueRow({ text, grip, edit, steer, remove, steerLabel }: { text: ReactNode; grip: El; edit: El; steer: El; remove: El; steerLabel: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', display: 'grid', gap: '1px', position: 'relative' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', columnGap: '4px', display: 'grid', gridTemplateColumns: '24px minmax(0px, 1fr) auto', minHeight: '20px' }}>
+        <div {...grip} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', height: '24px', justifyContent: 'center', width: '24px' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+            <circle cx="15.512" cy="19" r=".75" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" />
+            <circle cx="15.512" cy="12" r=".75" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" />
+            <circle cx="15.496" cy="5" r=".75" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" />
+            <circle cx="8.504" cy="19" r=".75" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" />
+            <circle cx="8.504" cy="12" r=".75" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" />
+            <circle cx="8.488" cy="5" r=".75" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" />
+          </svg>
+        </div>
+        <div style={{ boxSizing: 'border-box', color: '#0D0D0DCC', display: '-webkit-box', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', minWidth: '0px', overflow: 'hidden', textOverflow: 'ellipsis', WebkitBoxOrient: 'vertical', WebkitLineClamp: '1', whiteSpace: 'pre' }}>
+          {text}
+        </div>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+          <div {...edit} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', flexShrink: 0, height: '24px', justifyContent: 'center', width: '24px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M14.36 4.079L15.287 3.152C16.823 1.616 19.313 1.616 20.848 3.152C22.384 4.687 22.384 7.177 20.848 8.713L19.921 9.64M14.36 4.079C14.36 4.079 14.476 6.048 16.214 7.786C17.952 9.524 19.921 9.64 19.921 9.64M19.921 9.64L11.4 18.161C10.823 18.738 10.534 19.027 10.216 19.275C9.841 19.568 9.435 19.819 9.005 20.024C8.641 20.197 8.254 20.326 7.479 20.584L4.198 21.678L3.396 21.946C3.015 22.073 2.595 21.973 2.311 21.689C2.027 21.405 1.927 20.985 2.054 20.604L2.322 19.802L3.416 16.521C3.674 15.746 3.803 15.359 3.976 14.995C4.181 14.565 4.432 14.159 4.725 13.784C4.973 13.466 5.262 13.177 5.839 12.6L14.36 4.079M4.198 21.678L2.322 19.802" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </div>
+          <div {...steer} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '24px', paddingInline: '7px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ marginRight: '-2px', marginLeft: '-2px', display: 'inline-block', flexShrink: 0 }}>
+              <path d="M14.5 17L19.5 12L14.5 7M19.5 12L9.5 12C7.833 12 4.5 13 4.5 17" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div style={{ boxSizing: 'border-box', color: '#5D5D5D', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '16px', whiteSpace: 'pre' }}>
+              {steerLabel}
+            </div>
+          </div>
+          <div {...remove} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'inline-flex', flexShrink: 0, height: '24px', justifyContent: 'center', width: '24px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M19.007 5L5.007 19" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M19 19L5 5" fill="none" stroke="rgb(93 93 93)" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+          </div>
+        </div>
       </div>
     </div>
   );

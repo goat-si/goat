@@ -1,0 +1,33 @@
+{
+  "id": "decision:3f2a",
+  "source": "decision",
+  "from": {
+    "threadId": "thr-worker-1",
+    "threadTitle": "PR #12 review",
+    "parentThreadId": "thr-bot-1",
+    "parentThreadTitle": "GOAT"
+  },
+  "title": "Merge with the flaky e2e check failing?",
+  "context": "The same e2e test fails on goat2; the change passes its own tests.",
+  "options": [
+    {
+      "id": "merge",
+      "label": "Merge now",
+      "consequence": "Lands the fix; goat2 stays red on that test."
+    },
+    {
+      "id": "wait",
+      "label": "Wait for the e2e fix",
+      "consequence": "Holds the fix until the test is repaired."
+    }
+  ],
+  "recommended": "merge",
+  "expiresAt": null,
+  "status": "open",
+  "answer": null,
+  "answeredBy": null,
+  "createdAt": "2026-11-28T13:00:00Z",
+  "updatedAt": "2026-11-28T13:00:00Z",
+  "humanRequired": false,
+  "routedTo": "parent"
+}

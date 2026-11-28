@@ -8,3 +8,13 @@ license.workspace = true
 publish = false
 
 [dependencies]
+goat2-contracts = { path = "../goat2-contracts" }
+serde.workspace = true
+serde_json.workspace = true
+schemars = "0.8"
+sha2 = "0.10"
+thiserror.workspace = true
+
+[[bin]]
+name = "goat2-parity"
+path = "src/main.rs"
