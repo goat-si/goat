@@ -4187,7 +4187,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         Effect.ensuring(Effect.suspend(() => (transferred ? Effect.void : release()))),
       );
 
-      yield* refreshNewWorktreeIndex(worktreePath, executeGit, fileSystem, path).pipe(
+      yield* refreshNewWorktreeIndex(worktreePath, executeGit, fileSystem, path, serviceScope).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("worktree index refresh failed", { worktreePath, cause }),
         ),
