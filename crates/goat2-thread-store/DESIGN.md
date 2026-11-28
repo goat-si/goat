@@ -81,7 +81,7 @@ unsupported: append / read / read_page / settle return `UnsupportedEvent`; `read
 
 | Call | Condition | Result |
 |---|---|---|
-| read(None) | latest checkpoint C with suffix after it <= 128 lines and <= 1 MiB | snapshot C + suffix |
+| read(None) | latest eligible checkpoint C (its fold has every Fold field) with suffix after it <= 128 lines and <= 1 MiB | snapshot C + suffix |
 | read(None) | no checkpoint and whole log within limits | all lines |
 | read(None) | otherwise | snapshot of the current {card, fold} at head, no lines (history via read_page) |
 | read(c) | folder missing | reset ThreadMissing |
