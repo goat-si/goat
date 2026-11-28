@@ -112,8 +112,13 @@ pub enum ProviderAuthResponse {
         #[ts(as = "String")]
         #[schemars(with = "String", length(max = 4096))]
         data: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "crate::serde_util::present_nonnull",
+            skip_serializing_if = "Option::is_none"
+        )]
         #[ts(optional)]
+        #[schemars(with = "ProviderAuthTerminalSize")]
         size: Option<ProviderAuthTerminalSize>,
     },
     Credentials {

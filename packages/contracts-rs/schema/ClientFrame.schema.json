@@ -222,14 +222,7 @@
               "type": "string"
             },
             "size": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ProviderAuthTerminalSize"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/ProviderAuthTerminalSize"
             },
             "type": {
               "const": "terminal",
