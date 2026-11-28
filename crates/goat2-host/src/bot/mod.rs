@@ -3,8 +3,11 @@
 //! notes. The core calls in through the single-call hooks below (boundary agreed with lane E).
 
 pub mod asks;
+pub mod attention;
 pub mod brief;
+pub mod commands;
 pub mod decisions;
+pub mod details;
 pub mod guards;
 pub mod mcp;
 pub mod notes;
@@ -23,6 +26,12 @@ use crate::engine::EngineInput;
 #[derive(Debug, Default)]
 pub struct BotState {
     pub(crate) guards: Mutex<guards::Guards>,
+    pub(crate) attention: Mutex<attention::Attention>,
+}
+
+/// Hook (host start): background work of the bot module.
+pub(crate) fn start(host: &Host) {
+    attention::start(host);
 }
 
 /// Whether the engine can steer a message into a running turn (v1 capability flag

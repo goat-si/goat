@@ -29,9 +29,17 @@ use crate::store::ThreadStore;
 #[derive(Debug, Clone)]
 pub enum CardUpdate {
     Changed(Arc<ThreadCard>),
-    Removed { thread_id: ThreadId, card_seq: u64 },
+    Removed {
+        thread_id: ThreadId,
+        card_seq: u64,
+    },
     BotChanged(Arc<BotProfile>),
-    BotRemoved { bot_id: goat2_contracts::BotId },
+    /// The same card served again with UI state changed (`unread` after `mark_read`); sent
+    /// whatever the subscriber's card_seq.
+    Refreshed(Arc<ThreadCard>),
+    BotRemoved {
+        bot_id: goat2_contracts::BotId,
+    },
 }
 
 /// A live thread change, broadcast to every `subscribe_thread` of that thread.
@@ -67,6 +75,10 @@ pub trait WsHost: Send + Sync + 'static {
     fn store(&self) -> Arc<dyn ThreadStore>;
     /// Current bot profiles.
     fn bots(&self) -> Vec<BotProfile>;
+    /// A card as the UI sees it (host-derived UI fields such as `unread`).
+    fn serve_card(&self, card: ThreadCard) -> ThreadCard {
+        card
+    }
     /// Subscribe before reading so no change is missed; dedupe by `cardSeq`.
     fn watch_cards(&self) -> broadcast::Receiver<CardUpdate>;
     /// Subscribe to a thread's live changes plus a snapshot of items still streaming.

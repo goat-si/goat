@@ -79,7 +79,8 @@ pub fn section(heading: &str, body: &str) -> String {
 /// carry no raw newline, so profile text can never start a line or a heading.
 pub fn identity_section(bot: &BotProfile) -> String {
     let json = |s: &str| serde_json::to_string(s).unwrap_or_default();
-    if bot.name == "GOAT" && bot.purpose.trim().is_empty() {
+    let instructions = bot.instructions.as_deref().unwrap_or("").trim();
+    if bot.name == "GOAT" && bot.purpose.trim().is_empty() && instructions.is_empty() {
         return String::new();
     }
     let mut out = format!(
@@ -90,6 +91,12 @@ pub fn identity_section(bot: &BotProfile) -> String {
         out.push_str(&format!(
             "Your purpose, in the person's words (a JSON string): {}\n",
             json(&bot.purpose)
+        ));
+    }
+    if !instructions.is_empty() {
+        out.push_str(&format!(
+            "Your standing bot instructions (a JSON string): {}\n",
+            json(instructions)
         ));
     }
     out.push('\n');

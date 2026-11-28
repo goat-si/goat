@@ -498,6 +498,82 @@ pub fn append(
     Ok(Saved::Wrote { line, correction })
 }
 
+/// `list_bot_notes`: the newest 256 KiB of the notes as lines (v1 channelBotNotes list shape).
+/// `revision` is a digest of the whole file (None = no file), the token `write_bot_notes`
+/// checks.
+pub fn list(path: &Path) -> std::io::Result<goat2_contracts::ChannelListBotNotesResult> {
+    let whole = match std::fs::read(path) {
+        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(goat2_contracts::ChannelListBotNotesResult {
+                revision: None,
+                notes: Vec::new(),
+                truncated: false,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let tail = read_tail(path)?.unwrap_or_default();
+    let notes = parse_lines(&tail)
+        .into_iter()
+        .map(|l| goat2_contracts::ChannelBotNote {
+            index: l.index as u32,
+            date: l.date,
+            text: l.text,
+            replaces: l.replaces,
+            replaced_by: l.replaced_by.map(|i| i as u32),
+        })
+        .collect();
+    Ok(goat2_contracts::ChannelListBotNotesResult {
+        revision: Some(revision_of(&whole)),
+        notes,
+        truncated: whole.len() as u64 > NOTES_SCAN_BYTES,
+    })
+}
+
+/// The notes file's revision token.
+pub fn revision_of(text: &str) -> String {
+    crate::util::stable_id(&[text])
+}
+
+/// Why a notes write did not happen.
+#[derive(Debug)]
+pub enum WriteError {
+    /// The file changed since `expected_revision` (v1 has no direct edit; GOAT 2 refuses a stale one).
+    Changed,
+    TooLarge,
+    Io(std::io::Error),
+}
+
+/// `write_bot_notes`: replace the whole notes file (the person's own edit). The caller holds the
+/// notes lock.
+pub fn write(path: &Path, text: &str, expected: Option<&str>) -> Result<(), WriteError> {
+    if text.len() as u64 > NOTES_SCAN_BYTES {
+        return Err(WriteError::TooLarge);
+    }
+    let current = match std::fs::read(path) {
+        Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(WriteError::Io(e)),
+    };
+    if let Some(expected) = expected
+        && current.as_deref().map(revision_of).as_deref() != Some(expected)
+    {
+        return Err(WriteError::Changed);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
+    }
+    let tmp = path.with_extension("md.tmp");
+    let body = if text.is_empty() || text.ends_with('\n') {
+        text.to_owned()
+    } else {
+        format!("{text}\n")
+    };
+    std::fs::write(&tmp, body).map_err(WriteError::Io)?;
+    std::fs::rename(tmp, path).map_err(WriteError::Io)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

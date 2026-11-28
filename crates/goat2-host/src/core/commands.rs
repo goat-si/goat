@@ -455,6 +455,40 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 ..Default::default()
             })
         }
+        Command::UpdateBot {
+            bot_id,
+            name,
+            purpose,
+            face,
+            default_model_selection,
+            instructions,
+            ..
+        } => crate::bot::commands::update_bot(
+            host,
+            &bot_id,
+            crate::bot::commands::BotChange {
+                name,
+                purpose,
+                face,
+                default_model_selection,
+                instructions,
+            },
+        ),
+        Command::ListBotNotes { bot_id, .. } => {
+            crate::bot::commands::list_bot_notes(host, &bot_id).await
+        }
+        Command::WriteBotNotes {
+            bot_id,
+            text,
+            expected_revision,
+            ..
+        } => crate::bot::commands::write_bot_notes(host, &bot_id, text, expected_revision).await,
+        Command::MarkRead { thread_id, seq, .. } => {
+            crate::bot::commands::mark_read(host, &thread_id, seq)
+        }
+        Command::GetTurnItem {
+            thread_id, item_id, ..
+        } => crate::bot::commands::get_turn_item(host, &thread_id, &item_id).await,
         // Part 2 commands whose host module has not landed yet (providers module: lane E;
         // bot notes, update_bot, get_turn_item, mark_read: P2-E). Refused plainly until then.
         Command::RefreshProviders { .. }
@@ -466,12 +500,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
         | Command::AcceptAcpRegistryUrlAuth { .. }
         | Command::SearchAcpRegistry { .. }
         | Command::PrepareAcpRegistryAgent { .. }
-        | Command::SetProviderInstance { .. }
-        | Command::UpdateBot { .. }
-        | Command::ListBotNotes { .. }
-        | Command::WriteBotNotes { .. }
-        | Command::GetTurnItem { .. }
-        | Command::MarkRead { .. } => Err(command_error(
+        | Command::SetProviderInstance { .. } => Err(command_error(
             Reason::NotAvailable,
             "this command is not available in this host build yet",
         )),
@@ -556,6 +585,10 @@ impl WsHost for Host {
 
     fn bots(&self) -> Vec<BotProfile> {
         self.inner.bots.lock().expect("bots").clone()
+    }
+
+    fn serve_card(&self, card: ThreadCard) -> ThreadCard {
+        crate::bot::attention::serve(self, card)
     }
 
     fn watch_cards(&self) -> broadcast::Receiver<CardUpdate> {

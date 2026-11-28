@@ -28,6 +28,12 @@ fn bots_dir(host: &Host) -> std::path::PathBuf {
     host.options().data_dir.join("bots")
 }
 
+/// v1 BOT_INSTRUCTIONS_MAX_BYTES: the bot store refuses instructions over 16384 UTF-8 bytes
+/// before writing (contracts check the 16384-character limit; JSON Schema cannot count bytes).
+pub fn instructions_fit(text: Option<&str>) -> bool {
+    text.is_none_or(|t| t.len() <= goat2_contracts::limits::BOT_INSTRUCTIONS_MAX_BYTES)
+}
+
 pub(crate) fn save_bot(host: &Host, profile: &BotProfile) -> Result<(), StoreError> {
     let dir = bots_dir(host);
     std::fs::create_dir_all(&dir)?;

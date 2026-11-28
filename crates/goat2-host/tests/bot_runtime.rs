@@ -792,3 +792,225 @@ async fn a_bot_lists_and_answers_its_workers_decision() {
         matches!(again, SurfaceResult::Error { ref error } if error.reason == "decision_not_found")
     );
 }
+
+async fn command(
+    t: &T,
+    frame: serde_json::Value,
+) -> Result<goat2_contracts::CommandValue, goat2_contracts::CommandError> {
+    let frame: ClientFrame = serde_json::from_value(frame).unwrap();
+    t.host.command(frame).await
+}
+
+#[tokio::test]
+async fn update_bot_checks_the_byte_cap_and_rotates_the_session() {
+    let t = setup().await;
+    let (b, id) = bot(&t);
+    // 16384 characters fit the contract but not v1's 16384-byte store cap.
+    let too_big = "é".repeat(16_384);
+    let refused = command(
+        &t,
+        serde_json::json!({
+            "type": "update_bot", "reqId": "r", "clientRequestId": "ub-1",
+            "botId": b.bot_id, "instructions": too_big,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.reason, "invalid_request");
+    say(&t, &id, "ub-hi", "hi").await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.finish_turn(&id, "Hello.");
+    eventually("idle", || {
+        !running(&t, &id) && !notified(&t, &id).is_empty()
+    })
+    .await;
+    let value = command(
+        &t,
+        serde_json::json!({
+            "type": "update_bot", "reqId": "r", "clientRequestId": "ub-2",
+            "botId": b.bot_id, "name": "Juno", "instructions": "Answer in Korean.",
+        }),
+    )
+    .await
+    .unwrap();
+    let bot2 = value.bot.unwrap();
+    assert_eq!(bot2.name, "Juno");
+    assert_eq!(bot2.instructions.as_deref(), Some("Answer in Korean."));
+    let saved: goat2_contracts::BotProfile = serde_json::from_slice(
+        &std::fs::read(t.dir.path().join("bots").join(format!("{}.json", b.bot_id))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved.instructions.as_deref(), Some("Answer in Korean."));
+    say(&t, &id, "ub-again", "again").await;
+    eventually("second turn", || t.fake.turn_texts(&id).len() == 2).await;
+    let brief = &t.fake.turn_texts(&id)[1];
+    assert!(
+        brief.starts_with("## Identity\nThe person named you \"Juno\""),
+        "{brief}"
+    );
+    assert!(
+        brief.contains("Your standing bot instructions (a JSON string): \"Answer in Korean.\"")
+    );
+    assert_eq!(
+        starts(&t, &id).len(),
+        2,
+        "a changed profile starts a fresh session"
+    );
+}
+
+#[tokio::test]
+async fn bot_notes_list_and_write_with_a_revision_check() {
+    let t = setup().await;
+    let (b, _) = bot(&t);
+    let empty = command(
+        &t,
+        serde_json::json!({
+            "type": "list_bot_notes", "reqId": "r", "clientRequestId": "ln-1", "botId": b.bot_id,
+        }),
+    )
+    .await
+    .unwrap()
+    .notes
+    .unwrap();
+    assert_eq!(empty.revision, None);
+    assert!(empty.notes.is_empty());
+    let text = format!("{}- 2026-11-28: Open PRs as drafts\n", notes::NOTES_HEADER);
+    let written = command(&t, serde_json::json!({
+        "type": "write_bot_notes", "reqId": "r", "clientRequestId": "wn-1", "botId": b.bot_id, "text": text,
+    })).await.unwrap().notes.unwrap();
+    assert_eq!(written.notes.len(), 1);
+    assert_eq!(written.notes[0].text, "Open PRs as drafts");
+    assert_eq!(written.notes[0].date.as_deref(), Some("2026-11-28"));
+    let rev = written.revision.clone().unwrap();
+    let ok = command(
+        &t,
+        serde_json::json!({
+            "type": "write_bot_notes", "reqId": "r", "clientRequestId": "wn-2", "botId": b.bot_id,
+            "text": format!("{text}- 2026-11-29: Use pnpm\n"), "expectedRevision": rev,
+        }),
+    )
+    .await
+    .unwrap()
+    .notes
+    .unwrap();
+    assert_eq!(ok.notes.len(), 2);
+    let stale = command(
+        &t,
+        serde_json::json!({
+            "type": "write_bot_notes", "reqId": "r", "clientRequestId": "wn-3", "botId": b.bot_id,
+            "text": "nope", "expectedRevision": rev,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(stale.reason, "notes_changed");
+    let missing = command(
+        &t,
+        serde_json::json!({
+            "type": "list_bot_notes", "reqId": "r", "clientRequestId": "ln-2", "botId": "bot_none",
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(missing.reason, "bot_not_found");
+}
+
+#[tokio::test]
+async fn unread_follows_the_bots_messages_and_mark_read_survives_a_restart() {
+    let t = setup().await;
+    let (_, id) = bot(&t);
+    let served = |t: &T| t.host.serve_card(t.host.store().card(&id).unwrap());
+    say(&t, &id, "u-1", "hello").await;
+    eventually("running", || running(&t, &id)).await;
+    assert!(!served(&t).unread, "the person's own message is not news");
+    t.fake.finish_turn(&id, "Hi!");
+    eventually("answered", || !notified(&t, &id).is_empty()).await;
+    eventually("unread", || served(&t).unread).await;
+    let last = t.host.store().last_seq(&id).unwrap();
+    command(&t, serde_json::json!({
+        "type": "mark_read", "reqId": "r", "clientRequestId": "mr-1", "threadId": id, "seq": last,
+    })).await.unwrap();
+    assert!(!served(&t).unread);
+    eventually("ui-state written", || {
+        goat2_host::bot::attention::stored_marks(t.dir.path()).get(id.as_str()) == Some(&last)
+    })
+    .await;
+    let t = reopen(t).await;
+    assert!(!t.host.serve_card(t.host.store().card(&id).unwrap()).unread);
+}
+
+#[tokio::test]
+async fn get_turn_item_reads_through_the_live_session_and_refuses_otherwise() {
+    let t = setup().await;
+    let (_, id) = bot(&t);
+    say(&t, &id, "g-1", "build it").await;
+    eventually("running", || running(&t, &id)).await;
+    let turn_id = t.fake.active_turn(&id).unwrap();
+    let mut item = assistant_item(&id, &ItemId::new("cmd-9"), &turn_id, "");
+    item.body = TurnItemBody::CommandExecution {
+        input: "cargo build".into(),
+        command_actions: None,
+        output: None,
+        output_omitted: Some(true),
+        output_indicates_failure: None,
+        exit_code: Some(0),
+    };
+    t.fake.emit(
+        &id,
+        EngineEvent::ItemCompleted {
+            turn_id: turn_id.clone(),
+            item: Box::new(item.clone()),
+            locator: Some(goat2_contracts::EngineItemLocator {
+                turn_id: turn_id.clone(),
+                item_id: "eng-cmd-9".into(),
+            }),
+        },
+    );
+    eventually("item stored", || {
+        t.host.store().read_after(&id, 0).unwrap().iter().any(
+            |l| matches!(&l.event, LogEvent::ItemCompleted(d) if d.item.id.as_str() == "cmd-9"),
+        )
+    })
+    .await;
+    let get = |key: &str| {
+        serde_json::json!({
+            "type": "get_turn_item", "reqId": "r", "clientRequestId": key, "threadId": id, "itemId": "cmd-9",
+        })
+    };
+    // The engine cannot read it: not available, never a made-up item.
+    assert_eq!(
+        command(&t, get("gi-1")).await.unwrap_err().reason,
+        "not_available"
+    );
+    let mut full = item.clone();
+    full.body = TurnItemBody::CommandExecution {
+        input: "cargo build".into(),
+        command_actions: None,
+        output: Some("Compiling goat2 ... Finished".into()),
+        output_omitted: None,
+        output_indicates_failure: None,
+        exit_code: Some(0),
+    };
+    t.fake.put_readable("eng-cmd-9", full);
+    let read = command(&t, get("gi-2")).await.unwrap().turn_item.unwrap();
+    assert!(
+        matches!(read.body, TurnItemBody::CommandExecution { output: Some(ref o), .. } if o.contains("Finished"))
+    );
+    assert_eq!(read.thread_id, id);
+    // No live engine session (the process ended): refused once the host dropped it.
+    t.fake.crash(&id, "gone");
+    let start = Instant::now();
+    let refused = loop {
+        match command(&t, get(&format!("gi-3-{}", start.elapsed().as_micros()))).await {
+            Err(e) => break e,
+            Ok(_) => {
+                assert!(
+                    start.elapsed() < Duration::from_secs(5),
+                    "still read after the crash"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    };
+    assert_eq!(refused.reason, "not_available");
+}

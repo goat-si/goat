@@ -90,6 +90,8 @@ struct Shared {
     pgids: HashMap<ThreadId, i32>,
     turn_texts: HashMap<ThreadId, Vec<String>>,
     capabilities: Option<goat2_contracts::ProviderCapabilities>,
+    /// Items `read_item` answers, by engine item id (none = Unsupported).
+    readable: HashMap<String, TurnItem>,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -105,6 +107,15 @@ impl FakeEngine {
         let engine = Self::default();
         engine.shared.lock().expect("fake").script = script;
         engine
+    }
+
+    /// Let `read_item` answer this item for its engine item id.
+    pub fn put_readable(&self, engine_item_id: &str, item: TurnItem) {
+        self.shared
+            .lock()
+            .expect("fake")
+            .readable
+            .insert(engine_item_id.to_owned(), item);
     }
 
     /// Report these capability flags instead of Codex's.
@@ -423,6 +434,17 @@ impl EngineSession for FakeSession {
             });
         }
         result
+    }
+
+    async fn read_item(&self, locator: &EngineItemLocator) -> Result<TurnItem, EngineError> {
+        self.engine
+            .shared
+            .lock()
+            .expect("fake")
+            .readable
+            .get(&locator.item_id)
+            .cloned()
+            .ok_or_else(|| EngineError::Unsupported("read_item".into()))
     }
 
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {

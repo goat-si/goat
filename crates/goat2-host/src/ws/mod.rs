@@ -204,7 +204,7 @@ async fn cards(host: Arc<dyn WsHost>, tx: Tx, sub_id: String, after: Option<Card
                 &tx,
                 HostFrame::CardChanged {
                     sub_id: sub_id.clone(),
-                    card: Box::new(card),
+                    card: Box::new(host.serve_card(card)),
                 },
             );
         }
@@ -232,6 +232,15 @@ async fn cards(host: Arc<dyn WsHost>, tx: Tx, sub_id: String, after: Option<Card
         match rx.recv().await {
             Ok(CardUpdate::Changed(card)) if card.card_seq > last => {
                 last = card.card_seq;
+                send(
+                    &tx,
+                    HostFrame::CardChanged {
+                        sub_id: sub_id.clone(),
+                        card: Box::new(host.serve_card((*card).clone())),
+                    },
+                );
+            }
+            Ok(CardUpdate::Refreshed(card)) if card.card_seq <= last => {
                 send(
                     &tx,
                     HostFrame::CardChanged {

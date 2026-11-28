@@ -284,6 +284,7 @@ impl Host {
         settle::settle_and_resume(self, settled).await?;
         self.spawn_flusher();
         crate::bot::registry::load_bots(self)?;
+        crate::bot::start(self);
         commands::rebuild_dedupe(self).await;
         self.spawn_memory_sampler();
         self.inner.stall.note(
@@ -379,6 +380,7 @@ impl Host {
     }
 
     pub(crate) fn publish(&self, id: &ThreadId, appended: &Appended) {
+        crate::bot::attention::noted(self, id, &appended.lines);
         if let Some(live) = self.inner.live.lock().expect("live").get(id) {
             for line in &appended.lines {
                 let _ = live.tx.send(ThreadLive::Line(Arc::new(line.clone())));
