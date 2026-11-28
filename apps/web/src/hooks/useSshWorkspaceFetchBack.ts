@@ -4,6 +4,7 @@ import {
   SshWorkspaceError,
   type ScopedThreadRef,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { sshWorkspaceErrorCopy } from "~/lib/sshWorktreeSubmission";
 import {
@@ -143,7 +144,8 @@ export function useSshWorkspaceFetchBack(threadRef: ScopedThreadRef | null) {
       input: { cwd: result.value.localWorkspaceRoot },
     });
     if (refreshed._tag === "Failure" && !isAtomCommandInterrupted(refreshed)) {
-      const error = squashAtomCommandFailure(refreshed);
+      // Unstructured string defects stay on the bounded fallback copy even when command helpers wrap strings.
+      const error = Cause.squash(refreshed.cause);
       toastManager.add({
         type: "error",
         title: "Branch fetched; local Git status refresh failed",
