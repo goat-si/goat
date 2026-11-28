@@ -1657,3 +1657,46 @@ async fn an_unreadable_log_refuses_a_keyed_write() {
         "nothing was written"
     );
 }
+
+type Snapshots = Arc<std::sync::Mutex<Vec<(u64, Vec<i32>)>>>;
+
+#[tokio::test]
+async fn the_newest_engine_group_snapshot_is_the_live_set() {
+    let t = setup(FakeScript {
+        auto_finish: false,
+        start_ms: 5,
+        ..FakeScript::default()
+    })
+    .await;
+    let seen: Snapshots = Arc::default();
+    {
+        let seen = seen.clone();
+        t.host.on_engine_groups(move |seq, mut groups| {
+            groups.sort();
+            seen.lock().unwrap().push((seq, groups));
+        });
+    }
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        let id = start_user_thread(&t, &format!("pg-{i}"), None).await;
+        t.fake.set_pgid(&id, 70_000 + i);
+        ids.push(id);
+    }
+    // All four engines start at about the same time.
+    for (i, id) in ids.iter().enumerate() {
+        send(&t, id, &format!("pg-go-{i}"), "go", InputMode::Followup).await;
+    }
+    eventually("four engines", || ids.iter().all(|id| running(&t, id))).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let seen = seen.lock().unwrap().clone();
+    let newest = seen.iter().max_by_key(|(seq, _)| *seq).unwrap();
+    assert_eq!(
+        newest.1,
+        vec![70_000, 70_001, 70_002, 70_003],
+        "snapshots: {seen:?}"
+    );
+    // Seq numbers are unique and follow capture order.
+    let mut seqs: Vec<u64> = seen.iter().map(|(s, _)| *s).collect();
+    seqs.dedup();
+    assert_eq!(seqs.len(), seen.len());
+}

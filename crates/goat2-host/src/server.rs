@@ -47,13 +47,13 @@ pub struct GroupRecord {
     pub identity: String,
 }
 
-/// Engine-group snapshots for `host.json`. Each snapshot is numbered when it is taken; a writer
+/// Engine-group snapshots for `host.json`. Each snapshot is numbered by the host core when it is
+/// taken (Host::on_engine_groups, under the lock the groups are read under); a writer
 /// whose snapshot is older than the one already written drops it, so a late writer never removes
 /// a live engine group from `host.json`.
 pub struct HostJsonSnapshots {
     path: PathBuf,
     state: Mutex<(HostJson, u64)>,
-    issued: std::sync::atomic::AtomicU64,
 }
 
 impl HostJsonSnapshots {
@@ -61,15 +61,7 @@ impl HostJsonSnapshots {
         Self {
             path,
             state: Mutex::new((base, 0)),
-            issued: std::sync::atomic::AtomicU64::new(0),
         }
-    }
-
-    /// Number the snapshot about to be taken.
-    pub fn take_seq(&self) -> u64 {
-        self.issued
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1
     }
 
     /// Write snapshot `seq` unless a newer one is already written. Returns whether it wrote.
@@ -286,8 +278,7 @@ pub async fn start_with_engine(
     let snapshots = Arc::new(HostJsonSnapshots::new(host_json.clone(), base));
     {
         let snapshots = snapshots.clone();
-        host.on_engine_groups(move |groups| {
-            let seq = snapshots.take_seq();
+        host.on_engine_groups(move |seq, groups| {
             // Identities are read with `ps` off the async runtime.
             let snapshots = snapshots.clone();
             std::thread::spawn(move || {
@@ -397,8 +388,7 @@ mod tests {
             pgid,
             identity: format!("leader {pgid}"),
         };
-        let older = snapshots.take_seq();
-        let newer = snapshots.take_seq();
+        let (older, newer) = (1, 2);
         // The newer snapshot (two live engines) is written first; the older one (one engine)
         // finishes late and must not replace it.
         assert!(snapshots.write(newer, vec![group(10), group(11)]));

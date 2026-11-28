@@ -150,12 +150,19 @@ pub(crate) struct Inner {
     pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
-    engine_groups_hook: Mutex<Option<EngineGroupsHook>>,
+    engine_groups_hook: Mutex<EngineGroupsNotifier>,
     /// Actor and background tasks, aborted on shutdown so the host (and the store lock) drops.
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
-type EngineGroupsHook = Box<dyn Fn(Vec<i32>) + Send + Sync>;
+/// Called with (snapshot seq, live engine process groups). The seq is assigned under the same
+/// lock the groups are read under, so a higher seq is always a later snapshot.
+type EngineGroupsHook = Box<dyn Fn(u64, Vec<i32>) + Send + Sync>;
+
+struct EngineGroupsNotifier {
+    hook: Option<EngineGroupsHook>,
+    seq: u64,
+}
 
 /// The host. Cheap to clone.
 #[derive(Clone)]
@@ -195,7 +202,7 @@ impl Host {
                 dedupe: Mutex::new(HashMap::new()),
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
-                engine_groups_hook: Mutex::new(None),
+                engine_groups_hook: Mutex::new(EngineGroupsNotifier { hook: None, seq: 0 }),
                 tasks: Mutex::new(Vec::new()),
             }),
         };
@@ -203,11 +210,13 @@ impl Host {
     }
 
     /// Called with the live engine process groups whenever they change (`host.json`).
-    pub fn on_engine_groups(&self, hook: impl Fn(Vec<i32>) + Send + Sync + 'static) {
-        *self.inner.engine_groups_hook.lock().expect("hook") = Some(Box::new(hook));
+    pub fn on_engine_groups(&self, hook: impl Fn(u64, Vec<i32>) + Send + Sync + 'static) {
+        self.inner.engine_groups_hook.lock().expect("hook").hook = Some(Box::new(hook));
     }
 
     pub(crate) fn engine_groups_changed(&self) {
+        // Capture and number the snapshot under one lock (hook lock, then sessions lock).
+        let mut notifier = self.inner.engine_groups_hook.lock().expect("hook");
         let groups: Vec<i32> = self
             .inner
             .sessions
@@ -216,8 +225,10 @@ impl Host {
             .values()
             .filter_map(|(_, s)| s.process_group_id())
             .collect();
-        if let Some(hook) = self.inner.engine_groups_hook.lock().expect("hook").as_ref() {
-            hook(groups);
+        notifier.seq += 1;
+        let seq = notifier.seq;
+        if let Some(hook) = notifier.hook.as_ref() {
+            hook(seq, groups);
         }
     }
 

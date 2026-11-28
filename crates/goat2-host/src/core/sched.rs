@@ -114,7 +114,10 @@ impl RunSlot {
                 false
             } else {
                 st.parks += 1;
-                st.parks == 1 && std::mem::take(&mut st.holding)
+                // Any wait that starts while the run holds its slot lends it: the run is
+                // blocked on a child again, also when an earlier wait is still parked and a
+                // resumed one already took the slot back.
+                std::mem::take(&mut st.holding)
             }
         };
         if release {
@@ -127,7 +130,7 @@ impl RunSlot {
 
     /// Take the slot back before this wait returns control to the run. Every finished wait does
     /// this, also while other waits of the same run are still parked: a run that runs again
-    /// always holds a slot. (A later park only lends the slot again when it is the run's first.)
+    /// always holds a slot.
     async fn unpark(self: Arc<Self>) {
         {
             let mut st = self.st.lock().expect("slot");
@@ -354,6 +357,31 @@ mod tests {
         c.resume().await;
         assert_eq!(sched.running(), 1);
         // Finishing the run releases exactly once.
+        drop(permit);
+        assert_eq!(sched.running(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_wait_started_after_a_resume_lends_the_slot_again() {
+        // park a, park b, resume a (takes the slot back), park c: the run is blocked on b and c,
+        // so its slot must be free for a child.
+        let sched = Scheduler::new(1, 1);
+        let permit = sched.acquire(Priority::Human).await.unwrap();
+        let slot = permit.slot();
+        let a = slot.park();
+        let b = slot.park();
+        a.resume().await;
+        assert_eq!(sched.running(), 1);
+        let c = slot.park();
+        assert_eq!(sched.running(), 0, "the new wait lends the slot");
+        let child = tokio::time::timeout(Duration::from_secs(1), sched.acquire(Priority::Child))
+            .await
+            .expect("a child gets the slot")
+            .unwrap();
+        drop(child);
+        b.resume().await;
+        c.resume().await;
+        assert_eq!(sched.running(), 1);
         drop(permit);
         assert_eq!(sched.running(), 0);
     }

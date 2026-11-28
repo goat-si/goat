@@ -87,6 +87,7 @@ struct Shared {
     senders: HashMap<ThreadId, mpsc::UnboundedSender<EngineEvent>>,
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
+    pgids: HashMap<ThreadId, i32>,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -133,6 +134,15 @@ impl FakeEngine {
             .entry(thread_id.clone())
             .or_default()
             .push_back(result);
+    }
+
+    /// The process group id a thread's fake process reports.
+    pub fn set_pgid(&self, thread_id: &ThreadId, pgid: i32) {
+        self.shared
+            .lock()
+            .expect("fake")
+            .pgids
+            .insert(thread_id.clone(), pgid);
     }
 
     pub fn set_rss(&self, thread_id: &ThreadId, bytes: u64) {
@@ -422,6 +432,16 @@ impl EngineSession for FakeSession {
             key: key.to_owned(),
         });
         Ok(())
+    }
+
+    fn process_group_id(&self) -> Option<i32> {
+        self.engine
+            .shared
+            .lock()
+            .expect("fake")
+            .pgids
+            .get(&self.thread_id)
+            .copied()
     }
 
     fn group_rss_bytes(&self) -> Option<u64> {
