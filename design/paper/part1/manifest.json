@@ -86,7 +86,7 @@
   "name": "T0 · 스레드 모드 첫 진입 (GOAT v1 코드 + Updating)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 64040,
+  "jsxBytes": 64104,
   "shot": true
  },
  {
@@ -95,7 +95,7 @@
   "name": "T1 · 스레드 Chat (GOAT v1 코드)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 84115,
+  "jsxBytes": 84179,
   "shot": true
  },
  {
@@ -104,7 +104,7 @@
   "name": "T4 · 스레드 — 대기 메시지 (GOAT v1 QueuedRunsControl)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 92831,
+  "jsxBytes": 92895,
   "shot": true
  },
  {
@@ -113,7 +113,7 @@
   "name": "T2 · 멀티플렉서 2×2 (칸 = GOAT v1 스레드)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 179110,
+  "jsxBytes": 179174,
   "shot": true
  },
  {
@@ -122,7 +122,7 @@
   "name": "T3 · 멀티플렉서 1+2 (칸 = GOAT v1 스레드)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 149454,
+  "jsxBytes": 149518,
   "shot": true
  }
 ]
