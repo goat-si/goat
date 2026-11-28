@@ -13,7 +13,7 @@ import { contextUsage, type Usage } from "./turnUsage.ts";
 
 type Client = ReturnType<typeof client>;
 type ChildSnapshot = { id: string; permission: PermissionRuleset; metadata: Record<string, unknown> | undefined; parentBases: PermissionRuleset[] };
-type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
+type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean; statusCheck?: object };
 type SteerReceipt = { inputIds: string[]; accepted: boolean; ready: boolean; observed: boolean };
 type OrderedUsage = { usage: Usage; order: number };
 type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; heldOutcome?: TurnOutcome; steers: Map<string, SteerReceipt>; promptIds: Set<string>; usageOwners: Map<string, boolean>; usagePending: Map<string, Map<string, OrderedUsage>>; usagePartIds: Set<string>; usageOrder: number; lastUsage?: OrderedUsage; usageLookup?: object; usageLookupDone?: boolean; maxTokens?: number; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
@@ -290,14 +290,15 @@ export class OpenCodeSession implements EngineSession {
     if (signal === "observed" || signal === "completed") a.observed = true;
     if (!a.accepted || (!a.observed && !(signal === "idle" && turn.steers.get(a.id)?.accepted))) return;
     if (!a.idle) { a.pending = false; return; }
+    const check = {}; a.statusCheck = check;
     try {
       const result = await this.api.session.status({}, { throwOnError: true, signal: AbortSignal.timeout(10_000) });
-      if (this.active !== turn || turn.admission !== a || !a.pending || !a.idle) return;
+      if (this.active !== turn || turn.admission !== a || a.statusCheck !== check || !a.pending || !a.idle) return;
       if (!result.data) throw new Error("missing status");
       const status = result.data?.[this.engineRef];
       if (!status || status.type === "idle") { a.pending = false; this.finish(turn, turn.interrupted ? { type: "interrupted" } : turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
       else a.pending = false;
-    } catch { if (this.active === turn && turn.admission === a && a.pending && a.idle) this.broken("OpenCode admission status could not be reconciled"); }
+    } catch { if (this.active === turn && turn.admission === a && a.statusCheck === check && a.pending && a.idle) this.broken("OpenCode admission status could not be reconciled"); }
   }
   private async route(event: Event, replay = false) {
     if ((event.type === "session.created" || event.type === "session.updated") && event.properties.info.parentID && (event.properties.info.parentID === this.engineRef || this.childSessions.has(event.properties.info.parentID))) {

@@ -43,8 +43,8 @@ export function holdAbort(sessionID: string) {
 }
 export function holdStatus(capture = false) {
   captureStatus = capture;
-  statusGate = Promise.withResolvers<void>(); statusReached = Promise.withResolvers<void>();
-  return { reached: statusReached.promise, release: () => statusGate?.resolve() };
+  const gate = Promise.withResolvers<void>(); const reached = Promise.withResolvers<void>(); statusGate = gate; statusReached = reached;
+  return { reached: reached.promise, release: () => gate.resolve() };
 }
 export function holdPrompt(ignoreAbort = false) {
   ignorePromptAbort = ignoreAbort;
