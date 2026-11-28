@@ -158,9 +158,8 @@ pub fn parse_probe_modes(setup: &Value) -> Option<ProbeModes> {
 /// The id of a descriptor.
 pub fn descriptor_id(descriptor: &ProviderOptionDescriptor) -> &str {
     match descriptor {
-        ProviderOptionDescriptor::Select { id, .. } | ProviderOptionDescriptor::Boolean { id, .. } => {
-            id
-        }
+        ProviderOptionDescriptor::Select { id, .. }
+        | ProviderOptionDescriptor::Boolean { id, .. } => id,
     }
 }
 
@@ -190,15 +189,18 @@ pub fn acp_provider_option_descriptors(
         if matches!(category, Some("model") | Some("collaboration_mode")) {
             continue;
         }
-        let Some(id) = config_option_id(option).and_then(|id| bounded_opaque_value(id, MAX_TEXT_LENGTH))
+        let Some(id) =
+            config_option_id(option).and_then(|id| bounded_opaque_value(id, MAX_TEXT_LENGTH))
         else {
             continue;
         };
         if !seen.insert(id.clone()) {
             continue;
         }
-        let description =
-            bounded_text(str_of(option, "description").unwrap_or_default(), MAX_DESCRIPTION_LENGTH);
+        let description = bounded_text(
+            str_of(option, "description").unwrap_or_default(),
+            MAX_DESCRIPTION_LENGTH,
+        );
         let description = (!description.is_empty()).then_some(description);
         let label = bounded_text(str_of(option, "name").unwrap_or_default(), MAX_TEXT_LENGTH);
         let label = if label.is_empty() { id.clone() } else { label };
@@ -342,7 +344,10 @@ fn normalized_model(id: String, candidate: &ProbeModel) -> ProbeModel {
 }
 
 /// v1 `normalizeModels` (probe.ts:121-142).
-pub fn normalize_models(candidates: &[ProbeModel], current_model_id: Option<&str>) -> Vec<ProbeModel> {
+pub fn normalize_models(
+    candidates: &[ProbeModel],
+    current_model_id: Option<&str>,
+) -> Vec<ProbeModel> {
     let mut seen = HashSet::new();
     let mut models = Vec::new();
     for candidate in candidates {
@@ -599,8 +604,8 @@ pub fn apply_live_configuration(
     let provisional = configuration.models.len() == 1
         && !configuration.models_from_model_select
         && probed.len() > 1;
-    let use_live = configuration.models.len() > 1
-        || (configuration.models.len() == 1 && !provisional);
+    let use_live =
+        configuration.models.len() > 1 || (configuration.models.len() == 1 && !provisional);
     let selected = match &configuration.current_model_id {
         Some(current) if probed.iter().any(|m| &m.slug == current) => Some(current.clone()),
         _ => probed
@@ -760,7 +765,8 @@ pub fn is_cache_valid(
     expires_at > now
         && ((local && inspected_version.is_none())
             || cached.version.as_deref() == inspected_version)
-        && (inspected_launch_identity.is_none() || cached_launch_identity == inspected_launch_identity)
+        && (inspected_launch_identity.is_none()
+            || cached_launch_identity == inspected_launch_identity)
 }
 
 #[cfg(test)]
@@ -807,7 +813,10 @@ mod tests {
         }
         // A thought-level option with the same choices as the modes stands for them.
         let mirrored = vec![select("level", "thought_level", &["ask", "code"], "ask")];
-        assert_eq!(acp_provider_option_descriptors(&mirrored, Some(&modes)).len(), 1);
+        assert_eq!(
+            acp_provider_option_descriptors(&mirrored, Some(&modes)).len(),
+            1
+        );
         // The empty ACP choice gets GOAT's placeholder id.
         let empty = vec![select("x", "other", &["", "y"], "")];
         match &acp_provider_option_descriptors(&empty, None)[0] {
@@ -906,7 +915,9 @@ mod tests {
             cli: None,
             binary_path: None,
             status: ServerProviderState::Warning,
-            auth: crate::probe::support::auth_status(goat2_contracts::ServerProviderAuthStatus::Unknown),
+            auth: crate::probe::support::auth_status(
+                goat2_contracts::ServerProviderAuthStatus::Unknown,
+            ),
             models: vec![a, built_in_model("b", "B")],
             checked_at: "t".into(),
             message: Some("old".into()),
@@ -940,7 +951,14 @@ mod tests {
         )]);
         let with = with_learned_model_options(&next.models, &learned);
         assert_eq!(
-            with[0].capabilities.as_ref().unwrap().option_descriptors.as_ref().unwrap().len(),
+            with[0]
+                .capabilities
+                .as_ref()
+                .unwrap()
+                .option_descriptors
+                .as_ref()
+                .unwrap()
+                .len(),
             1
         );
     }

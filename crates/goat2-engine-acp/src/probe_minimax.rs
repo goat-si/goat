@@ -148,7 +148,11 @@ impl QuotaHttp for ReqwestQuotaHttp {
 /// v1 `boundedJson` (minimaxCodeAccountQuota.ts:127-144).
 fn bounded_json(response: Option<QuotaResponse>) -> Option<Json> {
     let response = response?;
-    if !response.ok || response.content_length.is_some_and(|l| l > MAX_BYTES as u64) {
+    if !response.ok
+        || response
+            .content_length
+            .is_some_and(|l| l > MAX_BYTES as u64)
+    {
         return None;
     }
     match serde_json::from_slice::<Value>(&response.body?).ok()? {
@@ -336,7 +340,11 @@ fn personal_group(payload: Option<&Json>) -> Option<String> {
     let personal: Vec<Option<&Json>> = workspaces
         .iter()
         .map(|w| w.as_object())
-        .filter(|w| w.and_then(|w| w.get("workspace_type")).and_then(Value::as_f64) == Some(0.0))
+        .filter(|w| {
+            w.and_then(|w| w.get("workspace_type"))
+                .and_then(Value::as_f64)
+                == Some(0.0)
+        })
         .collect();
     if personal.len() != 1 {
         return None;
@@ -389,17 +397,31 @@ fn quota_windows(payload: Option<&Json>) -> Vec<UsageWindow> {
     let mut windows = Vec::new();
     for (key, kind, label, reset, duration) in [
         ("current_interval", "session", "5h", "end_time", 300),
-        ("current_weekly", "weekly", "Weekly", "weekly_end_time", 10080),
+        (
+            "current_weekly",
+            "weekly",
+            "Weekly",
+            "weekly_end_time",
+            10080,
+        ),
     ] {
         if model.get(&format!("{key}_status")).and_then(Value::as_f64) == Some(3.0) {
             continue; // Unlimited.
         }
-        let total = model.get(&format!("{key}_total_count")).and_then(Value::as_f64);
+        let total = model
+            .get(&format!("{key}_total_count"))
+            .and_then(Value::as_f64);
         // In the legacy payload, usage_count is the remaining quantity, not used.
-        let count = model.get(&format!("{key}_usage_count")).and_then(Value::as_f64);
+        let count = model
+            .get(&format!("{key}_usage_count"))
+            .and_then(Value::as_f64);
         let from_counts = match (total, count) {
             (Some(total), Some(count))
-                if total.is_finite() && total > 0.0 && count.is_finite() && count >= 0.0 && count <= total =>
+                if total.is_finite()
+                    && total > 0.0
+                    && count.is_finite()
+                    && count >= 0.0
+                    && count <= total =>
             {
                 Some(count / total * 100.0)
             }
@@ -409,7 +431,8 @@ fn quota_windows(payload: Option<&Json>) -> Vec<UsageWindow> {
             None | Some(Value::Null) => from_counts,
             Some(value) => value.as_f64(),
         };
-        let Some(remaining) = remaining.filter(|r| r.is_finite() && (0.0..=100.0).contains(r)) else {
+        let Some(remaining) = remaining.filter(|r| r.is_finite() && (0.0..=100.0).contains(r))
+        else {
             continue;
         };
         let resets_at = model
@@ -477,8 +500,11 @@ impl MiniMaxCodeQuotaReader {
             }
             let selected = choose_region(&root, uid, configured.as_deref())?;
             let login = read_login(&root, uid, selected, now)?;
-            *account.lock().expect("account") =
-                Some(format!("{}\0{selected}\0{}", root.display(), login.generation));
+            *account.lock().expect("account") = Some(format!(
+                "{}\0{selected}\0{}",
+                root.display(),
+                login.generation
+            ));
             let still_signed_in = || {
                 choose_region(&root, uid, configured.as_deref()) == Some(selected)
                     && read_login(&root, uid, selected, now).is_some_and(|current| {
@@ -638,7 +664,12 @@ mod tests {
             0o600,
         );
         let dir = root.join("auth/prod/en").join(CLIENT);
-        for d in [root.join("auth"), root.join("auth/prod"), root.join("auth/prod/en"), dir.clone()] {
+        for d in [
+            root.join("auth"),
+            root.join("auth/prod"),
+            root.join("auth/prod/en"),
+            dir.clone(),
+        ] {
             private_dir(&d);
         }
         let expires = crate::items::now_ms() + 3_600_000;
@@ -687,7 +718,10 @@ mod tests {
         profile(&root, "tok.en-1", 0o600);
         let http = fake(quota());
         let reader = MiniMaxCodeQuotaReader::new(http.clone());
-        let env = BTreeMap::from([("MINIMAX_DATA_DIR".into(), root.to_string_lossy().into_owned())]);
+        let env = BTreeMap::from([(
+            "MINIMAX_DATA_DIR".into(),
+            root.to_string_lossy().into_owned(),
+        )]);
         let reading = reader.read(&env, &["acp".into()]).await;
         let QuotaReading::Reading(limits) = reading else {
             panic!("{reading:?}");
@@ -695,13 +729,26 @@ mod tests {
         assert_eq!(limits.windows.len(), 2);
         assert_eq!(limits.windows[0].kind, "session");
         assert_eq!(limits.windows[0].used_percent, 25.0);
-        assert_eq!(limits.windows[0].resets_at.as_deref(), Some("2027-01-15T08:00:00.000Z"));
+        assert_eq!(
+            limits.windows[0].resets_at.as_deref(),
+            Some("2027-01-15T08:00:00.000Z")
+        );
         assert_eq!(limits.windows[1].used_percent, 75.0);
-        let requests = http.requests.lock().unwrap();
-        assert_eq!(requests[0].url, "https://agent.minimax.io/matrix/api/v1/user/get_user_extra_info");
-        assert!(requests[0].headers.contains(&("Authorization".into(), "Bearer tok.en-1".into())));
-        assert!(requests[1].headers.contains(&("X-Group-Id".into(), "grp_1".into())));
-        drop(requests);
+        let requests = http.requests.lock().unwrap().clone();
+        assert_eq!(
+            requests[0].url,
+            "https://agent.minimax.io/matrix/api/v1/user/get_user_extra_info"
+        );
+        assert!(
+            requests[0]
+                .headers
+                .contains(&("Authorization".into(), "Bearer tok.en-1".into()))
+        );
+        assert!(
+            requests[1]
+                .headers
+                .contains(&("X-Group-Id".into(), "grp_1".into()))
+        );
 
         // A failed read for the same account keeps the last reading.
         let failing = MiniMaxCodeQuotaReader {
@@ -709,11 +756,23 @@ mod tests {
             uid: reader.uid,
             last_account: Mutex::new(reader.last_account.lock().unwrap().clone()),
         };
-        assert_eq!(failing.read(&env, &["acp".into()]).await, QuotaReading::KeepLast);
-        assert_eq!(failing.read(&env, &["acp".into()]).await, QuotaReading::KeepLast);
+        assert_eq!(
+            failing.read(&env, &["acp".into()]).await,
+            QuotaReading::KeepLast
+        );
+        assert_eq!(
+            failing.read(&env, &["acp".into()]).await,
+            QuotaReading::KeepLast
+        );
         // Another launch is not the profile: signed out, and the remembered account is dropped.
-        assert_eq!(failing.read(&env, &["chat".into()]).await, QuotaReading::SignedOut);
-        assert_eq!(failing.read(&env, &["acp".into()]).await, QuotaReading::SignedOut);
+        assert_eq!(
+            failing.read(&env, &["chat".into()]).await,
+            QuotaReading::SignedOut
+        );
+        assert_eq!(
+            failing.read(&env, &["acp".into()]).await,
+            QuotaReading::SignedOut
+        );
     }
 
     #[tokio::test]
@@ -723,21 +782,36 @@ mod tests {
         profile(&root, "tok", 0o644);
         let http = fake(quota());
         let reader = MiniMaxCodeQuotaReader::new(http.clone());
-        let env = BTreeMap::from([("MINIMAX_DATA_DIR".into(), root.to_string_lossy().into_owned())]);
-        assert_eq!(reader.read(&env, &["acp".into()]).await, QuotaReading::SignedOut);
+        let env = BTreeMap::from([(
+            "MINIMAX_DATA_DIR".into(),
+            root.to_string_lossy().into_owned(),
+        )]);
+        assert_eq!(
+            reader.read(&env, &["acp".into()]).await,
+            QuotaReading::SignedOut
+        );
         assert!(http.requests.lock().unwrap().is_empty());
     }
 
     #[test]
     fn profile_rules_match_v1() {
         let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
-            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
         };
         assert_eq!(
-            profile_root(&env(&[("MINIMAX_DATA_DIR", "/a/./b/../c")]), &["acp".into()]),
+            profile_root(
+                &env(&[("MINIMAX_DATA_DIR", "/a/./b/../c")]),
+                &["acp".into()]
+            ),
             Some(PathBuf::from("/a/c"))
         );
-        assert_eq!(profile_root(&env(&[("MINIMAX_DATA_DIR", "rel")]), &["acp".into()]), None);
+        assert_eq!(
+            profile_root(&env(&[("MINIMAX_DATA_DIR", "rel")]), &["acp".into()]),
+            None
+        );
         assert_eq!(
             profile_root(
                 &env(&[("MINIMAX_DATA_DIR", "/a"), ("MAVIS_BUILD_ENV", "staging")]),
@@ -750,7 +824,10 @@ mod tests {
             value: value.into(),
             sensitive: false,
         };
-        assert!(has_explicit_quota_profile(Some(&[var("MINIMAX_DATA_DIR", "/p")])));
+        assert!(has_explicit_quota_profile(Some(&[var(
+            "MINIMAX_DATA_DIR",
+            "/p"
+        )])));
         assert!(has_explicit_quota_profile(Some(&[
             var("MINIMAX_DATA_DIR", "/p"),
             var("MAVIS_REGION", "cn")
@@ -759,7 +836,10 @@ mod tests {
             var("MINIMAX_DATA_DIR", "/p"),
             var("MAVIS_REGION", "us")
         ])));
-        assert!(!has_explicit_quota_profile(Some(&[var("MINIMAX_DATA_DIR", "p")])));
+        assert!(!has_explicit_quota_profile(Some(&[var(
+            "MINIMAX_DATA_DIR",
+            "p"
+        )])));
         assert!(!has_explicit_quota_profile(Some(&[InstanceVariable {
             sensitive: true,
             ..var("MINIMAX_DATA_DIR", "/p")
@@ -772,6 +852,9 @@ mod tests {
             read_mini_max_code_quota: true,
             ..Default::default()
         };
-        assert!(quota_enrichment_enabled(&settings, Some(&[var("MINIMAX_DATA_DIR", "/p")])));
+        assert!(quota_enrichment_enabled(
+            &settings,
+            Some(&[var("MINIMAX_DATA_DIR", "/p")])
+        ));
     }
 }

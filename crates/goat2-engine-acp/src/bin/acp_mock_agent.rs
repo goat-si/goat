@@ -43,6 +43,24 @@
 //!   (default `end_turn`) and `GOAT_ACP_XAI_AGENT_RESULT` set its `stopReason` and `agentResult`.
 //! - `GOAT_ACP_STDERR_LINE=<text>` (GOAT 2): print this line on stderr at start.
 //! - `GOAT_ACP_STDOUT_LINE=<text>` (GOAT 2): print this non-JSON line on stdout at start.
+//!
+//! Provider probe scenarios (GOAT 2, for `src/probe*.rs`):
+//! - `GOAT_ACP_EXIT_AT_START=<code>`: exit with this code before reading stdin (after the stderr line).
+//! - `GOAT_ACP_ARGV_LOG_PATH=<file>`: write `{"argv": [...], "patch": <--patch file contents>}` at start.
+//! - `GOAT_ACP_INITIALIZE_META=<json>`: the `initialize` result's `_meta` (Grok `modelState`).
+//! - `GOAT_ACP_AUTH_METHODS=<json>`: the raw `authMethods` (env-var and terminal methods); with
+//!   `GOAT_ACP_AUTH_METHOD_ID` unset, `GOAT_ACP_AUTH_REQUIRED=1` makes `session/new` answer -32000.
+//! - `GOAT_ACP_LOGOUT=1`: advertise `agentCapabilities.auth.logout`.
+//! - `GOAT_ACP_SESSION_MODELS=<json>`: `models` of the `session/new` answer (ACP session models).
+//! - `GOAT_ACP_NO_MODEL_OPTION=1`: no model select among the config options.
+//! - `GOAT_ACP_THOUGHT_LEVEL=1`: a `thought_level` option whose levels depend on the current model.
+//! - `GOAT_ACP_LATE_MODELS=1`: answer `session/new` without config options, then send them in a
+//!   `config_option_update`.
+//! - `GOAT_ACP_MOCK_CLI=1`: behave as a provider CLI for `--version` (`GOAT_ACP_MOCK_CLI_VERSION`,
+//!   default `mock-cli 1.2.3`; exit `GOAT_ACP_MOCK_CLI_VERSION_EXIT`), `models`
+//!   (`GOAT_ACP_MOCK_CLI_MODELS`; `GOAT_ACP_MOCK_CLI_MODELS_2` from the second call, counted in
+//!   `GOAT_ACP_MOCK_CLI_LOG_PATH`) and `status --json` (`GOAT_ACP_MOCK_CLI_STATUS`); any other
+//!   arguments run the ACP agent. `GOAT_ACP_MOCK_CLI_LOG_PATH` records one line per CLI call.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -111,11 +129,28 @@ impl Agent {
     }
 
     fn model_options(&self) -> Value {
-        json!([{
-            "id": "model", "name": "Model", "category": "model", "type": "select",
-            "currentValue": *self.model.lock().unwrap(),
-            "options": [{"value": "mock-default", "name": "Mock Default"}, {"value": "mock-fast", "name": "Mock Fast"}]
-        }])
+        let model = self.model.lock().unwrap().clone();
+        let mut options = Vec::new();
+        if !flag("GOAT_ACP_NO_MODEL_OPTION") {
+            options.push(json!({
+                "id": "model", "name": "Model", "category": "model", "type": "select",
+                "currentValue": model,
+                "options": [{"value": "mock-default", "name": "Mock Default"}, {"value": "mock-fast", "name": "Mock Fast"}]
+            }));
+        }
+        if flag("GOAT_ACP_THOUGHT_LEVEL") {
+            let levels: &[&str] = if model == "mock-fast" {
+                &["minimal"]
+            } else {
+                &["low", "high"]
+            };
+            options.push(json!({
+                "id": "effort", "name": "Effort", "category": "thought_level", "type": "select",
+                "currentValue": levels[0],
+                "options": levels.iter().map(|l| json!({"value": l, "name": l.to_uppercase()})).collect::<Vec<_>>()
+            }));
+        }
+        Value::Array(options)
     }
 
     fn modes(&self) -> Value {
@@ -166,6 +201,19 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                 result["authMethods"] =
                     json!([{"id": method_id, "name": "Mock agent authentication"}]);
             }
+            if let Some(methods) = env("GOAT_ACP_AUTH_METHODS")
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                result["authMethods"] = methods;
+            }
+            if let Some(meta) = env("GOAT_ACP_INITIALIZE_META")
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                result["_meta"] = meta;
+            }
+            if flag("GOAT_ACP_LOGOUT") {
+                result["agentCapabilities"]["auth"] = json!({"logout": {}});
+            }
             agent.respond(&id, result);
         }
         "authenticate" => {
@@ -186,20 +234,26 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
             }
         }
         "session/new" => {
-            if env("GOAT_ACP_AUTH_METHOD_ID").is_some()
+            if (env("GOAT_ACP_AUTH_METHOD_ID").is_some() || flag("GOAT_ACP_AUTH_REQUIRED"))
                 && !agent.authenticated.load(Ordering::SeqCst)
             {
                 agent.error(&id, -32000, "Authentication required");
                 return;
             }
-            agent.respond(
-                &id,
-                json!({
-                    "sessionId": "mock-session-1",
-                    "modes": agent.modes(),
-                    "configOptions": agent.model_options()
-                }),
-            );
+            let mut result = json!({
+                "sessionId": "mock-session-1",
+                "modes": agent.modes(),
+                "configOptions": if flag("GOAT_ACP_LATE_MODELS") { json!([]) } else { agent.model_options() }
+            });
+            if let Some(models) = env("GOAT_ACP_SESSION_MODELS")
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                result["models"] = models;
+            }
+            agent.respond(&id, result);
+            if flag("GOAT_ACP_LATE_MODELS") {
+                agent.update("mock-session-1", json!({"sessionUpdate": "config_option_update", "configOptions": agent.model_options()}));
+            }
             if flag("GOAT_ACP_EMIT_COMMANDS") {
                 agent.update("mock-session-1", json!({"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "review", "description": "Review the diff"}]}));
             }
@@ -418,6 +472,9 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
 }
 
 fn main() {
+    if flag("GOAT_ACP_MOCK_CLI") && mock_cli() {
+        return;
+    }
     let agent = Arc::new(Agent {
         out: Mutex::new(std::io::stdout()),
         next_id: AtomicU64::new(0),
@@ -430,6 +487,19 @@ fn main() {
     });
     if let Some(line) = env("GOAT_ACP_STDERR_LINE") {
         eprintln!("{line}");
+    }
+    if let Some(path) = env("GOAT_ACP_ARGV_LOG_PATH") {
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        let patch = argv
+            .iter()
+            .position(|a| a == "--patch")
+            .and_then(|i| argv.get(i + 1))
+            .and_then(|p| std::fs::read_to_string(p).ok());
+        let _ = std::fs::write(path, json!({"argv": argv, "patch": patch}).to_string());
+    }
+    if let Some(code) = env("GOAT_ACP_EXIT_AT_START") {
+        let _ = std::io::stderr().flush();
+        std::process::exit(code.parse().unwrap_or(1));
     }
     if let Some(line) = env("GOAT_ACP_STDOUT_LINE") {
         let mut out = agent.out.lock().unwrap();
@@ -482,6 +552,60 @@ fn main() {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Provider CLI behaviour (`GOAT_ACP_MOCK_CLI=1`). True when the arguments were a CLI call.
+fn mock_cli() -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let log = env("GOAT_ACP_MOCK_CLI_LOG_PATH");
+    let previous_calls = |name: &str| {
+        log.as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| text.lines().filter(|line| line.starts_with(name)).count())
+            .unwrap_or(0)
+    };
+    let record = |line: &str| {
+        if let Some(path) = &log
+            && let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    };
+    match args.first().map(String::as_str) {
+        Some("--version") => {
+            record("--version");
+            println!(
+                "{}",
+                env("GOAT_ACP_MOCK_CLI_VERSION").unwrap_or_else(|| "mock-cli 1.2.3".into())
+            );
+            let code = env("GOAT_ACP_MOCK_CLI_VERSION_EXIT")
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(0);
+            std::process::exit(code);
+        }
+        Some("models") => {
+            let output = if previous_calls("models") >= 1 {
+                env("GOAT_ACP_MOCK_CLI_MODELS_2").or_else(|| env("GOAT_ACP_MOCK_CLI_MODELS"))
+            } else {
+                env("GOAT_ACP_MOCK_CLI_MODELS")
+            };
+            record(&format!("models {}", args[1..].join(" ")));
+            println!("{}", output.unwrap_or_default());
+            true
+        }
+        Some("status") => {
+            record("status");
+            println!("{}", env("GOAT_ACP_MOCK_CLI_STATUS").unwrap_or_default());
+            true
+        }
+        _ => {
+            record(&format!("acp {}", args.join(" ")));
+            false
         }
     }
 }

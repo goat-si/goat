@@ -316,6 +316,9 @@ mod tests {
             probe_timeout_message(PROBE_TIMEOUT),
             "The ACP agent did not create a test session within 60 seconds. Agent startup may be slow; this check retries on the next provider refresh."
         );
-        assert!(probe_timeout_message(std::time::Duration::from_millis(90_500)).contains("90.5 seconds"));
+        assert!(
+            probe_timeout_message(std::time::Duration::from_millis(90_500))
+                .contains("90.5 seconds")
+        );
     }
 }

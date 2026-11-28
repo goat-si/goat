@@ -81,7 +81,8 @@ pub fn fx_models(
     default.capabilities = Some(capabilities.clone());
     let mut models = vec![default];
     for (index, id) in listed.iter().enumerate() {
-        if id == FX_DEFAULT_MODEL_SLUG || listed.iter().position(|other| other == id) != Some(index) {
+        if id == FX_DEFAULT_MODEL_SLUG || listed.iter().position(|other| other == id) != Some(index)
+        {
             continue;
         }
         let mut model = built_in_model(id.clone(), id.clone());
@@ -111,7 +112,10 @@ pub struct FxStatus {
     pub modes: Option<Vec<String>>,
 }
 
-fn optional_string(object: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, ()> {
+fn optional_string(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, ()> {
     match object.get(key) {
         None => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
@@ -305,7 +309,10 @@ pub async fn check_fx_provider_status(
         ),
         ServerProviderAuthStatus::Authenticated if listed.is_none() => (
             ServerProviderState::Warning,
-            Some("fx is installed but model listing failed. Model options may be incomplete.".to_owned()),
+            Some(
+                "fx is installed but model listing failed. Model options may be incomplete."
+                    .to_owned(),
+            ),
         ),
         ServerProviderAuthStatus::Authenticated => (ServerProviderState::Ready, None),
     };
@@ -345,21 +352,33 @@ mod tests {
 
     #[test]
     fn status_and_models_decode_like_v1() {
-        let status = decode_fx_status(r#"{"auth":"oauth","model":"fx-1","modes":[{"id":"full-access"}]}"#).unwrap();
+        let status =
+            decode_fx_status(r#"{"auth":"oauth","model":"fx-1","modes":[{"id":"full-access"}]}"#)
+                .unwrap();
         assert_eq!(status.auth.as_deref(), Some("oauth"));
         assert!(fx_offers_full_access(&status));
         assert_eq!(decode_fx_status(r#"{"auth":1}"#), None);
         assert_eq!(decode_fx_status("not json"), None);
-        assert_eq!(decode_fx_models(r#"{"ids":[" a ","","b"]}"#), Some(vec!["a".into(), "b".into()]));
+        assert_eq!(
+            decode_fx_models(r#"{"ids":[" a ","","b"]}"#),
+            Some(vec!["a".into(), "b".into()])
+        );
         assert_eq!(decode_fx_models(r#"{}"#), Some(vec![]));
-        assert_eq!(fx_auth(Some("missing")).status, ServerProviderAuthStatus::Unauthenticated);
+        assert_eq!(
+            fx_auth(Some("missing")).status,
+            ServerProviderAuthStatus::Unauthenticated
+        );
         assert_eq!(fx_auth(Some(" ")).status, ServerProviderAuthStatus::Unknown);
         assert_eq!(fx_auth(Some("oauth")).label.as_deref(), Some("oauth"));
     }
 
     #[test]
     fn default_model_carries_the_status_alias() {
-        let models = fx_models(&[], Some("fx-1"), &["default".into(), "fx-2".into(), "fx-2".into()]);
+        let models = fx_models(
+            &[],
+            Some("fx-1"),
+            &["default".into(), "fx-2".into(), "fx-2".into()],
+        );
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].name, "Default (fx-1)");
         assert_eq!(fx_default_model_id(&models), Some("fx-1"));

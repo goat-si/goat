@@ -201,6 +201,9 @@ struct State {
     model: Option<String>,
     /// The latest `available_commands_update` list (probes read it; v1 probe.ts:470-476).
     available_commands: Option<Vec<Value>>,
+    /// A `config_option_update` arrived; it replaces the setup response's options even when it
+    /// is handled first (v1 probe.ts:545-547 prefers the update).
+    config_options_from_update: bool,
 }
 
 struct Shared {
@@ -404,6 +407,7 @@ impl Shared {
                 "config_option_update" => {
                     if let Some(options) = update.get("configOptions").and_then(Value::as_array) {
                         state.config_options = options.clone();
+                        state.config_options_from_update = true;
                     }
                     self.advertised.send_modify(|n| *n += 1);
                 }
@@ -1972,7 +1976,9 @@ impl AcpEngineFactory {
         {
             let mut state = shared.state.lock().expect("state");
             state.modes = setup.modes.clone().or_else(|| parse_modes(&setup.raw));
-            state.config_options = setup.config_options.clone();
+            if !state.config_options_from_update {
+                state.config_options = setup.config_options.clone();
+            }
             state.setup = setup;
             // A resumed session already holds what its first prompt carried.
             state.preamble = (resume_id.is_none() && !preamble_parts.is_empty())

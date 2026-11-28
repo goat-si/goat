@@ -23,8 +23,8 @@ use serde_json::{Value, json};
 use super::minimax::{MiniMaxCodeQuotaReader, QuotaReading};
 use super::models::{
     LiveConfiguration, MAX_ID_LENGTH, MAX_NAME_LENGTH, ProbeModes, current_model_options,
-    flatten_select_choices, models_from_discovery, normalize_live_configuration,
-    parse_probe_modes, with_learned_model_options,
+    flatten_select_choices, models_from_discovery, normalize_live_configuration, parse_probe_modes,
+    with_learned_model_options,
 };
 use super::support::{
     CommandResult, auth_status, bounded_opaque_value, bounded_text, child_environment,
@@ -189,7 +189,10 @@ fn terminal_auth_command(method: &Value, command: &str, args: &[String]) -> Opti
         .map(|env| {
             env.iter()
                 .map(|(name, value)| {
-                    format!("{name}={}", shell_display_token(value.as_str().unwrap_or_default()))
+                    format!(
+                        "{name}={}",
+                        shell_display_token(value.as_str().unwrap_or_default())
+                    )
                 })
                 .collect()
         })
@@ -262,7 +265,10 @@ pub fn normalize_auth_methods(
             None
         };
         let name = bounded_text(
-            method.get("name").and_then(Value::as_str).unwrap_or_default(),
+            method
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
             MAX_NAME_LENGTH,
         );
         normalized.push(ProbeAuthMethod {
@@ -340,7 +346,10 @@ pub fn normalize_registry_commands(commands: &[Value]) -> AvailableCommands {
             continue;
         }
         let description = bounded_text(
-            command.get("description").and_then(Value::as_str).unwrap_or_default(),
+            command
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
             MAX_DESCRIPTION_LENGTH,
         );
         let description = (!description.is_empty()).then_some(description);
@@ -546,7 +555,8 @@ pub fn isolate_deepseek_probe_history(
     if !uses_acp_profile {
         return Ok(None);
     }
-    let failed = |_| "Could not prepare temporary history for the DeepSeek Harness probe.".to_owned();
+    let failed =
+        |_| "Could not prepare temporary history for the DeepSeek Harness probe.".to_owned();
     let directory = ProbeTempDir::create("goat-dsh-acp-probe-").map_err(failed)?;
     let patch_path = directory.path().join("probe.json");
     let patch = json!([
@@ -663,8 +673,15 @@ async fn read_probe_session(
         setup.raw.get("models"),
         true,
     );
-    let caps = init.raw.get("agentCapabilities").cloned().unwrap_or(Value::Null);
-    let session_caps = caps.get("sessionCapabilities").cloned().unwrap_or(Value::Null);
+    let caps = init
+        .raw
+        .get("agentCapabilities")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let session_caps = caps
+        .get("sessionCapabilities")
+        .cloned()
+        .unwrap_or(Value::Null);
     let commands = normalize_registry_commands(&session.available_commands().unwrap_or_default());
     // Runs in the probe session before it is deleted, outside the setup deadline.
     let learned_model_options = if discover.is_empty() {
@@ -728,7 +745,10 @@ fn base_snapshot(
 }
 
 /// v1 `buildInitialAcpRegistrySnapshot` (driverSnapshots.ts:122-137).
-pub fn initial_registry_snapshot(enabled: bool, settings: &RegistrySettings) -> ProviderProbeResult {
+pub fn initial_registry_snapshot(
+    enabled: bool,
+    settings: &RegistrySettings,
+) -> ProviderProbeResult {
     base_snapshot(
         enabled,
         settings,
@@ -997,15 +1017,20 @@ pub async fn check_registry_provider_status(
     let opened = probe_factory.open_probe_within(spec, timeout).await;
     match opened {
         Ok(session) => {
-            let probe =
-                read_probe_session(&session.session, (&program, &command.args), &config.discover_models)
-                    .await;
+            let probe = read_probe_session(
+                &session.session,
+                (&program, &command.args),
+                &config.discover_models,
+            )
+            .await;
             session.close().await;
             finish(inspection, Some(probe), None, binary_path, usage)
         }
         Err(failure) => {
-            let methods =
-                normalize_auth_methods(failure.initialize_raw.as_ref(), Some((&program, &command.args)));
+            let methods = normalize_auth_methods(
+                failure.initialize_raw.as_ref(),
+                Some((&program, &command.args)),
+            );
             let error = classify_probe_failure(&failure, methods);
             finish(inspection, None, Some(error), binary_path, usage)
         }
@@ -1028,7 +1053,9 @@ mod tests {
                 installed: false,
                 version: Some("1.0.0".into()),
                 status: ServerProviderState::Error,
-                message: Some("ACP executable 'npx' is not available on this environment's PATH.".into())
+                message: Some(
+                    "ACP executable 'npx' is not available on this environment's PATH.".into()
+                )
             }
         );
         assert_eq!(
@@ -1046,7 +1073,11 @@ mod tests {
             ServerProviderState::Warning
         );
         assert_eq!(
-            snapshot_readiness(&Inspection::NotFound { agent_id: "x".into() }).message.as_deref(),
+            snapshot_readiness(&Inspection::NotFound {
+                agent_id: "x".into()
+            })
+            .message
+            .as_deref(),
             Some("ACP Registry does not contain agent 'x'.")
         );
     }
@@ -1103,11 +1134,16 @@ mod tests {
             Some("/bin/agent".into()),
         );
         assert_eq!(snapshot.status, ServerProviderState::Warning);
-        assert_eq!(snapshot.auth.status, ServerProviderAuthStatus::Unauthenticated);
+        assert_eq!(
+            snapshot.auth.status,
+            ServerProviderAuthStatus::Unauthenticated
+        );
         assert_eq!(snapshot.auth.auth_type.as_deref(), Some("env_var"));
         assert_eq!(
             snapshot.message.as_deref(),
-            Some("Set MOCK_KEY under this instance's environment variables in provider settings. GOAT will detect it on the next provider refresh.")
+            Some(
+                "Set MOCK_KEY under this instance's environment variables in provider settings. GOAT will detect it on the next provider refresh."
+            )
         );
         // Login words in a failure count as authentication (v1 probeHelpers.ts:40-42).
         let worded = AcpProbeFailure {
@@ -1137,7 +1173,9 @@ mod tests {
             Some(&error),
             Some("/bin/agent".into()),
         );
-        assert!(!snapshot.installed && snapshot.version.is_none() && snapshot.binary_path.is_none());
+        assert!(
+            !snapshot.installed && snapshot.version.is_none() && snapshot.binary_path.is_none()
+        );
         assert_eq!(
             snapshot.message.as_deref(),
             Some("The ACP agent executable is not installed or not available.")
@@ -1152,7 +1190,10 @@ mod tests {
             json!({"name": "$my skill", "description": ""}),
         ]);
         assert_eq!(commands.slash_commands.len(), 1);
-        assert_eq!(commands.slash_commands[0].input_hint.as_deref(), Some("path"));
+        assert_eq!(
+            commands.slash_commands[0].input_hint.as_deref(),
+            Some("path")
+        );
         assert_eq!(commands.skills[0].path, "acp://skill/my%20skill");
     }
 
@@ -1179,7 +1220,10 @@ mod tests {
         assert_eq!(args[4..], ["--", "x"]);
         let patch: Value =
             serde_json::from_str(&std::fs::read_to_string(&args[3]).unwrap()).unwrap();
-        assert_eq!(patch[1], json!({"id": "session-projection-cache", "disabled": true}));
+        assert_eq!(
+            patch[1],
+            json!({"id": "session-projection-cache", "disabled": true})
+        );
         assert!(
             patch[0]["config"]["root"]
                 .as_str()
@@ -1193,7 +1237,10 @@ mod tests {
 
     #[test]
     fn agent_versions_are_bounded() {
-        assert_eq!(bounded_agent_version(Some(" 1.2.3 ")).as_deref(), Some("1.2.3"));
+        assert_eq!(
+            bounded_agent_version(Some(" 1.2.3 ")).as_deref(),
+            Some("1.2.3")
+        );
         assert_eq!(bounded_agent_version(Some("1.2\u{7}")), None);
         assert_eq!(bounded_agent_version(Some("  ")), None);
         assert_eq!(shell_display_token("it's"), "'it'\\''s'");

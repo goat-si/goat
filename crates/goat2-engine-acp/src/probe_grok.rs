@@ -339,16 +339,17 @@ fn grok_initialize_params() -> Value {
     })
 }
 
-struct Snapshot<'a> {
+/// What v1 `buildServerProvider` (snapshotProbe.ts:316-373) takes besides the probe fields.
+struct Snapshot {
     checked_at: String,
     enabled: bool,
     binary_path: Option<String>,
     models: Vec<ServerProviderModel>,
-    _custom: &'a [CustomModel],
 }
 
-impl Snapshot<'_> {
-    /// v1 `buildServerProvider` (snapshotProbe.ts:316-373), the fields the contract carries.
+impl Snapshot {
+    /// v1 `buildServerProvider` with v1's `ProviderProbeResult` fields as arguments.
+    #[allow(clippy::too_many_arguments)]
     fn build(
         &self,
         installed: bool,
@@ -411,7 +412,6 @@ pub async fn check_grok_provider_status(
         enabled: config.enabled,
         binary_path: None,
         models: fallback.clone(),
-        _custom: &config.custom_models,
     };
     if !config.enabled {
         return snapshot.build(
@@ -520,7 +520,8 @@ pub async fn check_grok_provider_status(
     }
 
     // `grok models` reports login state and model slugs without starting the agent.
-    let models_timeout = resolve_provider_probe_timeout("grok", AUTH_PROBE_TIMEOUT_MS, &environment);
+    let models_timeout =
+        resolve_provider_probe_timeout("grok", AUTH_PROBE_TIMEOUT_MS, &environment);
     let mut cli_models = probe_grok_models(&program, &probe_env, models_timeout).await;
     // An expired access token prints the logged-out line, then the CLI refreshes it in the same
     // process. Probing again after that process exited tells a refresh from a real logout.
@@ -591,7 +592,10 @@ pub async fn check_grok_provider_status(
             version,
             ServerProviderState::Error,
             auth,
-            Some("Grok CLI is installed but not logged in. Add an xAI API key, or run `grok login`.".into()),
+            Some(
+                "Grok CLI is installed but not logged in. Add an xAI API key, or run `grok login`."
+                    .into(),
+            ),
             Some(models),
         );
     }
@@ -644,9 +648,11 @@ mod tests {
         assert_eq!(options[0].is_default, Some(true));
         assert_eq!(current.as_deref(), Some("high"));
         assert!(
-            grok_reasoning_options(Some(&json!({"supportsReasoningEffort": false, "reasoningEfforts": [{"value": "low"}]})))
-                .0
-                .is_empty()
+            grok_reasoning_options(Some(
+                &json!({"supportsReasoningEffort": false, "reasoningEfforts": [{"value": "low"}]})
+            ))
+            .0
+            .is_empty()
         );
         let state = json!({"currentModelId": "grok-build", "availableModels": [
             {"modelId": "grok-build", "name": "Grok Build", "_meta": meta},
@@ -655,8 +661,15 @@ mod tests {
         let models = grok_models_from_model_state(Some(&state));
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].is_default, Some(true));
-        assert!(session_model_state_from_initialize(&json!({"_meta": {"modelState": state}})).is_some());
-        assert!(session_model_state_from_initialize(&json!({"_meta": {"modelState": {"currentModelId": 1}}})).is_none());
+        assert!(
+            session_model_state_from_initialize(&json!({"_meta": {"modelState": state}})).is_some()
+        );
+        assert!(
+            session_model_state_from_initialize(
+                &json!({"_meta": {"modelState": {"currentModelId": 1}}})
+            )
+            .is_none()
+        );
         assert!(is_valid_reasoning_effort_token("x-high.1"));
         assert!(!is_valid_reasoning_effort_token("-x"));
     }

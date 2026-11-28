@@ -211,7 +211,11 @@ mod tests {
             Ok(dir.path().join("agy"))
         );
         assert_eq!(
-            resolve_antigravity_executable(Some(Path::new("/goat2-no/agy")), Path::new("agy_acp_server"), &env),
+            resolve_antigravity_executable(
+                Some(Path::new("/goat2-no/agy")),
+                Path::new("agy_acp_server"),
+                &env
+            ),
             Err(CUSTOM_MISSING)
         );
     }

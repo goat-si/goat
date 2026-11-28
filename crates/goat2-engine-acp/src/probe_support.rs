@@ -684,8 +684,14 @@ mod tests {
             stderr: stderr.into(),
             code,
         };
-        assert!(is_missing_probe_tool_result(&result("npm error code ENOTCACHED", 1)));
-        assert!(!is_missing_probe_tool_result(&result("npm error code ENOTCACHED", 0)));
+        assert!(is_missing_probe_tool_result(&result(
+            "npm error code ENOTCACHED",
+            1
+        )));
+        assert!(!is_missing_probe_tool_result(&result(
+            "npm error code ENOTCACHED",
+            0
+        )));
         assert!(is_missing_probe_tool_result(&result(
             "mise ERROR tool node@22 is not installed",
             1
