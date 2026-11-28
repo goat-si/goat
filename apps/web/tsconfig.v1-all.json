@@ -1,0 +1,6 @@
+{
+  "//": "Every file under src/v1 with v1's compiler options (pnpm typecheck:v1-all). Not a gate until the seam is complete; tsconfig.v1.json is.",
+  "extends": "./tsconfig.v1.json",
+  "files": ["src/v1/seam/goat2/globals.d.ts"],
+  "include": ["src/v1"]
+}

@@ -17,6 +17,18 @@ V1_REF = "916b5ccc1b2"
 OUT = os.path.join(ROOT, "apps/web/src/v1")
 SEAM = os.path.join(OUT, "seam")
 INVENTORY = os.path.join(ROOT, "devlog/_plan/261128_goat2-ui-paper/071_v1_inventory.md")
+WEB = os.path.join(ROOT, "apps/web")
+BASE_UI = os.path.join(WEB, "node_modules/@base-ui/react")
+
+def base_ui_portal_part(spec):
+    """'@base-ui/react/<part>' whose parts render a Portal: lifted files reach it through seam/base-ui/<part>.ts,
+    which mounts portals into the [data-v1][data-v1-portal] root (devlog 070 Revision A2.2)."""
+    m = re.fullmatch(r"@base-ui/react/([a-z-]+)", spec)
+    if not m: return None
+    parts = os.path.join(BASE_UI, m.group(1), "index.parts.d.mts")
+    return m.group(1) if os.path.exists(parts) and re.search(r"\bPortal\b", open(parts).read()) else None
+
+CSS_URL_RE = re.compile(r"""url\(\s*["']?(\.{1,2}/[^"')]+)["']?\s*\)""")
 
 LIFT_D = os.path.join(ROOT, "scripts/v1-lift.d")
 
@@ -84,21 +96,25 @@ def resolve_local(base, spec):
         if cand + ext in FILES: return cand + ext
     return None
 
-IMPORT_RE = re.compile(r"""(?:^|\n)\s*(?:import|export)\s[^;]*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|@import\s+["']([^"']+)["']""", re.S)
+IMPORT_RE = re.compile(r"""(?:^|\n)\s*(?:import|export)\s[^;=]*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|@import\s+["']([^"']+)["']""", re.S)
 
 # Pure modules lifted transitively when a lifted file imports them (logic only, no stores/runtime).
 AUTO_LIFT = [r"^packages/shared/src/[^/]+\.ts$", r"^packages/client-runtime/src/work-log/[^/]+\.ts$",
              r"^packages/client-runtime/src/(clock|goatToolSummary|markdownImages|mediaSource|userMessage|worktreeSetup)\.ts$",
              r"^apps/web/src/components/chat/(timeline|turnThreadTargets)[A-Za-z]*\.ts$",
              r"^apps/web/src/(filePathDisplay|timestampFormat|session-logic|sessionTimelineVisibility|sessionRevert|types)\.ts$",
-             r"^apps/web/src/lib/(observeResize|tickTextContent|visibleAnimation|windowControlsOverlay)\.ts$"]
-AUTO_DENY = [r"/state/", r"Store\.ts$", r"environment", r"^packages/contracts/"]
+             r"^apps/web/src/lib/(observeResize|tickTextContent|visibleAnimation|windowControlsOverlay)\.ts$",
+             # bot-work and source-control logic the model picker reaches (modelTraits -> threadExecution -> state/models)
+             r"^packages/client-runtime/src/goatBot/[^/]+\.ts$",
+             r"^packages/source-control-[a-z-]+/src/(shared/)?[^/]+\.ts$"]
+AUTO_DENY = [r"/state/", r"Store\.ts$", r"environment", r"^packages/contracts/", r"\.(test|testkit|browser\.test)\.tsx?$"]
 def auto_lift(p):
     return any(re.search(a, p) for a in AUTO_LIFT) and not any(re.search(d, p) for d in AUTO_DENY)
 
 def lift_set():
     s = set(LIFT)
-    for d in LIFT_DIRS: s |= {f for f in FILES if f.startswith(d + "/")}
+    # "dir:" lifts carry runtime files only: v1 tests import v1's runner (vite-plus/test) and are not GOAT 2 tests.
+    for d in LIFT_DIRS: s |= {f for f in FILES if f.startswith(d + "/") and not re.search(r"\.(test|browser\.test)\.tsx?$", f)}
     for spec in LIFT_PKG:
         p = resolve_pkg(spec)
         if p: s.add(p)
@@ -164,7 +180,19 @@ def main(check):
             else:
                 pkg = "/".join(spec.split("/")[:2]) if spec.startswith("@") else spec.split("/")[0]
                 externals[pkg] = externals.get(pkg) or lock_version(pkg)
-                rows.append((f, spec, "EXTERNAL", pkg))
+                part = base_ui_portal_part(spec)
+                if part:
+                    seam_part = os.path.join(SEAM, "base-ui", part + ".ts")
+                    if not os.path.exists(seam_part): problems.append(f"bridge not implemented: seam/base-ui/{part}.ts (portal part {spec} used by {f})")
+                    aliases[spec] = f"apps/web/src/v1/seam/base-ui/{part}.ts"
+                    rows.append((f, spec, "BRIDGE", f"seam/base-ui/{part}.ts"))
+                else:
+                    rows.append((f, spec, "EXTERNAL", pkg))
+        if f.endswith(".css"):
+            for m in CSS_URL_RE.finditer(text):
+                tgt = os.path.normpath(os.path.join(os.path.dirname(f), m.group(1)))
+                if tgt not in lifted: problems.append(f"unlifted CSS asset {m.group(1)} in {f}")
+                else: rows.append((f, m.group(1), "LIFT", tgt))
     # mirrored re-export files for relative/~ bridges
     for tgt in sorted(bridges):
         seam_file = os.path.join(SEAM, mirror(tgt))
@@ -176,13 +204,24 @@ def main(check):
             # does not cover, so package bridges get the same mirrored re-export as app bridges.
         mirror_path = os.path.join(OUT, mirror(tgt))
         rel = os.path.relpath(seam_file, os.path.dirname(mirror_path))
-        body = f'// Bridge: v1 {tgt} is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table).\nexport * from "{rel if rel.startswith(".") else "./" + rel}";\n'
+        rel = rel if rel.startswith(".") else "./" + rel
+        if tgt.endswith(".css"):
+            body = f'/* Bridge: v1 {tgt} is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table). */\n@import "{rel}";\n'
+        else:
+            body = f'// Bridge: v1 {tgt} is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table).\nexport * from "{rel}";\n'
         if not check:
             os.makedirs(os.path.dirname(mirror_path), exist_ok=True)
             open(mirror_path, "w").write(body)
+    aliases["~"] = "apps/web/src/v1"
     if not check:
-        aliases["~"] = "apps/web/src/v1"
         open(os.path.join(OUT, "aliases.json"), "w").write(json.dumps(dict(sorted(aliases.items())), indent=2) + "\n")
+        for name, body in tsconfigs(aliases).items(): open(os.path.join(WEB, name), "w").write(body)
+    else:
+        for name, body in tsconfigs(aliases).items():
+            path = os.path.join(WEB, name)
+            if not os.path.exists(path) or open(path).read() != body: problems.append(f"apps/web/{name} is stale: rerun scripts/v1-lift.py")
+    if not check:
+        os.makedirs(os.path.dirname(INVENTORY), exist_ok=True)
         with open(INVENTORY, "w") as w:
             w.write(f"# 071 — v1 lift inventory (generated by scripts/v1-lift.py from goat {V1_REF})\n\n")
             w.write(f"Lifted files: {len(lifted)}. Bridges: {len(bridges)}. Externals: {len(externals)}.\n\n")
@@ -195,6 +234,20 @@ def main(check):
     for p in problems: print(p)
     print(f"v1-lift: {len(lifted)} lifted, {len(bridges)} bridges, {len(externals)} externals, {len(problems)} problems")
     if check and problems: sys.exit(1)
+
+def tsconfigs(aliases):
+    """apps/web/tsconfig.v1.paths.json: the alias map (aliases.json + the hand-written seam/npm-aliases.json) as TypeScript
+    paths, the same map vite-plugin-v1.ts resolves with. Extended by tsconfig.v1.json (v1 compiler options, typechecks the
+    v1 entry points GOAT 2 uses) and tsconfig.v1-all.json (the whole tree). Generated so there is no second copy."""
+    rel = lambda p: "./" + os.path.relpath(os.path.join(ROOT, p), WEB)
+    merged = dict(aliases)
+    npm = os.path.join(SEAM, "npm-aliases.json")
+    if os.path.exists(npm): merged.update({k: v for k, v in json.load(open(npm)).items() if k != "//"})
+    paths = {"~/*": [rel(merged["~"]) + "/*"]}
+    for k, v in sorted(merged.items()):
+        if k != "~": paths[k] = [rel(v)]
+    header = "GENERATED by scripts/v1-lift.py from src/v1/aliases.json and src/v1/seam/npm-aliases.json; do not edit."
+    return {"tsconfig.v1.paths.json": json.dumps({"//": header, "compilerOptions": {"paths": paths}}, indent=2) + "\n"}
 
 if __name__ == "__main__":
     main("--check" in sys.argv)
