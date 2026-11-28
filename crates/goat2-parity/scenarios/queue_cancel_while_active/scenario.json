@@ -136,8 +136,70 @@
       "status": "supported"
     },
     "goat2": {
-      "status": "pending",
-      "reason": "no host yet"
+      "status": "supported",
+      "expect": {
+        "complete": true,
+        "exhaustive": [
+          "input.accepted",
+          "input.refused",
+          "queue.changed",
+          "run.started",
+          "steer.applied",
+          "run.finished",
+          "child.started",
+          "child.reported",
+          "parent.woken",
+          "tool.result",
+          "host.restarted"
+        ],
+        "threads": {
+          "t1": [
+            {
+              "id": "e1",
+              "kind": "input.accepted",
+              "thread": "t1",
+              "input": "i1",
+              "from": "user",
+              "mode": "start",
+              "text": "Respond with exactly: first fixture turn complete"
+            },
+            {
+              "id": "e2",
+              "kind": "run.started",
+              "thread": "t1",
+              "run": "r1",
+              "inputs": [
+                "i1"
+              ]
+            },
+            {
+              "id": "e3",
+              "kind": "input.accepted",
+              "thread": "t1",
+              "input": "i2",
+              "from": "user",
+              "mode": "queue",
+              "text": "Respond with exactly: second fixture turn complete"
+            },
+            {
+              "id": "e5",
+              "kind": "queue.changed",
+              "thread": "t1",
+              "input": "i2",
+              "op": "cancelled"
+            },
+            {
+              "id": "e6",
+              "kind": "run.finished",
+              "thread": "t1",
+              "run": "r1",
+              "status": "done"
+            }
+          ]
+        },
+        "happensBefore": []
+      },
+      "decision": "GOAT 2's log does not record that an input waits in the queue: input.accepted carries the requested mode and a queued input is only seen when its run starts or input.changed edits it (goat2-parity README 'GOAT 2 logs do not prove enqueue'; plan 020 A5, queued state pending). The GOAT 2 expectation is the v1 one without queue.changed enqueued; everything else is compared as is."
     }
   }
 }

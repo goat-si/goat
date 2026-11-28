@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+default-run = "goat2-parity"
 
 [dependencies]
 goat2-contracts = { path = "../goat2-contracts" }
@@ -14,7 +15,16 @@ serde_json.workspace = true
 schemars = "0.8"
 sha2 = "0.10"
 thiserror.workspace = true
+tungstenite = "0.28"
 
 [[bin]]
 name = "goat2-parity"
 path = "src/main.rs"
+
+[[bin]]
+name = "goat2-parity-fake-codex"
+path = "src/bin/fake_codex.rs"
+
+[[bin]]
+name = "goat2-parity-goat2-runner"
+path = "src/bin/goat2_runner.rs"

@@ -10,6 +10,7 @@ pub mod capabilities;
 pub mod contract;
 pub mod engine;
 pub mod items;
+pub mod probe;
 pub mod process;
 pub mod protocol;
 pub mod runtime;

@@ -130,8 +130,7 @@
       "status": "supported"
     },
     "goat2": {
-      "status": "pending",
-      "reason": "needs the goat2 target and the Codex driver"
+      "status": "supported"
     }
   }
 }
