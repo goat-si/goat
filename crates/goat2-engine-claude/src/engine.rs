@@ -421,7 +421,22 @@ async fn start_session(
 }
 
 impl Inner {
-    fn emit(&self, event: EngineEvent) {
+    /// Every reason that leaves the driver is redacted: Claude's errors can echo request headers.
+    fn emit(&self, mut event: EngineEvent) {
+        let redact = |text: &mut String| *text = util::redact_secrets(text, &self.mcp_token);
+        match &mut event {
+            EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Failed { reason },
+                ..
+            }
+            | EngineEvent::Exited { reason }
+            | EngineEvent::SteerUpdated {
+                status: SteerStatus::Cancelled { reason },
+                ..
+            } => redact(reason),
+            EngineEvent::AuthRequired { message, .. } => redact(message),
+            _ => {}
+        }
         let _ = self.events.send(event);
     }
 
@@ -485,7 +500,7 @@ impl Inner {
             return Err("Claude is not running".to_string());
         }
         match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => result.map_err(|error| util::redact_secrets(&error, &self.mcp_token)),
             Ok(Err(_)) => Err("Claude exited before answering".to_string()),
             Err(_) => {
                 if let Ok(mut controls) = self.controls.lock() {
@@ -871,6 +886,19 @@ impl Inner {
         drop(state);
         self.settled.notify_waiters();
         Some(reason)
+    }
+
+    /// A control request Claude never answered may or may not have taken effect, so the process
+    /// state is unknown: end it (the host resumes the session in a known state).
+    async fn abandon_if_unconfirmed(&self, error: &str) {
+        if error.starts_with("Control request timeout") {
+            let generation = self.generation.load(Ordering::SeqCst);
+            self.close_process(
+                generation,
+                "Claude did not confirm a settings change, so the session was restarted".into(),
+            )
+            .await;
+        }
     }
 
     /// The next process generation, taken under the state lock so an exit settlement sees either
@@ -2126,11 +2154,16 @@ impl Inner {
             return Ok(());
         }
         if model.api_model_id != current_model.api_model_id && !model.api_model_id.is_empty() {
-            self.control(
-                json!({"subtype": "set_model", "model": model.api_model_id}),
-                self.options.control_timeout,
-            )
-            .await?;
+            if let Err(error) = self
+                .control(
+                    json!({"subtype": "set_model", "model": model.api_model_id}),
+                    self.options.control_timeout,
+                )
+                .await
+            {
+                self.abandon_if_unconfirmed(&error).await;
+                return Err(error);
+            }
             if let Ok(mut state) = self.state.lock() {
                 state.model = model;
             }
@@ -2753,17 +2786,19 @@ impl EngineSession for ClaudeSession {
         }
         let model_changed =
             model.api_model_id != current_model.api_model_id && !model.api_model_id.is_empty();
-        if model_changed {
-            inner
+        if model_changed
+            && let Err(error) = inner
                 .control(
                     json!({"subtype": "set_model", "model": model.api_model_id}),
                     inner.options.control_timeout,
                 )
                 .await
-                .map_err(EngineError::Transport)?;
-            if let Ok(mut state) = inner.state.lock() {
-                state.model.api_model_id = model.api_model_id.clone();
-            }
+        {
+            inner.abandon_if_unconfirmed(&error).await;
+            return Err(EngineError::Transport(error));
+        }
+        if model_changed && let Ok(mut state) = inner.state.lock() {
+            state.model.api_model_id = model.api_model_id.clone();
         }
         if mode != current_mode {
             let changed = inner
@@ -2773,6 +2808,10 @@ impl EngineSession for ClaudeSession {
                 )
                 .await;
             if let Err(error) = changed {
+                if error.starts_with("Control request timeout") {
+                    inner.abandon_if_unconfirmed(&error).await;
+                    return Err(EngineError::Transport(error));
+                }
                 if !model_changed {
                     return Err(EngineError::Transport(error));
                 }
@@ -2784,6 +2823,9 @@ impl EngineSession for ClaudeSession {
                         inner.options.control_timeout,
                     )
                     .await;
+                if let Err(rollback_error) = &restored {
+                    inner.abandon_if_unconfirmed(rollback_error).await;
+                }
                 return Err(EngineError::Transport(match restored {
                     Ok(_) => {
                         if let Ok(mut state) = inner.state.lock() {
