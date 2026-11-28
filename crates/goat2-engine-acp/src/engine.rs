@@ -200,7 +200,10 @@ struct Shared {
     init: OnceLock<InitializeInfo>,
     conn: OnceLock<Conn>,
     child: tokio::sync::Mutex<Option<ChildProcess>>,
-    pgid: Option<i32>,
+    /// Set once the process is spawned (the stderr hook must already point at this state).
+    pgid: OnceLock<i32>,
+    /// Why the flavor ended the connection ([StdoutLine::Fail]); reported with handshake errors.
+    transport_failure: Mutex<Option<String>>,
     exited: AtomicBool,
     timeouts: AcpTimeouts,
     resolver: Option<AttachmentResolver>,
@@ -1517,12 +1520,12 @@ impl EngineSession for AcpSession {
     }
 
     fn group_rss_bytes(&self) -> Option<u64> {
-        let pgid = self.shared.pgid?;
+        let pgid = *self.shared.pgid.get()?;
         crate::process::group_rss_bytes_of(pgid as u32).ok()
     }
 
     fn process_group_id(&self) -> Option<i32> {
-        self.shared.pgid
+        self.shared.pgid.get().copied()
     }
 
     async fn shutdown(&self) {
@@ -1620,7 +1623,8 @@ impl AcpEngineFactory {
             init: OnceLock::new(),
             conn: OnceLock::new(),
             child: tokio::sync::Mutex::new(None),
-            pgid: None,
+            pgid: OnceLock::new(),
+            transport_failure: Mutex::new(None),
             exited: AtomicBool::new(false),
             timeouts: self.timeouts.clone(),
             resolver: self.resolver.clone(),
@@ -1646,20 +1650,15 @@ impl AcpEngineFactory {
         };
         let mut child = ChildProcess::spawn_with_stderr(&launch, Some(stderr_hook))
             .map_err(|e| EngineError::Unavailable(format!("{}: {e}", launch.program.display())))?;
-        let pgid = i32::try_from(child.pid()).ok();
+        if let Ok(pgid) = i32::try_from(child.pid()) {
+            let _ = shared.pgid.set(pgid);
+        }
         let stdin = child
             .take_stdin()
             .ok_or_else(|| EngineError::StartFailed("no stdin".into()))?;
         let stdout = child
             .take_stdout()
             .ok_or_else(|| EngineError::StartFailed("no stdout".into()))?;
-        // Safe: nothing else holds `shared` yet except the stderr hook's weak pointer.
-        let shared = {
-            let mut owned = Arc::try_unwrap(shared)
-                .map_err(|_| EngineError::StartFailed("shared state in use".into()))?;
-            owned.pgid = pgid;
-            Arc::new(owned)
-        };
         *shared.child.lock().await = Some(child);
 
         // Transport: newline-delimited JSON with the flavor looking at every stdout line first.
@@ -1702,6 +1701,10 @@ impl AcpEngineFactory {
                                 }
                             }
                             StdoutLine::Fail(message) => {
+                                if let Some(shared) = weak.upgrade() {
+                                    *shared.transport_failure.lock().expect("failure") =
+                                        Some(message.clone());
+                                }
                                 return Some((Err(std::io::Error::other(message)), reader));
                             }
                         }
@@ -1802,13 +1805,19 @@ impl AcpEngineFactory {
     ) -> Result<EngineRef, EngineError> {
         let flavor = &self.flavor;
         let stderr = || async {
-            shared
+            let tail = shared
                 .child
                 .lock()
                 .await
                 .as_ref()
                 .map(|c| c.stderr_tail())
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // The flavor's reason for ending the connection goes last, so it is never cut off.
+            match shared.transport_failure.lock().expect("failure").clone() {
+                Some(failure) if tail.is_empty() => failure,
+                Some(failure) => format!("{tail}\n{failure}"),
+                None => tail,
+            }
         };
         // initialize (v1 AcpSessionRuntime.ts:995-1009, :1427-1442).
         let caps = flavor.client_capabilities();
