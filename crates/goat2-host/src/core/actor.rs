@@ -189,7 +189,7 @@ struct Actor {
     /// Engine-native subagents still running in this session (non-terminal SubagentUpdate):
     /// subagent id -> the turn it belongs to. The engine is not idle-stopped while any runs
     /// (v1 keeps background subagents alive).
-    live_subagents: std::collections::HashMap<String, Option<String>>,
+    live_subagents: std::collections::HashMap<String, LiveSubagent>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -363,9 +363,14 @@ impl Actor {
                 if gen_ == self.idle_gen
                     && matches!(self.phase, Phase::Idle)
                     && self.session.is_some()
-                    && self.live_subagents.is_empty()
                 {
-                    self.stop_session("idle").await;
+                    self.prune_ended_subagents();
+                    if self.live_subagents.is_empty() {
+                        self.stop_session("idle").await;
+                    } else if self.live_subagents.values().all(|s| s.ended.is_some()) {
+                        // Only finished items are still on the way: look again later.
+                        self.arm_idle();
+                    }
                 }
             }
             Msg::MemoryLimit { pgen, bytes } => {
@@ -848,6 +853,16 @@ impl Actor {
                 item,
                 locator,
             } => {
+                // A subagent's finished item ends its hold on its turn and on the engine, also
+                // when the item itself cannot be filed.
+                if let TurnItemBody::Subagent { subagent_id, .. } = &item.body
+                    && is_terminal(item.status)
+                    && self.live_subagents.remove(subagent_id).is_some()
+                    && self.live_subagents.is_empty()
+                    && matches!(self.phase, Phase::Idle)
+                {
+                    self.arm_idle();
+                }
                 // The run of the item's turn: the active run, or the earlier run of this session
                 // a late item (a background subagent finishing after its turn) belongs to. It is
                 // appended after that run's run.finished; the run is not reopened.
@@ -869,14 +884,6 @@ impl Actor {
                 item.run_id = Some(run_id.clone());
                 item.thread_id = self.id.clone();
                 let item_id = item.id.clone();
-                if let TurnItemBody::Subagent { subagent_id, .. } = &item.body
-                    && is_terminal(item.status)
-                    && self.live_subagents.remove(subagent_id).is_some()
-                    && self.live_subagents.is_empty()
-                    && matches!(self.phase, Phase::Idle)
-                {
-                    self.arm_idle();
-                }
                 if active
                     && let TurnItemBody::AssistantMessage { phase, text, .. } = &item.body
                     && !matches!(phase, Some(AssistantMessagePhase::Commentary))
@@ -999,9 +1006,13 @@ impl Actor {
                 // the engine from being idle-stopped.
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
                 if is_terminal(status) {
-                    if self.live_subagents.remove(&subagent_id).is_some()
-                        && self.live_subagents.is_empty()
-                        && matches!(self.phase, Phase::Idle)
+                    // Ended, but its finished item comes separately: keep its origin and the
+                    // idle protection until that item is recorded, or until the grace runs out.
+                    if let Some(live) = self.live_subagents.get_mut(&subagent_id) {
+                        live.ended.get_or_insert_with(Instant::now);
+                    }
+                    if matches!(self.phase, Phase::Idle)
+                        && self.live_subagents.values().all(|s| s.ended.is_some())
                     {
                         self.arm_idle();
                     }
@@ -1016,12 +1027,17 @@ impl Actor {
                     };
                     match self.live_subagents.entry(subagent_id) {
                         std::collections::hash_map::Entry::Occupied(mut known) => {
+                            let known = known.get_mut();
+                            known.ended = None;
                             if turn_id.is_some() {
-                                *known.get_mut() = turn_id;
+                                known.origin = turn_id;
                             }
                         }
                         std::collections::hash_map::Entry::Vacant(new) => {
-                            new.insert(turn_id.or(running));
+                            new.insert(LiveSubagent {
+                                origin: turn_id.or(running),
+                                ended: None,
+                            });
                         }
                     }
                 }
@@ -1059,20 +1075,30 @@ impl Actor {
     /// past the cap. While a live subagent's origin is unknown nothing is dropped, since any
     /// turn could be its origin; the record shrinks back once it ends.
     fn forget_settled_turn(&mut self) {
-        if self.live_subagents.values().any(Option::is_none) {
+        self.prune_ended_subagents();
+        if self.live_subagents.values().any(|s| s.origin.is_none()) {
             return;
         }
         while self.turn_runs.len() >= TURN_RUNS_KEPT {
             let live_subagents = &self.live_subagents;
-            let Some(pos) = self
-                .turn_runs
-                .iter()
-                .position(|(t, _)| !live_subagents.values().any(|o| o.as_deref() == Some(t)))
-            else {
+            let Some(pos) = self.turn_runs.iter().position(|(t, _)| {
+                !live_subagents
+                    .values()
+                    .any(|s| s.origin.as_deref() == Some(t))
+            }) else {
                 return;
             };
             self.turn_runs.remove(pos);
         }
+    }
+
+    /// Forget subagents that reported their end longer than the grace ago and whose item never
+    /// came (a driver that sends none): they no longer hold a turn or the engine.
+    fn prune_ended_subagents(&mut self) {
+        let grace = self.host.inner.opts.subagent_item_grace;
+        let now = Instant::now();
+        self.live_subagents
+            .retain(|_, s| s.ended.is_none_or(|t| now.duration_since(t) < grace));
     }
 
     /// An accepted steer the engine later cancelled (owner 2026-11-29, a deliberate difference
@@ -1553,7 +1579,11 @@ impl Actor {
                     },
                 )
                 .await
-                .map_err(|e| Refusal::new(Reason::Internal, e.to_string()))?;
+                .map_err(|_| {
+                    // The engine's error can name the request key: a fixed message only.
+                    tracing::warn!(thread = %self.id, "the engine did not take the answer");
+                    Refusal::new(Reason::Internal, "the engine did not take the answer")
+                })?;
             if let Phase::Running(run) = &mut self.phase {
                 run.engine_requests.retain(|(k, _)| k != key);
             }
@@ -1787,6 +1817,13 @@ const SIGNIN_SUMMARY: &str = "Sign in to continue";
 
 /// Turns of one engine session remembered for late items.
 const TURN_RUNS_KEPT: usize = 64;
+
+/// An engine-native subagent of the session: the turn it came from (unknown = `None`) and
+/// when it reported its end, if it did.
+struct LiveSubagent {
+    origin: Option<String>,
+    ended: Option<Instant>,
+}
 
 /// A subagent status after which nothing more happens.
 fn is_terminal(status: goat2_contracts::TurnItemStatus) -> bool {
