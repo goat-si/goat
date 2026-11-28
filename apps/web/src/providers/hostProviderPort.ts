@@ -63,60 +63,62 @@ export const idleInstall = (driver: string): ProviderInstallState =>
   ({ driver, operationId: null, phase: "idle", downloadedBytes: 0, totalBytes: null, version: null, installedVersion: null, canRemove: false, message: null });
 
 export interface HostProviderPort extends ProviderPortShape {
-  /** Ends the port's providers subscription and any pending waits (the app uninstalls the port). */
+  /** Ends the port's providers subscription; calls still in flight, and any made later, reject (the app uninstalls the port). */
   dispose(): void;
 }
 
-export interface HostProviderPortOptions {
-  /** How long a refresh waits for the host's providers frame after its command_result, ms. */
-  refreshListTimeoutMs?: number;
-}
+const CLOSED = "The provider connection was closed.";
 
 /**
  * One providers subscription for the port's life; subscribe and watch streams fan out from it, so no call leaves a
- * subscription behind. A refresh resolves with the list the host sent for it: the host sends that providers frame
- * before the refresh's command_result (docs/part2/provider-wire.md, refresh_providers), so the latest list when the
- * result arrives is the refreshed one if any frame arrived after the request; otherwise the next frame is awaited,
- * bounded, and a missing list is an error. Other commands resolve from their command_result alone.
+ * subscription behind. A refresh resolves with the list the host sent for it. The wire orders that: every
+ * refresh_providers ends with a providers frame on the requesting socket's subscription, sent before the refresh's
+ * command_result on the same queue (docs/part2/provider-wire.md; lane E's host). Each frame is the whole current list,
+ * so the newest frame received between the request and its result is the refreshed list, or a later one if another
+ * change landed in between. A result with no frame since the request breaks that order and is an error; nothing waits
+ * past the result, so no later, unrelated frame can answer it. Other commands resolve from their command_result alone.
  */
-export function hostProviderPort(client: HostClient, opts: HostProviderPortOptions = {}): HostProviderPort {
-  const timeoutMs = opts.refreshListTimeoutMs ?? 15_000;
+export function hostProviderPort(client: HostClient): HostProviderPort {
   let latest: ServerProviderEntry[] | null = null;
   let frames = 0;
+  let disposed = false;
   const listeners = new Set<(list: ServerProviderEntry[]) => void>();
-  const waiters = new Set<() => void>();
+  /** Rejecters of calls still awaiting their command_result, so dispose settles them at once. */
+  const inFlight = new Set<(error: Error) => void>();
   const stop = client.watchProviders((list) => {
     latest = list;
     frames += 1;
-    for (const wake of [...waiters]) wake();
     for (const listener of [...listeners]) listener(list);
   });
   const listen = (listener: (list: ServerProviderEntry[]) => void) => {
+    if (disposed) return () => {};
     listeners.add(listener);
     if (latest) listener(latest);
     return () => { listeners.delete(listener); };
   };
-  /** Resolves once a providers frame numbered above `after` has arrived; rejects after the bound; always cleans up. */
-  const frameAfter = (after: number) => new Promise<void>((resolve, reject) => {
-    if (frames > after) { resolve(); return; }
-    const wake = () => { if (frames > after) { cleanup(); resolve(); } };
-    const timer = setTimeout(() => { cleanup(); reject(new Error("The host did not send its provider list after the refresh.")); }, timeoutMs);
-    const cleanup = () => { waiters.delete(wake); clearTimeout(timer); };
-    waiters.add(wake);
+  /** The command's result, or a rejection as soon as the port is disposed. */
+  const send = (body: ProviderCommandBody) => new Promise<Awaited<ReturnType<HostClient["providerCommand"]>>>((resolve, reject) => {
+    const abort = (error: Error) => { inFlight.delete(abort); reject(error); };
+    inFlight.add(abort);
+    client.providerCommand(body).then(
+      (r) => { if (!inFlight.delete(abort)) return; resolve(r); },
+      (e: unknown) => { if (!inFlight.delete(abort)) return; reject(e instanceof Error ? e : new Error(String(e))); },
+    );
   });
   return {
     subscribe: (listener) => listen(listener),
     call: async (method, payload) => {
+      if (disposed) throw new Error(CLOSED);
       const unserved = UNSERVED[method];
       if (unserved) throw new Error(unserved);
       const body = toCommand(method, payload);
       if (!body) throw new Error(`GOAT does not serve ${method}.`);
       const before = frames;
-      const r = await client.providerCommand(body);
+      const r = await send(body);
       if (!r.ok) throw new Error(r.error?.message ?? "The host refused this request.");
       if (method === "server.refreshProviders") {
-        await frameAfter(before);
-        return { providers: latest ?? [] };
+        if (frames === before || !latest) throw new Error("The host did not send its provider list for the refresh.");
+        return { providers: latest };
       }
       return toResult(method, r.value ?? {});
     },
@@ -129,9 +131,11 @@ export function hostProviderPort(client: HostClient, opts: HostProviderPortOptio
       });
     },
     dispose: () => {
+      if (disposed) return;
+      disposed = true;
       stop();
       listeners.clear();
-      for (const wake of [...waiters]) waiters.delete(wake);
+      for (const abort of [...inFlight]) abort(new Error(CLOSED));
     },
   };
 }

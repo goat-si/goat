@@ -108,7 +108,7 @@ describe("hostProviderPort + fake host", () => {
   });
 });
 
-describe("hostProviderPort: refresh correlation and cleanup (review 1 P1s)", () => {
+describe("hostProviderPort: refresh correlation and cleanup (reviews 1 and 2)", () => {
   class SilentRefresh extends FakeProviders {
     /** A host that answers refresh_providers without sending a providers frame. */
     override run(body: { type: string } & Record<string, unknown>) {
@@ -118,21 +118,50 @@ describe("hostProviderPort: refresh correlation and cleanup (review 1 P1s)", () 
   const make = (providers: FakeProviders) => {
     const fake = new FakeHost({ ...demoWorld(), providers }, { connect: "open" });
     const client = new HostClient(fake, { outbox: memoryStorage(), cache: null, demo: "test" });
-    return { fake, client, port: hostProviderPort(client, { refreshListTimeoutMs: 30 }) };
+    return { fake, client, port: hostProviderPort(client) };
   };
 
   it("a refresh whose list never comes is an error, not the old list", async () => {
     const { port } = make(new SilentRefresh(demoProviderEntries(AT), undefined, { now: () => AT }));
     await tick(5);
-    await expect(port.call("server.refreshProviders", {})).rejects.toThrow("The host did not send its provider list after the refresh.");
+    await expect(port.call("server.refreshProviders", {})).rejects.toThrow("The host did not send its provider list for the refresh.");
   });
 
-  it("the subscription's first list does not answer a refresh sent after it", async () => {
-    const providers = new SilentRefresh(demoProviderEntries(AT), undefined, { now: () => AT });
-    const { port } = make(providers);
+  it("a frame that arrives after the result never answers the refresh", async () => {
+    class LateList extends FakeProviders {
+      /** Answers first, then sends a list: the reverse of the wire's order. */
+      override run(body: { type: string } & Record<string, unknown>) {
+        if (body.type !== "refresh_providers") return super.run(body);
+        setTimeout(() => super.run(body), 0); // a later socket message
+        return { ok: true as const, value: {} };
+      }
+    }
+    const { port } = make(new LateList(demoProviderEntries(AT), undefined, { now: () => AT }));
     await tick(5); // first list delivered
-    const pending = port.call("server.refreshProviders", {});
-    await expect(pending).rejects.toThrow(/did not send its provider list/);
+    await expect(port.call("server.refreshProviders", {})).rejects.toThrow(/did not send its provider list/);
+  });
+
+  it("another change landing during a refresh: the refresh still resolves with its own, newest list", async () => {
+    class Busy extends FakeProviders {
+      /** Another change's frame goes out after the request, then the refresh's own frame, then the result. */
+      override run(body: { type: string } & Record<string, unknown>) {
+        if (body.type !== "refresh_providers") return super.run(body);
+        const grok = this.entries.find((e) => e.instanceId === "grok")!;
+        grok.probe = { ...grok.probe, message: "other change" };
+        super.run({ type: "refresh_providers", instanceId: "grok" });
+        this.entries[0]!.probe = { ...this.entries[0]!.probe, version: "0.169.0" };
+        return super.run(body);
+      }
+    }
+    const { port } = make(new Busy(demoProviderEntries(AT), undefined, { now: () => AT }));
+    const frames: ServerProviderEntry[][] = [];
+    port.subscribe((l) => frames.push(l as ServerProviderEntry[]));
+    await tick(5);
+    const before = frames.length;
+    const r = await port.call("server.refreshProviders", { instanceId: "codex" }) as { providers: ServerProviderEntry[] };
+    expect(frames.length - before).toBe(2);
+    expect(r.providers).toBe(frames.at(-1));
+    expect(r.providers.find((e) => e.instanceId === "codex")!.probe.version).toBe("0.169.0");
   });
 
   it("other commands resolve from their result without waiting for a list", async () => {
@@ -150,5 +179,17 @@ describe("hostProviderPort: refresh correlation and cleanup (review 1 P1s)", () 
     expect(subs).toHaveLength(1);
     port.dispose();
     expect(fake.received.at(-1)).toEqual({ type: "unsubscribe", subId: (subs[0] as unknown as { subId: string }).subId });
+  });
+
+  it("dispose settles calls still in flight at once, and later calls are refused", async () => {
+    const { port } = make(new FakeProviders(demoProviderEntries(AT), undefined, { now: () => AT }));
+    await tick(5);
+    const refresh = port.call("server.refreshProviders", {});
+    const search = port.call("server.searchAcpRegistry", { query: "ki" });
+    port.dispose();
+    await expect(refresh).rejects.toThrow("The provider connection was closed.");
+    await expect(search).rejects.toThrow("The provider connection was closed.");
+    await expect(port.call("server.refreshProviders", {})).rejects.toThrow("The provider connection was closed.");
+    await tick(5); // the host's late results land on a disposed port without effect
   });
 });
