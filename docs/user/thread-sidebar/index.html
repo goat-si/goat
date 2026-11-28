@@ -308,8 +308,9 @@ Work in progress, pending questions or approvals, and background work the agent
 is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on <strong>Keep threads with a PR</strong> in <strong>Settings → General</strong>,
 but an old closed or merged pull request does not settle work you
-resumed after it closed. Only your own messages count as resuming. A turn that
-finished background work or a pull request watch starts on its own does not.</p>
+resumed after it closed. Your own messages count as resuming, and so does a
+message an agent sends with <code>goat_thread_send</code> or <code>goat thread send</code>. A turn that finished
+background work or a pull request watch starts on its own does not.</p>
 <p>To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
 choose <strong>Auto-settle behavior</strong>, and pick <strong>Never</strong>. The current option is checked. Pick
 <strong>Follow settings</strong> to return to the rules below. While those rules are off, a thread on
