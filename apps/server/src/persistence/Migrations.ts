@@ -206,6 +206,7 @@ import Migration0190 from "./Migrations/190_TurnStartReadIndexes.ts";
 import Migration0191 from "./Migrations/191_ThreadItemCounts.ts";
 import Migration0192 from "./Migrations/192_WorktreePathKeyIndex.ts";
 import Migration0193 from "./Migrations/193_DeferredSlashCommandIndex.ts";
+import Migration0194 from "./Migrations/194_SupersededRunAttemptIndex.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -405,6 +406,7 @@ export const migrationEntries = [
   [191, "ThreadItemCounts", Migration0191],
   [192, "WorktreePathKeyIndex", Migration0192],
   [193, "DeferredSlashCommandIndex", Migration0193],
+  [194, "SupersededRunAttemptIndex", Migration0194],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
