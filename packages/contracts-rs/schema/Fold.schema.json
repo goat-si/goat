@@ -276,6 +276,14 @@
     "RequestOpened": {
       "description": "`request.opened`: a person is needed.",
       "properties": {
+        "context": {
+          "description": "What the person needs to know to decide (v1 `DecisionItem.context`), at most\n[crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.",
+          "maxLength": 4000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "itemId": {
           "anyOf": [
             {

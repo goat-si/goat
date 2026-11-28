@@ -8,4 +8,8 @@ import type { ProviderInstanceId } from "./ProviderInstanceId.ts";
 /**
  * v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.
  */
-export type ProviderAuthState = { instanceId: ProviderInstanceId, phase: ProviderAuthPhase, flowId: string | null, authorizationUrl: string | null, expiresAt: string | null, message: string | null, methods?: Array<ProviderAuthMethod>, interaction?: ProviderAuthInteraction | null, credentialOwner?: CredentialOwner, };
+export type ProviderAuthState = { instanceId: ProviderInstanceId, phase: ProviderAuthPhase, flowId: string | null, 
+/**
+ * v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.
+ */
+authorizationUrl: string | null, expiresAt: string | null, message: string | null, methods?: Array<ProviderAuthMethod>, interaction?: ProviderAuthInteraction | null, credentialOwner?: CredentialOwner, };

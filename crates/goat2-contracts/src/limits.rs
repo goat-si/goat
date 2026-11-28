@@ -13,6 +13,8 @@ pub const LOG_FORMAT_VERSION: u32 = 1;
 
 /// Bot instructions limit in UTF-8 bytes.
 pub const BOT_INSTRUCTIONS_MAX_BYTES: usize = 16384;
+/// `RequestOpened.context`, in characters (lane P2-E; v1 decision context has no cap).
+pub const REQUEST_CONTEXT_MAX_CHARS: usize = 4000;
 
 /// Format version of `card.json` (`CardFile.v`).
 pub const CARD_FILE_FORMAT_VERSION: u32 = 1;

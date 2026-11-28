@@ -363,6 +363,16 @@ pub struct RequestOpened {
     pub kind: RequestKind,
     /// At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.
     pub summary: String,
+    /// What the person needs to know to decide (v1 `DecisionItem.context`), at most
+    /// [crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::serde_util::request_context"
+    )]
+    #[ts(optional, as = "Option<String>")]
+    #[schemars(with = "Option<String>", length(max = 4000))]
+    pub context: Option<String>,
     /// Kind `decision`: the choices offered (v1 `goat_decision_request`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
