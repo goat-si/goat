@@ -31,12 +31,22 @@ async fn run(options: &LaunchOptions, args: &[&str]) -> Result<(bool, String), S
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for name in [
-        "CLAUDECODE",
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDE_AGENT_SDK_VERSION",
-    ] {
+    // The same removals as a session's launch: host session variables, GOAT's own identity and
+    // the host's UI token never reach the CLI.
+    for name in crate::launch::REMOVED_ENV
+        .iter()
+        .chain(crate::launch::REMOVED_HOST_IDENTITY.iter())
+    {
         command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if crate::launch::REMOVED_ENV_PREFIXES
+            .iter()
+            .any(|prefix| text.starts_with(prefix))
+        {
+            command.env_remove(&name);
+        }
     }
     for (key, value) in &options.env {
         command.env(key, value);

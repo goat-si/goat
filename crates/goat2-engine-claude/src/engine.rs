@@ -2402,7 +2402,7 @@ impl Inner {
                     attachment.name
                 ));
             };
-            let bytes = std::fs::read(&path).map_err(|error| {
+            let bytes = util::read_no_follow(&path).map_err(|error| {
                 format!(
                     "Image attachment '{}' could not be read: {error}",
                     attachment.name
