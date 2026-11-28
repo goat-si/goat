@@ -1,3 +1,5 @@
+import * as limits from "./gitHubPullRequestLimits.ts";
+import { requireThreadOfPullRequest } from "./gitHubReviewThreadScope.ts";
 import { collectGitHubPages } from "./gitHubPullRequestPageCollector.ts";
 import { isGraphQlClientError } from "./gitHubGraphQlClientError.ts";
 import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
@@ -307,23 +309,11 @@ export type GitHubPullRequestApiError =
   | GitHubPullRequestUpdatedAtUnavailableError;
 
 const { isNotFoundOnly } = GitHubGraphQlClient;
-
 const isGitHubApiResponseError = Schema.is(GitHubRequestPolicy.GitHubApiResponseError);
 const isGitHubServerError = (error: unknown): boolean =>
   isGitHubApiResponseError(error) && error.status >= 500;
 
-const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
-
-const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
-
-const FILES_VIEWED_MAX_PAGES = 5;
-const FILES_VIEWED_PER_REQUEST = 100;
-
 export const NODE_ID_CACHE_CAPACITY = 128;
-
-const REVIEW_THREAD_PAGES = 10;
-
-const CHECK_CONTEXT_PAGES = 10;
 
 export interface GitHubPullRequestListBatch {
   readonly items: ReadonlyArray<GitHubPullRequestListItem>;
@@ -340,9 +330,7 @@ export interface GitHubPullRequestStat {
 }
 
 /** Four parallel batches of 25 took ~2.1s; one batch of 100 took ~5.2s. */
-const STAT_ALIASES_PER_REQUEST = 25;
 // Cache checks stagger reads across scheduler ticks; allow time to batch.
-const SUMMARY_BATCH_WINDOW = "10 millis";
 
 export interface GitHubPullRequestSearchBatch {
   readonly items: ReadonlyArray<GitHubPullRequestSearchItem>;
@@ -668,6 +656,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
+      readonly number: number;
       readonly threadId: string;
       readonly body: string;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
@@ -676,6 +665,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
+      readonly number: number;
       readonly threadId: string;
       readonly resolved: boolean;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
@@ -1097,7 +1087,7 @@ export const make = Effect.gen(function* () {
               .split("/")
               .map(encodeURIComponent)
               .join("/")}?ref=${encodeURIComponent(revision)}`,
-            maxResponseBytes: DIFF_FILE_MAX_OUTPUT_BYTES,
+            maxResponseBytes: limits.DIFF_FILE_MAX_OUTPUT_BYTES,
             timeout: DIFF_TIMEOUT,
           })
           .pipe(
@@ -1168,7 +1158,7 @@ export const make = Effect.gen(function* () {
       ),
       {
         ...target,
-        maxPages: CHECK_CONTEXT_PAGES,
+        maxPages: limits.CHECK_CONTEXT_PAGES,
         hasNextPage: (page) => page.nextCursor !== null,
       },
     ).pipe(graphql(target));
@@ -1438,8 +1428,8 @@ export const make = Effect.gen(function* () {
   const summaryResolver = GraphQLResolver.aliased(client.PullRequestSummary, {
     batchKey: GitHubGraphQlClient.batchKey,
   }).pipe(
-    RequestResolver.setDelay(SUMMARY_BATCH_WINDOW),
-    RequestResolver.batchN(STAT_ALIASES_PER_REQUEST),
+    RequestResolver.setDelay(limits.SUMMARY_BATCH_WINDOW),
+    RequestResolver.batchN(limits.STAT_ALIASES_PER_REQUEST),
   );
   const getPullRequestSummary: GitHubPullRequestApi["Service"]["getPullRequestSummary"] = Effect.fn(
     "GitHubPullRequestApi.getPullRequestSummary",
@@ -1475,8 +1465,8 @@ export const make = Effect.gen(function* () {
   const watchFingerprintResolver = GraphQLResolver.aliased(client.PullRequestWatchFingerprint, {
     batchKey: GitHubGraphQlClient.batchKey,
   }).pipe(
-    RequestResolver.setDelay(SUMMARY_BATCH_WINDOW),
-    RequestResolver.batchN(STAT_ALIASES_PER_REQUEST),
+    RequestResolver.setDelay(limits.SUMMARY_BATCH_WINDOW),
+    RequestResolver.batchN(limits.STAT_ALIASES_PER_REQUEST),
   );
   const getPullRequestWatchFingerprint: GitHubPullRequestApi["Service"]["getPullRequestWatchFingerprint"] =
     (input) => {
@@ -1497,14 +1487,14 @@ export const make = Effect.gen(function* () {
 
   const statsResolver = GraphQLResolver.aliased(client.PullRequestStats, {
     batchKey: GitHubGraphQlClient.batchKey,
-  }).pipe(RequestResolver.batchN(STAT_ALIASES_PER_REQUEST));
+  }).pipe(RequestResolver.batchN(limits.STAT_ALIASES_PER_REQUEST));
   const stackMembershipResolver = GraphQLResolver.aliased(client.PullRequestStackMembership, {
     batchKey: GitHubGraphQlClient.batchKey,
-  }).pipe(RequestResolver.batchN(STAT_ALIASES_PER_REQUEST));
+  }).pipe(RequestResolver.batchN(limits.STAT_ALIASES_PER_REQUEST));
   // GitHub has no bulk viewed-file mutation; aliases combine individual paths into one request.
   const setFileViewedResolver = GraphQLResolver.aliased(client.SetFileViewed, {
     batchKey: GitHubGraphQlClient.batchKey,
-  }).pipe(RequestResolver.batchN(FILES_VIEWED_PER_REQUEST));
+  }).pipe(RequestResolver.batchN(limits.FILES_VIEWED_PER_REQUEST));
 
   return GitHubPullRequestApi.of({
     withVerifiedCredential,
@@ -1515,7 +1505,7 @@ export const make = Effect.gen(function* () {
     }),
 
     listPullRequests: Effect.fn("GitHubPullRequestApi.listPullRequests")(function (input) {
-      const fallbackMaxRows = Math.max(input.limit + 1, PULL_REQUEST_FALLBACK_MAX_ROWS);
+      const fallbackMaxRows = Math.max(input.limit + 1, limits.PULL_REQUEST_FALLBACK_MAX_ROWS);
       const { owner, name } = parseRepositorySelector(input.repository);
       const query = searchQuery({ ...input, repositories: [input.repository] });
       if (query === null) {
@@ -1805,7 +1795,11 @@ export const make = Effect.gen(function* () {
         let withComments = true;
         let withReviews = true;
         const target = { ...input, operation: "getPullRequestActivity" };
-        for (let page = 0; page < REVIEW_THREAD_PAGES && (withComments || withReviews); page++) {
+        for (
+          let page = 0;
+          page < limits.REVIEW_THREAD_PAGES && (withComments || withReviews);
+          page++
+        ) {
           const read: GitHubPullRequestActivityPage = yield* client
             .PullRequestActivity({
               owner,
@@ -1913,7 +1907,7 @@ export const make = Effect.gen(function* () {
         let cursor = first.nextCursor;
         let page = 1;
         // Later pages carry the threads alone; the PR-wide fields above come from the first.
-        while (cursor !== null && page < REVIEW_THREAD_PAGES) {
+        while (cursor !== null && page < limits.REVIEW_THREAD_PAGES) {
           const later: Pick<
             GitHubReviewThreadPage,
             "threads" | "nextCursor" | "avatarsByLogin" | "botLogins"
@@ -1939,7 +1933,7 @@ export const make = Effect.gen(function* () {
           }> = [];
           const seen = new Set<string>();
           // Carries on from the thread read's own cursor, which `GraphQLClient.pages` cannot.
-          while (after !== null && pages.length < REVIEW_THREAD_PAGES && !seen.has(after)) {
+          while (after !== null && pages.length < limits.REVIEW_THREAD_PAGES && !seen.has(after)) {
             seen.add(after);
             const read: {
               readonly dismissalsByReviewId: ReadonlyMap<string, string>;
@@ -2450,9 +2444,14 @@ export const make = Effect.gen(function* () {
     }),
 
     replyToReviewThread: Effect.fn("GitHubPullRequestApi.replyToReviewThread")(function (input) {
-      return client
-        .AddReviewThreadReply({ threadId: input.threadId, body: input.body })
-        .pipe(graphql({ ...input, operation: "replyToReviewThread" }), Effect.asVoid);
+      const target = { ...input, operation: "replyToReviewThread" };
+      return requireThreadOfPullRequest(subjectBelongsToPullRequest, target).pipe(
+        Effect.andThen(
+          client
+            .AddReviewThreadReply({ threadId: input.threadId, body: input.body })
+            .pipe(graphql(target), Effect.asVoid),
+        ),
+      );
     }),
 
     getPullRequestFilesViewed: Effect.fn("GitHubPullRequestApi.getPullRequestFilesViewed")(
@@ -2472,7 +2471,7 @@ export const make = Effect.gen(function* () {
           }),
           {
             ...target,
-            maxPages: FILES_VIEWED_MAX_PAGES,
+            maxPages: limits.FILES_VIEWED_MAX_PAGES,
             hasNextPage: (page) => page.nextCursor !== null,
           },
         ).pipe(
@@ -2502,7 +2501,7 @@ export const make = Effect.gen(function* () {
           }),
           {
             ...target,
-            maxPages: FILES_VIEWED_MAX_PAGES,
+            maxPages: limits.FILES_VIEWED_MAX_PAGES,
             hasNextPage: (page) => page.nextCursor !== null,
           },
         ).pipe(
@@ -2539,11 +2538,15 @@ export const make = Effect.gen(function* () {
 
     setReviewThreadResolution: Effect.fn("GitHubPullRequestApi.setReviewThreadResolution")(
       function (input) {
-        return (
-          input.resolved
-            ? client.ResolveReviewThread({ threadId: input.threadId }).pipe(Effect.asVoid)
-            : client.UnresolveReviewThread({ threadId: input.threadId }).pipe(Effect.asVoid)
-        ).pipe(graphql({ ...input, operation: "setReviewThreadResolution" }));
+        const target = { ...input, operation: "setReviewThreadResolution" };
+        return requireThreadOfPullRequest(subjectBelongsToPullRequest, target).pipe(
+          Effect.andThen(
+            (input.resolved
+              ? client.ResolveReviewThread({ threadId: input.threadId }).pipe(Effect.asVoid)
+              : client.UnresolveReviewThread({ threadId: input.threadId }).pipe(Effect.asVoid)
+            ).pipe(graphql(target)),
+          ),
+        );
       },
     ),
 

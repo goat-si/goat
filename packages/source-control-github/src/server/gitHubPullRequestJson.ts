@@ -65,7 +65,6 @@ import type {
   PullRequestFileStats,
   PullRequestHeads,
   PullRequestPreview as PullRequestPreviewQuery,
-  PullRequestSubject,
   RepositoryAuthors,
   RepositoryLabels,
   ViewerPermissions,
@@ -228,21 +227,7 @@ export function toPullRequestNodeId(result: {
   return result.repository?.pullRequest?.id ?? null;
 }
 
-export function isSubjectOfPullRequest(result: PullRequestSubject.Result): boolean {
-  const expected = result.repository?.pullRequest?.id ?? null;
-  const node = result.node;
-  const actual =
-    node === null
-      ? null
-      : node.__typename === "IssueComment"
-        ? (node.pullRequest?.id ?? null)
-        : node.__typename === "PullRequestReviewComment"
-          ? node.reviewCommentPullRequest.id
-          : node.__typename === "PullRequestReview"
-            ? node.reviewPullRequest.id
-            : node.id;
-  return expected !== null && actual !== null && expected === actual;
-}
+export { isSubjectOfPullRequest } from "./gitHubReviewThreadScope.ts";
 
 const ReviewSubmissionSchema = Schema.Struct({
   event: Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
