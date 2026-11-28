@@ -1,4 +1,4 @@
 {
   "//": "npm modules lifted v1 files import that GOAT 2 answers from the seam; read by scripts/v1-lift.py (tsconfig.v1.paths.json) and apps/web/vite-plugin-v1.ts next to aliases.json",
-  "@tanstack/react-router": "apps/web/src/v1/seam/npm/tanstack-react-router.ts"
+  "@tanstack/react-router": "apps/web/src/v1/seam/npm/tanstack-react-router.tsx"
 }

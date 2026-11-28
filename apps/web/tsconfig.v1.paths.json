@@ -164,6 +164,9 @@
       "@goat/contracts/legacyT3Names": [
         "./src/v1/packages/contracts/src/legacyT3Names.ts"
       ],
+      "@goat/contracts/relay": [
+        "./src/v1/packages/contracts/src/relay.ts"
+      ],
       "@goat/contracts/settings": [
         "./src/v1/packages/contracts/src/settings.ts"
       ],
@@ -253,6 +256,9 @@
       ],
       "@goat/shared/goatMcpToolPresentation": [
         "./src/v1/packages/shared/src/goatMcpToolPresentation.ts"
+      ],
+      "@goat/shared/hostClassification": [
+        "./src/v1/packages/shared/src/hostClassification.ts"
       ],
       "@goat/shared/htmlRender": [
         "./src/v1/packages/shared/src/htmlRender.ts"
@@ -366,7 +372,7 @@
         "./src/v1/packages/source-control-gitlab/src/shared/definition.ts"
       ],
       "@tanstack/react-router": [
-        "./src/v1/seam/npm/tanstack-react-router.ts"
+        "./src/v1/seam/npm/tanstack-react-router.tsx"
       ]
     }
   }

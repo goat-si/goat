@@ -209,6 +209,9 @@ def main(check):
             body = f'/* Bridge: v1 {tgt} is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table). */\n@import "{rel}";\n'
         else:
             body = f'// Bridge: v1 {tgt} is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table).\nexport * from "{rel}";\n'
+            # export * does not forward a default export (v1 ChatMarkdown is imported as a default)
+            if os.path.exists(seam_file) and re.search(r"^export default ", open(seam_file).read(), re.M):
+                body += f'export {{ default }} from "{rel}";\n'
         if not check:
             os.makedirs(os.path.dirname(mirror_path), exist_ok=True)
             open(mirror_path, "w").write(body)

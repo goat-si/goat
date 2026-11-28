@@ -1,7 +1,7 @@
-// Seam for the npm module @tanstack/react-router, which lifted v1 files import (settingsLayout, ModelPickerProviderNotices).
+// Seam for the npm module @tanstack/react-router, which lifted v1 files import (settingsLayout, ModelPickerProviderNotices, TimelineWorkEntryRow, lib/sentFromNavigation).
 // GOAT 2 has its own navigation (apps/web/src/ui-state), so this module answers v1's two hooks: useLocation reads the
 // location the GOAT 2 frame sets, and useNavigate hands v1 paths to the GOAT 2 frame (setGoat2Navigator).
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type AnchorHTMLAttributes, type ReactNode } from "react";
 
 export interface HistoryState {}
 
@@ -52,4 +52,37 @@ export function useNavigate() {
     navigator(options);
     return Promise.resolve();
   };
+}
+
+/** v1's router register interface; lifted files augment it (lib/sentFromNavigation.ts). */
+export interface Register {}
+
+/**
+ * v1 <Link to="/$environmentId/$threadId" params>: the path is resolved with its params and handed to the GOAT 2
+ * navigator, so a timeline "read thread" link opens the thread through the GOAT 2 frame (lane F). Markup and classes
+ * are the ones the lifted row passes.
+ */
+export function Link(
+  props: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    readonly to: string;
+    readonly params?: Record<string, string>;
+    readonly children?: ReactNode;
+  },
+) {
+  const { to, params, onClick, children, ...rest } = props;
+  const path = to.replace(/\$([A-Za-z]+)/g, (whole, name: string) => params?.[name] ?? whole);
+  return (
+    <a
+      {...rest}
+      href={path}
+      onClick={(event) => {
+        onClick?.(event);
+        if (event.defaultPrevented) return;
+        event.preventDefault();
+        navigator({ to: path });
+      }}
+    >
+      {children}
+    </a>
+  );
 }
