@@ -19,6 +19,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Socket from "effect/socket/Socket";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 import { RpcClientError } from "effect/rpc";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
@@ -361,6 +362,67 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
         expect(stored).toHaveLength(1);
         expect(stored[0]?.action.type).toBe("settle");
         expect(stored[0]?.attempted).toBe(true);
+      }),
+  );
+
+  it.effect(
+    "preserves a pending compensating unsettle when a live snooze or unsnooze succeeds",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness({ connected: false });
+        yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+        yield* h.reconnect();
+        const sent = yield* Queue.take(h.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* h.disconnect();
+
+        // Queue compensating unsettle offline, then reconnect with committed settle and transient failure.
+        yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
+        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
+          ...SNAPSHOT,
+          snapshotSequence: 2,
+          threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
+        });
+        yield* h.reconnect();
+        const failedUndo = yield* Queue.take(h.requests);
+        expect(failedUndo.command.type).toBe("thread.unsettle");
+        yield* Deferred.fail(
+          failedUndo.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+
+        // A live snooze and live unsnooze must NOT discard the unrelated pending unsettle.
+        const liveSnooze = h.commands.snooze.run(h.registry, snooze);
+        const snoozeReq = yield* Queue.take(h.requests);
+        expect(snoozeReq.command.type).toBe("thread.snooze");
+        yield* Deferred.succeed(snoozeReq.reply, { sequence: 3 });
+        expect((yield* Effect.promise(() => liveSnooze))._tag).toBe("Success");
+        expect((yield* h.store.update((entries) => entries)).map((e) => e.action.type)).toEqual([
+          "unsettle",
+        ]);
+
+        const liveUnsnooze = h.commands.unsnooze.run(h.registry, undo);
+        const unsnoozeReq = yield* Queue.take(h.requests);
+        expect(unsnoozeReq.command.type).toBe("thread.unsnooze");
+        yield* Deferred.succeed(unsnoozeReq.reply, { sequence: 4 });
+        expect((yield* Effect.promise(() => liveUnsnooze))._tag).toBe("Success");
+        expect((yield* h.store.update((entries) => entries)).map((e) => e.action.type)).toEqual([
+          "unsettle",
+        ]);
+
+        // Next retry still replays the preserved compensating unsettle.
+        yield* TestClock.adjust("2 seconds");
+        const retriedUndo = yield* Queue.take(h.requests);
+        expect(retriedUndo.command.type).toBe("thread.unsettle");
+        yield* Deferred.succeed(retriedUndo.reply, { sequence: 5 });
+        yield* waitFor(h.registry, h.pendingSyncAtom, (threads) => threads.size === 0);
       }),
   );
 });

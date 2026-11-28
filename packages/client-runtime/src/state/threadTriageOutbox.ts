@@ -152,14 +152,21 @@ export function createThreadTriageOutbox<R, E>(input: {
     return executeAtomQuery(registry, atom, { reportDefect: false, reportFailure: false });
   };
 
-  const pendingFor = (
-    registry: AtomRegistry.AtomRegistry,
-    environmentId: EnvironmentId,
-    threadId: ThreadId,
-  ) =>
-    registry
-      .get(entriesAtom)
-      .find((entry) => entry.environmentId === environmentId && entry.threadId === threadId);
+  const supersedesAction = (
+    succeeded: PendingThreadTriage["action"]["type"],
+    queued: PendingThreadTriage["action"]["type"],
+  ) => {
+    switch (succeeded) {
+      case "settle":
+        // Settling clears snooze on the server too, so it supersedes any queued triage entry.
+        return true;
+      case "snooze":
+      case "unsnooze":
+        return queued === "snooze" || queued === "unsnooze";
+      case "unsettle":
+        return queued === "settle" || queued === "unsettle";
+    }
+  };
 
   /** Never fails: a change that stays stored is judged again on the next synchronized shell. */
   const forgetEffect = (registry: AtomRegistry.AtomRegistry, commandId: CommandId | undefined) =>
@@ -171,14 +178,21 @@ export function createThreadTriageOutbox<R, E>(input: {
             : stored,
         ).pipe(Effect.ignore);
 
-  const forgetAsync = (registry: AtomRegistry.AtomRegistry, commandId: CommandId | undefined) =>
-    commandId === undefined
-      ? Promise.resolve()
-      : runInRuntime(
-          registry,
-          "thread-triage-outbox:forget",
-          forgetEffect(registry, commandId),
-        ).then(() => undefined);
+  const forgetSupersededEffect = (
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    succeeded: PendingThreadTriage["action"]["type"],
+  ) =>
+    update(registry, (stored) => {
+      const kept = stored.filter(
+        (entry) =>
+          entry.environmentId !== environmentId ||
+          entry.threadId !== threadId ||
+          !supersedesAction(succeeded, entry.action.type),
+      );
+      return kept.length === stored.length ? stored : kept;
+    }).pipe(Effect.ignore);
 
   const isCompensatingAction = (action: PendingThreadTriage["action"]) =>
     action.type === "unsettle" || action.type === "unsnooze";
@@ -362,50 +376,51 @@ export function createThreadTriageOutbox<R, E>(input: {
   function queueWhenOffline<I extends { readonly threadId: ThreadId }, CE>(
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
     toAction: (input: I) => PendingThreadTriage["action"],
-  ): AtomCommand<Target<I>, { readonly sequence: number }, CE> {
+  ): AtomCommand<Target<I>, { readonly sequence: number }, CE | E> {
     if (!enabled) return command;
     return {
       label: command.label,
       run: async (registry, target) => {
         const { environmentId } = target;
         const { threadId } = target.input;
-        // Read before sending: the change is judged against what the user saw when acting.
-        const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
-        const thread = snapshot?.threads.find((candidate) => candidate.id === threadId);
-        const result = await command.run(registry, target);
-        if (result._tag === "Success") {
-          // The server now has a newer decision than the queued one.
-          await forgetAsync(registry, pendingFor(registry, environmentId, threadId)?.commandId);
-          return result;
-        }
-        if (!hasUnavailableReason(result.cause)) {
-          return result;
-        }
         const action = toAction(target.input);
-        const queuedAt = DateTime.nowUnsafe();
-        if (
-          snapshot == null ||
-          thread === undefined ||
-          input.apply(thread, action, queuedAt) === thread
-        ) {
-          return result;
-        }
-        const queued = await runInRuntime(
+        const outcome = await runInRuntime(
           registry,
           "thread-triage-outbox:queue",
           threadLock(environmentId, threadId).withPermit(
-            queue(registry, environmentId, thread, action, queuedAt).pipe(
-              Effect.tap((stored) =>
-                Effect.sync(() => {
-                  if (stored) triggerReplayIfLive(registry, environmentId);
-                }),
-              ),
-            ),
+            Effect.gen(function* () {
+              // Read before sending: the change is judged against what the user saw when acting.
+              const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
+              const thread = snapshot?.threads.find((candidate) => candidate.id === threadId);
+              const result = yield* Effect.promise(() => command.run(registry, target));
+              if (result._tag === "Success") {
+                // Only clear entries this action actually supersedes; unrelated compensations stay.
+                yield* forgetSupersededEffect(registry, environmentId, threadId, action.type);
+                return result;
+              }
+              if (!hasUnavailableReason(result.cause)) {
+                return result;
+              }
+              const queuedAt = DateTime.nowUnsafe();
+              if (
+                snapshot == null ||
+                thread === undefined ||
+                input.apply(thread, action, queuedAt) === thread
+              ) {
+                return result;
+              }
+              const stored = yield* queue(registry, environmentId, thread, action, queuedAt).pipe(
+                Effect.exit,
+              );
+              if (stored._tag === "Success" && stored.value) {
+                triggerReplayIfLive(registry, environmentId);
+                return AsyncResult.success({ sequence: snapshot.snapshotSequence });
+              }
+              return result;
+            }),
           ),
         );
-        return queued._tag === "Success" && queued.value
-          ? AsyncResult.success({ sequence: snapshot.snapshotSequence })
-          : result;
+        return outcome._tag === "Success" ? outcome.value : AsyncResult.failure(outcome.cause);
       },
     };
   }
@@ -492,10 +507,8 @@ export function createThreadTriageOutbox<R, E>(input: {
               }
               const result = yield* Effect.promise(() => command.run(registry, target));
               if (result._tag === "Success") {
-                yield* forgetEffect(
-                  registry,
-                  deferredAttemptedId ?? pendingFor(registry, environmentId, threadId)?.commandId,
-                );
+                const reverseType = cancels === "settle" ? "unsettle" : "unsnooze";
+                yield* forgetSupersededEffect(registry, environmentId, threadId, reverseType);
                 return result;
               }
               if (hasUnavailableReason(result.cause)) {
