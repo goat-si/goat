@@ -1932,11 +1932,7 @@ export const layerWithOptions = (
               providerInstanceId: runtime.instanceId,
             }),
           ).pipe(
-            // A start that fails or is stopped may never emit turn.terminal,
-            // so it clears its own turn or the session never goes idle. If
-            // the adapter emits the terminal anyway, clearing the same turn
-            // again changes nothing, so another thread's turn on a shared
-            // session stays busy either way.
+            // Failed starts may omit turn.terminal, so they must clear their own turn.
             Effect.andThen(
               holdThreadLoaded({
                 providerSessionId,
@@ -1994,6 +1990,7 @@ export const layerWithOptions = (
             ),
           );
         const { resumeInterruptedTurn } = runtime;
+        const { compactThread } = runtime;
         return {
           ...runtime,
           // Pi replaces its session snapshot as metadata changes.
@@ -2135,6 +2132,9 @@ export const layerWithOptions = (
             : {
                 resumeTurn: (input) => trackTurn(input, runtime.resumeTurn!(input)),
               }),
+          ...(compactThread === undefined
+            ? {}
+            : { compactThread: (input) => trackTurn(input, compactThread(input)) }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
               Effect.andThen(
