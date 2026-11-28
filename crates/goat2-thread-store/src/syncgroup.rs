@@ -9,7 +9,8 @@
 //! per append instead of 31 ms.
 //!
 //! Other platforms keep `sync_data` per append (`fdatasync` already makes the file durable on its
-//! own).
+//! own), so the group machinery is only exercised by the unit tests there.
+#![cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 
 use std::fs::File;
 use std::io;
@@ -63,14 +64,14 @@ impl SyncGroup {
                 st.started += 1;
                 let target = st.started;
                 drop(st);
+                let mut leader = Leader {
+                    group: self,
+                    target,
+                    failed: true,
+                };
                 let result = barrier(file);
-                st = self.lock();
-                st.busy = false;
-                st.done = target;
-                if result.is_err() {
-                    st.failed = st.failed.max(target);
-                }
-                self.cv.notify_all();
+                leader.failed = result.is_err();
+                drop(leader);
                 return result;
             }
             st = self.cv.wait(st).unwrap_or_else(|p| p.into_inner());
@@ -83,28 +84,51 @@ impl SyncGroup {
         use std::os::fd::AsRawFd;
         self.sync_with(
             file,
-            |f| {
-                // SAFETY: plain fsync on an open descriptor we own for the duration of the call.
-                if unsafe { libc::fsync(f.as_raw_fd()) } == 0 {
-                    Ok(())
-                } else {
-                    Err(io::Error::last_os_error())
-                }
-            },
-            |f| {
-                // SAFETY: F_FULLFSYNC takes no argument and only reads the descriptor.
-                if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_FULLFSYNC) } == -1 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            },
+            // SAFETY: plain fsync on an open descriptor borrowed for the duration of the call.
+            |f| retry_interrupted(|| unsafe { libc::fsync(f.as_raw_fd()) }),
+            // SAFETY: F_FULLFSYNC takes no argument and only reads the descriptor.
+            |f| retry_interrupted(|| unsafe { libc::fcntl(f.as_raw_fd(), libc::F_FULLFSYNC) }),
         )
     }
 
     #[cfg(not(target_vendor = "apple"))]
     pub(crate) fn sync(&self, file: &File) -> io::Result<()> {
         file.sync_data()
+    }
+}
+
+/// Finishes a leader's flush generation, also when the barrier panics: the generation counts as
+/// failed then, so covered callers flush on their own instead of waiting forever.
+struct Leader<'a> {
+    group: &'a SyncGroup,
+    target: u64,
+    failed: bool,
+}
+
+impl Drop for Leader<'_> {
+    fn drop(&mut self) {
+        let mut st = self.group.lock();
+        st.busy = false;
+        st.done = st.done.max(self.target);
+        if self.failed {
+            st.failed = st.failed.max(self.target);
+        }
+        self.group.cv.notify_all();
+    }
+}
+
+/// Run a system call that returns -1 on error, retrying when a signal interrupted it (std's
+/// `sync_data` does the same), so a stray SIGCHLD does not poison a thread.
+#[cfg(target_vendor = "apple")]
+fn retry_interrupted(call: impl Fn() -> libc::c_int) -> io::Result<()> {
+    loop {
+        if call() != -1 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
     }
 }
 
@@ -193,6 +217,21 @@ mod tests {
                 "a failed flush was reported as success"
             );
         }
+        // Each caller ran exactly one barrier: its own as leader, or its own retry after the shared
+        // flush that covered it failed.
+        assert_eq!(calls.load(Ordering::SeqCst), 8);
+    }
+
+    #[test]
+    fn a_panicking_flush_does_not_stall_later_callers() {
+        let group = Arc::new(SyncGroup::default());
+        let g = group.clone();
+        let panicked = std::thread::spawn(move || {
+            let _ = g.sync_with(&file(), |_| Ok(()), |_| panic!("barrier panicked"));
+        })
+        .join();
+        assert!(panicked.is_err());
+        group.sync_with(&file(), |_| Ok(()), |_| Ok(())).unwrap();
     }
 
     #[test]
