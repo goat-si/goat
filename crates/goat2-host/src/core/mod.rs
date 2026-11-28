@@ -176,6 +176,8 @@ pub(crate) struct Inner {
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
     /// Sign-in links of open `signin` requests, by request. Memory only (see [SigninLink]).
     signin_links: Mutex<HashMap<RequestId, SigninLink>>,
+    /// Provider instances, probes and the `providers` list (docs/part2/provider-wire.md).
+    pub providers: crate::providers::Providers,
     engine_groups_hook: Mutex<EngineGroupsNotifier>,
     /// Actor and background tasks, aborted on shutdown so the host (and the store lock) drops.
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
@@ -206,6 +208,11 @@ impl Host {
         stall: StallRecorder,
     ) -> StoreResult<Self> {
         let (cards_tx, _) = broadcast::channel(1024);
+        // Only Codex is built in so far; the Part 2 drivers register here as they merge.
+        let providers = crate::providers::Providers::open(
+            &opts.data_dir,
+            std::collections::BTreeMap::from([("codex".to_owned(), engine.clone())]),
+        );
         let host = Self {
             inner: Arc::new(Inner {
                 sched: Scheduler::new(opts.max_runs, opts.max_starts),
@@ -229,6 +236,7 @@ impl Host {
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
                 signin_links: Mutex::new(HashMap::new()),
+                providers,
                 engine_groups_hook: Mutex::new(EngineGroupsNotifier { hook: None, seq: 0 }),
                 tasks: Mutex::new(Vec::new()),
             }),
@@ -281,6 +289,11 @@ impl Host {
         commands::load_bots(self)?;
         commands::rebuild_dedupe(self).await;
         self.spawn_memory_sampler();
+        let host = self.clone();
+        let probes = tokio::spawn(async move {
+            let _ = host.inner.providers.refresh(&host, None).await;
+        });
+        self.track(&probes);
         self.inner.stall.note(
             "startup",
             serde_json::json!({ "ms": started.elapsed().as_millis() as u64, "threads": self.inner.store.cards().len() }),
@@ -479,14 +492,20 @@ impl Host {
             .lock()
             .expect("signin links")
             .insert(link.request_id.clone(), link);
+        self.inner.providers.publish(self);
     }
 
     pub(crate) fn forget_signin_link(&self, request_id: &RequestId) {
-        self.inner
+        let removed = self
+            .inner
             .signin_links
             .lock()
             .expect("signin links")
-            .remove(request_id);
+            .remove(request_id)
+            .is_some();
+        if removed {
+            self.inner.providers.publish(self);
+        }
     }
 
     /// Busy children of a parent (the per-bot child cap counts these).

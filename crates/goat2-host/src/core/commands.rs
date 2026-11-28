@@ -434,10 +434,49 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 ..Default::default()
             })
         }
-        // Part 2 commands whose host module has not landed yet (providers module: lane E;
-        // bot notes, update_bot, get_turn_item, mark_read: P2-E). Refused plainly until then.
-        Command::RefreshProviders { .. }
-        | Command::ProviderInstallStart { .. }
+        Command::RefreshProviders { instance_id, .. } => {
+            // A probe always reads the model list, so `refreshModels` needs no separate path.
+            host.inner
+                .providers
+                .refresh(host, instance_id.as_ref().map(|i| i.as_str()))
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue::default())
+        }
+        Command::SetProviderInstance {
+            instance_id,
+            driver,
+            acp_agent_id,
+            enabled,
+            display_name,
+            ..
+        } => {
+            let id = instance_id.to_string();
+            host.inner
+                .providers
+                .set_instance(
+                    host,
+                    crate::providers::ProviderInstance {
+                        instance_id: id.clone(),
+                        driver,
+                        acp_agent_id,
+                        enabled,
+                        display_name,
+                    },
+                )
+                .map_err(provider_refusal)?;
+            if enabled {
+                let probing = host.clone();
+                let task = tokio::spawn(async move {
+                    let _ = probing.inner.providers.refresh(&probing, Some(&id)).await;
+                });
+                host.track(&task);
+            }
+            Ok(CommandValue::default())
+        }
+        // Part 2 commands whose host module has not landed yet (provider install, sign-in and
+        // ACP registry: lane E slice 2; bot notes, update_bot, get_turn_item, mark_read: P2-E).
+        Command::ProviderInstallStart { .. }
         | Command::ProviderInstallCancel { .. }
         | Command::ProviderAuthStart { .. }
         | Command::ProviderAuthCancel { .. }
@@ -445,7 +484,6 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
         | Command::AcceptAcpRegistryUrlAuth { .. }
         | Command::SearchAcpRegistry { .. }
         | Command::PrepareAcpRegistryAgent { .. }
-        | Command::SetProviderInstance { .. }
         | Command::UpdateBot { .. }
         | Command::ListBotNotes { .. }
         | Command::WriteBotNotes { .. }
@@ -455,6 +493,16 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             "this command is not available in this host build yet",
         )),
         _ => Err(command_error(Reason::InvalidRequest, "not a command frame")),
+    }
+}
+
+fn provider_refusal(refusal: crate::providers::ProviderRefusal) -> crate::api::CommandError {
+    use crate::providers::ProviderRefusal as R;
+    match refusal {
+        R::NotFound(m) => command_error(Reason::ProviderNotFound, m),
+        R::DriverUnavailable(m) => command_error(Reason::DriverUnavailable, m),
+        R::Invalid(m) => command_error(Reason::InvalidRequest, m),
+        R::Internal(m) => command_error(Reason::Internal, m),
     }
 }
 
@@ -656,6 +704,10 @@ impl WsHost for Host {
 
     async fn command(&self, command: Command) -> CommandReply {
         handle(self, command).await
+    }
+
+    fn watch_providers(&self) -> tokio::sync::watch::Receiver<crate::providers::ProviderList> {
+        self.inner.providers.subscribe()
     }
 
     fn stalled_ms_since(&self, since: std::time::Instant) -> u64 {

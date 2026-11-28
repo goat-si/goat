@@ -1952,6 +1952,195 @@ async fn part2_fields_carry_what_the_host_knows() {
     );
 }
 
+#[tokio::test]
+async fn providers_list_refresh_and_instance_settings() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    // The startup probe may have run before the fake had a probe set: refresh once.
+    t.host.command(refresh("prov-0", None)).await.unwrap();
+    let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    assert!(codex.enabled);
+    assert_eq!(codex.driver, "codex");
+    assert_eq!(
+        codex.capabilities,
+        goat2_host::engine::codex::codex_capabilities()
+    );
+    assert_eq!(codex.probe.models[0].slug, "gpt-6.1-terra");
+    // Refresh probes again and pushes the new result.
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    t.host
+        .command(refresh("prov-1", Some("codex")))
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    // Unknown instance.
+    let missing = t
+        .host
+        .command(refresh("prov-2", Some("nope")))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.reason, "provider_not_found");
+    // Turn it off: listed as disabled, saved.
+    t.host
+        .command(set_instance("prov-3", "codex", "codex", false))
+        .await
+        .unwrap();
+    let off = eventually_provider(&t, |e| !e.enabled).await;
+    assert_eq!(
+        off.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+    let saved = std::fs::read_to_string(
+        t._dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("provider-instances.json"),
+    )
+    .unwrap();
+    assert!(saved.contains("\"enabled\": false"), "{saved}");
+    // A driver this build does not have is refused.
+    let grok = t
+        .host
+        .command(set_instance("prov-4", "grok", "grok", true))
+        .await
+        .unwrap_err();
+    assert_eq!(grok.reason, "driver_unavailable");
+    // Back on: probed again.
+    t.host
+        .command(set_instance("prov-5", "codex", "codex", true))
+        .await
+        .unwrap();
+    let on = eventually_provider(&t, |e| {
+        e.enabled && e.probe.status == goat2_contracts::ServerProviderState::Ready
+    })
+    .await;
+    assert_eq!(on.probe.version.as_deref(), Some("0.168.0"));
+}
+
+#[tokio::test]
+async fn a_driver_that_cannot_probe_is_listed_with_that_reason() {
+    let t = setup(manual()).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Warning
+    );
+    assert_eq!(
+        codex.probe.message.as_deref(),
+        Some("This driver cannot report its status yet.")
+    );
+}
+
+#[tokio::test]
+async fn an_engine_sign_in_link_shows_on_its_provider() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    let id = start_user_thread(&t, "prov-auth", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            key: None,
+            url: Some("https://auth.example.invalid/device?code=ABC".into()),
+            message: "Sign in to Codex".into(),
+        },
+    );
+    let codex = eventually_provider(&t, |e| e.probe.auth.action.is_some()).await;
+    let action = codex.probe.auth.action.unwrap();
+    assert_eq!(action.url, "https://auth.example.invalid/device?code=ABC");
+    assert_eq!(action.message, "Sign in to Codex");
+    // Settling the request takes the link off the entry.
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "prov-auth-done".into(),
+            thread_id: id.clone(),
+            request_id: action.elicitation_id.as_str().into(),
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| e.probe.auth.action.is_none()).await;
+}
+
+fn ready_probe(version: &str) -> goat2_contracts::ProviderProbeResult {
+    serde_json::from_value(serde_json::json!({
+        "installed": true, "version": version, "status": "ready",
+        "auth": { "status": "authenticated", "type": "chatgpt" },
+        "models": [{ "slug": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "isCustom": false, "isDefault": true, "capabilities": null }],
+        "checkedAt": "2026-11-29T00:00:00Z"
+    }))
+    .unwrap()
+}
+
+fn refresh(key: &str, instance: Option<&str>) -> ClientFrame {
+    ClientFrame::RefreshProviders {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: instance.map(Into::into),
+        refresh_models: None,
+    }
+}
+
+fn set_instance(key: &str, id: &str, driver: &str, enabled: bool) -> ClientFrame {
+    ClientFrame::SetProviderInstance {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: id.into(),
+        driver: driver.into(),
+        acp_agent_id: None,
+        enabled,
+        display_name: None,
+    }
+}
+
+/// The codex entry of the providers list once `pred` holds for it.
+async fn eventually_provider(
+    t: &T,
+    pred: impl Fn(&goat2_contracts::ServerProviderEntry) -> bool,
+) -> goat2_contracts::ServerProviderEntry {
+    let rx = t.host.watch_providers();
+    let find = || {
+        rx.borrow()
+            .as_ref()
+            .and_then(|l| {
+                l.iter()
+                    .find(|e| e.instance_id.as_str() == "codex")
+                    .cloned()
+            })
+            .filter(|e| pred(e))
+    };
+    eventually("provider entry", || find().is_some()).await;
+    find().unwrap()
+}
+
+#[tokio::test]
+async fn provider_instance_settings_survive_a_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            t.host
+                .command(set_instance("prov-restart", "codex", "codex", false))
+                .await
+                .unwrap();
+            eventually_provider(&t, |e| !e.enabled).await;
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert!(!codex.enabled);
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
