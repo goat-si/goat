@@ -1496,6 +1496,15 @@ impl Actor {
     async fn on_internal(&mut self, internal: Internal) {
         match internal {
             Internal::TurnsListed { status_gen, result } => {
+                // Notifications Codex sent before answering the list are queued: apply them
+                // first, so the list is judged against the state at its answer (v1 re-checks
+                // after the list, CodexTurnStartGuard.ts:78-86).
+                while let Ok(inbound) = self.inbound.try_recv() {
+                    Box::pin(self.on_inbound_event(Some(inbound))).await;
+                    if self.exited {
+                        return;
+                    }
+                }
                 let list = result
                     .ok()
                     .and_then(|value| serde_json::from_value::<TurnsListResponse>(value).ok())

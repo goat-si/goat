@@ -1302,6 +1302,35 @@ async fn a_foreign_turn_seen_while_the_setting_is_read_refuses_the_start() {
     finish(h).await;
 }
 
+#[tokio::test]
+async fn an_idle_status_sent_just_before_the_list_answer_wins() {
+    // No delay between the idle notification and the list answer: the driver must still apply
+    // the notification first, whatever order its own event loop picks them up in.
+    let t = load("codex-0.167.0/resume.json");
+    let (mut entries, thread) = busy_resume_prefix();
+    entries.push(turns_list(50, &thread));
+    entries.push(thread_idle(&thread));
+    entries.push(foreign_running(50));
+    let from = t
+        .entries
+        .iter()
+        .position(|e| method_of(e) == Some("config/read"))
+        .unwrap();
+    entries.extend(t.entries[from..].iter().cloned());
+    let t = synthetic("stale-list-no-delay", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |_| {}).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-1", "Reply with exactly: RESUMED"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
 fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {
     goat2_contracts::ChatAttachment {
         kind: goat2_contracts::ChatAttachmentType::Image,
