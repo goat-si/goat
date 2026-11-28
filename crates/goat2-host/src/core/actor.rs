@@ -987,6 +987,9 @@ impl Actor {
                     self.undeclined_signin_keys.retain(|k| *k != key);
                     self.settled_signin_keys.insert(key.clone());
                 }
+                // If this write fails, the request stays listed under its run or session and is
+                // closed when that ends; its key is already settled, so nothing answers the
+                // engine for it, and a person resolving it first reaches no engine either.
                 if let Some(request_id) = request
                     && self.is_open(&request_id)
                 {
@@ -1172,7 +1175,8 @@ impl Actor {
             }
         }
         let events: Vec<LogEvent> = requeue
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|input_id| {
                 LogEvent::InputDelivered(InputDelivered {
                     input_id,
@@ -1186,7 +1190,14 @@ impl Actor {
             return;
         }
         tracing::info!(thread = %self.id, reason, "steer cancelled by the engine: requeued as followup");
-        self.append(events);
+        if self.append(events).is_none() {
+            // Not recorded: the inputs stay accepted steers of this run, so a later cancel for
+            // them can still requeue them.
+            if let Phase::Running(run) = &mut self.phase {
+                run.steered.extend(requeue);
+            }
+            return;
+        }
         self.sync_runtime();
         self.maybe_start();
     }
