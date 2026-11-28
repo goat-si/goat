@@ -186,7 +186,13 @@ it.layer(
               ?.status,
             "completed",
           );
-          assert.equal((yield* archive.runPass(archivePolicy)).archivedThreads, 1);
+          assert.equal((yield* archive.runPass(archivePolicy)).archivedThreads, 0);
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+              (item) => item.id === `turn-item:recovery-parked:${parked.id}`,
+            )?.status,
+            "completed",
+          );
         }),
       ),
   );

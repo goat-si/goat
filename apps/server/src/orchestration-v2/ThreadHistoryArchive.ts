@@ -388,6 +388,8 @@ const make = Effect.gen(function* () {
   const archiveThread = Effect.fn("ThreadHistoryArchive.archiveThread")(function* (
     threadId: string,
     now: number,
+    settledBefore: string,
+    settledAt: string,
     observation?: ArchivePassObservation,
   ) {
     const existing = yield* readArchiveRow(threadId);
@@ -462,11 +464,37 @@ const make = Effect.gen(function* () {
     };
     // Verify what is on disk before any row leaves the database.
     yield* readArchive(row, () => Effect.void);
-    yield* sql`
-      INSERT INTO orchestration_v2_thread_history_archives
-        (thread_id, state, archived_at, file_name, file_bytes, raw_bytes, item_count, event_count, sha256, frames_json, rows_deleted)
-      VALUES (${threadId}, 'archived', ${row.archived_at}, ${fileName}, ${fileBytes}, ${rawBytes}, ${items.length}, ${events.length}, ${row.sha256}, ${row.frames_json}, 0)
-    `;
+    const published = yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const eligible = yield* sql<{ readonly eligible: number }>`
+        SELECT 1 AS eligible FROM orchestration_v2_projection_threads AS thread
+        WHERE thread.thread_id = ${threadId}
+          AND json_valid(thread.payload_json)
+          AND json_type(thread.payload_json, '$.settledAt') = 'text'
+          AND json_extract(thread.payload_json, '$.settledAt') <= ${settledBefore}
+          AND json_extract(thread.payload_json, '$.settledAt') = ${settledAt}
+      `;
+        if (eligible.length === 0) return false;
+        const liveRun = yield* sql`SELECT 1 FROM orchestration_v2_projection_runs
+        WHERE thread_id = ${threadId} AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting') LIMIT ${1}`;
+        if (liveRun.length > 0) return false;
+        const liveItem =
+          yield* sql`SELECT 1 FROM orchestration_v2_projection_turn_items INDEXED BY orchestration_v2_projection_turn_items_thread_type_idx
+        WHERE thread_id = ${threadId} AND type IN ('command_execution', 'dynamic_tool', 'subagent', 'human_handoff', 'secret_request', 'user_input_request', 'approval_request')
+          AND status IN ('pending', 'running', 'waiting') LIMIT ${1}`;
+        if (liveItem.length > 0) return false;
+        yield* sql`
+        INSERT INTO orchestration_v2_thread_history_archives
+          (thread_id, state, archived_at, file_name, file_bytes, raw_bytes, item_count, event_count, sha256, frames_json, rows_deleted)
+        VALUES (${threadId}, 'archived', ${row.archived_at}, ${fileName}, ${fileBytes}, ${rawBytes}, ${items.length}, ${events.length}, ${row.sha256}, ${row.frames_json}, 0)
+      `;
+        return true;
+      }),
+    );
+    if (!published) {
+      yield* fs.remove(finalPath);
+      return undefined;
+    }
     pending.add(threadId);
     yield* announce(threadId, "archived");
     yield* deleteArchivedRows(threadId, items, events);
@@ -636,24 +664,30 @@ const make = Effect.gen(function* () {
             const idleBefore = DateTime.formatIso(
               DateTime.makeUnsafe(policy.now - policy.archiveAfterDays * 86_400_000),
             );
-            let afterAt = "";
             let afterId = "";
             while (true) {
-              const page = yield* sql<{ readonly thread_id: string; readonly updated_at: string }>`
-              SELECT thread_id, updated_at FROM orchestration_v2_projection_threads
-              WHERE updated_at < ${idleBefore} AND (updated_at, thread_id) > (${afterAt}, ${afterId})
-              ORDER BY updated_at, thread_id LIMIT ${PAGE_ROWS}
+              const page = yield* sql<{ readonly thread_id: string; readonly settled_at: string }>`
+              SELECT thread_id, json_extract(payload_json, '$.settledAt') AS settled_at FROM orchestration_v2_projection_threads
+              WHERE thread_id > ${afterId} AND json_valid(payload_json)
+                AND json_type(payload_json, '$.settledAt') = 'text'
+                AND json_extract(payload_json, '$.settledAt') <= ${idleBefore}
+              ORDER BY thread_id LIMIT ${PAGE_ROWS}
             `;
               observation?.onPage("threads", page.length);
               for (const thread of page) {
-                const result = yield* archiveThread(thread.thread_id, policy.now, observation);
+                const result = yield* archiveThread(
+                  thread.thread_id,
+                  policy.now,
+                  idleBefore,
+                  thread.settled_at,
+                  observation,
+                );
                 if (result === undefined) continue;
                 archivedThreads++;
                 archivedRawBytes += result.rawBytes;
                 archiveFileBytes += result.fileBytes;
               }
               if (page.length < PAGE_ROWS) break;
-              afterAt = page.at(-1)!.updated_at;
               afterId = page.at(-1)!.thread_id;
             }
           }

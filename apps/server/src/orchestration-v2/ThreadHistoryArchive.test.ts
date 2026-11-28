@@ -47,7 +47,7 @@ const seed = Effect.gen(function* () {
     const at = DateTime.formatIso(DateTime.makeUnsafe(now - idleDays * day));
     yield* sql`INSERT INTO orchestration_v2_projection_threads
       (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
-      VALUES (${threadId}, 'project', ${threadId}, 'codex', 'full-access', 'default', ${at}, ${at}, '{}')`;
+      VALUES (${threadId}, 'project', ${threadId}, 'codex', 'full-access', 'default', ${at}, ${at}, json_object('settledAt', ${at}))`;
     for (let n = 0; n < items; n++) {
       const id = `${threadId}:item-${n}`;
       // The last item: a handoff someone waits on, or a todo list left running on a
@@ -109,6 +109,52 @@ const crashAt = (pattern: RegExp, nth = 1): Statement.Transformer => {
       : Effect.succeed(statement);
 };
 
+it.effect(
+  "archives only threads settled for the configured period, including UI-archived threads",
+  () =>
+    Effect.gen(function* () {
+      const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+      const sql = yield* SqlClient.SqlClient;
+      yield* seed;
+      const sixDays = DateTime.formatIso(DateTime.makeUnsafe(now - 6 * day));
+      const sevenDays = DateTime.formatIso(DateTime.makeUnsafe(now - 7 * day));
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.settledAt', ${sixDays}) WHERE thread_id = 'old'`;
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.settledAt', ${sevenDays}, '$.archivedAt', ${sevenDays}), archived_at = ${sevenDays} WHERE thread_id = 'recent'`;
+      const before = yield* rows("recent");
+      const pass = yield* archive.runPass({ ...policy, archiveAfterDays: 7 });
+      assert.equal(pass.archivedThreads, 1);
+      assert.equal((yield* rows("old")).items.length, items);
+      assert.equal((yield* rows("recent")).items.length, 0);
+      assert.isTrue(yield* archive.restore("recent"));
+      assert.deepEqual(yield* rows("recent"), before);
+    }).pipe(Effect.provide(layer())),
+);
+
+it.effect("rechecks settlement after preparing the archive file", () =>
+  Effect.gen(function* () {
+    const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+    const sql = yield* SqlClient.SqlClient;
+    yield* seed;
+    const before = yield* rows("old");
+    const reengage: Statement.Transformer = (statement) =>
+      /SELECT 1 AS eligible FROM orchestration_v2_projection_threads/u.test(statement.compile()[0])
+        ? sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.settledAt', NULL) WHERE thread_id = 'old'`.pipe(
+            Effect.orDie,
+            Effect.as(statement),
+          )
+        : Effect.succeed(statement);
+    assert.equal(
+      (yield* archive
+        .runPass(policy)
+        .pipe(Effect.provideService(Statement.CurrentTransformer, reengage))).archivedThreads,
+      0,
+    );
+    assert.deepEqual(yield* rows("old"), before);
+    assert.isUndefined(yield* archiveState("old"));
+    assert.deepEqual(yield* archiveFiles, []);
+  }).pipe(Effect.provide(layer())),
+);
+
 it.effect("closes archive observation exactly once when interrupted during acquisition", () =>
   Effect.gen(function* () {
     const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
@@ -168,9 +214,7 @@ it.effect("reports archive pass pages and closes observation on interruption", (
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const hold: Statement.Transformer = (statement) =>
-      /SELECT thread_id, updated_at FROM orchestration_v2_projection_threads/u.test(
-        statement.compile()[0],
-      )
+      /SELECT thread_id, json_extract\(payload_json/u.test(statement.compile()[0])
         ? Deferred.succeed(entered, undefined).pipe(
             Effect.andThen(Deferred.await(release)),
             Effect.as(statement),

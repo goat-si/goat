@@ -78,7 +78,7 @@ export const ORCHESTRATION_HISTORY_TRIM_IDLE_MS = 604800000;
 /** Bulky history fields above this are cut to a head and tail that fit it, marker included. */
 export const ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES = 8192;
 /**
- * Default idle days after which a thread's turn items move to a compressed archive file and
+ * Default days after settlement after which a thread's turn items move to a compressed archive file and
  * come back when the thread is read. Configurable as `storageCleanup.historyArchiveAfterDays`.
  */
 export const ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS = 30;

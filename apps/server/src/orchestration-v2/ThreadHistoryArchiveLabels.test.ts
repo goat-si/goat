@@ -44,7 +44,7 @@ it.effect("records archive changes on threads and corrects drift at startup", ()
       // "stale" says archived but has no archive; "idle" has history to archive.
       for (const [threadId, payload] of [
         ["stale", '{"historyArchive":"archived"}'],
-        ["idle", "{}"],
+        ["idle", JSON.stringify({ settledAt: at })],
       ] as const)
         yield* sql`INSERT INTO orchestration_v2_projection_threads
           (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)

@@ -151,7 +151,7 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_BUDGET_BYTES)),
   ),
   /**
-   * Threads idle this many days keep their messages in the database and move tool calls,
+   * Threads settled this many days keep their messages in the database and move tool calls,
    * output and reasoning to a compressed archive that is restored when the thread is opened.
    * Null keeps every thread in the database.
    */

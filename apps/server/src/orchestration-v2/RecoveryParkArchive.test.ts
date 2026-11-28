@@ -29,7 +29,7 @@ it.effect("a parked hold protects its notice from history archiving until releas
     const sql = yield* SqlClient.SqlClient;
     const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
     for (const thread of ["parked", "ordinary"]) {
-      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES (${thread}, 'project', ${thread}, 'codex', 'full-access', 'default', ${at}, ${at}, '{}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES (${thread}, 'project', ${thread}, 'codex', 'full-access', 'default', ${at}, ${at}, json_object('settledAt', ${at}))`;
       const item = thread === "parked" ? "turn-item:recovery-parked:run:parked" : "ordinary-item";
       yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json) VALUES (${item}, ${thread}, 1, 'system_notice', 'waiting', ${at}, '{}')`;
     }
@@ -44,7 +44,7 @@ it.effect("a parked hold protects its notice from history archiving until releas
       yield* sql`SELECT turn_item_id FROM orchestration_v2_projection_turn_items WHERE thread_id = 'ordinary'`,
       0,
     );
-    yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json = '{"queueHeld":false}' WHERE run_id = 'run:parked'`;
+    yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed', payload_json = '{"queueHeld":false}' WHERE run_id = 'run:parked'`;
     assert.equal((yield* archive.runPass(policy)).archivedThreads, 1);
     assert.lengthOf(
       yield* sql`SELECT turn_item_id FROM orchestration_v2_projection_turn_items WHERE thread_id = 'parked'`,

@@ -421,7 +421,7 @@ in the server's `settings.json`. While history is larger, GOAT trims long comman
 output, and reasoning in threads untouched for a week, oldest first. Each trimmed field keeps its
 start and end with an _output trimmed_ note. Messages are never trimmed.
 
-Threads untouched for 30 days move their tool calls, output, and reasoning to a compressed archive
+Threads settled for 30 days move their tool calls, output, and reasoning to a compressed archive
 next to the database; messages stay. Opening the thread, or an agent reading it, restores
 everything first, usually in well under a second. Change the window with
 `storageCleanup.historyArchiveAfterDays`, or set it to `null` to keep every thread in the
