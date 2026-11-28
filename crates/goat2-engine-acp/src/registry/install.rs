@@ -289,7 +289,19 @@ pub(crate) async fn run_command(
         )
     };
     let run = async {
-        let mut cmd = tokio::process::Command::new(command);
+        // A bare name is resolved against the child's PATH first so std keeps posix_spawn
+        // (crate::process module docs). Callers pass resolved paths today; this keeps it so.
+        let child_path = match options.env {
+            Some(env) => env.get("PATH").map(std::ffi::OsString::from),
+            None => std::env::var_os("PATH"),
+        };
+        let program = crate::process::resolve_program(
+            std::path::Path::new(command),
+            child_path.as_deref(),
+            None,
+        )
+        .map_err(|_| could_not_run())?;
+        let mut cmd = tokio::process::Command::new(program);
         cmd.args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -365,8 +377,6 @@ pub(crate) async fn run_command(
     }
 }
 
-/// Read `reader` to its end, keeping at most `max` bytes; true when more arrived. A read error
-/// fails the command (v1 AcpRegistrySupport.ts:742-758 fails when a stream fails).
 /// Resolves once the child `pid` has exited, leaving it unreaped (`waitid` with `WNOWAIT`), so
 /// its process group id cannot be reused yet. Async: woken by SIGCHLD and checked without blocking
 /// (a blocking-pool wait would also stop a paused test clock from advancing). Subscribed before
@@ -404,6 +414,8 @@ async fn exited_unreaped(pid: Option<u32>) {
     let _ = pid;
 }
 
+/// Read `reader` to its end, keeping at most `max` bytes; true when more arrived. A read error
+/// fails the command (v1 AcpRegistrySupport.ts:742-758 fails when a stream fails).
 async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut R,
     max: usize,

@@ -164,6 +164,9 @@ pub fn resolve_program(
     }
     let default = std::ffi::OsString::from("/usr/bin:/bin");
     let search = child_path.unwrap_or(&default);
+    // execvp: an entry that exists but cannot be executed is skipped and remembered, so the
+    // search ends in EACCES rather than ENOENT (final review 9 finding 1).
+    let mut denied = false;
     for entry in std::env::split_paths(search) {
         // An empty entry is the current directory, as in execvp.
         let dir = if entry.as_os_str().is_empty() {
@@ -176,36 +179,61 @@ pub fn resolve_program(
             _ => dir,
         };
         let candidate = dir.join(program);
-        if is_executable_file(&candidate) {
-            return Ok(candidate);
+        match executable(&candidate) {
+            Candidate::Runs => return Ok(candidate),
+            Candidate::Denied => denied = true,
+            Candidate::Missing => {}
         }
     }
-    Err(io::Error::from_raw_os_error(libc_enoent()))
+    Err(io::Error::from_raw_os_error(spawn_errno(denied)))
 }
 
-fn libc_enoent() -> i32 {
+/// ENOENT, or EACCES when a candidate existed but could not be executed.
+fn spawn_errno(denied: bool) -> i32 {
     #[cfg(unix)]
     {
-        libc::ENOENT
+        if denied { libc::EACCES } else { libc::ENOENT }
     }
     #[cfg(not(unix))]
     {
-        2
+        if denied { 13 } else { 2 }
     }
 }
 
-fn is_executable_file(path: &Path) -> bool {
+enum Candidate {
+    Runs,
+    /// Exists, but this process may not execute it (or it is a directory).
+    Denied,
+    Missing,
+}
+
+/// Whether this process may execute the path as execvp decides it: access(X_OK) with the
+/// process's own ids, on a regular file.
+fn executable(path: &Path) -> Candidate {
     let Ok(meta) = std::fs::metadata(path) else {
-        return false;
+        return Candidate::Missing;
     };
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        meta.is_file() && meta.permissions().mode() & 0o111 != 0
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return Candidate::Missing;
+        };
+        // SAFETY: plain syscall on a NUL-terminated path.
+        let may_run = unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0;
+        if meta.is_file() && may_run {
+            Candidate::Runs
+        } else {
+            Candidate::Denied
+        }
     }
     #[cfg(not(unix))]
     {
-        meta.is_file()
+        if meta.is_file() {
+            Candidate::Runs
+        } else {
+            Candidate::Denied
+        }
     }
 }
 
@@ -650,6 +678,35 @@ mod tests {
             child.group_gone,
             "a killed, reaped group must be marked gone"
         );
+    }
+
+    /// execvp's search: a file this process may not execute is skipped, a later runnable one
+    /// wins, and when nothing runs the error is EACCES, not ENOENT (final review 9 finding 1).
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_cannot_run_is_skipped_and_reported_as_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = (dir.path().join("a"), dir.path().join("b"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let blocked = first.join("fx");
+        std::fs::write(&blocked, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let only_first = std::env::join_paths([&first]).unwrap();
+        let error = resolve_program(Path::new("fx"), Some(&only_first), None).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let runs = second.join("fx");
+        std::fs::write(&runs, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&runs, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let both = std::env::join_paths([&first, &second]).unwrap();
+        assert_eq!(
+            resolve_program(Path::new("fx"), Some(&both), None).unwrap(),
+            runs
+        );
+        let none = std::env::join_paths([dir.path().join("c")]).unwrap();
+        let error = resolve_program(Path::new("fx"), Some(&none), None).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
     /// The agent still runs `nice` lower than the host after the priority moved out of
