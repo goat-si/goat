@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use goat2_contracts::{
     ApprovalDecision, ApprovalOption, EngineDriver, ModelSelection, ProviderCapabilities,
     RuntimeMode, TurnItemStatus, UserInputQuestion,
@@ -96,6 +97,54 @@ pub enum ModelWrite {
     Unavailable {
         message: String,
     },
+    /// Several writes in order (v1 Grok `applyGrokSessionModelSelection`: the model, then the
+    /// effort option of the new model).
+    Sequence(Vec<ModelWrite>),
+    /// Try the first write; when the agent rejects it, apply the second instead (v1 Grok protocol 1:
+    /// an effort Grok refuses is skipped and the model is set without it).
+    OrElse(Box<ModelWrite>, Box<ModelWrite>),
+    /// `session/set_config_option` on the select option of `category`, read when the write runs
+    /// (after earlier writes). Skipped when the session has no such option, when the option does not
+    /// offer `value` or already holds it, and when the agent rejects it (v1 Grok `thought_level`).
+    OptionalConfigByCategory {
+        category: String,
+        value: String,
+    },
+}
+
+/// A text notice that a subagent ended (v1 `extractSubagentEndNotice`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentEndNotice {
+    pub child_session_id: String,
+    pub status: TurnItemStatus,
+}
+
+/// v1 background task status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+/// A change to a background task's tool (v1 `extractBackgroundTaskCompletion` /
+/// `extractBackgroundToolMutation` entries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundMutation {
+    pub task_id: String,
+    pub status: BackgroundStatus,
+    pub append_output: String,
+}
+
+/// What the driver knows about the session when a flavor rewrites a prompt (v1 `rewriteUserText`
+/// receives the session launch and the turn's runtime policy).
+#[derive(Debug, Clone, Default)]
+pub struct PromptContext {
+    pub cwd: String,
+    /// The agent program the session launched.
+    pub program: PathBuf,
+    /// Variables the session set on top of the inherited environment.
+    pub launch_env: Vec<(String, String)>,
 }
 
 /// Something an extension notification means for the turn.
@@ -123,7 +172,8 @@ pub enum FlavorEvent {
         message: String,
     },
     /// v1 `AcpAdapterV2ExtensionContext.finishSubagent` (`adapterFlavor.ts:78-83`): an extension
-    /// reported that the child session of a native subagent ended (Copilot `subagent.completed`).
+    /// reported that the child session of a native subagent ended (Copilot `subagent.completed`, xAI
+    /// `subagent_finished`).
     FinishSubagent {
         session_id: String,
         child_session_id: String,
@@ -136,6 +186,14 @@ pub enum FlavorEvent {
     ForegroundWork {
         session_id: String,
         running: bool,
+    },
+    /// A background task started or ended (v1 `applyBackgroundTaskMutation`, xAI
+    /// `x.ai/task_backgrounded` / `x.ai/task_completed`). Ignored for another session.
+    BackgroundTask {
+        session_id: String,
+        task_id: String,
+        status: BackgroundStatus,
+        output: Option<String>,
     },
 }
 
@@ -246,8 +304,13 @@ pub enum ExtRequest {
         answer: ExtAnswer,
     },
     /// Record a proposed plan for the turn, then answer with `response` (xAI `exit_plan_mode`,
-    /// v1 grok `adapter.ts:171-197`).
-    CapturePlan { markdown: String, response: Value },
+    /// v1 grok `adapter.ts:171-197`). Without `markdown` the plan is the last one captured in this
+    /// turn (v1 `lastProposedPlanMarkdown`), else `fallback`.
+    CapturePlan {
+        markdown: Option<String>,
+        fallback: String,
+        response: Value,
+    },
 }
 
 /// Client capabilities a flavor advertises in `initialize`.
@@ -279,6 +342,11 @@ pub trait AcpFlavor: Send + Sync + 'static {
     }
     fn auth_policy(&self) -> AuthPolicy {
         AuthPolicy::OnRequired { method_id: None }
+    }
+    /// [Self::auth_policy] for one session (Grok picks the API key method when the launch
+    /// environment has a key, v1 `resolveGrokAuthMethodId`).
+    fn auth_policy_for(&self, _spec: &SessionSpec) -> AuthPolicy {
+        self.auth_policy()
     }
     /// None: `session/load` when advertised, otherwise `session/resume` (v1 default).
     fn resume_method(&self) -> Option<ResumeMethod> {
@@ -330,6 +398,16 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn model_write(&self, selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
         default_model_write(selection, setup)
     }
+    /// [Self::model_write] with what `initialize` reported (v1 `applyModelSelection` reads the
+    /// protocol version).
+    fn model_write_for(
+        &self,
+        selection: &ModelSelection,
+        setup: &SessionSetup,
+        _init: &InitializeInfo,
+    ) -> ModelWrite {
+        self.model_write(selection, setup)
+    }
     /// v1 `steersWithPrompt`: a second `session/prompt` steers the running turn.
     fn steers_with_prompt(&self, _init: &InitializeInfo) -> bool {
         false
@@ -366,6 +444,15 @@ pub trait AcpFlavor: Send + Sync + 'static {
     /// v1 `rewriteUserText`.
     fn rewrite_user_text(&self, text: String) -> String {
         text
+    }
+    /// v1 `rewriteUserText` when the rewrite needs the session (Grok asks `grok inspect` for its
+    /// skills). Applied to the start of the message before [Self::rewrite_user_text].
+    fn rewrite_user_text_for(
+        &self,
+        text: String,
+        _context: &PromptContext,
+    ) -> BoxFuture<'static, String> {
+        Box::pin(std::future::ready(text))
     }
     /// v1 `supportsImagePrompts`: send images even when `promptCapabilities.image` is false.
     fn supports_image_prompts(&self, init: &InitializeInfo) -> bool {
@@ -418,6 +505,56 @@ pub trait AcpFlavor: Send + Sync + 'static {
     }
     /// v1 `releaseRuntime`: the agent process of `session_id` ended; drop per-runtime state.
     fn release_runtime(&self, _session_id: &str) {}
+    /// v1 `extractSubagentEndNotice`: a subagent end announced in injected user text.
+    fn subagent_end_notice(&self, _text: &str) -> Option<SubagentEndNotice> {
+        None
+    }
+    /// v1 `extractProposedPlanMarkdown`: the plan a tool call writes. `Some("")` is an empty plan
+    /// write, which is not captured. `launch_env` is the session's launch environment.
+    fn proposed_plan_markdown(
+        &self,
+        _tool: &ToolState,
+        _launch_env: &[(String, String)],
+    ) -> Option<String> {
+        None
+    }
+    /// v1 `extractBackgroundTaskId`: the background task a tool call runs or watches.
+    fn background_task_id(&self, _tool: &ToolState) -> Option<String> {
+        None
+    }
+    /// v1 `isPersistentBackgroundTool`: a background task that must not hold the turn open.
+    fn is_persistent_background_tool(&self, _tool: &ToolState) -> bool {
+        false
+    }
+    /// v1 `extractBackgroundTaskCompletion`: background tasks a tool call (a poll or kill) ends.
+    fn background_task_completions(&self, _tool: &ToolState) -> Vec<BackgroundMutation> {
+        Vec::new()
+    }
+    /// v1 `extractBackgroundToolMutation`: background task output injected as user text.
+    fn background_tool_mutations(&self, _text: &str) -> Vec<BackgroundMutation> {
+        Vec::new()
+    }
+    /// v1 `isProviderWakeNotification`: a `session/update` of a turn the agent started by itself
+    /// after a background task ended. `params` is the whole notification.
+    fn is_wake_notification(&self, _params: &Value) -> bool {
+        false
+    }
+    /// v1 `deferFinalizeForBackgroundWork`: after the prompt answers, the turn stays open while
+    /// background tasks or subagents run.
+    fn defers_finalize_for_background_work(&self) -> bool {
+        false
+    }
+    /// v1 `preserveRuntimeOnSettledInterrupt`: interrupting a turn whose prompt already answered
+    /// neither cancels nor restarts the agent (its background work keeps running).
+    fn preserve_runtime_on_settled_interrupt(&self) -> bool {
+        false
+    }
+    /// v1 xAI `cancel` (`xaiAcpExtension.ts:1323-1357,1553-1560`, `abortPendingPromptCompletions`):
+    /// once `session/cancel` is sent the open prompt counts as cancelled, without waiting for an
+    /// answer the agent may never send.
+    fn settles_prompt_on_cancel(&self) -> bool {
+        false
+    }
 }
 
 /// v1 default approval options: what the request's option kinds allow, plus cancel.
