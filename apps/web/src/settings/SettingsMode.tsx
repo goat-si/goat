@@ -8,14 +8,17 @@ import { Planned } from "../planned/Planned.tsx";
 import type { UiState } from "../ui-state/uiState.ts";
 
 export const SETTINGS_PROVIDERS_PATH = "/settings/providers";
+export const SETTINGS_GOAT_BOT_PATH = "/settings/goat-bot";
 
-export function SettingsMode({ ui, setUi, top, rail, nav }: {
+export function SettingsMode({ ui, setUi, top, rail, nav, botPage }: {
   ui: UiState;
   setUi: (patch: Partial<UiState> | ((s: UiState) => Partial<UiState>)) => void;
   top: ReactNode;
   rail: ReactNode;
   /** v1's settings sidebar nav (null while the sidebar is closed). */
   nav: ReactNode;
+  /** Settings > GOAT Bot for a bot (the main bot unless ?botId= names one). */
+  botPage: (botId: string | null) => ReactNode;
 }) {
   const path = ui.settingsPath ?? SETTINGS_PROVIDERS_PATH;
   const instanceId = typeof ui.settingsSearch?.instanceId === "string" ? ui.settingsSearch.instanceId : undefined;
@@ -31,7 +34,9 @@ export function SettingsMode({ ui, setUi, top, rail, nav }: {
         <V1Boundary data-settings-main="" style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto" }}>
           {path === SETTINGS_PROVIDERS_PATH
             ? <ProvidersSettingsScreen {...(instanceId ? { instanceId } : {})} />
-            : <div style={{ padding: 32 }}><Planned id="settings-accounts" /></div>}
+            : path === SETTINGS_GOAT_BOT_PATH
+              ? botPage(typeof ui.settingsSearch?.botId === "string" ? ui.settingsSearch.botId : null)
+              : <div style={{ padding: 32 }}><Planned id="settings-accounts" /></div>}
         </V1Boundary>
       } />
   );

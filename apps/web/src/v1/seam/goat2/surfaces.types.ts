@@ -62,3 +62,22 @@ export interface V1Location { readonly pathname: string; readonly hash?: string;
 export declare const setV1Location: (location: V1Location) => void;
 /** How v1 code moves: the GOAT 2 frame receives the resolved target (v1 useNavigate / Link). */
 export declare const setV1Navigator: (navigate: (to: Required<V1Location>) => void) => void;
+
+/** v1's ProviderModelPicker (trigger + popup) over the host's providers; GOAT 2 decides where the choice goes. */
+export interface ModelPickerProps {
+  instanceId: string;
+  model: string;
+  onChange: (selection: { instanceId: string; model: string }) => void;
+  composer?: boolean;
+  popupAlign?: "start" | "end";
+  ariaLabel?: string;
+  disabled?: boolean;
+}
+export declare const ModelPicker: ComponentType<ModelPickerProps>;
+/** Settings > bot: the Model row (board 1QYE-2). onChange null until the bot has a thread. */
+export declare const BotModelSettings: ComponentType<{
+  botName: string;
+  instanceId: string;
+  model: string;
+  onChange: ((selection: { instanceId: string; model: string }) => void) | null;
+}>;

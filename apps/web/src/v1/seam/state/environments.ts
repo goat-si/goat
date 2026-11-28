@@ -1,7 +1,7 @@
 // Seam for v1 apps/web/src/state/environments.ts (goat 916b5ccc1b2): the one GOAT 2 environment, the local host this
 // app's desktop shell started (v1's primary target), connected once the host has sent its provider list.
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId, ServerProvider } from "@goat/contracts";
 import type { ConnectionCatalogEntry, EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
 
@@ -52,6 +52,12 @@ export function useEnvironments() {
 
 export function usePrimaryEnvironmentId(): EnvironmentId | null {
   return GOAT2_ENVIRONMENT_ID;
+}
+
+/** v1 environments.ts:48-50 (providersByEnvironmentAtom): the one environment's provider list. */
+export function useEnvironmentProviders(): ReadonlyMap<EnvironmentId, ReadonlyArray<ServerProvider>> {
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(GOAT2_ENVIRONMENT_ID));
+  return new Map(providers ? [[GOAT2_ENVIRONMENT_ID, providers]] : []);
 }
 
 export function readPrimaryEnvironmentId(): EnvironmentId | null {
