@@ -1,10 +1,8 @@
 import { rowBatchesSource } from "./sqliteRowBatches.ts";
-import { sqliteCaseContainsSource } from "./sqliteCaseContains.ts";
 
 // Eval source also runs in bundles and single-executable builds without module files.
 export const writerWorkerSource = `
 ${rowBatchesSource}
-${sqliteCaseContainsSource}
 const { parentPort, workerData } = require("node:worker_threads");
 const { DatabaseSync, constants } = require("node:sqlite");
 const { statSync } = require("node:fs");
@@ -39,7 +37,6 @@ const initialize = () => {
     db = new DatabaseSync(workerData.filename, {
       readOnly: workerData.readonly, allowExtension: workerData.allowExtension,
     });
-    db.function("goat_case_contains", { deterministic: true }, sqliteCaseContains);
     if (typeof db.isTransaction !== "boolean" || typeof db.setAuthorizer !== "function")
       throw new Error("Writer worker requires SQLite authorizer and transaction state");
     if (workerData.checkpoint) {

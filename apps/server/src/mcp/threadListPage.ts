@@ -2,6 +2,7 @@ import type { OrchestratorMcpThreadListInput, OrchestrationV2ThreadShell } from 
 import * as Effect from "effect/Effect";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import type * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import type { McpPageStatus } from "../orchestration-v2/ProjectionMcpThreadPage.ts";
 import { listedThreadStatus, threadSettlement } from "./threadListView.ts";
 
 const CANDIDATE_PAGE_SIZE = 200;
@@ -20,11 +21,15 @@ export const listThreadPage = Effect.fn("OrchestratorMcpService.listThreadPage")
     input.statuses !== undefined &&
     input.statuses.length > 0 &&
     input.statuses.every(
-      (status) => status === "preparing" || status === "starting" || status === "running",
+      (status): status is McpPageStatus =>
+        status === "preparing" || status === "starting" || status === "running",
     )
       ? input.statuses
       : undefined;
-  const needsScan = input.snoozed !== undefined || (statuses !== null && sqlStatuses === undefined);
+  const needsScan =
+    input.snoozed !== undefined ||
+    input.titleContains !== undefined ||
+    (statuses !== null && sqlStatuses === undefined);
   if (!needsScan) return yield* threads.listMcpThreadPage({ ...query, statuses: sqlStatuses });
   const page: Array<OrchestrationV2ThreadShell> = [];
   let offset = 0;

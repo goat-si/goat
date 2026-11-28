@@ -3171,7 +3171,6 @@ const make = Effect.gen(function* () {
           projectId,
           includeSubagents: input.includeSubagents !== false,
           settled: input.settled,
-          titleContains: input.titleContains,
           threadIds: lineageIds,
           offset: cursor,
           limit,

@@ -13,12 +13,13 @@ import { makeShellThreadRows } from "./ProjectionShellThreadRows.ts";
 
 const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
+export type McpPageStatus = "preparing" | "starting" | "running";
+
 export interface McpThreadPageInput {
   readonly projectId?: ProjectId | undefined;
   readonly includeSubagents: boolean;
   readonly settled?: boolean | undefined;
-  readonly statuses?: ReadonlyArray<string> | undefined;
-  readonly titleContains?: string | undefined;
+  readonly statuses?: ReadonlyArray<McpPageStatus> | undefined;
   readonly threadIds?: ReadonlyArray<ThreadId> | undefined;
   readonly offset: number;
   readonly limit: number;
@@ -70,18 +71,13 @@ export const selectPage = Effect.fn("ProjectionMcpThreadPage.selectPage")(functi
           AND NOT ${isSilentShellRun("r")}
         ORDER BY r.ordinal DESC, r.run_id DESC LIMIT 1)
         IN (SELECT value FROM json_each(${encodeIds(input.statuses)}))`;
-        const title =
-          input.titleContains === undefined
-            ? sql``
-            : sql`
-          AND goat_case_contains(title, ${input.titleContains}) = 1`;
         const count = yield* sql<{ readonly total: number }>`
       SELECT COUNT(*) AS total FROM orchestration_v2_projection_threads
-      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled} ${statuses} ${title}
+      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled} ${statuses}
     `;
         const rows = yield* sql<{ readonly thread_id: string }>`
       SELECT thread_id FROM orchestration_v2_projection_threads
-      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled} ${statuses} ${title}
+      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled} ${statuses}
       ORDER BY updated_at DESC, thread_id DESC LIMIT ${input.limit} OFFSET ${input.offset}
     `;
         const ids = rows.map((row) => ThreadId.make(row.thread_id));
@@ -118,9 +114,7 @@ export const memoryPage = (
         (input.threadIds === undefined || input.threadIds.includes(thread.id)) &&
         (input.statuses === undefined ||
           (thread.activityRunStatus != null &&
-            input.statuses.includes(thread.activityRunStatus))) &&
-        (input.titleContains === undefined ||
-          thread.title.toLocaleLowerCase().includes(input.titleContains.toLocaleLowerCase())) &&
+            input.statuses.some((status) => status === thread.activityRunStatus))) &&
         (input.settled === undefined || (thread.settledOverride === "settled") === input.settled) &&
         (input.includeSubagents ||
           (thread.lineage.relationshipToParent !== "subagent" && !isSideChatThread(thread))),

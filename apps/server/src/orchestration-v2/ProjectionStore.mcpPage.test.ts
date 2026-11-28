@@ -95,32 +95,6 @@ it.effect.each([
   }).pipe(Effect.provide(layer)),
 );
 
-it.effect("title filtering matches JavaScript Unicode case folding before paging", () =>
-  Effect.gen(function* () {
-    const store = yield* ProjectionStore.ProjectionStoreV2;
-    const sql = yield* SqlClient.SqlClient;
-    yield* createD10Thread("title-a");
-    yield* createD10Thread("title-b");
-    yield* sql`UPDATE orchestration_v2_projection_threads
-      SET title = 'Kelvin', payload_json = json_set(payload_json, '$.title', 'Kelvin')
-      WHERE thread_id = 'thread:title-a'`;
-    yield* sql`UPDATE orchestration_v2_projection_threads
-      SET title = 'Other', payload_json = json_set(payload_json, '$.title', 'Other')
-      WHERE thread_id = 'thread:title-b'`;
-    const page = yield* store.listMcpThreadPage({
-      includeSubagents: true,
-      titleContains: "k",
-      offset: 0,
-      limit: 1,
-    });
-    assert.equal(page.total, 1);
-    assert.deepEqual(
-      page.threads.map((thread) => thread.id),
-      ["thread:title-a"],
-    );
-  }).pipe(Effect.provide(layerTest)),
-);
-
 it.effect.each([
   ["SQL", layerTest],
   ["memory", ProjectionStore.layerMemory],

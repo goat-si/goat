@@ -1,10 +1,8 @@
 import { rowBatchesSource } from "./sqliteRowBatches.ts";
-import { sqliteCaseContainsSource } from "./sqliteCaseContains.ts";
 
 // Inline worker source also runs in bundles and single-executable builds without module files.
 export const readerWorkerSource = `
 ${rowBatchesSource}
-${sqliteCaseContainsSource}
 const { parentPort, workerData } = require("node:worker_threads");
 const { DatabaseSync } = require("node:sqlite");
 let db;
@@ -16,7 +14,6 @@ try {
     readOnly: true,
     allowExtension: workerData.allowExtension,
   });
-  next.function("goat_case_contains", { deterministic: true }, sqliteCaseContains);
   next.exec("PRAGMA busy_timeout = 5000;");
   // Without WAL a reader's shared lock blocks the writer's commits, so refuse.
   const mode = String(next.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase();

@@ -100,7 +100,6 @@ const shellReads = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
     threadIds?: ReadonlyArray<ThreadId> | undefined;
     settled?: boolean | undefined;
     statuses?: ReadonlyArray<string> | undefined;
-    titleContains?: string | undefined;
     includeSubagents: boolean;
     offset: number;
     limit: number;
@@ -112,8 +111,6 @@ const shellReads = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
         (input.settled === undefined || (shell.settledOverride === "settled") === input.settled) &&
         (input.statuses === undefined ||
           input.statuses.includes(shell.activityRunStatus ?? shell.status)) &&
-        (input.titleContains === undefined ||
-          shell.title.toLocaleLowerCase().includes(input.titleContains.toLocaleLowerCase())) &&
         (input.includeSubagents ||
           (shell.lineage.relationshipToParent !== "subagent" && shell.sideChatOf == null)),
     );
@@ -184,6 +181,27 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("title filters keep Unicode case folding when scanning candidate pages", () => {
+    const matching = finished(ThreadId.make("thread:title-a"), { title: "Kelvin" });
+    const other = finished(ThreadId.make("thread:title-b"), { title: "Other" });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, { projectId, titleContains: "k", limit: 1 });
+      assert.equal(result.total, 1);
+      assert.deepEqual(
+        result.threads.map((thread) => thread.threadId),
+        [matching.id],
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([other, matching]),
+          listProjectThreads: () => Effect.die("title filters must use bounded pages"),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   it.effect("complex filters count and page across SQL-ordered candidate batches", () => {
     const shells = Array.from({ length: 205 }, (_, index) =>
       finished(ThreadId.make(`thread:batch-${String(index).padStart(3, "0")}`), {
