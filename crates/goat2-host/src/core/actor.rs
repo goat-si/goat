@@ -985,10 +985,23 @@ impl Actor {
                         self.arm_idle();
                     }
                 } else {
-                    // Keep the turn a first update named if a later one leaves it out.
-                    let turn = self.live_subagents.entry(subagent_id).or_insert(None);
-                    if turn_id.is_some() {
-                        *turn = turn_id;
+                    // The subagent's origin turn: the one an update names; for a first update
+                    // without one, the turn running now (drivers report a subagent during the
+                    // turn that started it); with no turn running it stays unknown, which
+                    // stops all eviction while it lives. A later named turn replaces it.
+                    let running = match &self.phase {
+                        Phase::Running(run) if !run.turn_id.is_empty() => Some(run.turn_id.clone()),
+                        _ => None,
+                    };
+                    match self.live_subagents.entry(subagent_id) {
+                        std::collections::hash_map::Entry::Occupied(mut known) => {
+                            if turn_id.is_some() {
+                                *known.get_mut() = turn_id;
+                            }
+                        }
+                        std::collections::hash_map::Entry::Vacant(new) => {
+                            new.insert(turn_id.or(running));
+                        }
                     }
                 }
             }
@@ -1020,19 +1033,23 @@ impl Actor {
             .is_some_and(|f| f.open_requests.iter().any(|r| &r.request_id == request_id))
     }
 
-    /// Make room in [Actor::turn_runs] before a new turn is recorded: at [TURN_RUNS_KEPT],
-    /// the oldest turn without a live subagent goes. Turns with live subagents stay even past
-    /// the cap; they leave once their subagents finish and a later turn needs the room.
+    /// Make room in [Actor::turn_runs] before a new turn is recorded: below [TURN_RUNS_KEPT],
+    /// dropping the oldest turns without a live subagent. Turns with live subagents stay even
+    /// past the cap. While a live subagent's origin is unknown nothing is dropped, since any
+    /// turn could be its origin; the record shrinks back once it ends.
     fn forget_settled_turn(&mut self) {
-        if self.turn_runs.len() < TURN_RUNS_KEPT {
+        if self.live_subagents.values().any(Option::is_none) {
             return;
         }
-        let live = |turn: &str| {
-            self.live_subagents
-                .values()
-                .any(|t| t.as_deref() == Some(turn))
-        };
-        if let Some(pos) = self.turn_runs.iter().position(|(t, _)| !live(t)) {
+        while self.turn_runs.len() >= TURN_RUNS_KEPT {
+            let live_subagents = &self.live_subagents;
+            let Some(pos) = self
+                .turn_runs
+                .iter()
+                .position(|(t, _)| !live_subagents.values().any(|o| o.as_deref() == Some(t)))
+            else {
+                return;
+            };
             self.turn_runs.remove(pos);
         }
     }
