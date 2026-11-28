@@ -81,18 +81,26 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
   other parts while waiting.
 
 ## Delivery (owner rule 2026-11-28: merge locally now, remote CI later)
-- Commit on `goat2_<lane>` and push it. When a piece is green locally (`cargo fmt --check`,
-  `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`), merge it into `goat2` **locally**:
+- Commit on `goat2_<lane>` and push it. When green locally, merge into `goat2` **locally**, one merger at a time:
   ```sh
-  until mkdir /tmp/goat2-merge.lock 2>/dev/null; do sleep 5; done   # one merger at a time
-  trap 'rmdir /tmp/goat2-merge.lock' EXIT
-  cd ~/Developer/goat2 && git pull --rebase origin goat2 || true
+  until mkdir /tmp/goat2-merge.lock 2>/dev/null; do sleep 5; done
+  cd ~/Developer/goat2
+  cleanup() { git merge --abort 2>/dev/null; git reset -q --hard origin/goat2; rmdir /tmp/goat2-merge.lock; }
+  trap cleanup ERR                       # any failure: drop the local merge BEFORE releasing the lock
+  git fetch -q origin goat2 && git reset -q --hard origin/goat2
   git merge --no-ff goat2_<lane> -m "merge goat2_<lane>: <what>"
-  cargo test --workspace            # must stay green after the merge
+  cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
+  pnpm -r typecheck                      # the TS side must stay green too
   git push --force-with-lease origin goat2
+  trap - ERR; rmdir /tmp/goat2-merge.lock
   ```
-  Then rebase your lane branch on the new `goat2` and keep going. Remote CI and PRs come later; a PR is
-  optional. Never touch `dev`. Author `JUN <jun@lidgeai.com>`.
+- Never leave an unpushed merge in `~/Developer/goat2` when you release the lock (a later lane would push it
+  under its own name). Informational steps go before taking the lock, never under the lock with `set -e`.
+- `goat2` must always build: `cargo test --workspace` and `pnpm -r typecheck` green after every merge. A
+  contract change that breaks another lane's code is announced to that lane before merging, and the fix lands
+  right after (or in the same merge if small).
+- Then rebase your lane branch on the new `goat2`. Remote CI and PRs come later. Never touch `dev`.
+  Author `JUN <jun@lidgeai.com>`.
 
 ## Lanes
 | Lane | Branch / folder | Crates | Done when |
