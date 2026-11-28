@@ -1948,6 +1948,158 @@ async fn part2_fields_carry_what_the_host_knows() {
     );
 }
 
+#[tokio::test]
+async fn a_late_item_goes_to_its_origin_run_and_never_to_another() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late", Some("one")).await;
+    eventually("first turn", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.finish_turn(&id, "first answer");
+    eventually("first run finished", || count(&t, &id, "run.finished") == 1).await;
+    send(&t, &id, "late-two", "two", InputMode::Followup).await;
+    eventually("second turn", || running(&t, &id)).await;
+    let run2 = last_run(&t, &id).unwrap();
+    assert_ne!(run1, run2);
+    // While run 2 runs: an item for an unknown turn is dropped, the first turn's late items go
+    // to run 1 (a background subagent result and a late assistant message).
+    let emit = |turn: &str, item: goat2_contracts::TurnItem| {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::ItemCompleted {
+                turn_id: turn.to_owned(),
+                item: Box::new(item),
+                locator: None,
+            },
+        )
+    };
+    emit("no-such-turn", late_text(&id, "stray", "stray"));
+    emit(&first, subagent_item(&id, "sub-1", None));
+    emit(
+        &first,
+        late_text(&id, "late-text", "late answer from run 1"),
+    );
+    eventually("late items", || item_run(&t, &id, "late-text").is_some()).await;
+    assert_eq!(item_run(&t, &id, "sub-1"), Some(run1.clone()));
+    assert_eq!(item_run(&t, &id, "late-text"), Some(run1.clone()));
+    assert_eq!(item_run(&t, &id, "stray"), None);
+    // Run 2 keeps its own answer.
+    t.fake.finish_turn(&id, "second answer");
+    eventually("second run finished", || {
+        count(&t, &id, "run.finished") == 2
+    })
+    .await;
+    let finished = events(&t, &id)
+        .into_iter()
+        .filter_map(|e| match e {
+            LogEvent::RunFinished(f) => Some(f.run_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        finished,
+        vec![run1.clone(), run2.clone()],
+        "no run reopened or finished twice"
+    );
+    // While idle: still filed on run 1.
+    emit(&first, subagent_item(&id, "sub-2", None));
+    eventually("idle late item", || item_run(&t, &id, "sub-2").is_some()).await;
+    assert_eq!(item_run(&t, &id, "sub-2"), Some(run1));
+    assert_eq!(count(&t, &id, "run.finished"), 2);
+}
+
+#[tokio::test]
+async fn a_running_background_subagent_keeps_the_engine_from_idle_stopping() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "bg", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SubagentUpdate {
+            turn_id: Some(turn.clone()),
+            subagent_id: "bg-1".into(),
+            status: goat2_contracts::TurnItemStatus::Running,
+            title: None,
+            progress: None,
+        },
+    );
+    t.fake.finish_turn(&id, "done for now");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "not idle-stopped while the subagent runs"
+    );
+    // The subagent finishes late: its item lands on the run, then the idle stop follows.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ItemCompleted {
+            turn_id: turn,
+            item: Box::new(subagent_item(&id, "bg-1-item", Some("bg-1"))),
+            locator: None,
+        },
+    );
+    eventually("idle stop after the subagent", || shut_down(&t, &id)).await;
+    assert!(item_run(&t, &id, "bg-1-item").is_some());
+}
+
+async fn setup_with(script: FakeScript, tweak: impl FnOnce(&mut HostOptions)) -> T {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(script);
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let mut options = opts(&path, 1);
+    tweak(&mut options);
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(options, Arc::new(store), Arc::new(fake.clone()), stall).unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    T {
+        host,
+        fake,
+        _dir: Some(dir),
+    }
+}
+
+fn shut_down(t: &T, id: &ThreadId) -> bool {
+    t.fake
+        .calls()
+        .iter()
+        .any(|c| matches!(c, FakeCall::Shutdown { thread_id } if thread_id == id))
+}
+
+fn item_run(t: &T, id: &ThreadId, item_id: &str) -> Option<goat2_contracts::RunId> {
+    events(t, id).into_iter().find_map(|e| match e {
+        LogEvent::ItemCompleted(i) if i.item.id.as_str() == item_id => Some(i.run_id),
+        _ => None,
+    })
+}
+
+fn late_text(id: &ThreadId, item_id: &str, text: &str) -> goat2_contracts::TurnItem {
+    goat2_host::engine::fake::assistant_item(id, &item_id.into(), "late", text)
+}
+
+/// A finished engine-native subagent item (`subagent_id` defaults to the item id).
+fn subagent_item(
+    id: &ThreadId,
+    item_id: &str,
+    subagent_id: Option<&str>,
+) -> goat2_contracts::TurnItem {
+    let mut item = late_text(id, item_id, "");
+    item.body = goat2_contracts::TurnItemBody::Subagent {
+        subagent_id: subagent_id.unwrap_or(item_id).to_owned(),
+        origin: goat2_contracts::SubagentOrigin::ProviderNative,
+        driver: "claudeAgent".into(),
+        provider_instance_id: "claudeAgent".into(),
+        child_thread_id: None,
+        prompt: "look around".into(),
+        progress: None,
+        result: Some("found it".into()),
+    };
+    item
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
