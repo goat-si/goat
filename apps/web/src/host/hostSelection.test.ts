@@ -18,6 +18,14 @@ describe("host selection", () => {
     expect(h.client.getSnapshot().demo).toBe("2R-1");
     h.client.close();
   });
+  it("desktop before the host is up (wsUrl null) shows the disconnected state with the stamp", () => {
+    window.goat2Host = { wsUrl: null, token: "t", build: { commit: "53ef8fac777", branch: "goat2", builtAt: "now", dirty: false } };
+    const h = createHostFromLocation(loc(""));
+    expect(h.desktop).toBe(true);
+    expect(h.build?.commit).toBe("53ef8fac777");
+    expect(h.client.getSnapshot().connection).toBe("closed");
+    delete window.goat2Host;
+  });
   it("uses the preload config as the real host and marks desktop", () => {
     window.goat2Host = { wsUrl: "ws://127.0.0.1:1/ws", token: "t", build: { commit: "abc1234def", branch: "goat2", builtAt: "now" } };
     const h = createHostFromLocation(loc(""));
