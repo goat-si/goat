@@ -58,6 +58,12 @@ describe("catalog", () => {
   it("drivers this host build lacks show why they cannot be added", () => {
     const unserved = demo().map((e) => (e.instanceId === "muse" ? { ...e, probe: { ...e.probe, status: "disabled" as const, message: "This GOAT build does not include the Muse driver yet." } } : e));
     expect(catalog(unserved, [], [], "all", "").find((i) => i.key === "muse")).toMatchObject({ badge: "Not in this build", action: { kind: "none" } });
+    // A host that reports only Codex (lane E slice 1): every other local kind is still in the catalog, with the reason.
+    const codexOnly = demo().filter((e) => e.instanceId === "codex");
+    const items = catalog(codexOnly, [], [], "all", "");
+    const local = ["codex", "claudeAgent", "grok", "fx", "antigravity", "opencode", "cursor", "muse", "pi", "omo"];
+    expect(local.every((k) => items.some((i) => i.key === k))).toBe(true);
+    expect(items.find((i) => i.key === "claudeAgent")).toMatchObject({ badge: "Not in this build", action: { kind: "none", reason: "This GOAT build does not include the Claude driver yet." } });
   });
 });
 

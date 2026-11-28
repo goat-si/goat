@@ -147,6 +147,13 @@ export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: Re
         action: { kind: "none", reason: `Install ${name} on this Mac, then refresh.` }, cloud: false, installed: false });
     }
   }
+  // Local kinds the host does not report: its build lacks the driver (lane E lists only built-in drivers).
+  for (const driver of Object.keys(DRIVERS)) {
+    if (driver === "acpRegistry" || kinds.has(driver)) continue;
+    const name = driverLabel(driver);
+    items.push({ key: driver, name, blurb: DRIVERS[driver]!.blurb, badge: "Not in this build", section: "more", icon: { driver },
+      action: { kind: "none", reason: `This GOAT build does not include the ${name} driver yet.` }, cloud: false, installed: false });
+  }
   for (const p of PRESETS) {
     items.push({ key: `preset:${p.id}`, name: p.label, blurb: `Install it with one command, then add it as a custom agent.`, badge: "Install command",
       section: "more", icon: { url: p.iconUrl }, action: { kind: "copy", text: p.installHint, docsUrl: p.docsUrl }, cloud: false, installed: false });
