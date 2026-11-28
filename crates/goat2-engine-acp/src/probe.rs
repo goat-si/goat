@@ -300,6 +300,7 @@ pub(crate) fn effective_command(
             command.env.push((name.clone(), value.clone()));
         }
     }
+    factory.flavor().finish_launch(&mut command);
     Ok(command)
 }
 

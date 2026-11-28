@@ -211,6 +211,9 @@ pub(crate) struct RunOptions<'a> {
     pub timeout: Option<Duration>,
     pub truncated_reason: Reason,
     pub max_stdout: usize,
+    /// How messages name the command (`npm`, `uv`); None names it by its path with the home
+    /// directory written as `~`.
+    pub label: Option<&'a str>,
 }
 impl Default for RunOptions<'_> {
     fn default() -> Self {
@@ -219,7 +222,16 @@ impl Default for RunOptions<'_> {
             timeout: None,
             truncated_reason: Reason::ArchiveInvalid,
             max_stdout: MAX_COMMAND_OUTPUT_BYTES,
+            label: None,
         }
+    }
+}
+
+/// The home directories install messages hide: the host's and the install environment's.
+fn install_homes(env: Option<&Environment>) -> Vec<String> {
+    match env {
+        Some(env) => crate::probe::support::probe_homes(env),
+        None => crate::stderr::home_directories(),
     }
 }
 
@@ -227,15 +239,25 @@ impl Default for RunOptions<'_> {
 /// most `max_stdout` bytes of stdout and the last 1000 characters of stderr. The child is killed
 /// when the timeout drops it. (Windows `.cmd` managers run through `cmd.exe` with Rust's own
 /// argument escaping, where v1 builds the escaped line itself, `shell.ts:774-845`.)
+///
+/// v1 names the command by its path and keeps the raw stderr tail (`:760-790`). GOAT 2 names it by
+/// [RunOptions::label] (else its path from `~`) and cleans stderr line by line before keeping it
+/// (home directories become `~`, tokens and sign-in links are replaced, as for agent stderr,
+/// [crate::stderr::sanitize_stderr_excerpt]); final review 6 finding C2.
 pub(crate) async fn run_command(
     command: &str,
     args: &[String],
     options: RunOptions<'_>,
 ) -> Result<String, RegistryError> {
+    let homes = install_homes(options.env);
+    let shown = match options.label {
+        Some(label) => label.to_owned(),
+        None => crate::probe::support::redact_home(command, &homes),
+    };
     let could_not_run = || {
         RegistryError::new(
             Reason::InstallFailed,
-            format!("Could not run ACP Registry install command '{command}'."),
+            format!("Could not run ACP Registry install command '{shown}'."),
         )
     };
     let run = async {
@@ -254,7 +276,7 @@ pub(crate) async fn run_command(
         let max = options.max_stdout;
         let (out, err, status) = tokio::join!(
             read_capped(&mut stdout, max),
-            read_tail(&mut stderr),
+            read_clean_tail(&mut stderr, &homes),
             child.wait()
         );
         let (out, truncated) = out.map_err(|_| could_not_run())?;
@@ -275,7 +297,7 @@ pub(crate) async fn run_command(
             return Err(RegistryError::new(
                 Reason::InstallFailed,
                 format!(
-                    "ACP Registry install command '{command}' exited with code {code}: {}",
+                    "ACP Registry install command '{shown}' exited with code {code}: {}",
                     err.trim()
                 ),
             ));
@@ -285,7 +307,7 @@ pub(crate) async fn run_command(
             return Err(RegistryError::new(
                 options.truncated_reason,
                 format!(
-                    "ACP Registry install command '{command}' produced more output than expected."
+                    "ACP Registry install command '{shown}' produced more output than expected."
                 ),
             ));
         }
@@ -296,7 +318,7 @@ pub(crate) async fn run_command(
         Some(limit) => tokio::time::timeout(limit, run).await.unwrap_or_else(|_| {
             Err(RegistryError::new(
                 Reason::InstallFailed,
-                format!("Timed out running ACP Registry install command '{command}'."),
+                format!("Timed out running ACP Registry install command '{shown}'."),
             ))
         }),
     }
@@ -323,23 +345,30 @@ async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
     Ok((kept, truncated))
 }
 
-/// Read `reader` to its end, keeping the last [MAX_COMMAND_ERROR_TAIL_CHARS] characters. A read
-/// error fails the command, as for stdout.
+/// [read_clean_tail] with the host's home directories.
+#[cfg(test)]
 async fn read_tail<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> io::Result<String> {
-    let mut tail = Vec::new();
+    read_clean_tail(reader, &crate::stderr::home_directories()).await
+}
+
+/// Read `reader` to its end, keeping the last [MAX_COMMAND_ERROR_TAIL_CHARS] characters. Each line
+/// is cleaned before it is kept ([crate::stderr::StderrTail]: `homes` become `~`, credentials and
+/// sign-in links are replaced), so the cut to the tail can never split a secret. A read error
+/// fails the command, as for stdout.
+async fn read_clean_tail<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    homes: &[String],
+) -> io::Result<String> {
+    let mut tail = crate::stderr::StderrTail::new(homes.to_vec());
     let mut buf = vec![0u8; 16 * 1024];
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
             break;
         }
-        tail.extend_from_slice(&buf[..n]);
-        let keep = MAX_COMMAND_ERROR_TAIL_CHARS * 4;
-        if tail.len() > keep * 2 {
-            tail.drain(..tail.len() - keep);
-        }
+        tail.push(&buf[..n]);
     }
-    let text = String::from_utf8_lossy(&tail).into_owned();
+    let text = tail.text();
     let count = text.chars().count();
     Ok(text
         .chars()
@@ -596,17 +625,19 @@ impl Installer {
         }
     }
 
-    fn query_options(env: &Environment) -> RunOptions<'_> {
+    fn query_options<'a>(env: &'a Environment, label: &'a str) -> RunOptions<'a> {
         RunOptions {
             env: Some(env),
             timeout: Some(PACKAGE_QUERY_TIMEOUT),
             truncated_reason: Reason::InstallFailed,
+            label: Some(label),
             ..RunOptions::default()
         }
     }
 
     /// v1 `AcpRegistrySupport.ts:917-986`: an npm install of this exact package under the managed
-    /// prefix, found through npm's own `root`/`prefix`.
+    /// prefix, found through npm's own `root`/`prefix`. Messages name the manager `npm` and show
+    /// prefixes under the home directory from `~` (final review 6 finding C2).
     async fn discover_npm_global_package(
         &self,
         agent: &Agent,
@@ -624,18 +655,32 @@ impl Installer {
                 managed_prefix.to_string_lossy().into_owned(),
             ]
         };
-        let root_out = run_command(manager, &prefix_args("root"), Self::query_options(env)).await?;
-        let global_root = Self::parse_package_manager_path(manager, &root_out)?;
-        let prefix_out =
-            run_command(manager, &prefix_args("prefix"), Self::query_options(env)).await?;
-        let global_prefix = Self::parse_package_manager_path(manager, &prefix_out)?;
+        let label = "npm";
+        let root_out = run_command(
+            manager,
+            &prefix_args("root"),
+            Self::query_options(env, label),
+        )
+        .await?;
+        let global_root = Self::parse_package_manager_path(label, &root_out)?;
+        let prefix_out = run_command(
+            manager,
+            &prefix_args("prefix"),
+            Self::query_options(env, label),
+        )
+        .await?;
+        let global_prefix = Self::parse_package_manager_path(label, &prefix_out)?;
         if !command_path::is_same_resolved_path(&global_prefix, managed_prefix, &self.platform) {
+            let homes = install_homes(Some(env));
+            let shown = |path: &Path| {
+                crate::probe::support::redact_home(&path.display().to_string(), &homes)
+            };
             return Err(RegistryError::new(
                 Reason::InstallFailed,
                 format!(
-                    "'{manager}' reported global prefix {} instead of GOAT's managed prefix {}. It may be a shim that ignores --prefix; put a real npm first on PATH.",
-                    global_prefix.display(),
-                    managed_prefix.display()
+                    "'{label}' reported global prefix {} instead of GOAT's managed prefix {}. It may be a shim that ignores --prefix; put a real npm first on PATH.",
+                    shown(&global_prefix),
+                    shown(managed_prefix)
                 ),
             ));
         }
@@ -690,10 +735,11 @@ impl Installer {
         env: &Environment,
     ) -> Result<Option<PackageInstallReceipt>, RegistryError> {
         let identity = parse_uvx_package_spec(package_spec);
+        let label = "uv";
         let listed = run_command(
             manager,
             &["tool".into(), "list".into()],
-            Self::query_options(env),
+            Self::query_options(env, label),
         )
         .await?;
         let separators = regex::Regex::new(r"[._-]+").expect("static regex");
@@ -711,10 +757,10 @@ impl Installer {
         let dir_out = run_command(
             manager,
             &["tool".into(), "dir".into(), "--bin".into()],
-            Self::query_options(env),
+            Self::query_options(env, label),
         )
         .await?;
-        let bin_directory = Self::parse_package_manager_path(manager, &dir_out)?;
+        let bin_directory = Self::parse_package_manager_path(label, &dir_out)?;
         let mut bin_env = env.clone();
         bin_env.insert("PATH".into(), bin_directory.to_string_lossy().into_owned());
         let executable = package_command_candidates(&agent.id, &identity.name)
@@ -852,6 +898,7 @@ impl Installer {
                 env: Some(&install_env),
                 timeout: Some(PACKAGE_INSTALL_TIMEOUT),
                 truncated_reason: Reason::InstallFailed,
+                label: Some(manager_name),
                 ..RunOptions::default()
             },
         )
@@ -1077,7 +1124,22 @@ impl Installer {
                 "tar"
             };
             tokio::task::spawn_blocking(move || -> Result<(), Fault> {
-                let Some(listing) = archive::list_entries(kind, &archive_path)? else {
+                // Final review 6 finding C1: past the expansion limit is an invalid archive.
+                let too_large = || {
+                    Fault::from(RegistryError::new(
+                        Reason::ArchiveInvalid,
+                        format!(
+                            "ACP Registry agent {id} archive expands past {} GiB or {} entries.",
+                            archive::MAX_EXTRACTED_BYTES / (1024 * 1024 * 1024),
+                            archive::MAX_ARCHIVE_ENTRIES
+                        ),
+                    ))
+                };
+                let listed = match archive::list_entries(kind, &archive_path) {
+                    Err(e) if e.kind() == io::ErrorKind::FileTooLarge => return Err(too_large()),
+                    listed => listed?,
+                };
+                let Some(listing) = listed else {
                     return Err(RegistryError::new(
                         Reason::ArchiveInvalid,
                         format!("ACP Registry install command '{tool}' produced more output than expected."),
@@ -1092,6 +1154,9 @@ impl Installer {
                     .into());
                 }
                 archive::extract(kind, &archive_path, &extraction).map_err(|e| {
+                    if e.kind() == io::ErrorKind::FileTooLarge {
+                        return too_large();
+                    }
                     if e.kind() == io::ErrorKind::InvalidData {
                         RegistryError::new(
                             Reason::ArchiveInvalid,
@@ -1400,6 +1465,8 @@ mod tests {
 
     /// A redirect the policy stops (here: away from HTTPS) is not a download: only a 2xx final
     /// response is (v1 AcpRegistrySupport.ts:1313-1315 `filterStatusOk`; final review finding 6).
+    /// The failure must be the 302 itself: a connection that never reached the server fails here
+    /// at once instead of passing and then waiting forever for the server's accept.
     #[tokio::test]
     async fn a_stopped_redirect_is_not_a_download() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1421,7 +1488,10 @@ mod tests {
         });
         let download = HttpsDownload::new().unwrap();
         let opened = http_stream(&download.client, &format!("http://{addr}/start")).await;
-        assert!(opened.is_err(), "a 302 body was accepted as the download");
+        let Err(error) = opened else {
+            panic!("a 302 body was accepted as the download")
+        };
+        assert!(error.contains("302"), "{error}");
         server.await.unwrap();
     }
 

@@ -16,14 +16,14 @@ use goat2_contracts::{
     ServerProviderState,
 };
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use super::support::{
     AUTH_PROBE_TIMEOUT_MS, SpawnFailure, auth_status, built_in_model, child_environment,
     classify_spawn_failure, create_model_capabilities, empty_capabilities, instance_environment,
-    parse_cli_version_result, provider_models_from_settings, resolve_executable,
-    resolve_provider_probe_timeout, safe_process_cwd, spawn_and_collect, spawn_failure_message,
-    with_login_shell_path_note,
+    parse_cli_version_result, probe_homes, provider_models_from_settings, resolve_executable,
+    resolve_provider_probe_timeout, safe_process_cwd, spawn_and_collect,
+    spawn_failure_message_with_homes, with_login_shell_path_note,
 };
 use super::{ProbeConfig, checked_at_now, effective_command};
 use crate::engine::AcpEngineFactory;
@@ -285,6 +285,9 @@ pub const GROK_PROBE_ACP_ARGS: [&str; 2] = ["agent", "stdio"];
 
 /// Send `initialize` to an ACP agent over stdio and return its result, nothing more (v1
 /// `discoverGrokMetadataViaAcpInitialize`, status.ts:383-401). The child is killed on return.
+/// Lines are read with the driver's bounded frame reader, so a line past 16 Mi characters fails
+/// the probe before it is held whole (v1 effect-acp strictParser.ts:18-30; final review 6
+/// finding D1).
 pub async fn acp_initialize_only(
     program: &Path,
     args: &[String],
@@ -313,8 +316,11 @@ pub async fn acp_initialize_only(
         .await
         .map_err(|e| format!("write: {e}"))?;
     stdin.flush().await.map_err(|e| format!("write: {e}"))?;
-    let mut lines = tokio::io::BufReader::new(stdout).lines();
-    while let Some(line) = lines.next_line().await.map_err(|e| format!("read: {e}"))? {
+    let mut reader = tokio::io::BufReader::new(stdout);
+    while let Some(line) = crate::engine::read_frame(&mut reader)
+        .await
+        .map_err(|e| format!("read: {e}"))?
+    {
         let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
             continue;
         };
@@ -487,8 +493,13 @@ pub async fn check_grok_provider_status(
                         &environment,
                     )
                 } else {
-                    spawn_failure_message(failure, Some(&spawn_cwd), &binary)
-                        .unwrap_or_else(|| "Failed to execute Grok CLI health check.".into())
+                    spawn_failure_message_with_homes(
+                        failure,
+                        Some(&spawn_cwd),
+                        &binary,
+                        &probe_homes(&environment),
+                    )
+                    .unwrap_or_else(|| "Failed to execute Grok CLI health check.".into())
                 }),
                 None,
             );
@@ -672,5 +683,30 @@ mod tests {
         );
         assert!(is_valid_reasoning_effort_token("x-high.1"));
         assert!(!is_valid_reasoning_effort_token("-x"));
+    }
+
+    /// Final review 6 finding D1 (v1 probes Grok through the effect-acp runtime, whose
+    /// `makeStrictNdJsonRpcParser` refuses a line past 16 Mi characters, strictParser.ts:18-30): a
+    /// newline-free flood during the initialize probe fails at the frame cap, even when a valid
+    /// answer follows it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn initialize_probe_refuses_a_frame_past_the_cap() {
+        let flood = 16 * 1024 * 1024 + 1;
+        let script = format!(
+            "read request\nhead -c {flood} /dev/zero | tr '\\0' x\nprintf '\\n%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'"
+        );
+        let env: BTreeMap<String, String> =
+            [("PATH".to_owned(), "/usr/bin:/bin".to_owned())].into();
+        let result = acp_initialize_only(
+            Path::new("/bin/sh"),
+            &["-c".to_owned(), script],
+            &env,
+            None,
+            grok_initialize_params(),
+        )
+        .await;
+        let error = result.expect_err("a frame past the cap fails the probe");
+        assert!(error.contains("maximum size"), "{error}");
     }
 }

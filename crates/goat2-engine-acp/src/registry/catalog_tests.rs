@@ -422,6 +422,33 @@ async fn rejects_an_archive_with_a_traversal_entry() {
     assert!(leftovers(dir.path()).is_empty());
 }
 
+/// Final review 6 finding C1: an archive that would expand past the extraction limit is refused
+/// as invalid and leaves nothing behind (v1 extracts it whole, AcpRegistrySupport.ts:1402-1416).
+#[tokio::test]
+async fn rejects_an_archive_that_expands_past_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start().await;
+    server.route(
+        "/agent.tar.gz",
+        200,
+        super::archive::tests::tar_gz_declaring("agent", 4 * 1024 * 1024 * 1024 + 1, &[0; 4096]),
+    );
+    server.registry(&example(json!({"binary": {"linux-x86_64": {
+        "archive": "https://registry.test/agent.tar.gz", "cmd": "agent"}}})));
+    let c = catalog(dir.path(), &server, base_env());
+    let error = c.prepare(&prepare_input()).await.unwrap_err();
+    assert_eq!(error.reason, Reason::ArchiveInvalid, "{}", error.detail);
+    assert_eq!(
+        error.detail,
+        "ACP Registry agent example-agent archive expands past 4 GiB or 200000 entries."
+    );
+    assert!(
+        leftovers(dir.path()).is_empty(),
+        "{:?}",
+        leftovers(dir.path())
+    );
+}
+
 // v1 AcpRegistrySupport.binaryInstall.test.ts:147-207.
 #[tokio::test]
 async fn leaves_an_outside_file_alone_when_the_command_links_to_it() {
@@ -758,12 +785,21 @@ async fn installs_an_npm_package_into_the_managed_prefix_and_launches_its_comman
 #[tokio::test]
 async fn uses_the_managed_prefix_despite_a_system_owned_npm_prefix() {
     use std::os::unix::fs::PermissionsExt;
+    /// Gives the read-only directory its write bit back however the test ends, so the temporary
+    /// directory can always be removed.
+    struct Writable(PathBuf);
+    impl Drop for Writable {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start().await;
     server.registry(&example(json!({"npx": {"package": "@example/acp@1.2.3"}})));
     let npm = fake_npm(dir.path());
     let system = dir.path().join("system-global");
     std::fs::create_dir(&system).unwrap();
+    let _writable = Writable(system.clone());
     std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o555)).unwrap();
     let mut env = npm.environment.clone();
     env.insert("HOME".into(), dir.path().join("home").display().to_string());
@@ -779,7 +815,6 @@ async fn uses_the_managed_prefix_despite_a_system_owned_npm_prefix() {
         .await
         .unwrap();
     assert_eq!(resolved.spawn.command, npm.global_bin.join("example-agent"));
-    std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 // v1 AcpRegistrySupport.npmShim.test.ts:18-43.
@@ -829,6 +864,84 @@ async fn names_the_npm_shim_when_npm_cannot_install_into_the_managed_prefix() {
         !log(&npm.log_path)
             .lines()
             .any(|l| l.starts_with("install "))
+    );
+}
+
+/// Final review 6 finding C2 (v1 AcpRegistrySupport.ts:760-790 puts the manager's path and the raw
+/// stderr tail in the message): a failed npm install names the manager `npm` and its stderr is
+/// cleaned before it is kept: the home directory becomes `~`, tokens and sign-in links are
+/// replaced.
+#[tokio::test]
+async fn failed_install_messages_hide_the_manager_path_home_and_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().display().to_string();
+    let server = Server::start().await;
+    server.registry(&example(json!({"npx": {"package": "@example/acp@1.2.3"}})));
+    let npm = fake_npm(dir.path());
+    let real = dir.path().join("real/npm");
+    executable(&real, NPM_FIXTURE);
+    executable(
+        &dir.path().join("fake-node/bin/npm"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = install ]; then\n  printf '%s\\n' \"npm error log: $HOME/.npm/_logs/debug.log\" 'npm error auth: Bearer synthetic-token-0123456789' 'npm error sign in at https://accounts.google.com/o/oauth2/auth?code=synthetic-code' >&2\n  exit 1\nfi\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    );
+    let mut env = npm.environment.clone();
+    env.insert("HOME".into(), home.clone());
+    let c = catalog(dir.path(), &server, env.clone());
+    let error = c
+        .resolve(
+            &settings(),
+            Path::new("/w"),
+            Some(&env),
+            &ResolveOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason, Reason::InstallFailed);
+    let detail = &error.detail;
+    assert!(
+        detail.starts_with("ACP Registry install command 'npm' exited with code 1: "),
+        "{detail}"
+    );
+    assert!(!detail.contains(&home), "{detail}");
+    assert!(detail.contains("~/.npm/_logs/debug.log"), "{detail}");
+    assert!(!detail.contains("synthetic-token"), "{detail}");
+    assert!(detail.contains("Bearer [redacted]"), "{detail}");
+    assert!(!detail.contains("synthetic-code"), "{detail}");
+    assert!(detail.contains("[sign-in-url]"), "{detail}");
+}
+
+/// C2: the shim message names both prefixes from `~` when they are under the home directory.
+#[tokio::test]
+async fn the_shim_message_names_home_prefixes_from_tilde() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().display().to_string();
+    let server = Server::start().await;
+    server.registry(&example(json!({"npx": {"package": "@example/acp@1.2.3"}})));
+    let npm = fake_npm(dir.path());
+    let mut env = npm.environment.clone();
+    env.insert("FAKE_NPM_IGNORE_PREFIX".into(), "1".into());
+    env.insert("HOME".into(), home.clone());
+    let c = catalog(dir.path(), &server, env.clone());
+    let error = c
+        .resolve(
+            &settings(),
+            Path::new("/w"),
+            Some(&env),
+            &ResolveOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    let detail = &error.detail;
+    assert!(detail.contains("shim"), "{detail}");
+    assert!(!detail.contains(&home), "{detail}");
+    assert!(
+        detail.starts_with(
+            "'npm' reported global prefix ~/external-npm-global instead of GOAT's managed prefix ~/"
+        ),
+        "{detail}"
     );
 }
 

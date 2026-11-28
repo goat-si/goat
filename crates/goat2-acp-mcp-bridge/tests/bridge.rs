@@ -301,10 +301,11 @@ fn in_flight_requests_are_bounded_and_finished_ones_are_reaped() {
     // goat2_acp_mcp_bridge::MAX_CONCURRENT_REQUESTS
     const LIMIT: usize = 64;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let addr = listener.local_addr().unwrap();
+    let endpoint = format!("http://{addr}");
     let (events, received) = std::sync::mpsc::channel();
     let accepted = events.clone();
-    thread::spawn(move || {
+    let acceptor = thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { return };
             if accepted.send(Event::Connection(stream)).is_err() {
@@ -387,4 +388,9 @@ fn in_flight_requests_are_bounded_and_finished_ones_are_reaped() {
     drop(input);
     assert!(child.wait().unwrap().success());
     assert_eq!(server.join().unwrap(), LIMIT);
+    // The server is gone, so the acceptor's next hand-off fails and it returns: wake it once and
+    // join it, closing the listener.
+    drop(events);
+    let _ = std::net::TcpStream::connect(addr);
+    acceptor.join().unwrap();
 }

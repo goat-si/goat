@@ -1828,7 +1828,7 @@ const MAX_FRAME_CHARS: usize = 16 * 1024 * 1024;
 /// Read one stdout line (newline included), at most [MAX_FRAME_CHARS] characters: a longer line
 /// fails the connection before it is held whole (final review finding 5). Invalid UTF-8 is
 /// replaced, as v1's `TextDecoder` does. None at end of file.
-async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+pub(crate) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
 ) -> std::io::Result<Option<String>> {
     let mut line: Vec<u8> = Vec::new();
@@ -2374,6 +2374,7 @@ fn launch_for(flavor: &dyn AcpFlavor, spec: &SessionSpec) -> Result<Launch, Engi
             command.env.push((name.clone(), value.clone()));
         }
     }
+    flavor.finish_launch(&mut command);
     let mut launch = Launch::new(command.program).without_host_identity();
     launch.args = command.args.into_iter().map(Into::into).collect();
     launch.cwd = Some(PathBuf::from(&spec.engine.cwd));

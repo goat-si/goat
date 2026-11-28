@@ -174,32 +174,12 @@ pub async fn spawn_and_collect(
         .args(args)
         .env_clear()
         .envs(env)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
+        .stdin(std::process::Stdio::null());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     let run = async {
-        let mut child = command.spawn().map_err(CliError::Spawn)?;
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let (out, err, status) = tokio::join!(collect(stdout), collect(stderr), child.wait());
-        let (stdout, stdout_truncated) = out.map_err(CliError::Io)?;
-        let (stderr, stderr_truncated) = err.map_err(CliError::Io)?;
-        let status = status.map_err(CliError::Io)?;
-        if stdout_truncated {
-            return Err(CliError::OutputLimit("stdout"));
-        }
-        if stderr_truncated {
-            return Err(CliError::OutputLimit("stderr"));
-        }
-        let result = CommandResult {
-            stdout,
-            stderr,
-            code: status.code().unwrap_or(1),
-        };
+        let result = collect_command(command).await?;
         if env.get("MISE_OFFLINE").map(String::as_str) == Some("1")
             && is_missing_probe_tool_result(&result)
         {
@@ -211,6 +191,94 @@ pub async fn spawn_and_collect(
         Err(_) => Ok(None),
         Ok(result) => result.map(Some),
     }
+}
+
+/// Kills the probe's process group when dropped before the child was reaped (a timeout drops the
+/// collecting future; `kill_on_drop` alone would leave the child's own children running).
+struct GroupGuard {
+    pgid: Option<u32>,
+}
+
+impl GroupGuard {
+    fn kill(&self) {
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            // SAFETY: plain syscall on the group of a child this guard started and has not reaped.
+            unsafe {
+                libc::kill(-(pgid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Spawn `command` with piped stdout and stderr in its own process group and collect both, at
+/// most [MAX_PROBE_OUTPUT_BYTES] each (v1 `spawnAndCollect`, snapshotProbe.ts:182-205, with
+/// `collectUint8StreamText` caps and `ProviderProbeOutputLimitError`). The moment either stream
+/// passes its cap the group is killed and the child reaped, and the call fails with
+/// [CliError::OutputLimit]; nothing past the cap is kept (final review 6 finding B1).
+pub async fn collect_command(
+    mut command: tokio::process::Command,
+) -> Result<CommandResult, CliError> {
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(CliError::Spawn)?;
+    let mut guard = GroupGuard { pgid: child.id() };
+    let stdout = collect(child.stdout.take());
+    let stderr = collect(child.stderr.take());
+    tokio::pin!(stdout, stderr);
+    let (mut out, mut err, mut status) = (None, None, None);
+    let outcome = loop {
+        let oversized = match (&out, &err) {
+            (Some((_, true)), _) => Some("stdout"),
+            (_, Some((_, true))) => Some("stderr"),
+            _ => None,
+        };
+        if let Some(stream) = oversized {
+            break Err(CliError::OutputLimit(stream));
+        }
+        if let (Some(_), Some(_), Some(_)) = (&out, &err, &status) {
+            break Ok(());
+        }
+        let step = tokio::select! {
+            read = &mut stdout, if out.is_none() => read.map(|r| out = Some(r)),
+            read = &mut stderr, if err.is_none() => read.map(|r| err = Some(r)),
+            exit = child.wait(), if status.is_none() => exit.map(|s| status = Some(s)),
+        };
+        if let Err(error) = step {
+            break Err(CliError::Io(error));
+        }
+    };
+    if let Err(error) = outcome {
+        // The group may outlive its leader (a child writing on), so it is killed either way.
+        guard.kill();
+        if status.is_none() {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+        }
+        guard.pgid = None;
+        return Err(error);
+    }
+    guard.pgid = None;
+    let ((stdout, _), (stderr, _), status) = (
+        out.unwrap_or_default(),
+        err.unwrap_or_default(),
+        status.expect("reaped"),
+    );
+    Ok(CommandResult {
+        stdout,
+        stderr,
+        code: status.code().unwrap_or(1),
+    })
 }
 
 async fn collect<R: tokio::io::AsyncRead + Unpin>(reader: Option<R>) -> io::Result<(String, bool)> {
@@ -437,18 +505,66 @@ pub fn resolve_executable(
     command_path::resolve_executable(&text, platform, &env)
 }
 
-/// v1 `spawnFailureMessage` (spawnFailure.ts:130-144).
+/// `path` with a leading home directory (a whole path segment) written as `~`; the longest
+/// matching home wins.
+pub fn redact_home(path: &str, homes: &[String]) -> String {
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    let mut best: Option<&str> = None;
+    for home in homes {
+        let home = home.trim_end_matches(separators);
+        if home.is_empty() || best.is_some_and(|b| b.len() >= home.len()) {
+            continue;
+        }
+        if let Some(rest) = path.strip_prefix(home)
+            && (rest.is_empty() || rest.starts_with(separators))
+        {
+            best = Some(home);
+        }
+    }
+    match best {
+        Some(home) => format!("~{}", &path[home.len()..]),
+        None => path.to_owned(),
+    }
+}
+
+/// The home directories a probe's failure messages hide: the host's (`HOME`, `USERPROFILE`) and
+/// those of the instance environment the probe runs with.
+pub fn probe_homes(env: &BTreeMap<String, String>) -> Vec<String> {
+    let mut homes = crate::stderr::home_directories();
+    homes.extend(
+        ["HOME", "USERPROFILE"]
+            .iter()
+            .filter_map(|name| env.get(*name).cloned()),
+    );
+    homes
+}
+
+/// v1 `spawnFailureMessage` (spawnFailure.ts:130-144), with the host's home directories hidden
+/// (see [spawn_failure_message_with_homes]).
 pub fn spawn_failure_message(
     failure: SpawnFailure,
     cwd: Option<&Path>,
     binary: &str,
 ) -> Option<String> {
+    spawn_failure_message_with_homes(failure, cwd, binary, &crate::stderr::home_directories())
+}
+
+/// v1 `spawnFailureMessage` (spawnFailure.ts:130-144). v1 prints the working directory and the
+/// executable whole; GOAT 2 writes a leading home directory as `~` so probe results never carry
+/// the user's home path (final review 6 finding D2).
+pub fn spawn_failure_message_with_homes(
+    failure: SpawnFailure,
+    cwd: Option<&Path>,
+    binary: &str,
+    homes: &[String],
+) -> Option<String> {
+    let binary = redact_home(binary, homes);
     match failure {
         SpawnFailure::CwdInaccessible => Some(match cwd {
             None => "The GOAT server process cannot access its working directory.".to_owned(),
             Some(cwd) => format!(
                 "The GOAT server process cannot enter the working directory `{}`.",
-                cwd.display()
+                redact_home(&cwd.display().to_string(), homes)
             ),
         }),
         SpawnFailure::ExecFailed => Some(format!(
@@ -800,6 +916,34 @@ mod tests {
             spawn_failure_message(SpawnFailure::PermissionDenied, Some(&dir), "fx").as_deref(),
             Some("The GOAT server process does not have permission to execute `fx`.")
         );
+    }
+
+    /// Final review 6 finding D2 (v1 spawnFailure.ts:130-144 prints the paths whole): a working
+    /// directory or executable under the home directory is shown from `~`, so probe results never
+    /// carry the user's home path.
+    #[test]
+    fn failure_messages_show_home_paths_from_tilde() {
+        let Some(home) = std::env::var("HOME").ok().filter(|h| h.len() > 1) else {
+            return;
+        };
+        let cwd = Path::new(&home).join("goat2-test-no-such-dir");
+        let message =
+            spawn_failure_message(SpawnFailure::CwdInaccessible, Some(&cwd), "fx").unwrap();
+        assert_eq!(
+            message,
+            "The GOAT server process cannot enter the working directory `~/goat2-test-no-such-dir`."
+        );
+        let binary = format!("{home}/bin/grok");
+        for failure in [SpawnFailure::PermissionDenied, SpawnFailure::ExecFailed] {
+            let message = spawn_failure_message(failure, None, &binary).unwrap();
+            assert!(!message.contains(&home), "{message}");
+            assert!(message.contains("`~/bin/grok`"), "{message}");
+        }
+        // Only a whole leading path segment is the home directory.
+        let sibling = format!("{home}-other/grok");
+        let message =
+            spawn_failure_message(SpawnFailure::PermissionDenied, None, &sibling).unwrap();
+        assert!(message.contains(&sibling), "{message}");
     }
 
     #[test]

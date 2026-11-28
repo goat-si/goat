@@ -18,3 +18,15 @@ GOAT v1 at goat-si/goat origin/dev `916b5ccc1b2`. Findings are the final review'
 | 17 | src/mcp_over_acp.rs (dispose) | packages/provider-acp/src/server/mcpOverAcpBridge.ts:278-283 | ported-to-Rust (plus one 5 s deadline for the whole dispose) |
 | 24 | already fixed: src/agents/grok_notifications.rs keeps agent_result of turn_completed | packages/provider-grok/src/server/xaiAcpExtension.ts:57-75,1281-1298 | test only (src/agents/grok.rs turn_completed_requires_root_identity) |
 | tests | src/bin/acp_mock_agent.rs (GOAT_ACP_CRASH_STDERR_PARTIAL, GOAT_ACP_STDERR_HOLDER, GOAT_ACP_FLOOD_STDOUT, GOAT_ACP_URL_ELICITATION_ONCE_PATH) | apps/server/scripts/acp-mock-agent.ts (scenario style) | written new (GOAT 2 knobs) |
+
+## Final review 6 (head 990566f)
+
+| Finding | GOAT 2 | v1 source | Kind |
+|---|---|---|---|
+| B1 | src/probe_support.rs (collect_command, GroupGuard), src/agents/grok_skills.rs (discover_skills) | packages/provider-core/src/server/snapshotProbe.ts:159,182-205 (spawnAndCollect, 8 MiB caps); packages/provider-grok/src/server/skills.ts:97-109 | adapted (the process group is killed and reaped as soon as a stream passes its cap) |
+| B2 | src/agents/grok_auth.rs (resolve_key, resolve_for_spec, apply_to_merged), src/flavor.rs (finish_launch), src/engine.rs (launch_for), src/probe.rs (effective_command) | packages/provider-grok/src/server/auth.ts:57-64 (applyStoredGrokApiKey); adapter.ts:400-416; driver.ts:354-358; acpSupport.ts:164-168 | ported-to-Rust (applied to the merged environment after the launch overrides) |
+| C1 | src/registry/archive.rs (ArchiveLimits, MAX_EXTRACTED_BYTES, MAX_ARCHIVE_ENTRIES, extract_within), src/registry/install.rs (install_locked) | packages/provider-acp-registry/src/server/AcpRegistrySupport.ts:74,1382-1418 (download cap only) | written new (4 GiB and 200000 entries, charged before each entry is written; a failed extraction is emptied) |
+| C2 | src/registry/install.rs (RunOptions.label, read_clean_tail, discover_npm_global_package, discover_uv_global_package) | packages/provider-acp-registry/src/server/AcpRegistrySupport.ts:717-800,917-986; packages/provider-acp/src/server/stderr.ts (sanitizeAcpStderrExcerpt) | adapted (manager named npm/uv; stderr cleaned per line before the 1000-character tail; home prefixes as ~) |
+| D1 | src/probe_grok.rs (acp_initialize_only), src/engine.rs (read_frame) | packages/effect-acp/src/_internal/strictParser.ts:18-30 | ported-to-Rust |
+| D2 | src/probe_support.rs (redact_home, probe_homes, spawn_failure_message_with_homes), src/probe_fx.rs, src/probe_grok.rs | packages/provider-core/src/server/spawnFailure.ts:130-144 | adapted (home prefix shown as ~) |
+| tests | src/bin/acp_mock_agent.rs (GOAT_ACP_ENV_LOG_PATH, GOAT_ACP_ENV_LOG_NAMES) | apps/server/scripts/acp-mock-agent.ts (scenario style) | written new (GOAT 2 knobs) |

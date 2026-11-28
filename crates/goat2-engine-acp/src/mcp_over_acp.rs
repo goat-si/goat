@@ -270,52 +270,101 @@ impl McpOverAcp {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+
+    /// A test MCP endpoint on 127.0.0.1, served by one thread. Connections the handler keeps stay
+    /// open while the endpoint lives; dropping it stops the thread (a wake-up connection ends its
+    /// accept), which closes every connection it held, and joins it, so no socket or thread
+    /// outlives the test.
+    struct Endpoint {
+        url: String,
+        addr: SocketAddr,
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Endpoint {
+        fn serve(mut handle: impl FnMut(TcpStream, &mut Vec<TcpStream>) + Send + 'static) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopped = Arc::clone(&stop);
+            let thread = std::thread::spawn(move || {
+                let mut held = Vec::new();
+                for stream in listener.incoming() {
+                    if stopped.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(stream) = stream else { break };
+                    handle(stream, &mut held);
+                }
+            });
+            Self {
+                url: format!("http://{addr}/mcp"),
+                addr,
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for Endpoint {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect(self.addr);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// Read one request: its first line and body.
+    fn read_request(stream: &TcpStream) -> (String, Vec<u8>) {
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+            return (request_line, Vec::new());
+        }
+        let mut length = 0usize;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            let line = line.trim_end().to_owned();
+            if line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
+            {
+                length = value.trim().parse().unwrap_or(0);
+            }
+        }
+        let mut body = vec![0; length];
+        let _ = reader.read_exact(&mut body);
+        (request_line, body)
+    }
 
     /// An MCP endpoint that opens sessions and never answers a DELETE (held connections).
-    fn endpoint_that_hangs_on_delete() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
-            let mut held = Vec::new();
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request_line = String::new();
-                if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
-                    continue;
-                }
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    let line = line.trim_end().to_owned();
-                    if line.is_empty() {
-                        break;
-                    }
-                    if let Some((name, value)) = line.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                if request_line.starts_with("DELETE") {
-                    held.push(stream);
-                    continue;
-                }
-                let message: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                let reply = json!({"jsonrpc": "2.0", "id": message["id"], "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "goat", "version": "0"}}}).to_string();
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nmcp-session-id: s-1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
-                    reply.len()
-                );
+    fn endpoint_that_hangs_on_delete() -> Endpoint {
+        Endpoint::serve(|mut stream, held| {
+            let (request_line, body) = read_request(&stream);
+            if request_line.is_empty() {
+                return;
             }
-        });
-        url
+            if request_line.starts_with("DELETE") {
+                held.push(stream);
+                return;
+            }
+            let message: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let reply = json!({"jsonrpc": "2.0", "id": message["id"], "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "goat", "version": "0"}}}).to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nmcp-session-id: s-1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        })
     }
 
     /// Final review finding 17 (v1 mcpOverAcpBridge.ts:278-283): session shutdown ends every
@@ -323,7 +372,8 @@ mod tests {
     /// answers.
     #[tokio::test]
     async fn dispose_ends_connections_in_parallel_under_one_deadline() {
-        let bridge = McpOverAcp::new(endpoint_that_hangs_on_delete(), "Bearer t");
+        let endpoint = endpoint_that_hangs_on_delete();
+        let bridge = McpOverAcp::new(endpoint.url.clone(), "Bearer t");
         for _ in 0..3 {
             let connected = bridge
                 .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
@@ -346,53 +396,37 @@ mod tests {
         assert!(bridge.connections.lock().unwrap().is_empty());
     }
 
-    /// An MCP endpoint whose answer is an SSE stream of small events that never ends.
-    fn endpoint_with_endless_sse() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    let line = line.trim_end().to_owned();
-                    if line.is_empty() {
-                        break;
-                    }
-                    if let Some((name, value)) = line.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                std::thread::spawn(move || {
-                    let _ = stream.write_all(
-                        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
-                    );
-                    let event = format!(
-                        "data: {}\n\n",
-                        json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"pad": "x".repeat(1000)}})
-                    );
-                    // Until the client hangs up.
-                    while stream.write_all(event.as_bytes()).is_ok() {}
-                });
+    /// An MCP endpoint whose answer is an SSE stream of small events that never ends: past the
+    /// response cap it stops writing but keeps the stream open (held until the endpoint is
+    /// dropped), so only the cap can end the call, and no thread spins writing or waits on the
+    /// client.
+    fn endpoint_with_endless_sse() -> Endpoint {
+        Endpoint::serve(|mut stream, held| {
+            if read_request(&stream).0.is_empty() {
+                return;
             }
-        });
-        url
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+            );
+            let payload = json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"pad": "x".repeat(1000)}}).to_string();
+            let event = format!("data: {payload}\n\n");
+            // The cap counts serialized payloads: write a few events past it.
+            let mut written = 0;
+            while written <= MAX_RESPONSE_BYTES + 2 * payload.len()
+                && stream.write_all(event.as_bytes()).is_ok()
+            {
+                written += payload.len();
+            }
+            held.push(stream);
+        })
     }
 
     /// Final review 5 finding 1: many small SSE events cannot grow host memory without bound; the
     /// call fails once the collected response passes the cap.
     #[tokio::test]
     async fn an_endless_sse_answer_fails_at_the_size_cap() {
-        let bridge = McpOverAcp::new(endpoint_with_endless_sse(), "Bearer t");
+        let endpoint = endpoint_with_endless_sse();
+        let bridge = McpOverAcp::new(endpoint.url.clone(), "Bearer t");
         let connected = bridge
             .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
             .unwrap();
@@ -408,24 +442,16 @@ mod tests {
     }
 
     /// An MCP endpoint that accepts requests and never answers them.
-    fn endpoint_that_never_answers() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
-            let mut held = Vec::new();
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                held.push(stream);
-            }
-        });
-        url
+    fn endpoint_that_never_answers() -> Endpoint {
+        Endpoint::serve(|stream, held| held.push(stream))
     }
 
     /// Final review 6A finding 1: past [MAX_IN_FLIGHT] calls the agent is refused at once
     /// instead of piling up waiting tasks and request bodies.
     #[tokio::test]
     async fn calls_beyond_the_in_flight_limit_are_refused() {
-        let bridge = Arc::new(McpOverAcp::new(endpoint_that_never_answers(), "Bearer t"));
+        let endpoint = endpoint_that_never_answers();
+        let bridge = Arc::new(McpOverAcp::new(endpoint.url.clone(), "Bearer t"));
         let connected = bridge
             .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
             .unwrap();
