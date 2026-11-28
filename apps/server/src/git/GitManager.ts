@@ -43,8 +43,10 @@ import {
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitCommandError,
+  GitManagerError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
+  GitPullRequestMaterializationError,
   GitPullRequestRefInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
@@ -60,6 +62,7 @@ import {
   type SourceControlWritingStyleSettings,
   type ThreadId,
   type ThreadPullRequestKey,
+  trimAsciiWhitespace,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
 } from "@goat/contracts";
@@ -82,12 +85,6 @@ import {
   threadPullRequestKeyOf,
 } from "../sourceControl/threadPullRequests.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
-
-import {
-  GitManagerError,
-  GitPullRequestMaterializationError,
-  trimAsciiWhitespace,
-} from "@goat/contracts";
 import {
   historicalMessage,
   renderHistory,
