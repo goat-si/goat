@@ -49,3 +49,9 @@ Newest at the bottom.
   mobile; list/tile/rail faces step about once a second, only the open chat's face animates
   smoothly; spinners stay only where no face is drawn. Evidence: Grok Bot hands-on (codex 049/130
   §5), GOAT `AGENTS.md` no-continuous-repaint rule. MOTION.md rules 8-9.
+- **Left rail bots (hard rule).** The leftmost rail shows only the main bot (GOAT) by default.
+  Any other bot is added only through the rail's "…" button (placed right above the rail divider)
+  and its search popover. Pinning a bot tile or listing it in the sidebar never adds it to the rail.
+  This replaces the earlier "collapsed rail shows GOAT then pinned faces".
+- **Main bot on the rail.** Clicking it opens the main bot chat and switches the second sidebar to
+  the bot sidebar (pinned tiles, Needs you, Bots), from any mode (threads, inbox).

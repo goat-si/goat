@@ -110,7 +110,9 @@ Pinned bots (2026-11-28, from Grok Bot's "Pinned Bots", seen in 0.75.5 and 1.3.0
 pinned bots as face tiles under the search field (77x80, three per row) and drops them from the
 flat Bots list; dragging a row onto the tiles pins it, dragging a tile back or Unpin removes it,
 tiles reorder by drag. Empty state appears only while dragging: "Drag here to pin". The collapsed
-rail shows GOAT, then pinned faces.
+rail shows only the main bot by default; other bots are added from the rail's "…" (right above the
+divider) through search, never by pinning. Clicking the main bot opens its chat and switches the
+second sidebar to the bot sidebar.
 
 Mobile bot home (2026-11-28, Ovis mobile + Muse + Grok Bot): top row is account (left) and + new
 bot (right), round glass buttons. Below, pinned bots as big faces, three per row (GOAT carries a
