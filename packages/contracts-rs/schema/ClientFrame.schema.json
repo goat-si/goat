@@ -464,6 +464,7 @@
       "type": "object"
     },
     {
+      "description": "Records the person's read position: the host keeps `lastReadSeq` per thread in\n`~/.goat2/ui-state.json` (batched writes), never in the thread log. Cards then derive\n`unread` from it.",
       "properties": {
         "clientRequestId": {
           "type": "string"

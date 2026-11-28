@@ -3703,6 +3703,7 @@
           ]
         },
         "openAsks": {
+          "description": "Open requests that need a person (`fold.openRequests` except kind `resend`), folded by the\nstore. Omitted when 0.",
           "format": "uint32",
           "maximum": 4294967295,
           "minimum": 0,
@@ -3737,6 +3738,7 @@
           "type": "string"
         },
         "unread": {
+          "description": "Derived by the host when it serves a card: the thread's last item not from the person is\nnewer than the `lastReadSeq` that `mark_read` keeps in `~/.goat2/ui-state.json`. Read state\nis UI state, not thread history (PRD model.md, storage.md): the store never sets it, so it\nis never written to `card.json` or `goat.jsonl` and is not part of the frozen format.\nOmitted when false.",
           "type": "boolean"
         },
         "updatedAt": {
