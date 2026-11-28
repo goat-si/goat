@@ -285,8 +285,19 @@ pub fn verify_tail(path: &Path, fsync: bool) -> Result<Tail, TailError> {
             last = Some(parsed);
             repair = Some(Repair::NewlineAdded);
         } else {
+            // Keep the cut bytes for inspection, durably, before the log shrinks.
             let saved_to = torn_path(path);
-            std::fs::write(&saved_to, &frag)?;
+            let mut backup = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&saved_to)?;
+            backup.write_all(&frag)?;
+            if fsync {
+                backup.sync_all()?;
+                if let Some(dir) = path.parent() {
+                    crate::fsutil::sync_dir(dir)?;
+                }
+            }
             file.set_len(frag_start)?;
             new_len = frag_start;
             repair = Some(Repair::Truncated {

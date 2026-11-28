@@ -58,6 +58,8 @@ pub struct Faults {
     pub fail_log_syncs: bool,
     /// An index rebuild stops (returns an error) before it writes its rows.
     pub stop_rebuild_before_rows: bool,
+    /// Writing card.json fails with an I/O error.
+    pub fail_cache_writes: bool,
 }
 
 fn injected(what: &str) -> std::io::Error {
@@ -293,8 +295,17 @@ struct Shared {
 
 impl Shared {
     fn publish(&mut self, card: &mut ThreadCard) {
+        self.assign_seq(card);
+        self.announce(card);
+    }
+
+    fn assign_seq(&mut self, card: &mut ThreadCard) {
         card.card_seq = self.next_card_seq;
         self.next_card_seq += 1;
+    }
+
+    /// Put the card in the card set and tell card subscribers.
+    fn announce(&mut self, card: &ThreadCard) {
         self.cards.insert(card.id.clone(), card.clone());
         let update = CardUpdate::Changed(Box::new(card.clone()));
         self.subs.retain(|tx| {
@@ -771,8 +782,11 @@ impl Store {
         let mut expected = 1u64;
         log::scan_forward(&file, header_end, len, |_, bytes| -> Result<bool> {
             if bytes.is_empty() || bytes.iter().all(|&b| b == 0) {
-                // An incomplete tail; verify_tail repairs it on first touch.
-                return Ok(false);
+                // verify_tail already cut a trailing incomplete fragment, so this line is interior.
+                return Err(StoreError::CorruptLog {
+                    thread: id.to_string(),
+                    detail: format!("empty or zero-filled line where seq {expected} should be"),
+                });
             }
             let parsed = line::decode(bytes).map_err(|detail| StoreError::CorruptLog {
                 thread: id.to_string(),
@@ -1172,6 +1186,9 @@ impl Store {
 
     /// Write card.json and the index row (the log must already be synced through appliedSeq).
     fn write_cache(&self, slot: &mut Slot) -> Result<()> {
+        if self.faults().fail_cache_writes {
+            return Err(StoreError::Io(injected("card.json write")));
+        }
         let doc = card_doc(&slot.card, &slot.fold)?;
         atomic_write(&slot.dir.join(CARD_FILE), doc.as_bytes(), false)?;
         let active = slot.fold.active_run_id.is_some();
@@ -1255,16 +1272,16 @@ impl Store {
         slot.header_end = header_end;
         slot.len = len;
         slot.synced_len = len;
-        {
-            let mut shared = lock(&self.shared);
-            shared.publish(&mut slot.card);
-        }
+        // Nothing is announced until the cache is written and the thread is installed; a failure
+        // here leaves the committed log for the next start to finish (creating row).
+        lock(&self.shared).assign_seq(&mut slot.card);
         self.persist(&mut slot)?;
         let card = slot.card.clone();
         self.slots
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .insert(id, Arc::new(Mutex::new(slot)));
+        lock(&self.shared).announce(&card);
         Ok(card)
     }
 

@@ -452,3 +452,67 @@ fn fold_returns_the_current_fold_and_append_returns_it_too() {
     assert_eq!(fold.active_run_id.as_ref().map(|r| r.as_str()), Some("r1"));
     assert!(store.fold(&tid("missing")).unwrap().is_none());
 }
+
+// Review round 3.
+fn rebuild_with_interior_line(bad: &[u8]) -> (Store, goat2_thread_store::StartupReport) {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(tid("a")), created("a", "/w"))
+            .unwrap();
+        store.append(&tid("a"), vec![renamed("two")]).unwrap();
+    }
+    append_raw(dir.path(), "a", bad);
+    append_raw(
+        dir.path(),
+        "a",
+        b"{\"v\":1,\"seq\":3,\"at\":\"2026-11-28T10:00:00Z\",\"type\":\"thread.changed\",\"title\":\"three\"}\n",
+    );
+    std::fs::remove_file(dir.path().join("threads/a/card.json")).unwrap();
+    std::fs::remove_file(dir.path().join("cards.sqlite")).unwrap();
+    let opened = open(dir.path());
+    std::mem::forget(dir);
+    opened
+}
+
+#[test]
+fn an_interior_empty_line_is_corruption_not_the_end_of_the_log() {
+    let (store, report) = rebuild_with_interior_line(b"\n");
+    assert!(!store.index_complete(), "{:?}", report.unindexed);
+    assert!(report.unindexed.iter().any(|p| p.thread_id == "a"));
+    assert!(store.card(&tid("a")).unwrap().is_none());
+}
+
+#[test]
+fn an_interior_zero_filled_line_is_corruption_not_the_end_of_the_log() {
+    let (store, report) = rebuild_with_interior_line(&[0, 0, 0, 0, b'\n']);
+    assert!(!store.index_complete(), "{:?}", report.unindexed);
+    assert!(store.card(&tid("a")).unwrap().is_none());
+}
+
+#[test]
+fn a_create_whose_cache_write_fails_announces_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let (_, rx) = store.subscribe_cards(None);
+    testing::set_faults(
+        &store,
+        Faults {
+            fail_cache_writes: true,
+            ..Default::default()
+        },
+    );
+    assert!(
+        store
+            .create_thread(Some(tid("g")), created("g", "/w"))
+            .is_err()
+    );
+    assert!(store.find(&Default::default()).is_empty(), "no ghost card");
+    assert!(rx.try_recv().is_err(), "nothing announced");
+    testing::set_faults(&store, Faults::default());
+    testing::crash(store);
+    // The log was committed, so the next start finishes the create.
+    let (store, _) = open(dir.path());
+    assert!(store.card(&tid("g")).unwrap().is_some());
+}
