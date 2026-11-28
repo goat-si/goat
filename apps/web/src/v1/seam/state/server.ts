@@ -152,7 +152,8 @@ const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>,
     try {
       // Normalized through the same function (v1 fills derived keys such as idleCompaction on every patch), so only
       // what the patch itself changes counts.
-      const current = applyServerSettingsPatch(registry.get(goat2SettingsAtom), {});
+      const start = registry.get(goat2SettingsAtom);
+      const current = applyServerSettingsPatch(start, {});
       let next = applyServerSettingsPatch(current, input.patch);
       const mutation = input.providerInstanceMutation;
       if (mutation?.operation === "remove") {
@@ -180,12 +181,14 @@ const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>,
         await currentProviderPort().call("goat2.setProviderInstance", now);
         touched.push(id);
       }
-      // Provider frames may have updated the settings while the host answered; keep them and lay only the instances
-      // this write sent on top (the host's next frame replaces those too).
+      // Provider frames may have updated the settings while the host answered; keep them. An instance this write sent
+      // is laid on top only if no frame changed it meanwhile; if one did, that frame is the host's newer word on it.
       const latest = registry.get(goat2SettingsAtom);
-      const saved = touched.length === 0 ? latest : {
+      const untouchedByFrames = touched.filter((id) =>
+        JSON.stringify(latest.providerInstances[id]) === JSON.stringify(start.providerInstances[id]));
+      const saved = untouchedByFrames.length === 0 ? latest : {
         ...latest,
-        providerInstances: { ...latest.providerInstances, ...Object.fromEntries(touched.map((id) => [id, next.providerInstances[id]!])) },
+        providerInstances: { ...latest.providerInstances, ...Object.fromEntries(untouchedByFrames.map((id) => [id, next.providerInstances[id]!])) },
       };
       registry.set(goat2SettingsAtom, saved);
       return AsyncResult.success(saved);

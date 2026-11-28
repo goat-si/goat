@@ -57,4 +57,16 @@ describe("seam updateSettings", () => {
     expect(instances[pi]).toMatchObject({ driver: "pi", enabled: false });
     expect(instances[ProviderInstanceId.make("grok")]).toMatchObject({ driver: "grok", enabled: false });
   });
+  it("a frame for the same instance that lands while the host answers wins over the sent value (review 5)", async () => {
+    const { registry, run } = setup();
+    const grok = ProviderInstanceId.make("grok");
+    installProviderPort({ subscribe: () => () => {}, watch: () => () => {}, call: async () => {
+      const s = registry.get(goat2SettingsAtom);
+      registry.set(goat2SettingsAtom, { ...s, providerInstances: { ...s.providerInstances, [grok]: { driver: "grok", enabled: true, displayName: "Grok (other window)" } } as never });
+      return {};
+    } });
+    const r = await run({ patch: {}, providerInstanceMutation: { operation: "upsert", instanceId: "grok", instance: { driver: "grok", enabled: false } } });
+    expect(r._tag).toBe("Success");
+    expect(registry.get(goat2SettingsAtom).providerInstances[grok]).toMatchObject({ enabled: true, displayName: "Grok (other window)" });
+  });
 });
