@@ -365,6 +365,11 @@ async fn a_malformed_account_answer_fails_the_probe() {
             "string requiresOpenaiAuth",
             json!({"account": null, "requiresOpenaiAuth": "yes"}),
         ),
+        (
+            "positional account",
+            json!({"account": ["apiKey"], "requiresOpenaiAuth": true}),
+        ),
+        ("positional answer", json!([null, true])),
     ];
     for (name, answer) in cases {
         let mut e = handshake(None);
@@ -430,6 +435,18 @@ async fn a_route_from_a_malformed_config_answer_is_not_trusted() {
     let p = factory(e).probe().await.unwrap();
     assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
     assert_eq!(p.auth.endpoint.as_deref(), Some("http://127.0.0.1:9999"));
+}
+
+#[tokio::test]
+async fn a_positional_initialize_answer_fails_the_probe() {
+    let mut e = handshake(None);
+    if let Entry::EmitInbound { frame, .. } = &mut e[1] {
+        frame["result"] = json!(["T3 Code/0.167.0", "/tmp/codex-home", "unix", "macos"]);
+    }
+    e.truncate(3);
+    let p = factory(e).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert!(p.message.unwrap().contains("initialize"));
 }
 
 #[tokio::test]
@@ -512,6 +529,38 @@ async fn a_malformed_nested_model_field_fails_the_catalog() {
         (
             "upgradeInfo without model",
             with(json!({"upgradeInfo": {}})),
+        ),
+        // Final review r4: an array never stands in for an object (serde would fill a struct
+        // from it by position; the schema and v1's Schema.Struct refuse it).
+        (
+            "positional effort",
+            with(json!({"supportedReasoningEfforts": [["", "medium"]]})),
+        ),
+        (
+            "positional tier",
+            with(json!({"serviceTiers": [["", "priority", "Fast"]]})),
+        ),
+        (
+            "positional access programs",
+            with(json!({"availableAccessPrograms": [["standard"]]})),
+        ),
+        ("positional nux", with(json!({"availabilityNux": ["hi"]}))),
+        (
+            "positional upgradeInfo",
+            with(json!({"upgradeInfo": [null, "m", null, null, null]})),
+        ),
+        (
+            "positional model entry",
+            json!([
+                "gpt-6.1-terra",
+                "gpt-6.1-terra",
+                "x",
+                "",
+                false,
+                true,
+                "medium",
+                []
+            ]),
         ),
     ];
     for (name, bad) in cases {

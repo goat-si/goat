@@ -158,6 +158,28 @@ struct Snapshot {
     config: Option<Value>,
 }
 
+/// A JSON object decoded as `T`. serde lets a JSON array fill a struct by position (and an
+/// internally tagged enum with its tag first); the pinned schema and v1's `Schema.Struct` accept
+/// only objects, so every struct the probe checks is read through this.
+struct Obj<T>(T);
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Obj<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        if !value.is_object() {
+            return Err(serde::de::Error::custom("expected an object"));
+        }
+        serde_json::from_value(value)
+            .map(Obj)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Whether `value` is an object that decodes as `T` (see `Obj`).
+fn decodes_as<T: serde::de::DeserializeOwned>(value: &Value) -> Result<(), serde_json::Error> {
+    serde_json::from_value::<Obj<T>>(value.clone()).map(|_| ())
+}
+
 /// The pinned `InitializeResponse` (schema/codex-0.167.0/v1/InitializeResponse.json): v1 decodes every
 /// client response with Codex's schema (packages/effect-codex-app-server/src/client.ts:276-288),
 /// so a missing required field fails the probe.
@@ -190,7 +212,7 @@ struct AccountResponse {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct AccountResponseShape {
-    account: Option<AccountShape>,
+    account: Option<Obj<AccountShape>>,
     requires_openai_auth: bool,
 }
 
@@ -233,8 +255,8 @@ where
 #[derive(Deserialize)]
 #[allow(dead_code)]
 struct ConfigReadShape {
-    config: ConfigShape,
-    origins: std::collections::HashMap<String, ConfigLayerMetadataShape>,
+    config: Obj<ConfigShape>,
+    origins: std::collections::HashMap<String, Obj<ConfigLayerMetadataShape>>,
 }
 
 #[derive(Deserialize)]
@@ -247,8 +269,43 @@ struct ConfigShape {
 #[derive(Deserialize)]
 #[allow(dead_code)]
 struct ConfigLayerMetadataShape {
-    name: Value,
+    name: Obj<ConfigLayerSourceShape>,
     version: String,
+}
+
+/// The pinned `ConfigLayerSource` variants and their required fields.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[allow(dead_code)]
+enum ConfigLayerSourceShape {
+    PackagedDefaults {
+        file: String,
+    },
+    Mdm {
+        domain: String,
+        key: String,
+    },
+    System {
+        file: String,
+    },
+    EnterpriseManaged {
+        id: String,
+        name: String,
+    },
+    User {
+        file: String,
+        #[serde(default)]
+        profile: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Project {
+        dot_codex_folder: String,
+    },
+    SessionFlags {},
+    LegacyManagedConfigTomlFromFile {
+        file: String,
+    },
+    LegacyManagedConfigTomlFromMdm {},
 }
 
 /// The `config` of a `config/read` answer that matches `ConfigReadShape`; `None` otherwise.
@@ -258,7 +315,7 @@ fn read_config(answer: Value) -> Option<Value> {
     {
         return None;
     }
-    serde_json::from_value::<ConfigReadShape>(answer.clone()).ok()?;
+    decodes_as::<ConfigReadShape>(&answer).ok()?;
     answer.get("config").cloned()
 }
 
@@ -275,13 +332,15 @@ async fn discover(
     spawned_at_ms: i64,
     discovery_deadline: Instant,
 ) -> Result<Snapshot, String> {
-    let init: InitializeResponse = conn
-        .request(
+    let Obj(init): Obj<InitializeResponse> = serde_json::from_value(
+        conn.request_value(
             methods::INITIALIZE,
             &InitializeParams::goat(&options.client_version),
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("initialize answered an unreadable response: {e}"))?;
     conn.notify(methods::INITIALIZED, &Value::Null)
         .map_err(|e| e.to_string())?;
     let version = version_from_user_agent(&init.user_agent);
@@ -302,7 +361,7 @@ async fn discover(
         .request_value("account/read", &json!({}))
         .await
         .map_err(|e| format!("account/read: {e}"))?;
-    serde_json::from_value::<AccountResponseShape>(account_value.clone())
+    decodes_as::<AccountResponseShape>(&account_value)
         .map_err(|e| format!("account/read answered an unreadable account: {e}"))?;
     let account: AccountResponse = serde_json::from_value(account_value)
         .map_err(|e| format!("account/read answered an unreadable account: {e}"))?;
@@ -394,22 +453,22 @@ struct ModelShape {
     hidden: bool,
     is_default: bool,
     default_reasoning_effort: ReasoningEffort,
-    supported_reasoning_efforts: Vec<ReasoningEffortOptionShape>,
+    supported_reasoning_efforts: Vec<Obj<ReasoningEffortOptionShape>>,
     #[serde(default)]
     additional_speed_tiers: Vec<String>,
-    availability_nux: Option<AvailabilityNuxShape>,
-    available_access_programs: Option<AccessProgramsShape>,
+    availability_nux: Option<Obj<AvailabilityNuxShape>>,
+    available_access_programs: Option<Obj<AccessProgramsShape>>,
     default_service_tier: Option<String>,
     #[serde(default)]
     input_modalities: Vec<InputModalityShape>,
     model_specialty: Option<String>,
     multi_agent_version: Option<MultiAgentVersionShape>,
     #[serde(default)]
-    service_tiers: Vec<ServiceTierShape>,
+    service_tiers: Vec<Obj<ServiceTierShape>>,
     #[serde(default)]
     supports_personality: bool,
     upgrade: Option<String>,
-    upgrade_info: Option<UpgradeInfoShape>,
+    upgrade_info: Option<Obj<UpgradeInfoShape>>,
 }
 
 /// `ReasoningEffort`: a non-empty string.
@@ -509,7 +568,7 @@ async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, Strin
             .ok_or_else(|| "model/list answered without data".to_string())?;
         // Every entry must match the pinned schema: a partial catalog is not a catalog.
         for entry in data {
-            serde_json::from_value::<ModelShape>(entry.clone())
+            decodes_as::<ModelShape>(entry)
                 .map_err(|e| format!("model/list answered an unreadable model: {e}"))?;
             models.push(
                 model_from_codex(entry)
@@ -648,7 +707,12 @@ fn account_status(
             _ => None,
         };
         if kind == Some("chatgpt") {
-            auth.email = a.get("email").and_then(Value::as_str).map(str::to_string);
+            // v1 `...(authEmail ? { email } : {})` (CodexProviderAccount.ts:145-153): an empty one is omitted.
+            auth.email = a
+                .get("email")
+                .and_then(Value::as_str)
+                .filter(|e| !e.is_empty())
+                .map(str::to_string);
         }
     }
     (ServerProviderState::Ready, auth, None)
@@ -1186,7 +1250,7 @@ struct CyberAccessConfig {
     #[serde(default)]
     daybreak: Option<bool>,
     #[serde(default)]
-    features: Option<CyberAccessFeatures>,
+    features: Option<Obj<CyberAccessFeatures>>,
 }
 
 #[derive(Deserialize)]
@@ -1205,7 +1269,11 @@ fn configured_cyber_access(
     // v1 decodeCodexCyberAccessConfig (CodexProvider.ts:97-107): the two fields are decoded
     // together; a mistyped one drops both (daybreak off, programs not ruled out), as v1 does at
     // CodexProvider.ts:603-617.
-    let cyber = config.and_then(|c| serde_json::from_value::<CyberAccessConfig>(c.clone()).ok());
+    let cyber = config.and_then(|c| {
+        serde_json::from_value::<Obj<CyberAccessConfig>>(c.clone())
+            .ok()
+            .map(|Obj(c)| c)
+    });
     let daybreak: Option<bool> =
         config.map(|_| cyber.as_ref().and_then(|c| c.daybreak) == Some(true));
     let programs_unavailable = account.account_type() == Some("apiKey")
@@ -1213,7 +1281,7 @@ fn configured_cyber_access(
             || cyber
                 .as_ref()
                 .and_then(|c| c.features.as_ref())
-                .and_then(|f| f.api_key_cyber_access_programs)
+                .and_then(|Obj(f)| f.api_key_cyber_access_programs)
                 == Some(false));
     let offered = map_descriptors(models, |descriptors, model| {
         descriptors
@@ -1278,15 +1346,32 @@ fn version_from_user_agent(user_agent: &str) -> Option<String> {
 
 /// v1 `CODEX_CLI_VERSION_PATTERN`: `codex-cli 0.159.0`, prereleases and builds kept.
 pub fn version_from_cli_output(stdout: &str) -> Option<String> {
+    // v1 CODEX_CLI_VERSION_PATTERN (CodexProvider.ts:119-120):
+    // v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?) as a whole word.
+    let suffix_char = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
     stdout.split_whitespace().find_map(|word| {
         let word = word.strip_prefix('v').unwrap_or(word);
         let core_end = word.find(['-', '+']).unwrap_or(word.len());
         let parts: Vec<&str> = word[..core_end].split('.').collect();
-        (parts.len() == 3
+        let core = parts.len() == 3
             && parts
                 .iter()
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())))
-        .then(|| word.to_string())
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        let mut rest = &word[core_end..];
+        if let Some(pre) = rest.strip_prefix('-') {
+            let end = pre.find('+').unwrap_or(pre.len());
+            if end == 0 || !pre[..end].chars().all(suffix_char) {
+                return None;
+            }
+            rest = &pre[end..];
+        }
+        if let Some(build) = rest.strip_prefix('+') {
+            if build.is_empty() || !build.chars().all(suffix_char) {
+                return None;
+            }
+            rest = "";
+        }
+        (core && rest.is_empty()).then(|| word.to_string())
     })
 }
 
@@ -1622,6 +1707,21 @@ mod tests {
             Some("0.1.4161006".into())
         );
         assert_eq!(version_from_cli_output("no version here"), None);
+        // v1's pattern: non-empty suffixes of [0-9A-Za-z.-] only.
+        for bad in [
+            "1.2.3-",
+            "1.2.3+",
+            "1.2.3-a_b",
+            "1.2.3+x+y",
+            "1.2.3-a+",
+            "1.2",
+        ] {
+            assert_eq!(version_from_cli_output(bad), None, "{bad}");
+        }
+        assert_eq!(
+            version_from_cli_output("codex v0.168.0-rc.1+build-7 extra"),
+            Some("0.168.0-rc.1+build-7".into())
+        );
     }
 
     #[test]
@@ -1646,7 +1746,7 @@ mod tests {
     }
     #[test]
     fn account_answers_follow_the_pinned_schema() {
-        let ok = |v: Value| serde_json::from_value::<AccountResponseShape>(v).is_ok();
+        let ok = |v: Value| decodes_as::<AccountResponseShape>(&v).is_ok();
         // Accepted: no account, each variant, a ChatGPT email that is null, defaulted and
         // nullable fields absent, complete workspace routing, unknown fields.
         for good in [
@@ -1674,9 +1774,22 @@ mod tests {
             json!({"account": {"type": "amazonBedrock", "usesCodexManagedCredentials": null}, "requiresOpenaiAuth": true}),
             json!({"account": "apiKey", "requiresOpenaiAuth": true}),
             json!({"account": {"type": "chatgpt", "email": null, "planType": 3}, "requiresOpenaiAuth": true}),
+            json!({"account": ["apiKey"], "requiresOpenaiAuth": true}),
+            json!({"account": ["chatgpt", null, "pro"], "requiresOpenaiAuth": true}),
+            json!([null, true]),
         ] {
             assert!(!ok(bad.clone()), "{bad}");
         }
+        // v1 omits an empty ChatGPT email (CodexProviderAccount.ts:145-153).
+        let email = |e: Value| {
+            let a: AccountResponse = serde_json::from_value(
+                json!({"account": {"type": "chatgpt", "email": e, "planType": "pro"}, "requiresOpenaiAuth": true}),
+            )
+            .unwrap();
+            account_status(&a, None, None).1.email
+        };
+        assert_eq!(email(json!("")), None);
+        assert_eq!(email(json!("a@b.c")).as_deref(), Some("a@b.c"));
     }
 
     /// Final review r3: v1 decodes `daybreak` and `features.api_key_cyber_access_programs` together
@@ -1744,6 +1857,13 @@ mod tests {
             standard()
         );
         assert_eq!(cyber(&api_key, json!({"features": []})), standard());
+        // Final review r4: a positional features array is not the features object.
+        assert_eq!(cyber(&api_key, json!({"features": [false]})), standard());
+        assert_eq!(
+            cyber(&chatgpt, json!({"daybreak": true, "features": [false]})),
+            standard()
+        );
+        assert_eq!(cyber(&chatgpt, json!([true, null])), standard());
     }
 
     #[test]
@@ -1767,8 +1887,35 @@ mod tests {
             json!({"config": {"service_tier": true}, "origins": {}}),
             json!({"config": {}, "origins": {"model": {"version": "v1"}}}),
             json!({"config": {}, "origins": {"model": {"name": {}, "version": 1}}}),
+            // Final review r4: each origin's source is a pinned ConfigLayerSource object.
+            json!({"config": {}, "origins": {"model": {"name": null, "version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": {"name": 7, "version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": {"name": {"type": "user"}, "version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": {"name": {"type": "nope"}, "version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": {"name": ["sessionFlags"], "version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": [{"type": "sessionFlags"}, "v1"]}}),
+            json!({"config": {}, "origins": {"model": {"name": {"type": "project", "dot_codex_folder": "/p"}, "version": "v1"}}}),
+            json!({"config": {}, "origins": {"model": {"name": {"type": "mdm", "domain": "d"}, "version": "v1"}}}),
+            json!({"config": ["azure", null], "origins": {}}),
         ] {
             assert_eq!(read(bad.clone()), None, "{bad}");
+        }
+        for source in [
+            json!({"type": "packagedDefaults", "file": "/a"}),
+            json!({"type": "mdm", "domain": "d", "key": "k"}),
+            json!({"type": "system", "file": "/a"}),
+            json!({"type": "enterpriseManaged", "id": "i", "name": "n"}),
+            json!({"type": "user", "file": "/a", "profile": null}),
+            json!({"type": "project", "dotCodexFolder": "/p/.codex"}),
+            json!({"type": "sessionFlags"}),
+            json!({"type": "legacyManagedConfigTomlFromFile", "file": "/a"}),
+            json!({"type": "legacyManagedConfigTomlFromMdm"}),
+        ] {
+            assert!(
+                read(json!({"config": {}, "origins": {"k": {"name": source, "version": "v"}}}))
+                    .is_some(),
+                "{source}"
+            );
         }
     }
 
