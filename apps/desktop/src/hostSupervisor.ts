@@ -200,9 +200,14 @@ export class HostSupervisor {
       if (child?.pid !== undefined) {
         this.#set({ phase: "stopping" });
         const pgid = child.pid;
-        const empty = await killGroup(pgid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
-        await this.#childExited;
-        if (!empty) this.#log(`host group ${pgid} still has processes after SIGKILL`);
+        const empty = await (this.#opts.killGroup ?? killGroup)(pgid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
+        if (empty) {
+          await this.#childExited;
+        } else {
+          // Quitting ends the work but must not hang: a host stuck in the kernel may never report its exit.
+          this.#log(`host group ${pgid} still has processes after SIGKILL; quitting without it`);
+          await Promise.race([this.#childExited, sleep(this.#opts.killWaitMs ?? 2_000)]);
+        }
       }
       // A crash cleanup that was already running finishes before we report stopped.
       await this.#recovering;

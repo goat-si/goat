@@ -167,6 +167,12 @@ export async function installPosixEnvironment(env: Env, options: ShellEnvironmen
   const candidates = listLoginShellCandidates(platform, env.SHELL, options.userShell);
   let answeredBy: string | undefined;
   for (const shell of candidates) {
+    // A timed-out probe that has not exited (stuck after SIGKILL) must not overlap another login
+    // shell; launchctl below only reads launchd state and still runs.
+    if (options.probes !== undefined && !options.probes.allGone) {
+      options.log?.(`shell environment: an earlier login shell has not exited; not trying ${shell}`);
+      break;
+    }
     const output = await run(shell, ["-ilc", buildEnvironmentCaptureCommand(shell, LOGIN_SHELL_ENV_NAMES)], {
       env,
       timeoutMs: options.loginShellTimeoutMs ?? POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS,

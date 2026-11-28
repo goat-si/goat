@@ -55,6 +55,23 @@ describe("installPosixEnvironment (v1 rules)", () => {
     assert.deepEqual(calls, ["/bin/zsh", "/bin/launchctl"], "the fallback shell is the same zsh, tried once");
   });
 
+  it("does not start the next candidate shell while an earlier probe has not exited", async () => {
+    const calls: string[] = [];
+    const probes = new LiveShellProbes();
+    const run: CommandRunner = async (command, _args, opts) => {
+      calls.push(command);
+      if (command === "/bin/launchctl") return "/launchd/bin\n";
+      // A timed-out probe whose exit is never seen (stuck after SIGKILL).
+      opts.probes?.track({ once: () => undefined });
+      return "";
+    };
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", SHELL: "/bin/bash" };
+    assert.equal(await installPosixEnvironment(env, { ...options(run), probes }), false);
+    assert.deepEqual(calls, ["/bin/bash", "/bin/launchctl"], "a second login shell ran beside a live one");
+    assert.equal(env.PATH, "/launchd/bin:/usr/bin");
+  });
+
+
   it("keeps inherited values, prefers the shell's for preferred names, and hydrates locale together", async () => {
     const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", SHELL: "/bin/zsh", SSH_AUTH_SOCK: "/inherited.sock", JAVA_HOME: "/inherited/java" };
     await installPosixEnvironment(

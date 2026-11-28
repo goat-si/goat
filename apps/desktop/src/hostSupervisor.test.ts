@@ -326,6 +326,20 @@ test("crash recovery holds the restart while the crashed group survives SIGKILL"
   for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
 });
 
++test("stop() returns when the host itself survives SIGKILL and never reports its exit", async () => {
+  const h = await harness("grandchild,ignore-term", { killGroup: survivesFirstKill() });
+  h.supervisor.start();
+  await h.reached("ready");
+  const [host] = h.pids("host");
+  assert.ok(host !== undefined);
+  const started = Date.now();
+  await h.supervisor.stop();
+  assert.ok(Date.now() - started < 4_000, "stop() waited for the exit of a host that survived SIGKILL");
+  assert.equal(h.supervisor.state.phase, "stopped");
+  // The simulated survivor is still alive; end it so the test leaves nothing behind.
+  process.kill(-host, "SIGKILL");
+});
+
 test("stop() while an old group is stuck returns without waiting out the retry interval", async () => {
   const h = await harness("grandchild,ignore-term", { killGroup: survivesFirstKill(), stuckRetryMs: 60_000 });
   h.supervisor.start();
