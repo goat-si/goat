@@ -1292,3 +1292,60 @@ async fn set_config_refuses_option_changes_it_cannot_apply() {
     );
     handle.session.shutdown().await;
 }
+
+/// Final review 2 finding 1 (v1 `ClaudeAdapterV2.ts:7269-7315`, `:8749-8759`, `:8918-8926`;
+/// `ClaudeBackgroundTasks.ts` local_bash roster): a background shell command blocks a reopen like
+/// a background subagent, and once it finishes the reopen goes ahead.
+#[tokio::test]
+async fn a_background_command_blocks_a_reopen_until_it_finishes() {
+    let run = Run::new("wire/background_command_blocks_reopen.ndjson");
+    let mut factory = run.factory();
+    let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    // The fake sends keep_alive right after the task_notification; once the hook sees it, the
+    // notification has been applied.
+    factory.options.frame_hook = Some(std::sync::Arc::new(move |_, line: &str| {
+        if line.contains("keep_alive") {
+            let _ = seen_tx.send(());
+        }
+    }));
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::ApprovalRequired, None),
+    )
+    .await
+    .unwrap();
+    turn(
+        &handle,
+        "Start the server.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    let blocked = handle
+        .session
+        .start_turn(input("two"), &settings(MODEL, RuntimeMode::FullAccess))
+        .await;
+    match &blocked {
+        TurnStartResult::Declined { reason } => {
+            assert!(reason.contains("background agents or commands"), "{reason}")
+        }
+        other => panic!("a reopen ran over a background command: {other:?}"),
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(10), seen_rx.recv())
+        .await
+        .expect("the command finished")
+        .expect("hook alive");
+    turn(&handle, "two", MODEL, RuntimeMode::FullAccess).await;
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["two"]
+    );
+    assert_eq!(run.starts().len(), 2);
+    handle.session.shutdown().await;
+}
