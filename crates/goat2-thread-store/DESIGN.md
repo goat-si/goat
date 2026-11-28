@@ -56,13 +56,19 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
 
 1. Before any append, the thread's index row is committed with `dirty=1` (synchronous=FULL) unless it
    already is durably.
-2. The batch is written with one `write_all` and `sync_data`ed before anything is published or
+2. The batch is written with one `write_all` and made durable before anything is published or
    `append` returns, in a run too. A reader's cursor must never pass a line a power loss could drop:
    startup settlement would reuse those seqs under the same epoch and the reader would resume with no
    reset. `run.started` is the send boundary: the host sends to the engine only after `append`
-   returns. Cost: about 4 ms per in-run append on Apple (F_FULLFSYNC; `examples/append_bench.rs`).
-3. Not in a run, or when the status changes, or when a run ends, card.json and the index row are
-   written through after the card is published and subscribers notified. A failed log sync returns the
+   returns. Only finished items are appended: `item.completed` with a non-terminal status (idle,
+   pending, running, waiting) or a body still `streaming` is refused, so streaming deltas stay in
+   memory and never become per-token syncs. Durability is per thread (its own lock and file); on Apple
+   the drive cache flush is shared across threads by group commit (`src/syncgroup.rs`: plain `fsync`
+   of the file, then one `F_FULLFSYNC` that started after it); elsewhere `sync_data`. Measured with
+   `examples/append_bench.rs` on an M5 Max: 3.8 ms per append for one thread; 20 threads appending at
+   once 8.0 ms median, about 2,300 appends/s (one `F_FULLFSYNC` per append: 28 ms, 625/s).
+3. Not in a run, or when the status changes, or when a run ends, the card is published, card.json and
+   the index row are written through, and then thread subscribers are notified. A failed log sync returns the
    error and poisons the thread: nothing is published, and the outcome stays uncertain until a reopen
    checks the actual tail. In-run card writes are batched until `flush`. Before a row is stored clean the log is synced
    through the card's `appliedSeq`; the row stays `dirty=1` while a run is active. card.json is
@@ -83,7 +89,8 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    end of every start sweeps any `.trash-*` left over (a crash after the row delete, or a same-id
    create after a delete whose rename sync failed); a failed sync keeps the trash. Marking a create clears any cached card left on the row, and a
    `creating` row is never loaded from a cached card. Only one create per id runs at a time: a second
-   one returns ThreadExists at once, and so does a folder that appears under it.
+   one waits for the first, then returns ThreadExists if it succeeded or creates the thread if it
+   failed; a folder that appears under it also gives ThreadExists.
 
 Lock order: a thread's lock, then the thread map, then the shared lock (card set, index); the thread
 map is never held while a thread lock is taken.
@@ -126,7 +133,8 @@ until the store is reopened.
 
 Format v1 rules (lane C freeze): a v1 line with an unknown `type` is skipped (the fold only advances
 `appliedSeq`; reads leave it out; `read_raw` returns it). A line with `v > 1` stops the thread:
-append / read / read_page return `UnsupportedEvent`, `read_raw` still works.
+append / read / read_page return `UnsupportedEvent`, `read_raw` still works (but returns `Poisoned`
+after a failed sync, like every other call).
 
 ## Fold (contract `Fold`)
 

@@ -1126,3 +1126,54 @@ fn racing_creates_of_one_id_lose_with_thread_exists_and_keep_the_cached_card() {
     let (_, report) = open(dir.path());
     assert!(report.refolded.is_empty(), "{:?}", report.refolded);
 }
+
+// Review round 11 follow-ups.
+#[test]
+fn read_raw_refuses_a_thread_whose_last_sync_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("s", "/w"))
+        .unwrap();
+    testing::set_faults(
+        &store,
+        Faults {
+            fail_log_syncs: true,
+            ..Default::default()
+        },
+    );
+    assert!(store.append(&t, vec![renamed("unsynced")]).is_err());
+    testing::set_faults(&store, Faults::default());
+    let raw = store.read_raw(&t, 0, 10);
+    assert!(matches!(raw, Err(StoreError::Poisoned { .. })), "{raw:?}");
+}
+
+#[test]
+fn only_finished_items_are_appended() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("s", "/w"))
+        .unwrap();
+    store
+        .append(&t, vec![input("i1", "x"), started("r1", &["i1"])])
+        .unwrap();
+    let streaming = item(
+        "r1",
+        "a",
+        serde_json::json!({"type": "assistant_message", "messageId": "m-a", "text": "par", "streaming": true}),
+    );
+    let running = item(
+        "r1",
+        "b",
+        serde_json::json!({"type": "command_execution", "input": "ls", "outputOmitted": true, "status": "running"}),
+    );
+    for event in [streaming, running] {
+        let out = store.append(&t, vec![event]);
+        assert!(matches!(out, Err(StoreError::InvalidEvent(_))), "{out:?}");
+    }
+    store.append(&t, vec![answer("r1", "c", "done")]).unwrap();
+    assert_eq!(store.card(&t).unwrap().unwrap().applied_seq, 4);
+}
