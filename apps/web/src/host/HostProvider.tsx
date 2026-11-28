@@ -9,7 +9,7 @@ import { FakeHost } from "./fakeHost.ts";
 import { DEMO_NOW, demoWorld, withQueue } from "./demoWorld.ts";
 import { deriveThread, type DerivedThread } from "./store.ts";
 
-export interface Goat2HostConfig { wsUrl: string; token: string; build?: { commit: string; branch: string; builtAt: string } }
+export interface Goat2HostConfig { wsUrl: string | null; token: string; build?: { commit: string; branch: string; builtAt: string; dirty?: boolean } }
 declare global { interface Window { goat2Host?: Goat2HostConfig } }
 
 export interface HostContextValue { client: HostClient; now: () => Date; desktop: boolean; build: Goat2HostConfig["build"] | null }
@@ -19,6 +19,11 @@ export function createHostFromLocation(loc: Location = window.location): HostCon
   const params = new URLSearchParams(loc.search);
   const injected = window.goat2Host;
   const hostParam = params.get("host");
+  if (injected && !injected.wsUrl) {
+    // Desktop before the host printed its start line: the shell reloads the window once it has a URL.
+    const client = new HostClient(new OfflineTransport(), { outbox: localStorageOutbox(), cache: localStorageCache(), demo: null });
+    return { client, now: () => new Date(), desktop: true, build: injected.build ?? null };
+  }
   if (injected || hostParam) {
     const url = injected?.wsUrl ?? hostParam!;
     const token = injected?.token ?? params.get("token") ?? "";
