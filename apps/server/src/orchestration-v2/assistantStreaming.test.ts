@@ -43,6 +43,38 @@ const assistantEvent = (text: string): ProviderAdapter.ProviderAdapterV2Event =>
   },
 });
 
+it.each(["paragraph", "turn"] as const)(
+  "passes running assistant node changes through the %s streaming filter",
+  (mode) => {
+    const nodeId = NodeId.make("assistant-node");
+    const event = {
+      type: "node.updated",
+      driver: ProviderDriverKind.make("codex"),
+      node: {
+        id: nodeId,
+        threadId: ThreadId.make("thread"),
+        runId: RunId.make("run"),
+        parentNodeId: null,
+        rootNodeId: nodeId,
+        kind: "assistant_message",
+        status: "running",
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: DateTime.makeUnsafe(0),
+        completedAt: null,
+      },
+    } satisfies ProviderAdapter.ProviderAdapterV2Event;
+    const filter = makeAssistantStreamingFilter(mode);
+    expect(filter(event, 0)).toEqual(event);
+    const changed = { ...event, node: { ...event.node, countsForRun: true } };
+    expect(filter(changed, 1)).toEqual(changed);
+  },
+);
+
 it("flushes a line-leading inline backtick span before a later unfinished fence", () => {
   expect(splitBufferedAssistantText("```a``` is inline.\n\n```\ncode\n\nmore\n")).toEqual({
     ready: "```a``` is inline.\n\n",

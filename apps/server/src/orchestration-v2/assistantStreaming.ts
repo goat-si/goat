@@ -161,12 +161,6 @@ export function makeAssistantStreamingFilter(
       nextDueAt = value.dueAt;
   };
   const filter = (event: Event, now: number): Event | null => {
-    if (
-      event.type === "node.updated" &&
-      event.node.kind === "assistant_message" &&
-      event.node.status === "running"
-    )
-      return null;
     const message = streamedText(event);
     if (!message) return event;
     const key = `${event.type}:${message.id}`;
