@@ -17,4 +17,5 @@ pnpm --filter @goat2/contracts-rs typecheck
 - `schema/<Root>.schema.json`: JSON Schema draft 2020-12 per root type. Schemas describe what readers
   accept (serde deserialize contract): fields with defaults may be omitted, and a missing nullable field
   reads as `null` because the log is never migrated. Every `uint64` carries `maximum: 2^53-1`
-  (`MAX_SAFE_WIRE_INTEGER`) so JavaScript numbers stay exact.
+  (`MAX_SAFE_WIRE_INTEGER`) so JavaScript numbers stay exact; the Rust types enforce the same bound when
+  encoding and decoding (`serde_util::safe_u64`), so serde, the schemas and the TypeScript `number` agree.

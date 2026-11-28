@@ -41,6 +41,9 @@ pub struct LogLine {
     /// Line format version, [LOG_FORMAT_VERSION] when written by this build.
     pub v: u32,
     /// Per-thread sequence, starting at 1, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub seq: u64,
     /// RFC 3339 UTC timestamp.
     pub at: String,
@@ -290,6 +293,9 @@ pub struct RunStarted {
     pub run_id: RunId,
     pub input_ids: Vec<InputId>,
     /// Host generation; outputs from older generations are dropped.
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub generation: u64,
     pub engine_ref: Option<EngineRef>,
 }
@@ -539,8 +545,17 @@ pub struct HeldInputs {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FoldCounters {
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub inputs: u64,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub runs: u64,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub items: u64,
 }
 

@@ -135,9 +135,15 @@ pub struct ThreadCard {
     /// Generation of this thread's `goat.jsonl`.
     pub epoch: Epoch,
     /// Last `goat.jsonl` seq folded into this card, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub applied_seq: u64,
     /// Card index global sequence, the `subscribeCards` cursor, at most
     /// [crate::limits::MAX_SAFE_WIRE_INTEGER].
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub card_seq: u64,
 }
 
