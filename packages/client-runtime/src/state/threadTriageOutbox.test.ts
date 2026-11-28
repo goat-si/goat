@@ -27,6 +27,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
   makeThreadTriageOutboxStore,
+  ThreadTriageOutboxStorageError,
   ThreadTriageOutboxStore,
 } from "../platform/threadTriageOutboxStore.ts";
 import type { RpcSession } from "../rpc/session.ts";
@@ -87,6 +88,7 @@ const waitFor = <A>(
 const makeHarness = Effect.fn("TestThreadTriageOutbox.makeHarness")(function* (options?: {
   readonly connected?: boolean;
   readonly storage?: { value: string | null };
+  readonly failNextWrite?: { value: boolean };
 }) {
   const requests = yield* Queue.unbounded<{
     command: OrchestrationV2Command;
@@ -117,8 +119,14 @@ const makeHarness = Effect.fn("TestThreadTriageOutbox.makeHarness")(function* (o
   } as EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
   const storage = options?.storage ?? { value: null };
   const store = makeThreadTriageOutboxStore((next) =>
-    Effect.sync(() => {
-      storage.value = next(storage.value) ?? storage.value;
+    Effect.suspend(() => {
+      const updated = next(storage.value);
+      if (updated !== null && options?.failNextWrite?.value) {
+        options.failNextWrite.value = false;
+        return Effect.fail(new ThreadTriageOutboxStorageError({ cause: new Error("disk full") }));
+      }
+      if (updated !== null) storage.value = updated;
+      return Effect.void;
     }),
   );
   const clock = yield* Clock.Clock;
@@ -284,6 +292,75 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
         expect(next.command.type).toBe("thread.pin");
         yield* Deferred.succeed(next.reply, { sequence: 4 });
         yield* Effect.promise(() => pin);
+      }),
+  );
+
+  it.effect(
+    "preserves a compensating unsettle ahead of a later offline snooze and replays both in order",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness({ connected: false });
+        yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+        yield* h.reconnect();
+        const sent = yield* Queue.take(h.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* h.disconnect();
+
+        // Offline undo queues compensating unsettle, then offline snooze queues behind it.
+        yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
+        const snoozeResult = yield* Effect.promise(() => h.commands.snooze.run(h.registry, snooze));
+        expect(snoozeResult._tag).toBe("Success");
+        const stored = yield* h.store.update((entries) => entries);
+        expect(stored.map((entry) => entry.action.type)).toEqual(["unsettle", "snooze"]);
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toMatchObject({ snoozedUntil: FUTURE });
+
+        // Server had committed the earlier settle; reconnect replays unsettle first, then snooze.
+        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
+          ...SNAPSHOT,
+          snapshotSequence: 2,
+          threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
+        });
+        yield* h.reconnect();
+        const first = yield* Queue.take(h.requests);
+        expect(first.command.type).toBe("thread.unsettle");
+        yield* Deferred.succeed(first.reply, { sequence: 3 });
+        const second = yield* Queue.take(h.requests);
+        expect(second.command.type).toBe("thread.snooze");
+        yield* Deferred.succeed(second.reply, { sequence: 4 });
+        yield* waitFor(h.registry, h.pendingSyncAtom, (threads) => threads.size === 0);
+        expect(yield* h.store.update((entries) => entries)).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "keeps the attempted entry intact in storage when atomic compensation write fails",
+    () =>
+      Effect.gen(function* () {
+        const failNextWrite = { value: false };
+        const h = yield* makeHarness({ connected: false, failNextWrite });
+        yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+        yield* h.reconnect();
+        const sent = yield* Queue.take(h.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* h.disconnect();
+
+        failNextWrite.value = true;
+        const undoResult = yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
+        expect(undoResult._tag).toBe("Failure");
+        const stored = yield* h.store.update((entries) => entries);
+        expect(stored).toHaveLength(1);
+        expect(stored[0]?.action.type).toBe("settle");
+        expect(stored[0]?.attempted).toBe(true);
       }),
   );
 });

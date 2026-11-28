@@ -39,6 +39,15 @@ const isTransient = (cause: Cause.Cause<unknown>) =>
         (isUnavailable(reason.error) || isRpcClientError(reason.error))),
   );
 
+function workSeenState(thread: OrchestrationV2ThreadShell) {
+  return JSON.stringify([
+    thread.latestRunId,
+    thread.status,
+    thread.itemCount,
+    thread.pendingRuntimeRequest?.id ?? null,
+  ]);
+}
+
 /**
  * What the user acted on: the thread's work and every triage decision with its time. A rename,
  * tag change or visit is left out, so it does not drop the queued change.
@@ -188,14 +197,31 @@ export function createThreadTriageOutbox<R, E>(input: {
             // Read again under the per-thread lock: undo or another tab may have cancelled or
             // replaced this entry while an earlier change was being sent.
             const stored = yield* read(registry);
-            const current = stored.find((candidate) => candidate.commandId === entry.commandId);
+            const currentIndex = stored.findIndex(
+              (candidate) => candidate.commandId === entry.commandId,
+            );
+            const current = currentIndex === -1 ? undefined : stored[currentIndex];
             if (current === undefined) return false;
+            // A follow-up action queued behind a compensating undo waits until that undo finishes.
+            const blockedByCompensation = stored.some(
+              (candidate, index) =>
+                index < currentIndex &&
+                candidate.environmentId === environmentId &&
+                candidate.threadId === current.threadId &&
+                isCompensatingAction(candidate.action),
+            );
+            if (blockedByCompensation) return true;
             const thread = registry
               .get(input.sourceSnapshotAtom(environmentId))
               ?.threads.find((candidate) => candidate.id === current.threadId);
+            const seenMatches = isCompensatingAction(current.action)
+              ? true
+              : current.afterCompensation === true
+                ? thread !== undefined && workSeenState(thread) === current.seen
+                : thread !== undefined && seenState(thread) === current.seen;
             const matchesThread =
               thread !== undefined &&
-              (isCompensatingAction(current.action) || seenState(thread) === current.seen) &&
+              seenMatches &&
               input.apply(thread, current.action, DateTime.nowUnsafe()) !== thread;
             if (matchesThread) {
               // Mark attempted in storage before sending so an offline undo after a lost reply
@@ -249,14 +275,22 @@ export function createThreadTriageOutbox<R, E>(input: {
           const snapshot = get(input.sourceSnapshotAtom(environmentId));
           const entries = get(environmentEntriesAtom(environmentId));
           if (snapshot === null || entries.length === 0) return snapshot;
-          const byThread = new Map(entries.map((entry) => [entry.threadId, entry]));
+          const byThread = new Map<ThreadId, PendingThreadTriage[]>();
+          for (const entry of entries) {
+            const list = byThread.get(entry.threadId);
+            if (list) list.push(entry);
+            else byThread.set(entry.threadId, [entry]);
+          }
           return {
             ...snapshot,
             threads: snapshot.threads.map((thread) => {
-              const entry = byThread.get(thread.id);
-              return entry === undefined
+              const threadEntries = byThread.get(thread.id);
+              return threadEntries === undefined
                 ? thread
-                : input.apply(thread, entry.action, entry.queuedAt);
+                : threadEntries.reduce(
+                    (current, entry) => input.apply(current, entry.action, entry.queuedAt),
+                    thread,
+                  );
             }),
           };
         })
@@ -284,20 +318,42 @@ export function createThreadTriageOutbox<R, E>(input: {
     const stored = yield* update(registry, (current) => {
       const sameThread = (entry: PendingThreadTriage) =>
         entry.environmentId === environmentId && entry.threadId === thread.id;
-      // One change per thread. A snooze cannot replace a settle, which online it keeps.
-      return action.type === "snooze" && current.find(sameThread)?.action.type === "settle"
-        ? current
-        : [
-            ...current.filter((entry) => !sameThread(entry)),
-            {
+      const existing = current.filter(sameThread);
+      const existingRegular = existing.filter((entry) => !isCompensatingAction(entry.action));
+      // A snooze cannot replace a queued settle, which online it keeps.
+      if (
+        action.type === "snooze" &&
+        existingRegular.some((entry) => entry.action.type === "settle")
+      ) {
+        return current;
+      }
+      // Keep any compensating undo ahead of a later non-canceling action so reconnect applies both.
+      const keptCompensations = existing.filter(
+        (entry) =>
+          isCompensatingAction(entry.action) &&
+          !(action.type === "settle" && entry.action.type === "unsettle") &&
+          !(action.type === "snooze" && entry.action.type === "unsnooze"),
+      );
+      const nextEntry: PendingThreadTriage =
+        keptCompensations.length > 0
+          ? {
+              environmentId,
+              threadId: thread.id,
+              commandId,
+              action,
+              queuedAt,
+              seen: workSeenState(thread),
+              afterCompensation: true,
+            }
+          : {
               environmentId,
               threadId: thread.id,
               commandId,
               action,
               queuedAt,
               seen: seenState(thread),
-            },
-          ];
+            };
+      return [...current.filter((entry) => !sameThread(entry)), ...keptCompensations, nextEntry];
     });
     return stored.some((entry) => entry.commandId === commandId);
   });
@@ -354,34 +410,9 @@ export function createThreadTriageOutbox<R, E>(input: {
     };
   }
 
-  const queueCompensation = Effect.fn("ThreadTriageOutbox.queueCompensation")(function* (
-    registry: AtomRegistry.AtomRegistry,
-    environmentId: EnvironmentId,
-    threadId: ThreadId,
-    action: Extract<PendingThreadTriage["action"], { readonly type: "unsettle" | "unsnooze" }>,
-  ) {
-    const random = yield* SecureRandom.SecureRandom;
-    const commandId = CommandId.make(yield* random.uuidV4());
-    const queuedAt = DateTime.nowUnsafe();
-    yield* update(registry, (current) => [
-      ...current.filter(
-        (entry) => entry.environmentId !== environmentId || entry.threadId !== threadId,
-      ),
-      {
-        environmentId,
-        threadId,
-        commandId,
-        action,
-        queuedAt,
-        seen: "",
-      },
-    ]);
-    triggerReplayIfLive(registry, environmentId);
-  });
-
   /**
    * Removes a queued change from storage first. Offline this returns `cancelledOnDevice`, unless
-   * replay already attempted the change — in which case a compensating undo is persisted for sync.
+   * replay already attempted the change — in which case a compensating undo atomically replaces it.
    */
   function cancelQueued<I extends { readonly threadId: ThreadId }, CE>(
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
@@ -406,61 +437,82 @@ export function createThreadTriageOutbox<R, E>(input: {
           "thread-triage-outbox:cancel",
           threadLock(environmentId, threadId).withPermit(
             Effect.gen(function* () {
-              let removed = false;
-              let wasAttempted = false;
+              const random = yield* SecureRandom.SecureRandom;
+              const compensationId = CommandId.make(yield* random.uuidV4());
+              const liveBefore = registry.get(input.shellStatusAtom(environmentId)) === "live";
+              let removedUnattempted = false;
+              let replacedWithCompensation = false;
+              let deferredAttemptedId: CommandId | undefined;
+              const makeCompensation = (): PendingThreadTriage => ({
+                environmentId,
+                threadId,
+                commandId: compensationId,
+                action: toCompensate(target.input),
+                queuedAt: DateTime.nowUnsafe(),
+                seen: "",
+              });
+              // Single atomic storage update: an attempted entry is replaced in place when offline,
+              // or retained until the live reverse command succeeds or falls back to compensation.
               yield* update(registry, (stored) => {
-                const kept: PendingThreadTriage[] = [];
+                let changed = false;
+                const next: PendingThreadTriage[] = [];
                 for (const entry of stored) {
                   if (
                     entry.environmentId === environmentId &&
                     entry.threadId === threadId &&
                     entry.action.type === cancels
                   ) {
-                    removed = true;
-                    if (entry.attempted === true) wasAttempted = true;
+                    if (entry.attempted === true) {
+                      if (!liveBefore) {
+                        next.push(makeCompensation());
+                        replacedWithCompensation = true;
+                        changed = true;
+                      } else {
+                        deferredAttemptedId = entry.commandId;
+                        next.push(entry);
+                      }
+                    } else {
+                      removedUnattempted = true;
+                      changed = true;
+                    }
                     continue;
                   }
-                  kept.push(entry);
+                  next.push(entry);
                 }
-                return removed ? kept : stored;
+                return changed ? next : stored;
               });
-              // Re-read shell status under the per-thread lock after removal so a reconnect/replay
-              // that raced with this undo never leaves the server with the original action applied.
-              const live = registry.get(input.shellStatusAtom(environmentId)) === "live";
-              if (removed && !live) {
-                if (wasAttempted) {
-                  yield* queueCompensation(
-                    registry,
-                    environmentId,
-                    threadId,
-                    toCompensate(target.input),
-                  );
-                  const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
-                  return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
-                }
+              if (replacedWithCompensation) {
+                triggerReplayIfLive(registry, environmentId);
+                const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
+                return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
+              }
+              const liveAfter = registry.get(input.shellStatusAtom(environmentId)) === "live";
+              if (removedUnattempted && !liveAfter) {
                 return AsyncResult.success(cancelled);
               }
               const result = yield* Effect.promise(() => command.run(registry, target));
               if (result._tag === "Success") {
                 yield* forgetEffect(
                   registry,
-                  pendingFor(registry, environmentId, threadId)?.commandId,
+                  deferredAttemptedId ?? pendingFor(registry, environmentId, threadId)?.commandId,
                 );
                 return result;
               }
-              // The connection dropped before the shell noticed.
-              if (removed && hasUnavailableReason(result.cause)) {
-                if (wasAttempted) {
-                  yield* queueCompensation(
-                    registry,
-                    environmentId,
-                    threadId,
-                    toCompensate(target.input),
+              if (hasUnavailableReason(result.cause)) {
+                if (deferredAttemptedId !== undefined) {
+                  const targetId = deferredAttemptedId;
+                  yield* update(registry, (stored) =>
+                    stored.map((entry) =>
+                      entry.commandId === targetId ? makeCompensation() : entry,
+                    ),
                   );
+                  triggerReplayIfLive(registry, environmentId);
                   const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
                   return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
                 }
-                return AsyncResult.success(cancelled);
+                if (removedUnattempted) {
+                  return AsyncResult.success(cancelled);
+                }
               }
               return result;
             }),

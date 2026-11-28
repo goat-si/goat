@@ -23,6 +23,8 @@ export const PendingThreadTriage = Schema.Struct({
   seen: Schema.String,
   /** Set before replay sends over the wire so offline undo knows the server may have committed it. */
   attempted: Schema.optionalKey(Schema.Literal(true)),
+  /** Set when queued behind a compensating undo whose replay mutates server triage timestamps. */
+  afterCompensation: Schema.optionalKey(Schema.Literal(true)),
 });
 export type PendingThreadTriage = typeof PendingThreadTriage.Type;
 export type PendingThreadTriages = ReadonlyArray<PendingThreadTriage>;
