@@ -234,6 +234,9 @@ enum Health {
     },
     Corrupt(String),
     Poisoned(String),
+    /// Deleted while another caller waited for this thread's lock; the id may already belong to a
+    /// new thread with its own slot.
+    Deleted,
 }
 
 struct Slot {
@@ -279,7 +282,12 @@ impl Slot {
                 thread: self.id.to_string(),
                 detail: detail.clone(),
             }),
+            Health::Deleted => Err(StoreError::ThreadMissing(self.id.to_string())),
         }
+    }
+
+    fn is_deleted(&self) -> bool {
+        matches!(self.health, Health::Deleted)
     }
 }
 
@@ -334,6 +342,9 @@ pub struct Store {
     index_complete: std::sync::atomic::AtomicBool,
     /// Test hook: `create_thread` waits on both barriers right before it announces the card.
     create_pause: Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+    /// Test hook: `delete_thread` waits on barriers 0,1 after taking the thread lock and on 2,3
+    /// after removing the thread from the map, still holding the lock.
+    delete_pause: Mutex<Option<[Arc<std::sync::Barrier>; 4]>>,
 }
 
 fn ms(since: Instant) -> f64 {
@@ -440,6 +451,7 @@ impl Store {
             faults: Mutex::new(initial_faults),
             index_complete: std::sync::atomic::AtomicBool::new(true),
             create_pause: Mutex::new(None),
+            delete_pause: Mutex::new(None),
         };
         let mut report = StartupReport {
             threads: 0,
@@ -1567,12 +1579,10 @@ impl Store {
         let mut first_error = None;
         for slot in slots {
             let mut slot = lock(&slot);
-            if !slot.stale {
-                continue;
-            }
             let result = match &slot.health {
-                Health::Ready => self.persist(&mut slot),
-                // A thread whose earlier write failed still has unflushed state: keep reporting it.
+                Health::Ready if slot.stale => self.persist(&mut slot),
+                // A thread whose last write failed has an uncertain outcome: keep reporting it until
+                // the store is reopened and the tail is checked.
                 Health::Poisoned(detail) => Err(StoreError::Poisoned {
                     thread: slot.id.to_string(),
                     detail: detail.clone(),
@@ -1602,6 +1612,9 @@ impl Store {
             return Ok(None);
         };
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Ok(None);
+        }
         self.ensure_ready(&mut slot)?;
         Ok(Some(slot.card.clone()))
     }
@@ -1613,6 +1626,9 @@ impl Store {
             return Ok(None);
         };
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Ok(None);
+        }
         self.ensure_ready(&mut slot)?;
         Ok(Some(slot.fold.clone()))
     }
@@ -1690,6 +1706,14 @@ impl Store {
             });
         };
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Ok(ThreadRead {
+                reset: Some(ResetReason::ThreadMissing),
+                snapshot: None,
+                lines: Vec::new(),
+                cursor: None,
+            });
+        }
         self.ensure_ready(&mut slot)?;
         self.read_locked(&mut slot, after)
     }
@@ -1922,6 +1946,9 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
         let file = self.open_log_read(&slot.log_path())?;
         let len = file.metadata()?.len();
         let (_, header_end) = log::read_header(&file, len).map_err(|e| StoreError::CorruptLog {
@@ -1946,6 +1973,9 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
         blob::write_blob(&slot.dir, name_hint, bytes, self.opts.fsync)
     }
 
@@ -1955,6 +1985,9 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
         blob::read_blob(&slot.dir, &blob.path)
     }
 
@@ -1968,6 +2001,14 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let mut slot = lock(&slot);
+        if slot.is_deleted() {
+            return Err(StoreError::ThreadMissing(id.to_string()));
+        }
+        let pause = lock(&self.delete_pause).clone();
+        if let Some(b) = &pause {
+            b[0].wait();
+            b[1].wait();
+        }
         lock(&self.shared).index.mark(id.as_str(), true, false)?;
         slot.durable_dirty = true;
         slot.writer = None;
@@ -1975,6 +2016,8 @@ impl Store {
             .threads_dir()
             .join(format!(".trash-{}-{}", id.as_str(), random_hex(8)));
         fs::rename(&slot.dir, &trash)?;
+        // From here on, anyone who was waiting for this lock must not touch the path again.
+        slot.health = Health::Deleted;
         if self.opts.fsync {
             sync_dir(&self.threads_dir())?;
         }
@@ -1994,11 +2037,15 @@ impl Store {
             };
             shared.subs.retain(|tx| tx.try_send(update.clone()).is_ok());
         }
-        drop(slot);
         self.slots
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .remove(id);
+        if let Some(b) = &pause {
+            b[2].wait();
+            b[3].wait();
+        }
+        drop(slot);
         let _ = fs::remove_dir_all(&trash);
         Ok(())
     }
@@ -2038,6 +2085,12 @@ pub mod testing {
         barriers: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
     ) {
         *lock(&store.create_pause) = barriers;
+    }
+
+    /// Make `delete_thread` wait on the four barriers (see `Store::delete_pause`); `None` turns
+    /// the pause off.
+    pub fn pause_deletes(store: &Store, barriers: Option<[Arc<std::sync::Barrier>; 4]>) {
+        *lock(&store.delete_pause) = barriers;
     }
 
     /// Change the injected faults of a running store.

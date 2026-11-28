@@ -680,3 +680,76 @@ fn an_append_racing_a_create_is_not_overwritten_by_the_announcement() {
     );
     assert_eq!(store.cards_after(None).cards[0].title, "appended");
 }
+
+// Review round 5.
+#[test]
+fn an_append_waiting_on_a_deleted_thread_cannot_write_into_a_recreated_one() {
+    use std::sync::{Arc, Barrier};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(open(dir.path()).0);
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("old", "/w"))
+        .unwrap();
+    store
+        .append(&t, vec![renamed("old 2"), renamed("old 3")])
+        .unwrap();
+    let b: Vec<Arc<Barrier>> = (0..4).map(|_| Arc::new(Barrier::new(2))).collect();
+    testing::pause_deletes(
+        &store,
+        Some([b[0].clone(), b[1].clone(), b[2].clone(), b[3].clone()]),
+    );
+    let deleter = {
+        let store = store.clone();
+        let t = t.clone();
+        std::thread::spawn(move || store.delete_thread(&t).unwrap())
+    };
+    b[0].wait(); // delete holds the thread lock
+    let appender = {
+        let store = store.clone();
+        let t = t.clone();
+        std::thread::spawn(move || store.append(&t, vec![renamed("late append")]))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(50)); // appender is waiting on the old lock
+    b[1].wait();
+    b[2].wait(); // the old thread is gone from the map, its lock still held
+    testing::pause_deletes(&store, None);
+    store
+        .create_thread(Some(t.clone()), created("new", "/w"))
+        .unwrap();
+    b[3].wait();
+    deleter.join().unwrap();
+    let late = appender.join().unwrap();
+    assert!(
+        matches!(late, Err(StoreError::ThreadMissing(_))),
+        "{late:?}"
+    );
+    let card = store.card(&t).unwrap().unwrap();
+    assert_eq!((card.title.as_str(), card.applied_seq), ("new", 1));
+    let (replayed, _) = replay(dir.path(), "t");
+    assert_eq!(
+        replayed.applied_seq, 1,
+        "the new thread's log was written by the old slot"
+    );
+}
+
+#[test]
+fn flush_and_close_report_a_thread_poisoned_by_an_unbatched_append() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("p", "/w"))
+        .unwrap();
+    testing::set_faults(
+        &store,
+        Faults {
+            fail_log_syncs: true,
+            ..Default::default()
+        },
+    );
+    assert!(store.append(&t, vec![renamed("x")]).is_err());
+    testing::set_faults(&store, Faults::default());
+    assert!(store.flush().is_err(), "flush reports the poisoned thread");
+    assert!(store.close().is_err());
+}
