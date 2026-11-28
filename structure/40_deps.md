@@ -23,3 +23,5 @@ flowchart BT
 - `apps/desktop` knows the host only as a binary path + env (data dir, port, token).
 - Root `Cargo.toml`: no `[patch]`. Keep trees small; `libc` only under `cfg(unix)`.
 - One shared build cache (kache) for every worktree.
+
+- Part 2 (planned): `goat2-engine-sdk` -> `goat2-engine-api`, `goat2-contracts`; `goat2-host` -> `goat2-engine-sdk` (via the factory registry). Drivers never depend on `goat2-host`.

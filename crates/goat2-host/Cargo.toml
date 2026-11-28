@@ -7,4 +7,36 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "goat2_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "goat2-host"
+path = "src/main.rs"
+
 [dependencies]
+goat2-contracts = { path = "../goat2-contracts" }
+goat2-engine-api = { path = "../goat2-engine-api" }
+goat2-thread-store = { path = "../goat2-thread-store" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rand = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+rmcp = { version = "3.12", features = ["server", "transport-streamable-http-server"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.28"
+reqwest = { version = "0.12", features = ["json"] }

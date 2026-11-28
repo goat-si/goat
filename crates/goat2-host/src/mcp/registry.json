@@ -1,0 +1,544 @@
+[
+  {
+    "path": "surface.describe",
+    "name": "goat_describe",
+    "summary": "Find GOAT capabilities and whether this caller can use them",
+    "description": "Find GOAT capabilities and how to call them. query takes words or a tool name: exact names first, then paths with every word, then paths sharing some. total, truncated and nextCursor say what else matched; a short result never means nothing else exists. path takes a resource or a path or tool name for its arguments; Example: goat_describe {query:\"send a message to a thread\"}",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "query": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {}
+      }
+    ],
+    "guide": "Find paths with goat_describe. Pass path, paths or query; limit is 1-50, default 10. Pass nextCursor with the same query and path for the next page.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "path": "surface.call",
+    "name": "goat_call",
+    "summary": "Call any GOAT capability by path and get one result shape",
+    "description": "Call one GOAT capability by path or tool name, with args exactly as that tool takes them; it runs the same checks as a direct call and adds no permission. Returns status ok with value, error with code, reason and retryable, or needs_human with a handoff a person must finish, so do not retry. Example: goat_call {path:\"thread.read\", args:{threadId:\"t1\"}}",
+    "effect": "destructive",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "args": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "path": "thread.list"
+        }
+      }
+    ],
+    "guide": "Find paths with goat_describe. An invalid_request for an argument the path does not take, or one that does not decode, carries details.expectedSignature, the path's arguments on one line.",
+    "idempotencyReason": "Dispatches through the target tool's own authorization and idempotency admission; args.clientRequestId belongs to that target. Caching the dispatcher would bypass target replay checks and freeze call-again flows.",
+    "annotations": {
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "path": "thread.start",
+    "name": "goat_thread_start",
+    "summary": "Delegate a child task",
+    "description": "Delegate a child task; it stays this thread's subagent. Completion wakes this thread; don't poll. A worker cannot start children; a parent may run at most four.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "async",
+            "wait"
+          ]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "maximum": 60000
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Start a review round on another model",
+        "args": {
+          "task": "Review the diff on branch fix/flaky-checkout against dev. Report findings with path:line.",
+          "model": "gpt-6.1-sol",
+          "clientRequestId": "checkout-review-1"
+        }
+      }
+    ],
+    "idempotency": "key",
+    "reconcile": "thread.list",
+    "guide": "Delegate a research lane, review round, or implementation slice from an active agent run in this GOAT thread. The child receives the supplied task prompt without parent conversation history. Prefer mode='async' for long work. timeoutMs in mode='wait' limits the parent's wait and does not cancel the child. Async completion notifies and wakes this thread. Reuse clientRequestId for retries.",
+    "annotations": {
+      "title": "Delegate a child task",
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "task": "The child's whole brief, up to 64 KB.",
+      "title": "The child thread's title in the sidebar.",
+      "model": "Codex model id; omit to inherit."
+    }
+  },
+  {
+    "path": "thread.send",
+    "name": "goat_thread_send",
+    "summary": "Send to a GOAT thread",
+    "description": "Send a message to your child thread, starting or steering a turn.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "steer",
+            "followup",
+            "collect",
+            "interrupt"
+          ]
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Send a follow-up that a retry cannot duplicate",
+        "args": {
+          "threadId": "<threadId>",
+          "text": "Rebase on dev and rerun the failing test.",
+          "clientRequestId": "followup-rebase-1"
+        }
+      }
+    ],
+    "idempotency": "key",
+    "reconcile": "thread.read",
+    "guide": "Use clientRequestId for idempotent retries. The target must be a child of the calling thread.",
+    "annotations": {
+      "title": "Send to a GOAT thread",
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "threadId": "The thread to message. With host, the id that host returned.",
+      "text": "The message, up to 64 KB."
+    }
+  },
+  {
+    "path": "thread.read",
+    "name": "goat_thread_read",
+    "summary": "Read a GOAT thread",
+    "description": "Read a child thread's durable state and paginated messages.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "before": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Read a thread",
+        "args": {
+          "threadId": "<threadId>"
+        }
+      }
+    ],
+    "guide": "Pass before to read a page before a sequence number. Only the calling thread's own children can be read.",
+    "annotations": {
+      "title": "Read a GOAT thread",
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "threadId": "The thread to read. With host, the id that host returned."
+    }
+  },
+  {
+    "path": "thread.list",
+    "name": "goat_thread_list",
+    "summary": "List GOAT threads",
+    "description": "Read this thread’s children.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeFinished": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Check on the threads this thread started",
+        "args": {}
+      }
+    ],
+    "guide": "Use includeFinished to include finished child threads.",
+    "annotations": {
+      "title": "List GOAT threads",
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "path": "thread.wait",
+    "name": "goat_thread_wait",
+    "summary": "Wait for a GOAT thread",
+    "description": "Wait for a child thread run to end. This only reads state: timeout leaves work running.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "maximum": 60000
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Wait for a thread’s run to end",
+        "args": {
+          "threadId": "<threadId>",
+          "timeoutMs": 60000
+        }
+      }
+    ],
+    "guide": "Timeout does not interrupt work. Completion wakes this thread; do not poll. Waits are limited to 60000 milliseconds.",
+    "annotations": {
+      "title": "Wait for a GOAT thread",
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "threadId": "The thread to wait on. With host, the id that host returned.",
+      "timeoutMs": "How long to wait, at most 60000 milliseconds. A timeout leaves the run going."
+    }
+  },
+  {
+    "path": "thread.stop",
+    "name": "goat_thread_stop",
+    "summary": "Interrupt a GOAT thread",
+    "description": "Interrupt a child thread’s running turn.",
+    "effect": "destructive",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Stop a launched thread",
+        "args": {
+          "threadId": "thread-1"
+        }
+      }
+    ],
+    "idempotencyReason": "Each call stops the current run; a repeat can stop a later run.",
+    "guide": "The target must be a child of the calling thread.",
+    "annotations": {
+      "title": "Interrupt a GOAT thread",
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "threadId": "The thread whose turn to interrupt."
+    }
+  },
+  {
+    "path": "thread.report_result",
+    "name": "goat_thread_report_result",
+    "summary": "Report this thread's result",
+    "description": "Record or replace the structured result of this worker thread’s current run for its parent. Recording a result does not end the run.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed",
+            "blocked",
+            "cancelled"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Report that work is blocked",
+        "args": {
+          "outcome": "blocked",
+          "summary": "Needs a GitHub token with repo scope to push."
+        }
+      }
+    ],
+    "idempotencyReason": "A new report replaces the current run’s previous report.",
+    "guide": "Call once you finish a dispatched task, and call again to replace the report if the result changes. Set outcome to succeeded, failed, blocked when you need something you cannot get, or cancelled. Report only checked facts.",
+    "annotations": {
+      "title": "Report this thread's result",
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "outcome": "succeeded, failed, blocked when you need something you cannot get, or cancelled.",
+      "summary": "What happened, up to 4000 characters."
+    }
+  },
+  {
+    "path": "user.send",
+    "name": "goat_send_to_user",
+    "summary": "user send",
+    "description": "Send a user notification once per run per kind.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ack",
+            "result"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "kind": "ack",
+          "text": "Working"
+        }
+      }
+    ],
+    "idempotencyReason": "The host accepts each kind at most once per run.",
+    "guide": "Send a notification; the host enforces once per run per kind."
+  },
+  {
+    "path": "request.ask",
+    "name": "goat_ask",
+    "summary": "Request a durable decision",
+    "description": "Create a question, approval, or decision request. Retry with the same clientRequestId to reuse the result. Silence never approves.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "question",
+            "approval",
+            "decision"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "consequence": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ]
+          }
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Ask whether to merge with a known failing check",
+        "args": {
+          "kind": "decision",
+          "summary": "Merge with the flaky e2e check failing?",
+          "detail": "The same e2e test fails on dev; the change itself passes its own tests.",
+          "options": [
+            {
+              "id": "merge",
+              "label": "Merge now",
+              "consequence": "Lands the fix; dev stays red on that test."
+            },
+            {
+              "id": "wait",
+              "label": "Wait for the e2e fix",
+              "consequence": "Holds the fix until the test is repaired."
+            }
+          ],
+          "clientRequestId": "merge-decision-1"
+        }
+      }
+    ],
+    "idempotency": "key",
+    "reconcile": "thread.read",
+    "guide": "A decision requires at least two options. The host returns a needs_human handoff.",
+    "annotations": {
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "summary": "The decision, as one short question.",
+      "detail": "What the person needs to know to decide.",
+      "options": "Choices as {id, label, consequence}; a decision needs at least two."
+    }
+  }
+]

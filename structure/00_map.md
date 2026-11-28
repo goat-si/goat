@@ -24,3 +24,9 @@ State: `real` = has working code, `stub` = placeholder, `legacy` = superseded, t
 | `scripts/build-dev-app.sh` | sh | Build + install GOAT 2 (Dev), only from `goat2`, gate: `pnpm -r typecheck` + `cargo test --workspace --locked` | G | real (`1212962`) |
 | `docs/` | md | DECISIONS, PAPER, DESIGN, MOTION, PROVENANCE, lanes, parity (D) | owner + lanes | real |
 | `structure/` | md | This SSOT | owner | real |
+
+## Part 2 additions (planned, lane P2-S, 2026-11-28)
+| Path | Lang | Role | Lane | State |
+|---|---|---|---|---|
+| `crates/goat2-engine-sdk` | Rust | Driver for Cursor, OpenCode (1.x and 2 via v1's version selector), Muse over `apps/engine-helper`; Pi/OmO RPC driven directly | P2-S | on `goat2_engine_sdk` |
+| `apps/engine-helper` | Node/TS | One helper process per thread wrapping the Node-only SDKs; protocol `apps/engine-helper/PROTOCOL.md` | P2-S | on `goat2_engine_sdk` |

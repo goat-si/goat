@@ -17,6 +17,7 @@ mod index;
 mod line;
 mod log;
 mod store;
+mod syncgroup;
 
 pub use error::{Result, StoreError};
 pub use store::{
