@@ -1,3 +1,4 @@
+import { guardDiffFileContents, withListedCommit } from "./withListedCommit.ts";
 import { addressedProjectOf, observeRead } from "./addressedProject.ts";
 import { missingProjectError } from "./pullRequestMissingProject.ts";
 import { supersedesReading, type PullRequestReading } from "./pullRequestReading.ts";
@@ -334,7 +335,6 @@ export class PullRequestService extends Context.Service<
 
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 const LABEL_CHANGE_REFUSAL = "You need triage access on this repository to change its labels.";
-
 export interface SupportedProject {
   readonly cursorKey: string;
   readonly project: OrchestrationProjectShell;
@@ -3182,13 +3182,15 @@ export const make = Effect.gen(function* () {
     );
     return { key, read };
   };
-  const diff: PullRequestService["Service"]["diff"] = (input) => {
-    // The host must revalidate both live PR refs before every aggregate file read.
-    if (input.path !== undefined && input.commit === undefined) return diffUncached(input);
-    const { key, read } = readDiff(input);
-    const result = read.pipe(Effect.map((observation) => observation.value));
-    return input.path === undefined ? staleDiff.serve(key, result) : result;
-  };
+  const diff: PullRequestService["Service"]["diff"] = (input) =>
+    withListedCommit("diff", input, activity).pipe(
+      Effect.flatMap((input) => {
+        if (input.path !== undefined && input.commit === undefined) return diffUncached(input);
+        const { key, read } = readDiff(input);
+        const result = read.pipe(Effect.map((observation) => observation.value));
+        return input.path === undefined ? staleDiff.serve(key, result) : result;
+      }),
+    );
 
   const filesViewedCache = yield* Cache.makeWith(
     (key: string) => {
@@ -3643,21 +3645,11 @@ export const make = Effect.gen(function* () {
         );
     return walk(undefined);
   };
-  // PR read access does not grant arbitrary repository reads with the project credential; restrict to changed files.
-  const diffFileContents: PullRequestService["Service"]["diffFileContents"] = (input) =>
-    changesFile(input).pipe(
-      Effect.flatMap((changed) =>
-        changed
-          ? readDiffFileContents(input)
-          : Effect.fail(
-              new PullRequestOperationError({
-                operation: "diffFileContents",
-                detail: "This file is not part of the change request.",
-                reason: "not-found",
-              }),
-            ),
-      ),
-    );
+  const diffFileContents = guardDiffFileContents(
+    changesFile,
+    readDiffFileContents,
+    credentialCached(activity),
+  );
 
   const revisions = (ref: SubscriptionRef.SubscriptionRef<number>) =>
     SubscriptionRef.changes(ref).pipe(Stream.filter((revision) => revision > 0));
