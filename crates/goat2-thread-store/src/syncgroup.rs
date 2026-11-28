@@ -9,7 +9,8 @@
 //! per append instead of 31 ms.
 //!
 //! Other platforms keep `sync_data` per append (`fdatasync` already makes the file durable on its
-//! own).
+//! own), so the group machinery is only exercised by the unit tests there.
+#![cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 
 use std::fs::File;
 use std::io;
