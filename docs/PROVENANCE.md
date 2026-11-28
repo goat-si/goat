@@ -363,3 +363,11 @@ Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.t
 | `apps/engine-helper/test/server.test.ts` | none | new: inject a failing loader for the pre-existing unavailable test after Muse registration. |
 
 Not lifted: usage and limits, account pools, text generation, cloud and checkpoints; attachment blob resolution and v1's provider-host runtime instructions are not exposed by this helper seam. V1 background workflow wake offers and runless child approvals are not mapped by the current helper session protocol; these fail the helper visibly. Windows launcher resolution and workspace path canonicalization are not lifted.
+||||||| parent of 208baece4e (feat(cursor): lift SDK rejection classifier)
+## P2-S cursor
+
+| GOAT 2 path | v1 path at 916b5ccc1b2 | How |
+|---|---|---|
+| apps/engine-helper/src/engines/cursor/rejections.ts | packages/provider-cursor/src/server/CursorSdk.ts:15-44 | adapted: exported the same narrow SDK unhandled-rejection classifier; registration remains for the Cursor engine to do when it loads |
+| apps/engine-helper/test/cursor.test.ts | packages/provider-cursor/src/server/CursorSdk.ts:15-44 | new: exercise the classifier and helper registry without a Cursor SDK or network |
+
