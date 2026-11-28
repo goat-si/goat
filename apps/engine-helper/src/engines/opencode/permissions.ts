@@ -54,18 +54,6 @@ export function parentPermissionBases(native: PermissionRuleset, metadata?: Reco
   const history = Array.isArray(metadata?.goatPermissionBaseHistory) ? metadata.goatPermissionBaseHistory : [];
   return [...previous, ...history, metadata?.goatPermissionBase].slice(-16).flatMap((value) => { const base = parseBase(value); return base ? [base] : []; }).concat(native.length ? [native] : []);
 }
-function goatShaped(rule: PermissionRuleset[number]): boolean {
-  const restricted = ["bash", "edit", "webfetch", "websearch", "codesearch", "external_directory", "doom_loop"];
-  const allowed = ["question", "read", "glob", "grep", "lsp", "todowrite", "task", "skill"];
-  return (rule.permission === "*" && rule.pattern === "*") ||
-    (restricted.includes(rule.permission) && rule.pattern === "*" && (rule.action === "deny" || rule.action === "ask")) ||
-    (allowed.includes(rule.permission) && rule.pattern === "*" && rule.action === "allow") ||
-    (rule.permission === "read" && ["*.env", "*.env.*", "*.env.example"].includes(rule.pattern)) ||
-    (rule.permission === "edit" && rule.pattern === "*" && rule.action === "allow") ||
-    (["webfetch", "websearch", "codesearch"].includes(rule.permission) && rule.pattern === "*" && rule.action === "allow") ||
-    (rule.permission === "external_directory" && rule.action === "allow" && (rule.pattern === "*" || (rule.pattern.endsWith("/*") && !rule.pattern.slice(0, -2).includes("*"))));
-}
-
 // permissionRules.ts:300-340, 539-572: replace GOAT's base while retaining native rules and metadata.
 export function resumePermissionRules(mode: RuntimeMode, native: PermissionRuleset, metadata?: Record<string, unknown>) {
   const base = permissionRules(mode);
@@ -75,18 +63,23 @@ export function resumePermissionRules(mode: RuntimeMode, native: PermissionRules
   let recorded: PermissionRuleset | undefined;
   let kept = native;
   let found = false;
+  let droppedUnverifiedAllows = false;
   for (let offset = native.length - 1; offset >= 0; offset--) {
     const match = candidates.find((candidate) => startsWith(native, candidate, offset));
     if (match) { recorded = match; kept = native.slice(offset + match.length); found = true; break; }
   }
-  if (!found && startsWith(native, base)) kept = native.slice(base.length);
-  else if (!found && native[0]?.permission === "*" && native[0].pattern === "*" && ["allow", "deny"].includes(native[0].action)) {
-    let index = 0; while (index < native.length && goatShaped(native[index]!)) index++;
-    kept = native.slice(index);
+  if (!found) {
+    const known = (["full-access", "approval-required", "auto-accept-edits", "auto"] as const).map(permissionRules).sort((a, b) => b.length - a.length).find((candidate) => startsWith(native, candidate));
+    if (known) kept = native.slice(known.length);
+    else if (native[0]?.permission === "*" && native[0].pattern === "*" && ["allow", "deny"].includes(native[0].action)) {
+      // v1's legacy-prefix heuristic can also consume native denies; preserve every deny when the base is unknown.
+      kept = native.filter((rule) => rule.action === "deny");
+      droppedUnverifiedAllows = native.some((rule) => rule.action === "allow");
+    }
   }
   if (found && recorded && (recorded.length !== base.length || !startsWith(recorded, base)) && !previous.some((item) => item.length === recorded.length && startsWith(item, recorded))) previous.push(recorded);
   const ownsDeny = ownsSubagentDeny(native, metadata);
-  return { permission: [...base, ...kept], metadata: { ...metadata, ...(previous.length ? { goatPreviousPermissionBases: previous.slice(-16) } : {}), goatPermissionBase: base, goatSubagentDeny: ownsDeny } };
+  return { permission: [...base, ...kept], metadata: { ...metadata, ...(previous.length ? { goatPreviousPermissionBases: previous.slice(-16) } : {}), goatPermissionBase: base, goatSubagentDeny: ownsDeny }, droppedUnverifiedAllows };
 }
 
 // permissionRules.ts:574-594: avoid rewriting a session when its effective policy is unchanged.

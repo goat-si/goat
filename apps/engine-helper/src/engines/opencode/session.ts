@@ -82,7 +82,8 @@ export class OpenCodeSession implements EngineSession {
       if (!response.data?.id) throw new Error("session missing");
       if (params.resume) await OpenCodeSession.requireIdle(api, [response.data.id, ...children.map((child) => child.id)]);
       if (params.resume) {
-        const desired = resumePermissionRules(params.runtimeMode, response.data.permission ?? [], response.data.metadata);
+        const { droppedUnverifiedAllows, ...desired } = resumePermissionRules(params.runtimeMode, response.data.permission ?? [], response.data.metadata);
+        if (droppedUnverifiedAllows) safeHost(host, params).log("warn", `OpenCode session ${response.data.id}: unverified allow overrides were dropped`);
         if (permissionUpdateNeeded(response.data.permission ?? [], response.data.metadata, desired)) await api.session.update({ sessionID: response.data.id, ...desired }, { throwOnError: true });
       }
       const session = new OpenCodeSession(api, server, params, safeHost(host, params), response.data.id, abortEvents);

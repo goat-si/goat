@@ -339,6 +339,40 @@ test("resume leaves matching policies without GOAT metadata untouched", async ()
   try { assert.ok(!fake.calls.some((call) => call.method === "update")); } finally { await session.shutdown(); }
 });
 
+test("metadata-less resume retains a native deny added after the unchanged base", async () => {
+  fake.reset();
+  const base = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "external_directory", pattern: "*", action: "allow" as const }];
+  fake.setNativePermission("session-fake", base);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const first = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  assert.ok(!fake.calls.some((call) => call.method === "update")); await first.shutdown();
+  fake.setNativePermission("session-fake", [...base, { permission: "edit", pattern: "*", action: "deny" }]);
+  const second = await opencodeEngine.start({ ...params, resume: "session-fake", runtimeMode: "approval-required" }, host);
+  try {
+    const update = fake.calls.findLast((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "session-fake")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    const edit = update.permission.filter((rule) => rule.permission === "edit" && rule.pattern === "*").at(-1);
+    assert.equal(edit?.action, "deny");
+  } finally { await second.shutdown(); }
+});
+
+test("unknown legacy permission bases retain denies and warn about discarded allows", async () => {
+  fake.reset(); fake.setNativePermission("session-fake", [
+    { permission: "*", pattern: "*", action: "allow" },
+    { permission: "bash", pattern: "*", action: "ask" },
+    { permission: "edit", pattern: "/private/*", action: "deny" },
+    { permission: "bash", pattern: "*", action: "allow" },
+  ]);
+  const warnings: string[] = [];
+  const host = { emit(_event: EngineEvent) {}, log(level: string, message: string) { if (level === "warn") warnings.push(message); }, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake", runtimeMode: "approval-required" }, host);
+  try {
+    const update = fake.calls.findLast((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "session-fake")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(update.permission.some((rule) => rule.pattern === "/private/*" && rule.action === "deny"));
+    assert.ok(!update.permission.some((rule) => rule.permission === "bash" && rule.action === "allow"));
+    assert.ok(warnings.some((message) => message.includes("session-fake") && message.includes("unverified allow overrides were dropped")));
+  } finally { await session.shutdown(); }
+});
+
 test("resume checks idle before applying changed root and child policies", async () => {
   fake.reset(); fake.setChildren("session-fake", ["child-1"]);
   const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
