@@ -81,11 +81,17 @@ impl HelperLaunch {
     }
 
     /// `GOAT2_ENGINE_HELPER_ENTRY` (required) and `GOAT2_ENGINE_HELPER_NODE` (default `node`),
-    /// as lane G's app bundle sets them.
+    /// as lane G's app bundle sets them. `GOAT2_ENGINE_HELPER_RUN_AS_NODE=1` (the Dev app uses its
+    /// Electron binary as Node) sets `ELECTRON_RUN_AS_NODE=1` on the helper child only; the host's
+    /// own env never carries it, so Electron apps that agents launch keep working.
     pub fn from_env() -> Option<Self> {
         let entry = std::env::var_os("GOAT2_ENGINE_HELPER_ENTRY")?;
         let node = std::env::var_os("GOAT2_ENGINE_HELPER_NODE").unwrap_or_else(|| "node".into());
-        Some(Self::new(node, entry))
+        let mut launch = Self::new(node, entry);
+        if std::env::var_os("GOAT2_ENGINE_HELPER_RUN_AS_NODE").is_some_and(|value| value == "1") {
+            launch = launch.with_env("ELECTRON_RUN_AS_NODE", "1");
+        }
+        Some(launch)
     }
 
     pub fn with_env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
