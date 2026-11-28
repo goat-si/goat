@@ -33,6 +33,8 @@ pub fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
 }
 
 fn read_range(file: &File, start: u64, end: u64) -> io::Result<Vec<u8>> {
+    #[cfg(test)]
+    tests::READ_BYTES.with(|c| c.set(c.get() + (end - start)));
     let mut buf = vec![0u8; (end - start) as usize];
     read_at(file, &mut buf, start)?;
     Ok(buf)
@@ -139,11 +141,21 @@ pub fn scan_back<E: From<io::Error>>(
                 return Ok(());
             }
             None => {
-                // A line longer than the buffer: find its start once and read the rest in one go,
-                // so a multi-MiB line (a large checkpoint) costs time linear in its length instead
-                // of re-copying the growing buffer for every 64 KiB chunk.
-                let line_start = rfind_newline(file, start, buf_start)?.map_or(start, |nl| nl + 1);
-                let mut line = read_range(file, line_start, buf_start)?;
+                // The usual case: the line started in the previous chunk. Join it like before.
+                let lo = buf_start.saturating_sub(CHUNK).max(start);
+                let mut more = read_range(file, lo, buf_start)?;
+                if lo <= start || more.contains(&b'\n') {
+                    more.extend_from_slice(&buf);
+                    buf = more;
+                    buf_start = lo;
+                    continue;
+                }
+                // A line longer than a chunk: find its start once and read the rest in one go, so
+                // a multi-MiB line (a large checkpoint) costs time linear in its length instead of
+                // re-copying the growing buffer for every 64 KiB chunk.
+                let line_start = rfind_newline(file, start, lo)?.map_or(start, |nl| nl + 1);
+                let mut line = read_range(file, line_start, lo)?;
+                line.extend_from_slice(&more);
                 line.extend_from_slice(&buf[..search_end]);
                 if !f(line_start, &line)? {
                     return Ok(());
@@ -360,6 +372,11 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    thread_local! {
+        /// Bytes read through `read_range` on this test thread.
+        pub(super) static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
     fn file_with(lines: &[Vec<u8>]) -> (File, Vec<(u64, Vec<u8>)>, u64) {
         let mut f = tempfile::tempfile().unwrap();
         let mut at = 0u64;
@@ -381,6 +398,48 @@ mod tests {
         })
         .unwrap();
         got
+    }
+
+    #[test]
+    fn scan_back_handles_short_lines_on_exact_chunk_boundaries() {
+        // Lines sized so that newlines fall right at chunk edges, and a chunk that is only "\n".
+        let first = vec![b'x'; CHUNK as usize - 1];
+        let lines = vec![
+            first,
+            Vec::new(),
+            vec![b'y'; CHUNK as usize - 2],
+            b"z".to_vec(),
+            vec![b'w'; 2 * CHUNK as usize],
+            Vec::new(),
+            b"end".to_vec(),
+        ];
+        let (file, expect, end) = file_with(&lines);
+        let mut newest_first = expect.clone();
+        newest_first.reverse();
+        assert_eq!(back(&file, 0, end, usize::MAX), newest_first);
+        for (i, (at, _)) in expect.iter().enumerate() {
+            assert_eq!(
+                back(&file, *at, end, usize::MAX),
+                newest_first[..lines.len() - i].to_vec()
+            );
+        }
+    }
+
+    #[test]
+    fn scan_back_on_many_short_lines_reads_each_chunk_about_once() {
+        let lines: Vec<Vec<u8>> = (0..20_000)
+            .map(|i| format!("line {i} {}", "p".repeat(i % 97)).into_bytes())
+            .collect();
+        let (file, expect, end) = file_with(&lines);
+        let mut newest_first = expect.clone();
+        newest_first.reverse();
+        READ_BYTES.with(|c| c.set(0));
+        assert_eq!(back(&file, 0, end, usize::MAX), newest_first);
+        let read = READ_BYTES.with(|c| c.get());
+        assert!(
+            read <= end + end / 4,
+            "read {read} bytes for a {end}-byte file"
+        );
     }
 
     #[test]

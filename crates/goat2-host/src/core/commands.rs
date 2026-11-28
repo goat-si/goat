@@ -151,6 +151,13 @@ pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
             "clientRequestId is empty",
         ));
     }
+    // Do not retain secret-bearing auth responses in the generic idempotency cache.
+    if matches!(&frame, Command::ProviderAuthRespond { .. }) {
+        return Err(command_error(
+            Reason::NotAvailable,
+            "provider_auth_respond is not available in this host build yet",
+        ));
+    }
     let _guard = host.inner.command_lock.lock().await;
     // A sign-in answer carries secrets (an API key, terminal input): the dedupe cache keeps
     // only a digest of its arguments, enough to tell a retry from a different answer.

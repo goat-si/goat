@@ -27,6 +27,14 @@ export interface FakeOptions {
 
 let cardSeqCounter = 1000;
 
+type AuthResponse = Extract<ClientFrame, { type: "provider_auth_respond" }>["response"];
+/** Credentials values and terminal data are secrets: keep the shape, never the values. */
+export function redactAuthResponse(r: AuthResponse): AuthResponse {
+  if (r.type === "credentials") return { type: "credentials", values: Object.fromEntries(Object.keys(r.values).map((k) => [k, "<redacted>"])) };
+  if (r.type === "terminal") return { ...r, data: "<redacted>" };
+  return r;
+}
+
 export function line(seq: number, at: string, ev: Ev): LogLine {
   return { v: 1, seq, at, ...ev } as LogLine;
 }
@@ -76,7 +84,8 @@ export class FakeHost implements Transport {
 
   send(frame: ClientFrame) {
     if (this.state !== "open") return;
-    this.received.push(frame);
+    // The test log never keeps secrets: an auth response is recorded with its values redacted.
+    this.received.push(frame.type === "provider_auth_respond" ? { ...frame, response: redactAuthResponse(frame.response) } : frame);
     switch (frame.type) {
       case "subscribe_cards": {
         this.cardSubs.add(frame.subId);
