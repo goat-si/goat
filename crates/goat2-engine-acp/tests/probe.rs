@@ -116,7 +116,7 @@ async fn probe_reads_commands_and_deletes_its_session() {
         .available_commands()
         .expect("commands advertised");
     assert_eq!(commands[0]["name"], "review");
-    assert!(probe.session.session_setup().config_options.len() > 0);
+    assert!(!probe.session.session_setup().config_options.is_empty());
     probe.close().await;
     assert!(methods(&log).contains(&"session/delete".to_owned()));
 }
