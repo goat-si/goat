@@ -13,17 +13,13 @@ header{padding:32px 40px 8px} h1{font-size:28px;letter-spacing:-.02em;margin:0 0
 .sizes{display:flex;gap:18px;align-items:flex-end}
 .av{position:relative;flex-shrink:0} .av svg.face{position:absolute;left:0;top:0;overflow:visible}
 .chip{position:absolute;border-radius:9999px;background:#fff;display:flex;align-items:center;justify-content:center}
-.ring{position:absolute;border-radius:9999px;border:1.6px solid #DCDCE0;border-top-color:var(--ink);animation:spin 1.2s linear infinite;opacity:0;transition:opacity 200ms var(--ease)}
-.av[data-mood=work] .ring{opacity:1}
 .dot{position:absolute;border-radius:9999px;background:var(--decide);opacity:0;transition:opacity 200ms var(--ease)} .av[data-mood=needs_you] .dot{opacity:1}
 .label{font-size:12px;font-weight:600} .label.decide{color:#C8333A}
 @keyframes spin{to{transform:rotate(360deg)}}
 .demo{margin:32px 40px;padding:20px;border:1px solid var(--line);border-radius:12px;display:flex;gap:20px;align-items:center}
 .demo .status{font-size:13px;color:var(--muted)} .demo .status b{color:var(--ink)}
-@media (prefers-reduced-motion: reduce){.ring{animation:none;border-color:var(--ink)}}
-body.reduce .ring{animation:none;border-color:var(--ink)}
 </style></head><body>
-<header><h1>Bot motion</h1><p class="sub">Each mood at 64px and 40px (sidebar). Pose math is <code>@goat2/bot-face</code> (hermes-agent face clock + GOAT 2 moods). Ring = working, red dot = needs you, chip = which CLI.</p></header>
+<header><h1>Bot motion</h1><p class="sub">Each mood at 64px and 40px (sidebar). Pose math is <code>@goat2/bot-face</code> (hermes-agent face clock + GOAT 2 moods). Moving face = working (no ring), red dot = needs you, chip = which CLI.</p></header>
 <div class="bar"><label><input type="checkbox" id="reduce"> Reduced motion</label><button id="cycle">Play a run (idle → ack → think → work → needs you → work → done → idle)</button></div>
 <div class="grid" id="grid"></div>
 <div class="demo"><div id="demoAv"></div><div class="status" id="demoStatus">Press “Play a run”.</div></div>
@@ -33,7 +29,7 @@ const MOODS = [
  ['idle','Idle','No work. Calm, slow sway, blink every 3.2s.','codex'],
  ['ack','Ack','Work arrives (received / dispatching). One nod, 0.32s.','claude'],
  ['think','Thinking','Planning before tools run. Leans, looks up, dots.','antigravity'],
- ['work','Working','Tools running (running). Sway + ring around the chip.','claude'],
+ ['work','Working','Tools running (running). The face leans in and sways; no ring or spinner (2026-11-28).','claude'],
  ['needs_you','Needs you','Login, OTP, approval (waiting_input). Faces you, one hop every 4s.','antigravity'],
  ['done','Done','Run completed. Happy eyes 1.2s, then idle.','opencode'],
  ['error','Error','Run failed. Still, eyes shut. The label says why.','pi'],
@@ -62,7 +58,6 @@ function avatar(size, color, chip, mood){
   <path class="happy" d="M12.6 21q2.8-3.6 5.6 0M21.8 21q2.8-3.6 5.6 0" stroke="${color==='#111113'?'#fff':'#1A1A1A'}" stroke-width="2" fill="none" stroke-linecap="round" opacity="0"/>
   <path class="shut" d="M12.6 20.5h5.6M21.8 20.5h5.6" stroke="${color==='#111113'?'#fff':'#1A1A1A'}" stroke-width="2" stroke-linecap="round" opacity="0"/>
   <g class="dots" opacity="1"><circle class="d0" cx="15" cy="31" r="1.2" fill="#fff" opacity="0"/><circle class="d1" cx="20" cy="31" r="1.2" fill="#fff" opacity="0"/><circle class="d2" cx="25" cy="31" r="1.2" fill="#fff" opacity="0"/></g></g></svg>
-  <div class="ring" style="left:${20*s}px;top:${20*s}px;width:${28*s}px;height:${28*s}px"></div>
   <div class="chip" style="left:${24*s}px;top:${24*s}px;width:${20*s}px;height:${20*s}px;box-shadow:0 0 0 ${2*s}px #fff">${CHIPS[chip]}</div>
   <div class="dot" style="left:${32*s}px;top:${2*s}px;width:${10*s}px;height:${10*s}px;box-shadow:0 0 0 ${2*s}px #fff"></div>`;
  const icon=el.querySelector('.chip > *'); if(icon){icon.style.transform=`scale(${s})`}
