@@ -5,8 +5,7 @@
 // unknown item types behave exactly as in v1. An item v1 cannot decode is reported in `undecodable`, never dropped
 // silently.
 //
-// Rules: a user input shows once it reached a run (run.started inputIds, or input.delivered accepted into the active
-// run); queued inputs stay in the queue banner. An item is grouped under its origin run by item.runId, also when it
+// Rules: a user input shows once it reached a run (run.started inputIds, or input.delivered accepted into its run); queued inputs stay in the queue banner. An item is grouped under its origin run by item.runId, also when it
 // arrives after that run's run.finished (lane E, Part 2 late subagent completions). Streaming text for an unfinished
 // item is an in-progress assistant message at the end.
 import { OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
@@ -113,7 +112,8 @@ export function projectGoat2Thread(input: Goat2ThreadInput): ProjectedThread {
         for (const id of line.inputIds) showInput(id, line.runId, "turn_start");
         break;
       case "input.delivered":
-        if (line.outcome === "accepted" && activeRunId !== null) showInput(line.inputId, activeRunId, "steer");
+        // The engine took the input into run line.runId, as a steer or as the turn start.
+        if (line.outcome === "accepted") showInput(line.inputId, line.runId, line.as === "steer" ? "steer" : "turn_start");
         break;
       case "run.finished": {
         const run = runs.get(line.runId);

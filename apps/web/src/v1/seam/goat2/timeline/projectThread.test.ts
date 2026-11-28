@@ -36,7 +36,7 @@ describe("projectGoat2Thread", () => {
     const p = project([
       started(1, "r1", []), accepted(2, "q1", "queued"), accepted(3, "q2", "cancel me"), accepted(4, "s1", "steer"),
       line(5, at(5), { type: "input.changed", inputId: "q2", cancelled: true }),
-      line(6, at(6), { type: "input.delivered", inputId: "s1", outcome: "accepted" }),
+      line(6, at(6), { type: "input.delivered", inputId: "s1", runId: "r1", as: "steer", outcome: "accepted" }),
       line(7, at(7), { type: "item.completed", runId: "r1", engineLocator: null, item: item("t", "r1", "echo", at(7), { type: "user_message", createdBy: "user", creationSource: "web", messageId: "s1", inputIntent: "steer", text: "steer", attachments: [] }) }),
     ]);
     expect(p.undecodable).toEqual([]);
