@@ -329,6 +329,76 @@ async fn a_malformed_model_entry_fails_instead_of_a_partial_catalog() {
     assert!(message.contains("unreadable model"), "{message}");
 }
 
+/// Final review r1: `account/read` is checked whole against the pinned `GetAccountResponse` (v1
+/// decodes it with Codex's schema), so a malformed answer fails the probe instead of showing a
+/// signed-in or unknown account as Ready.
+#[tokio::test]
+async fn a_malformed_account_answer_fails_the_probe() {
+    let cases = [
+        (
+            "no requiresOpenaiAuth",
+            json!({"account": {"type": "apiKey"}}),
+        ),
+        (
+            "empty account",
+            json!({"account": {}, "requiresOpenaiAuth": true}),
+        ),
+        (
+            "unknown account type",
+            json!({"account": {"type": "magic"}, "requiresOpenaiAuth": true}),
+        ),
+        (
+            "chatgpt without email",
+            json!({"account": {"type": "chatgpt", "planType": "pro"}, "requiresOpenaiAuth": true}),
+        ),
+        (
+            "chatgpt with an unknown plan",
+            json!({"account": {"type": "chatgpt", "email": null, "planType": "galaxy"}, "requiresOpenaiAuth": true}),
+        ),
+        (
+            "incomplete workspace routing",
+            json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true, "workspaceRouting": {"backendOrigin": "x"}}),
+        ),
+        (
+            "string requiresOpenaiAuth",
+            json!({"account": null, "requiresOpenaiAuth": "yes"}),
+        ),
+    ];
+    for (name, answer) in cases {
+        let mut e = handshake(None);
+        e.push(expect(
+            json!({"id": 2, "method": "account/read", "params": {}}),
+        ));
+        e.push(emit(json!({"id": 2, "result": answer})));
+        let p = factory(e).probe().await.unwrap();
+        assert_eq!(p.status, ServerProviderState::Error, "{name}");
+        assert_ne!(
+            p.auth.status,
+            ServerProviderAuthStatus::Authenticated,
+            "{name}"
+        );
+        assert!(p.models.is_empty(), "{name}");
+        let message = p.message.unwrap();
+        assert!(message.contains("unreadable account"), "{name}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn an_initialize_answer_missing_a_required_field_fails_the_probe() {
+    let mut e = handshake(None);
+    if let Entry::EmitInbound { frame, .. } = &mut e[1] {
+        frame["result"]
+            .as_object_mut()
+            .unwrap()
+            .remove("platformOs");
+    }
+    // The probe stops after initialize; nothing else is expected.
+    e.truncate(3);
+    let p = factory(e).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert!(p.models.is_empty());
+}
+
 #[tokio::test]
 async fn a_malformed_cursor_fails_instead_of_ending_the_catalog() {
     let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))], "nextCursor": 7});

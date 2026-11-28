@@ -158,22 +158,126 @@ struct Snapshot {
     config: Option<Value>,
 }
 
+/// The pinned `InitializeResponse` (schema/codex-0.167.0/v1/InitializeResponse.json): v1 decodes every
+/// client response with Codex's schema (packages/effect-codex-app-server/src/client.ts:276-288),
+/// so a missing required field fails the probe.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct InitializeResponse {
-    #[serde(default)]
     user_agent: String,
-    #[serde(default)]
-    codex_home: Option<String>,
+    codex_home: String,
+    platform_family: String,
+    platform_os: String,
 }
 
+/// `account/read` as the probe reads it, after `AccountResponseShape` accepted the answer.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountResponse {
     #[serde(default)]
     account: Option<Value>,
-    #[serde(default)]
     requires_openai_auth: bool,
+}
+
+/// The pinned `GetAccountResponse` (schema/codex-0.167.0/v2/GetAccountResponse.json), checked whole as
+/// v1 decodes it: `requiresOpenaiAuth` required, `account` one of the four tagged variants with
+/// their fields (a ChatGPT account must carry `email` and a known `planType`), and
+/// `workspaceRouting` complete when present. Unknown fields are tolerated.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct AccountResponseShape {
+    account: Option<AccountShape>,
+    requires_openai_auth: bool,
+    workspace_routing: Option<WorkspaceRoutingShape>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[allow(dead_code)]
+enum AccountShape {
+    ApiKey {},
+    #[serde(rename_all = "camelCase")]
+    Chatgpt {
+        /// Required, may be null.
+        #[serde(deserialize_with = "present_nullable")]
+        email: Option<String>,
+        plan_type: PlanTypeShape,
+        workspace_name: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    AmazonBedrock {
+        #[serde(default)]
+        uses_codex_managed_credentials: bool,
+    },
+    Gcp {},
+}
+
+/// A required field whose value may be `null` (absent is an error, unlike a plain `Option`).
+fn present_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+/// The pinned `PlanType` values.
+#[derive(Deserialize)]
+#[serde(try_from = "String")]
+struct PlanTypeShape;
+
+impl TryFrom<String> for PlanTypeShape {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        const PLANS: [&str; 20] = [
+            "free",
+            "go",
+            "plus",
+            "pro",
+            "prolite",
+            "promax",
+            "team",
+            "self_serve_business_prolite",
+            "self_serve_business_usage_based",
+            "business",
+            "ent26",
+            "enterprise_cbp_automation",
+            "enterprise_cbp_usage_based",
+            "enterprise",
+            "edu",
+            "edu_plus",
+            "edu_pro",
+            "sci",
+            "sci_plus",
+            "unknown",
+        ];
+        if PLANS.contains(&value.as_str()) {
+            Ok(PlanTypeShape)
+        } else {
+            Err(format!("unknown planType {value:?}"))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct WorkspaceRoutingShape {
+    account_routing_override: AccountRoutingOverrideShape,
+    backend_origin: String,
+    chatgpt_account_id: String,
+}
+
+#[derive(Deserialize)]
+enum AccountRoutingOverrideShape {
+    #[serde(rename = "NO_CONSTRAINT")]
+    NoConstraint,
+    #[serde(rename = "us")]
+    Us,
+    #[serde(rename = "us_cr")]
+    UsCr,
 }
 
 impl AccountResponse {
@@ -212,10 +316,14 @@ async fn discover(
     let effective_base_url = route_config
         .as_ref()
         .and_then(|c| read_effective_base_url(c, openai_base_url_env(options).as_deref()));
-    let account: AccountResponse = conn
-        .request("account/read", &json!({}))
+    let account_value = conn
+        .request_value("account/read", &json!({}))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("account/read: {e}"))?;
+    serde_json::from_value::<AccountResponseShape>(account_value.clone())
+        .map_err(|e| format!("account/read answered an unreadable account: {e}"))?;
+    let account: AccountResponse = serde_json::from_value(account_value)
+        .map_err(|e| format!("account/read answered an unreadable account: {e}"))?;
     if account.account.is_none()
         && account.requires_openai_auth
         && !routes_away_from_openai(effective_base_url.as_deref())
@@ -244,7 +352,7 @@ async fn discover(
         if account.account_type() == Some("chatgpt") {
             chatgpt_models(
                 conn,
-                init.codex_home.as_deref(),
+                Some(init.codex_home.as_str()),
                 spawned_at_ms,
                 discovery_deadline,
             )
@@ -1533,6 +1641,37 @@ mod tests {
             Some("https://x.example.com".into())
         );
     }
+    #[test]
+    fn account_answers_follow_the_pinned_schema() {
+        let ok = |v: Value| serde_json::from_value::<AccountResponseShape>(v).is_ok();
+        // Accepted: no account, each variant, a ChatGPT email that is null, defaulted and
+        // nullable fields absent, complete workspace routing, unknown fields.
+        for good in [
+            json!({"account": null, "requiresOpenaiAuth": true}),
+            json!({"requiresOpenaiAuth": false}),
+            json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}),
+            json!({"account": {"type": "chatgpt", "email": null, "planType": "pro"}, "requiresOpenaiAuth": true}),
+            json!({"account": {"type": "chatgpt", "email": "a@b.c", "planType": "unknown", "workspaceName": "W"}, "requiresOpenaiAuth": true, "future": 1}),
+            json!({"account": {"type": "amazonBedrock"}, "requiresOpenaiAuth": false}),
+            json!({"account": {"type": "gcp"}, "requiresOpenaiAuth": false}),
+            json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true, "workspaceRouting": {"accountRoutingOverride": "us_cr", "backendOrigin": "https://x", "chatgptAccountId": "id"}}),
+        ] {
+            assert!(ok(good.clone()), "{good}");
+        }
+        for bad in [
+            json!({"account": {"type": "apiKey"}}),
+            json!({"account": {}, "requiresOpenaiAuth": true}),
+            json!({"account": {"type": "chatgpt", "planType": "pro"}, "requiresOpenaiAuth": true}),
+            json!({"account": {"type": "chatgpt", "email": "a@b.c"}, "requiresOpenaiAuth": true}),
+            json!({"account": {"type": "chatgpt", "email": 3, "planType": "pro"}, "requiresOpenaiAuth": true}),
+            json!({"account": {"type": "amazonBedrock", "usesCodexManagedCredentials": null}, "requiresOpenaiAuth": true}),
+            json!({"account": "apiKey", "requiresOpenaiAuth": true}),
+            json!({"account": null, "requiresOpenaiAuth": true, "workspaceRouting": {"accountRoutingOverride": "eu", "backendOrigin": "x", "chatgptAccountId": "y"}}),
+        ] {
+            assert!(!ok(bad.clone()), "{bad}");
+        }
+    }
+
     #[test]
     fn urls_follow_whatwg_origins() {
         // Every expected value below was checked against Node's `new URL` (v1's parser).
