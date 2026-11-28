@@ -15,7 +15,10 @@ use goat2_contracts::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-pub use commands::{BotProfile, Command, CommandError, CommandReply};
+pub use commands::{
+    BotProfile, Command, CommandError, CommandErrorCode, CommandReply, CommandValue, command_error,
+    is_command,
+};
 pub use envelope::{ErrorCode, Handoff, NextCall, SurfaceError, SurfaceResult};
 
 use crate::store::ThreadStore;
@@ -72,7 +75,8 @@ pub trait WsHost: Send + Sync + 'static {
         &self,
         thread_id: &ThreadId,
     ) -> (broadcast::Receiver<ThreadLive>, Vec<StreamingItem>);
-    /// Run one UI command. Idempotent by `clientRequestId` where the command carries one.
+    /// Run one UI command (a [Command] frame for which [is_command] is true). Deduped by
+    /// `clientRequestId`; the caller answers with the current frame's `reqId`.
     async fn command(&self, command: Command) -> CommandReply;
     /// Record how long the host itself was stalled, so silent-connection checks can ignore it.
     fn stalled_ms_since(&self, since: std::time::Instant) -> u64 {
@@ -113,20 +117,12 @@ pub struct ThreadStartArgs {
     pub model: Option<String>,
     /// `async` (default) or `wait` (v1 task.create mode; owner 2026-11-28).
     #[serde(default)]
-    pub mode: Option<ChildMode>,
+    pub mode: Option<goat2_contracts::StartMode>,
     /// For `mode: wait`: how long the call may block, at most 60 s.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub client_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChildMode {
-    #[default]
-    Async,
-    Wait,
 }
 
 /// `thread.send`.
@@ -227,14 +223,7 @@ pub enum AskKind {
     Decision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DecisionOption {
-    pub id: String,
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consequence: Option<String>,
-}
+pub use goat2_contracts::DecisionOption;
 
 /// What the MCP module needs from the host. The MCP module owns the registry, `goat_describe`,
 /// argument decoding, `clientRequestId` reservation and the HTTP/auth layer; the host owns the

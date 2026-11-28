@@ -7,8 +7,10 @@
 
 pub mod api;
 pub mod config;
+pub mod core;
 pub mod engine;
 pub mod mcp;
+pub mod stall;
 pub mod store;
 pub mod util;
 pub mod ws;

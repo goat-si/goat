@@ -1,37 +1,41 @@
-//! Card fold: `goat.jsonl` lines -> [ThreadCard] + [Fold].
+//! Card fold: `goat.jsonl` lines -> [ThreadCard] + [Fold], following the rules documented on
+//! `goat2_contracts::Fold` (lane C) so checkpoints match what lane A's store will write.
 
-use goat2_contracts::limits::CARD_EXCERPT_MAX_CHARS;
+use goat2_contracts::limits::{CARD_EXCERPT_MAX_CHARS, CARD_TITLE_MAX_CHARS};
 use goat2_contracts::text::clamp_chars;
 use goat2_contracts::{
-    AssistantMessagePhase, ChildCounts, DeliveredAs, DeliveryOutcome, Epoch, Fold, LogEvent,
-    LogLine, NeedsYou, NotifyKind, RunOutcome, ThreadCard, ThreadId, ThreadStatus, TurnItemBody,
+    AssistantMessagePhase, ChildCounts, DeliveredAs, DeliveryOutcome, Epoch, Fold, HeldInputs,
+    LogEvent, LogLine, NeedsYou, NotifyKind, QueuedInput, RequestId, RequestOutcome, RunOutcome,
+    ThreadCard, ThreadId, ThreadStatus, TurnItemBody,
 };
 
-/// Card plus the fold state, and the one bit the status precedence needs that neither carries:
-/// whether the last finished run failed.
+/// Card plus fold state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CardFold {
     pub card: ThreadCard,
     pub fold: Fold,
-    pub last_run_failed: bool,
+}
+
+/// Request id of the resend request opened for an `unknown` run.
+pub fn resend_request_id(run_id: &goat2_contracts::RunId) -> RequestId {
+    RequestId::new(format!("resend:{run_id}"))
 }
 
 impl CardFold {
-    /// Rebuild from a stored card and fold (`card.json`).
     pub fn from_stored(card: ThreadCard, fold: Fold) -> Self {
-        let last_run_failed = card.status == ThreadStatus::Failed;
-        Self {
-            card,
-            fold,
-            last_run_failed,
-        }
+        Self { card, fold }
     }
 
-    /// Recompute `status` and `needsYou` with the precedence from PRD model.md:
-    /// open request (incl. resend) > running > queued > failed > idle.
+    /// Status precedence (PRD model.md): open request (incl. resend) > running > queued >
+    /// failed > idle.
     pub fn recompute_status(&mut self) {
         let card = &mut self.card;
-        if let Some(request) = self.fold.open_requests.last() {
+        let fold = &self.fold;
+        card.children = ChildCounts {
+            running: fold.running_child_ids.len() as u32,
+            total: card.children.total,
+        };
+        if let Some(request) = fold.open_requests.last() {
             card.status = ThreadStatus::NeedsYou;
             card.needs_you = Some(NeedsYou {
                 kind: request.kind,
@@ -40,11 +44,11 @@ impl CardFold {
             return;
         }
         card.needs_you = None;
-        card.status = if self.fold.active_run_id.is_some() {
+        card.status = if fold.active_run_id.is_some() {
             ThreadStatus::Running
-        } else if !self.fold.queued_input_ids.is_empty() {
+        } else if !fold.queued_inputs.is_empty() {
             ThreadStatus::Queued
-        } else if self.last_run_failed {
+        } else if fold.last_run_outcome == Some(RunOutcome::Failed) {
             ThreadStatus::Failed
         } else {
             ThreadStatus::Idle
@@ -61,10 +65,7 @@ pub fn new_fold(id: &ThreadId, epoch: Epoch, line: &LogLine) -> Option<CardFold>
         card: ThreadCard {
             id: id.clone(),
             kind: created.kind,
-            title: clamp_chars(
-                &created.title,
-                goat2_contracts::limits::CARD_TITLE_MAX_CHARS,
-            ),
+            title: clamp_chars(&created.title, CARD_TITLE_MAX_CHARS),
             project_id: created.project_id.clone(),
             bot_id: created.bot_id.clone(),
             parent: created.parent.clone(),
@@ -82,10 +83,13 @@ pub fn new_fold(id: &ThreadId, epoch: Epoch, line: &LogLine) -> Option<CardFold>
             card_seq: 0,
         },
         fold: Fold::default(),
-        last_run_failed: false,
     };
     cf.recompute_status();
     Some(cf)
+}
+
+fn is_active_run(fold: &Fold, run_id: Option<&goat2_contracts::RunId>) -> bool {
+    run_id.is_some() && fold.active_run_id.as_ref() == run_id
 }
 
 /// Apply one line after `thread.created`.
@@ -93,10 +97,10 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
     let card = &mut cf.card;
     let fold = &mut cf.fold;
     match &line.event {
-        LogEvent::ThreadCreated(_) | LogEvent::RunAccepted(_) | LogEvent::Checkpoint(_) => {}
+        LogEvent::ThreadCreated(_) | LogEvent::Checkpoint(_) => {}
         LogEvent::ThreadChanged(change) => {
             if let Some(title) = &change.title {
-                card.title = clamp_chars(title, goat2_contracts::limits::CARD_TITLE_MAX_CHARS);
+                card.title = clamp_chars(title, CARD_TITLE_MAX_CHARS);
             }
             if let Some(model) = &change.model {
                 card.engine.model = model.clone();
@@ -113,31 +117,91 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
         }
         LogEvent::InputAccepted(input) => {
             fold.counters.inputs += 1;
-            if !fold.queued_input_ids.contains(&input.input_id) {
-                fold.queued_input_ids.push(input.input_id.clone());
+            if !fold
+                .queued_inputs
+                .iter()
+                .any(|q| q.input_id == input.input_id)
+            {
+                fold.queued_inputs.push(QueuedInput {
+                    input_id: input.input_id.clone(),
+                    text: input.text.clone(),
+                    mode: input.mode,
+                    source: input.from.clone(),
+                    attachments: input.attachments.clone(),
+                });
             }
         }
-        LogEvent::InputDelivered(delivered) => match (delivered.delivered_as, delivered.outcome) {
-            // A declined steer stays queued as a followup with the same inputId.
-            (DeliveredAs::Steer, DeliveryOutcome::Declined) => {
-                if !fold.queued_input_ids.contains(&delivered.input_id) {
-                    fold.queued_input_ids.push(delivered.input_id.clone());
+        LogEvent::InputChanged(change) => {
+            if let Some(index) = fold
+                .queued_inputs
+                .iter()
+                .position(|q| q.input_id == change.input_id)
+            {
+                if change.cancelled == Some(true) {
+                    fold.queued_inputs.remove(index);
+                } else {
+                    let mut input = fold.queued_inputs.remove(index);
+                    if let Some(text) = &change.text {
+                        input.text = text.clone();
+                    }
+                    if let Some(mode) = change.mode {
+                        input.mode = mode;
+                    }
+                    let at = change
+                        .position
+                        .map_or(index, |p| (p as usize).min(fold.queued_inputs.len()));
+                    fold.queued_inputs.insert(at, input);
                 }
             }
-            _ => fold.queued_input_ids.retain(|id| id != &delivered.input_id),
+        }
+        LogEvent::InputDelivered(delivered) => match delivered.outcome {
+            DeliveryOutcome::Accepted => {
+                fold.queued_inputs
+                    .retain(|q| q.input_id != delivered.input_id);
+                if delivered.delivered_as == DeliveredAs::Turn
+                    && is_active_run(fold, Some(&delivered.run_id))
+                {
+                    fold.active_run_reached_engine = true;
+                }
+            }
+            // Declined: stays queued (a declined steer becomes a followup, same inputId).
+            DeliveryOutcome::Declined => {
+                fold.active_run_input_ids
+                    .retain(|id| id != &delivered.input_id);
+            }
+            // Unknown: moves into the active run's hold.
+            DeliveryOutcome::Unknown => {
+                if let Some(index) = fold
+                    .queued_inputs
+                    .iter()
+                    .position(|q| q.input_id == delivered.input_id)
+                {
+                    let input = fold.queued_inputs.remove(index);
+                    hold(fold, &delivered.run_id, vec![input]);
+                }
+                fold.active_run_input_ids
+                    .retain(|id| id != &delivered.input_id);
+            }
         },
         LogEvent::RunStarted(started) => {
             fold.counters.runs += 1;
             fold.active_run_id = Some(started.run_id.clone());
-            fold.queued_input_ids
-                .retain(|id| !started.input_ids.contains(id));
+            fold.active_run_input_ids = started.input_ids.clone();
+            fold.active_run_reached_engine = false;
             if let Some(engine_ref) = &started.engine_ref {
                 card.engine_ref = Some(engine_ref.clone());
             }
-            cf.last_run_failed = false;
+        }
+        LogEvent::RunAccepted(accepted) => {
+            if is_active_run(fold, Some(&accepted.run_id)) {
+                fold.active_run_reached_engine = true;
+            }
         }
         LogEvent::ItemCompleted(done) => {
             fold.counters.items += 1;
+            if is_active_run(fold, Some(&done.run_id)) {
+                fold.active_run_reached_engine = true;
+            }
             if let TurnItemBody::AssistantMessage { phase, text, .. } = &done.item.body
                 && !matches!(phase, Some(AssistantMessagePhase::Commentary))
                 && !text.trim().is_empty()
@@ -146,6 +210,9 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
             }
         }
         LogEvent::RequestOpened(opened) => {
+            if is_active_run(fold, opened.run_id.as_ref()) {
+                fold.active_run_reached_engine = true;
+            }
             if !fold
                 .open_requests
                 .iter()
@@ -157,19 +224,50 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
         LogEvent::RequestResolved(resolved) => {
             fold.open_requests
                 .retain(|r| r.request_id != resolved.request_id);
+            if let Some(index) = fold
+                .held_inputs
+                .iter()
+                .position(|h| h.request_id == resolved.request_id)
+            {
+                let held = fold.held_inputs.remove(index);
+                if resolved.outcome == RequestOutcome::Resend {
+                    for (i, input) in held.inputs.into_iter().enumerate() {
+                        fold.queued_inputs.insert(i, input);
+                    }
+                }
+            }
         }
         LogEvent::RunFinished(finished) => {
-            if fold.active_run_id.as_ref() == Some(&finished.run_id) {
+            if is_active_run(fold, Some(&finished.run_id)) {
+                let run_inputs = std::mem::take(&mut fold.active_run_input_ids);
+                let still_queued: Vec<QueuedInput> = fold
+                    .queued_inputs
+                    .iter()
+                    .filter(|q| run_inputs.contains(&q.input_id))
+                    .cloned()
+                    .collect();
+                if fold.active_run_reached_engine {
+                    fold.queued_inputs
+                        .retain(|q| !run_inputs.contains(&q.input_id));
+                } else if finished.outcome == RunOutcome::Unknown {
+                    fold.queued_inputs
+                        .retain(|q| !run_inputs.contains(&q.input_id));
+                    hold(fold, &finished.run_id, still_queued);
+                }
                 fold.active_run_id = None;
+                fold.active_run_reached_engine = false;
             }
-            cf.last_run_failed = finished.outcome == RunOutcome::Failed;
+            fold.last_run_outcome = Some(finished.outcome);
         }
-        LogEvent::ChildStarted(_) => {
+        LogEvent::ChildStarted(started) => {
             card.children.total += 1;
-            card.children.running += 1;
+            if !fold.running_child_ids.contains(&started.child_thread_id) {
+                fold.running_child_ids.push(started.child_thread_id.clone());
+            }
         }
-        LogEvent::ChildReported(_) => {
-            card.children.running = card.children.running.saturating_sub(1);
+        LogEvent::ChildReported(reported) => {
+            fold.running_child_ids
+                .retain(|id| id != &reported.child_thread_id);
         }
         LogEvent::UserNotified(notified) => {
             if notified.kind == NotifyKind::Result && !notified.text.trim().is_empty() {
@@ -177,8 +275,30 @@ pub fn fold_line(cf: &mut CardFold, line: &LogLine) {
             }
         }
     }
-    let card = &mut cf.card;
-    card.updated_at = line.at.clone();
-    card.applied_seq = line.seq;
+    cf.card.updated_at = line.at.clone();
+    cf.card.applied_seq = line.seq;
     cf.recompute_status();
+}
+
+fn hold(fold: &mut Fold, run_id: &goat2_contracts::RunId, inputs: Vec<QueuedInput>) {
+    let request_id = resend_request_id(run_id);
+    match fold
+        .held_inputs
+        .iter_mut()
+        .find(|h| h.request_id == request_id)
+    {
+        Some(held) => {
+            for input in inputs {
+                if !held.inputs.iter().any(|q| q.input_id == input.input_id) {
+                    held.inputs.push(input);
+                }
+            }
+        }
+        None if !inputs.is_empty() => fold.held_inputs.push(HeldInputs {
+            request_id,
+            run_id: run_id.clone(),
+            inputs,
+        }),
+        None => {}
+    }
 }

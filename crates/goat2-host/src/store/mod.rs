@@ -10,7 +10,7 @@
 mod fold;
 mod fs;
 
-pub use fold::{CardFold, fold_line};
+pub use fold::{CardFold, fold_line, resend_request_id};
 pub use fs::FsStore;
 
 use goat2_contracts::{

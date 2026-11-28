@@ -8,10 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use goat2_contracts::{
-    Epoch, Fold, InputAccepted, InputId, LogEvent, LogHeader, LogLine, ThreadCard, ThreadCreated,
-    ThreadId,
+    CardFile, Epoch, Fold, InputAccepted, InputId, LogEvent, LogHeader, LogLine, ThreadCard,
+    ThreadCreated, ThreadId,
 };
-use serde::{Deserialize, Serialize};
 
 use super::fold::{CardFold, fold_line, new_fold};
 use super::{Appended, StoreError, StoreResult, ThreadStore};
@@ -19,13 +18,6 @@ use crate::util::now_rfc3339;
 
 const LOG_FILE: &str = "goat.jsonl";
 const CARD_FILE: &str = "card.json";
-
-#[derive(Serialize, Deserialize)]
-struct CardFile {
-    v: u32,
-    card: ThreadCard,
-    fold: Fold,
-}
 
 struct ThreadFile {
     dir: PathBuf,
@@ -145,12 +137,8 @@ fn io_err(err: serde_json::Error) -> StoreError {
 }
 
 fn write_card(dir: &Path, cf: &CardFold) -> StoreResult<()> {
-    let body = serde_json::to_vec(&CardFile {
-        v: 1,
-        card: cf.card.clone(),
-        fold: cf.fold.clone(),
-    })
-    .map_err(io_err)?;
+    let body =
+        serde_json::to_vec(&CardFile::new(cf.card.clone(), cf.fold.clone())).map_err(io_err)?;
     let tmp = dir.join(format!("{CARD_FILE}.tmp"));
     {
         let mut f = File::create(&tmp)?;
