@@ -191,7 +191,16 @@ fn execute() -> Result<(), String> {
                 return Err("unknown target".into());
             }
             let root = value(&args, "--v1-root")?;
-            let runner = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("v1-runner/run-v1.sh");
+            let runner = if args.iter().any(|a| a == "--runner") {
+                PathBuf::from(value(&args, "--runner")?)
+            } else {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("v1-runner/run-v1.sh")
+            };
+            // Check the runner before any scenario is skipped as pending, so a missing runner is
+            // reported as such instead of being hidden behind pending/REQUIRED errors.
+            if !runner.is_file() {
+                return Err(format!("v1 runner not installed: {}", runner.display()));
+            }
             let filtered = args.iter().any(|a| a == "--only" || a == "--scenarios");
             if filtered {
                 println!("DIAGNOSTIC (filtered)");
@@ -241,11 +250,6 @@ fn execute() -> Result<(), String> {
                     if filtered {
                         failed = true;
                     }
-                    continue;
-                }
-                if !runner.is_file() {
-                    eprintln!("{name}: v1 runner not installed");
-                    failed = true;
                     continue;
                 }
                 match target.run(&scenario) {
