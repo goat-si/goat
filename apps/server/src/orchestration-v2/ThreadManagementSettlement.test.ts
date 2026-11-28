@@ -57,6 +57,7 @@ it.effect("does not settle after a subsequent user run", () =>
                 },
               ],
               messages: [{ id: MessageId.make("user"), runId: nextRunId, role: "user" }],
+              turnItems: [],
             } as unknown as OrchestrationV2ThreadProjection),
           dispatch: (command) =>
             Effect.sync(() => {
@@ -134,6 +135,7 @@ it.effect.each([
                 ({
                   thread: { id: threadId, projectId, deletedAt: null },
                   runs: raced ? [...runs, nextRun] : runs,
+                  turnItems: [],
                   messages: [
                     { id: MessageId.make("original"), runId, role: "user" as const },
                     {
