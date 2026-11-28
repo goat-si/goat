@@ -40,3 +40,24 @@ Lane P2-M lifted the real v1 components and listed where these boards differed; 
 Still differs from v1 (not redrawn yet): P2's URL inside v1's Status card with "Continue authentication"; P3's 4-step
 wizard header (Provider / Identity / Config / Set up), built-in provider grid and local presets (Oh My Pi, MiniMax Code),
 "Search agents…" copy and Kiro id "kiro"; P4/P5 favorites tab on the rail and greyed-out unsigned providers.
+
+### Matched to v1, round 2 (2026-11-29)
+All points from the P2-M report are now drawn from v1 `916b5ccc` source:
+- P1 `1PBB-2`: settings nav icons are the real v1 Solar Linear glyphs from `SettingsSidebarNav.tsx`
+  `SETTINGS_SECTION_ICONS` (`solar.generated.ts` path data verbatim: tuning2, palette, keyboard, objectScan, testTube,
+  ghost, blocks, gitBranch, ssdRound, archive, chatRound, inbox, calendarMark, server, plugCircle; search = magnifer).
+- P2 `1Q0P-2`: same list + detail as P1 with Antigravity selected. Status card carries v1's URL auth action
+  (`ProviderInstanceCard.tsx:1170-1194`: agent message, the URL in mono, outline "Continue authentication" with the
+  external-link glyph). Account row in the waiting state (`ProviderAuthenticationSection.tsx`): "Finish signing in in
+  your browser." with Open browser, copy-link icon button and Cancel.
+- P3 `1QAN-2`: v1 `AddProviderInstanceDialog` step 0: header "Add provider" / "Add an account or configure a provider
+  on This Mac.", step bar Provider / Identity / Config / Set up (`ADD_PROVIDER_WIZARD_STEPS`), built-in provider grid in
+  two columns with setup badges (Signed in / Installed / Not installed) and the checked radio, "Or choose from ACP
+  Registry", the two local presets from `provider-acp-registry/src/localPresets.ts` (Oh My Pi, MiniMax Code: their inline
+  icons, install hints, Documentation, "Use …"), then `AcpRegistrySearchStep` (search field, rows Added / Add; Kiro
+  CLI's registry id is `kiro`), footer Cancel / Configure manually / Next. Behind it the new P1 list + detail. Cloud
+  kinds are left out of the grid (Part 3).
+- P4 `1QM8-2` / P5 `1QYE-2`: picker rail starts with the Favorites tab (filled Solar star) and a divider
+  (`ModelPickerSidebar.tsx:105-133`); providers that are not ready are at 50% opacity (`:159-161`) instead of status dots;
+  the add button is the Solar plus.
+Placeholder data only: model names, versions, account states.

@@ -193,9 +193,9 @@
           <div style={{ backgroundColor: '#F7F7F7', borderRightColor: '#ECECEC', borderRightStyle: 'solid', borderRightWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', paddingBlock: '10px', paddingInline: '8px', width: '256px' }}>
             <div style={{ boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
               <div style={{ alignItems: 'center', backgroundColor: '#EDEDED', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '6px', height: '30px', paddingInline: '9px', width: '219px' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
-                  <circle cx="11" cy="11" r="7" fill="none" stroke="#8F8F8F" strokeWidth="1.8" />
-                  <path d="m20 20-3.5-3.5" fill="#000000" stroke="#8F8F8F" strokeWidth="1.8" strokeLinecap="round" />
+                <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                  <circle cx="11.5" cy="11.5" r="9.5" fill="none" stroke="#8F8F8F" strokeWidth="1.75" strokeLinecap="round" />
+                  <path d="M18.217 18.218L22 22" fill="none" stroke="#8F8F8F" strokeWidth="1.75" strokeLinecap="round" />
                 </svg>
                 <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                   Search
@@ -211,7 +211,12 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M9.5 14C11.157 14 12.5 15.343 12.5 17C12.5 18.657 11.157 20 9.5 20C7.843 20 6.5 18.657 6.5 17C6.5 15.343 7.843 14 9.5 14Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M14.5 4C12.843 4 11.5 5.343 11.5 7C11.5 8.657 12.843 10 14.5 10C16.157 10 17.5 8.657 17.5 7C17.5 5.343 16.157 4 14.5 4Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M15 16.959L22 16.959" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M9 6.958L2 6.958" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2 16.959L4 16.959" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M22 6.958L20 6.958" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     General
@@ -221,7 +226,10 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2 6C2 4.6 2 3.9 2.272 3.365C2.512 2.895 2.895 2.512 3.365 2.272C3.9 2 4.6 2 6 2C7.4 2 8.1 2 8.635 2.272C9.105 2.512 9.488 2.895 9.728 3.365C10 3.9 10 4.6 10 6V18C10 19.4 10 20.1 9.728 20.635C9.488 21.105 9.105 21.488 8.635 21.727C8.1 22 7.4 22 6 22C4.6 22 3.9 22 3.365 21.727C2.895 21.488 2.512 21.105 2.272 20.635C2 20.1 2 19.4 2 18V6Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M7 19H5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M13.314 4.929L11.172 7.071C10.594 7.649 10.305 7.938 10.152 8.306C10 8.673 10 9.082 10 9.9L10 19.556L18.971 10.586C19.961 9.596 20.456 9.101 20.641 8.53C20.804 8.028 20.804 7.487 20.641 6.985C20.456 6.414 19.961 5.919 18.971 4.929C17.98 3.939 17.485 3.444 16.915 3.258C16.413 3.095 15.872 3.095 15.37 3.258C14.799 3.444 14.304 3.939 13.314 4.929Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6 22L18 22C19.4 22 20.1 22 20.635 21.727C21.105 21.488 21.488 21.105 21.727 20.635C22 20.1 22 19.4 22 18C22 16.6 22 15.9 21.727 15.365C21.488 14.895 21.105 14.512 20.635 14.273C20.1 14 19.4 14 18 14L15.5 14" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Appearance
@@ -231,7 +239,18 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M4 7h16v10H4zM7 10h1M10 10h1M13 10h1M8 14h8" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2 11C2 8.172 2 6.757 2.879 5.879C3.757 5 5.172 5 8 5H16C18.828 5 20.243 5 21.121 5.879C22 6.757 22 8.172 22 11V13C22 15.828 22 17.243 21.121 18.121C20.243 19 18.828 19 16 19H8C5.172 19 3.757 19 2.879 18.121C2 17.243 2 15.828 2 13V11Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M7 16H17" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6 9H6" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M9 9H9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M12 9H12" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M15 9H15" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M18 9H18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M18 12H18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M15 12H15" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M12 12H12" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M9 12H9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M6 12H6" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Keybindings
@@ -241,7 +260,13 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M4 7h3l2-2h6l2 2h3v12H4zM12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M22 14C22 17.771 22 19.657 20.828 20.828C19.657 22 17.771 22 14 22" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M10 22C6.229 22 4.343 22 3.172 20.828C2 19.657 2 17.771 2 14" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M10 2C6.229 2 4.343 2 3.172 3.172C2 4.343 2 6.229 2 10" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M14 2C17.771 2 19.657 2 20.828 3.172C22 4.343 22 6.229 22 10" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M4 11.5C4 11.5 6.4 9.5 12 9.5C17.6 9.5 20 11.5 20 11.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6 10V9.5C6 7.614 6 6.672 6.586 6.086C7.172 5.5 8.114 5.5 10 5.5H14C15.886 5.5 16.828 5.5 17.414 6.086C18 6.672 18 7.614 18 9.5V10" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6 14V14.5C6 16.386 6 17.328 6.586 17.914C7.172 18.5 8.114 18.5 10 18.5H14C15.886 18.5 16.828 18.5 17.414 17.914C18 17.328 18 16.386 18 14.5V14" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     SnapShots
@@ -251,7 +276,8 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M19 7.804L18.159 7.32L9.749 2.494M9.749 2.494L2.651 14.745C1.311 17.058 2.106 20.016 4.427 21.351C6.748 22.687 9.716 21.894 11.056 19.581L12.551 17M9.749 2.494L8.913 2M12.551 17L14.189 14.174L15.902 11.216L18.159 7.32M15.902 11.216L13.344 9.745M14.189 14.174L9.986 11.756M12.551 17L9.938 15.497" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M22 14.917C22 16.067 21.105 17 20 17C18.895 17 18 16.067 18 14.917C18 14.197 18.783 13.236 19.369 12.617C19.716 12.251 20.284 12.251 20.631 12.617C21.217 13.236 22 14.197 22 14.917Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Beta
@@ -268,7 +294,9 @@
               <div style={{ backgroundColor: '#E9E9E9', borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M22 19.723V12.301C22 6.612 17.523 2 12 2C6.477 2 2 6.612 2 12.301V19.723C2 21.045 3.351 21.905 4.499 21.314C5.427 20.836 6.533 20.907 7.396 21.5C8.367 22.167 9.633 22.167 10.604 21.5L10.957 21.258C11.588 20.824 12.412 20.824 13.043 21.258L13.396 21.5C14.367 22.167 15.633 22.167 16.604 21.5C17.467 20.907 18.573 20.836 19.501 21.314C20.649 21.905 22 21.045 22 19.723Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M15.5 10.5C15.5 11.052 15.276 11.5 15 11.5C14.724 11.5 14.5 11.052 14.5 10.5C14.5 9.948 14.724 9.5 15 9.5C15.276 9.5 15.5 9.948 15.5 10.5Z" fill="none" stroke="#5D5D5D" strokeWidth="1.167" strokeLinecap="round" />
+                    <ellipse cx="9" cy="10.5" rx=".5" ry="1" fill="none" stroke="#5D5D5D" strokeWidth="1.167" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Providers
@@ -278,7 +306,10 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M9 7V3M15 7V3M6 7h12v4a6 6 0 0 1-12 0zM12 17v4" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2.5 7.707C2.5 5.973 2.5 5.106 3.039 4.567C3.577 4.029 4.444 4.029 6.178 4.029C7.912 4.029 8.779 4.029 9.318 4.567C9.856 5.106 9.856 5.973 9.856 7.707C9.856 9.441 9.856 10.308 9.318 10.846C8.779 11.385 7.912 11.385 6.178 11.385C4.444 11.385 3.577 11.385 3.039 10.846C2.5 10.308 2.5 9.441 2.5 7.707Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M12.615 17.822C12.615 16.088 12.615 15.221 13.153 14.682C13.692 14.144 14.559 14.144 16.293 14.144C18.027 14.144 18.894 14.144 19.432 14.682C19.971 15.221 19.971 16.088 19.971 17.822C19.971 19.555 19.971 20.422 19.432 20.961C18.894 21.5 18.027 21.5 16.293 21.5C14.559 21.5 13.692 21.5 13.153 20.961C12.615 20.422 12.615 19.555 12.615 17.822Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2.5 17.822C2.5 16.088 2.5 15.221 3.039 14.682C3.577 14.144 4.444 14.144 6.178 14.144C7.912 14.144 8.779 14.144 9.318 14.682C9.856 15.221 9.856 16.088 9.856 17.822C9.856 19.555 9.856 20.422 9.318 20.961C8.779 21.5 7.912 21.5 6.178 21.5C4.444 21.5 3.577 21.5 3.039 20.961C2.5 20.422 2.5 19.555 2.5 17.822Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M14.959 3.839L14.959 3.839C13.733 5.065 13.12 5.678 13.12 6.44C13.12 7.202 13.733 7.815 14.959 9.041L14.959 9.041C16.185 10.267 16.798 10.88 17.56 10.88C18.322 10.88 18.935 10.267 20.161 9.041L20.161 9.041C21.387 7.815 22 7.202 22 6.44C22 5.678 21.387 5.065 20.161 3.839C18.935 2.613 18.322 2 17.56 2C16.798 2 16.185 2.613 14.959 3.839Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Integrations
@@ -288,7 +319,11 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6M18 9a9 9 0 0 1-9 9" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M9 4.5C9 5.881 7.881 7 6.5 7C5.119 7 4 5.881 4 4.5C4 3.119 5.119 2 6.5 2C7.881 2 9 3.119 9 4.5Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M20.182 7.5C20.182 8.881 19.063 10 17.682 10C16.301 10 15.182 8.881 15.182 7.5C15.182 6.119 16.301 5 17.682 5C19.063 5 20.182 6.119 20.182 7.5Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M9 19.5C9 20.881 7.881 22 6.5 22C5.119 22 4 20.881 4 19.5C4 18.119 5.119 17 6.5 17C7.881 17 9 18.119 9 19.5Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6.5 17L6.5 7" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M17.682 10C17.682 12.338 15.451 13.591 12.088 13.591C8.724 13.591 6.5 14.675 6.5 17" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Source control
@@ -305,7 +340,11 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3v12c0 1.7-3.6 3-8 3s-8-1.3-8-3zM4 6c0 1.7 3.6 3 8 3s8-1.3 8-3" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M21.553 15.481L19 5.118C18.5 3.529 17.605 3 16.5 3H7.5C6.395 3 5.5 3.529 5 5.118L2.447 15.481M2.447 15.481C2.162 16.017 2 16.636 2 17.294C2 19.341 3.567 21 5.5 21H18.5C20.433 21 22 19.341 22 17.294C22 16.636 21.838 16.017 21.553 15.481C20.954 14.351 19.811 13.588 18.5 13.588H5.5C4.189 13.588 3.046 14.351 2.447 15.481Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M18 17V18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M15.5 17V18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M13 17V18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M10.5 17V18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Storage
@@ -315,7 +354,9 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M4 4h16v4H4zM5 8v12h14V8M10 12h4" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M9 12C9 11.534 9 11.301 9.076 11.117C9.178 10.872 9.372 10.678 9.617 10.576C9.801 10.5 10.034 10.5 10.5 10.5H13.5C13.966 10.5 14.199 10.5 14.383 10.576C14.628 10.678 14.822 10.872 14.924 11.117C15 11.301 15 11.534 15 12C15 12.466 15 12.699 14.924 12.883C14.822 13.128 14.628 13.322 14.383 13.424C14.199 13.5 13.966 13.5 13.5 13.5H10.5C10.034 13.5 9.801 13.5 9.617 13.424C9.372 13.322 9.178 13.128 9.076 12.883C9 12.699 9 12.466 9 12Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M20.5 7V13C20.5 16.771 20.5 18.657 19.328 19.828C18.157 21 16.271 21 12.5 21H11.5C7.729 21 5.843 21 4.672 19.828C3.5 18.657 3.5 16.771 3.5 13V7" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2 5C2 4.057 2 3.586 2.293 3.293C2.586 3 3.057 3 4 3H20C20.943 3 21.414 3 21.707 3.293C22 3.586 22 4.057 22 5C22 5.943 22 6.414 21.707 6.707C21.414 7 20.943 7 20 7H4C3.057 7 2.586 7 2.293 6.707C2 6.414 2 5.943 2 5Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Archived Threads
@@ -332,7 +373,7 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M12 8V4H8M4 8h16v12H4zM9 13h.01M15 13h.01" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M12 22C17.523 22 22 17.523 22 12C22 6.477 17.523 2 12 2C6.477 2 2 6.477 2 12C2 13.6 2.376 15.112 3.043 16.453C3.221 16.809 3.28 17.216 3.177 17.601L2.582 19.827C2.323 20.793 3.207 21.677 4.173 21.419L6.399 20.823C6.784 20.72 7.191 20.779 7.548 20.956C8.888 21.624 10.4 22 12 22Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     GOAT Bot
@@ -342,7 +383,8 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13L22 12v7H2v-7z" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2 12C2 7.286 2 4.929 3.464 3.464C4.929 2 7.286 2 12 2C16.714 2 19.071 2 20.535 3.464C22 4.929 22 7.286 22 12C22 16.714 22 19.071 20.535 20.535C19.071 22 16.714 22 12 22C7.286 22 4.929 22 3.464 20.535C2 19.071 2 16.714 2 12Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2 13H5.16C6.065 13 6.518 13 6.916 13.183C7.314 13.366 7.608 13.71 8.197 14.397L8.803 15.103C9.392 15.79 9.686 16.134 10.084 16.317C10.482 16.5 10.935 16.5 11.84 16.5H12.16C13.065 16.5 13.518 16.5 13.916 16.317C14.314 16.134 14.608 15.79 15.197 15.103L15.803 14.397C16.392 13.71 16.686 13.366 17.084 13.183C17.482 13 17.935 13 18.84 13H22" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Decision Inbox
@@ -352,7 +394,11 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2 12C2 8.229 2 6.343 3.172 5.172C4.343 4 6.229 4 10 4H14C17.771 4 19.657 4 20.828 5.172C22 6.343 22 8.229 22 12V14C22 17.771 22 19.657 20.828 20.828C19.657 22 17.771 22 14 22H10C6.229 22 4.343 22 3.172 20.828C2 19.657 2 17.771 2 14V12Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M7 4V2.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M17 4V2.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <circle cx="16.5" cy="16.5" r="1.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2.5 9H21.5" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Scheduled tasks
@@ -369,7 +415,12 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0M12 3v6M12 15v6M3 12h6M15 12h6" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2 17C2 15.114 2 14.172 2.586 13.586C3.172 13 4.114 13 6 13H18C19.886 13 20.828 13 21.414 13.586C22 14.172 22 15.114 22 17C22 18.886 22 19.828 21.414 20.414C20.828 21 19.886 21 18 21H6C4.114 21 3.172 21 2.586 20.414C2 19.828 2 18.886 2 17Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M2 6C2 4.114 2 3.172 2.586 2.586C3.172 2 4.114 2 6 2H18C19.886 2 20.828 2 21.414 2.586C22 3.172 22 4.114 22 6C22 7.886 22 8.828 21.414 9.414C20.828 10 19.886 10 18 10H6C4.114 10 3.172 10 2.586 9.414C2 8.828 2 7.886 2 6Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M11 6H18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6 6H8" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M11 17H18" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M6 17H8" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Hub
@@ -379,7 +430,10 @@
               <div style={{ borderRadius: '8px', boxSizing: 'border-box', flexShrink: 0, height: '30px', paddingInline: '10px' }}>
                 <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', gap: '8px', height: '30px', paddingInline: '9px', width: '219px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
-                    <path d="M4 5h16v10H4zM8 19h8M12 15v4" fill="none" stroke="#5D5D5D" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M12 15.108V20.15C12 21.264 11.095 22.188 10.013 21.967C5.442 21.038 2 16.966 2 12.083C2 6.514 6.477 2 12 2C17.523 2 22 6.514 22 12.083C22 16.074 19.7 19.524 16.364 21.158" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M9 11.8C9 11.358 9.358 11 9.8 11H14.2C14.642 11 15 11.358 15 11.8V12C15 13.657 13.657 15 12 15C10.343 15 9 13.657 9 12V11.8Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M13.5 11V9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
+                    <path d="M10.5 11V9" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
                   </svg>
                   <div style={{ boxSizing: 'border-box', color: '#000000', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
                     Connections

@@ -1,42 +1,42 @@
 [
  {
   "id": "1PBB-2",
-  "name": "P1 · Settings › Providers (v1 code)",
+  "name": "P1 \u00b7 Settings \u203a Providers (v1 code)",
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 77621
+  "jsxBytes": 113186
  },
  {
   "id": "1Q0P-2",
-  "name": "P2 · Provider sign-in (Antigravity, v1 code)",
+  "name": "P2 \u00b7 Provider sign-in (Antigravity, v1 code)",
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 81659
+  "jsxBytes": 114666
  },
  {
   "id": "1QAN-2",
-  "name": "P3 · Add provider › ACP Registry (v1 code)",
+  "name": "P3 \u00b7 Add provider \u203a ACP Registry (v1 code)",
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 94935
+  "jsxBytes": 157687
  },
  {
   "id": "1QM8-2",
-  "name": "P4 · Composer model picker (bot home, v1 code)",
+  "name": "P4 \u00b7 Composer model picker (bot home, v1 code)",
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 109245
+  "jsxBytes": 109509
  },
  {
   "id": "1QYE-2",
-  "name": "P5 · Bot settings model picker (v1 GoatBotModelPicker)",
+  "name": "P5 \u00b7 Bot settings model picker (v1 GoatBotModelPicker)",
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 58791
+  "jsxBytes": 57903
  }
 ]
