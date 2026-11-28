@@ -218,6 +218,16 @@ export const MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH = 4 * 1024;
 // and at most one code unit split across chunks. A held unfinished sequence always starts with ESC.
 const SWALLOWING = "swallowing:";
 
+export function unfinishedSequenceReplay(pending: string): string {
+  if (pending.startsWith(SWALLOWING)) {
+    const kind = pending.charAt(SWALLOWING.length);
+    const tail = pending.slice(SWALLOWING.length + 1);
+    return "\u001b" + (kind === "E" ? "" : kind) + tail;
+  }
+  if (pending.length <= 4_096) return pending;
+  return pending.slice(0, 2) + carriedUnit(pending);
+}
+
 function swallowedKind(sequence: string): string {
   const introducer = sequence.charAt(1);
   if (introducer === "]" || introducer === "[") return introducer;

@@ -4,6 +4,7 @@ import {
   MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH,
   MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH,
   sanitizeTerminalHistoryChunk,
+  unfinishedSequenceReplay,
 } from "./terminalHistoryReplay.ts";
 
 const CAP = MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH;
@@ -210,4 +211,11 @@ it("removes terminated OSC palette queries while retaining setters and interrupt
   expect(sanitizeTerminalHistoryChunk("", input).visibleText).toBe(
     "\u001b]4;1;red;2;?\u0007\u001b]0;t\u001b\\\u001b]4;3;?\u001b]0;x\u0007",
   );
+});
+
+it("replays a bounded unfinished sequence when attaching", () => {
+  expect(unfinishedSequenceReplay("\u001b]0;title")).toBe("\u001b]0;title");
+  expect(unfinishedSequenceReplay("\u001b]0;" + "x".repeat(4096))).toBe("\u001b]");
+  const held = sanitizeTerminalHistoryChunk("", "\u001b]" + "x".repeat(CAP)).pendingControlSequence;
+  expect(unfinishedSequenceReplay(held)).toBe("\u001b]");
 });

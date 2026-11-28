@@ -34,10 +34,7 @@ import {
   TERMINAL_HISTORY_COMPACTION_NOTICE,
   writeCompactedTerminalHistory,
 } from "./terminalHistoryFile.ts";
-import {
-  neutralizeInheritedHistory,
-  sanitizeTerminalHistoryChunk,
-} from "./terminalHistoryReplay.ts";
+import * as terminalHistoryReplay from "./terminalHistoryReplay.ts";
 export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 import { makeTerminalLeaseOrder, type TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
@@ -432,7 +429,9 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     worktreePath: session.worktreePath,
     status: session.status,
     pid: session.pid,
-    history: session.history.value(),
+    history:
+      session.history.value() +
+      terminalHistoryReplay.unfinishedSequenceReplay(session.pendingHistoryControlSequence),
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     label: terminalWireLabel(session),
@@ -1510,7 +1509,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
 
         if (nextEvent.type === "output") {
-          const sanitized = sanitizeTerminalHistoryChunk(
+          const sanitized = terminalHistoryReplay.sanitizeTerminalHistoryChunk(
             session.pendingHistoryControlSequence,
             nextEvent.data,
           );
@@ -2170,7 +2169,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const inherited = yield* readHistory(input.threadId, terminalId);
       const history = new BoundedTerminalHistory(
         historyLineLimit,
-        neutralizeInheritedHistory(
+        terminalHistoryReplay.neutralizeInheritedHistory(
           inherited.value(),
           historyLineLimit,
           Math.min(historyByteLimit, DEFAULT_MAX_TERMINAL_BUFFER_BYTES),
