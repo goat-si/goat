@@ -575,12 +575,9 @@ impl Store {
                 self.insert_slot(self.new_slot(id, file.card, file.fold, Health::Unverified));
             }
             Some(file) => {
-                self.insert_slot(self.new_slot(
-                    id.clone(),
-                    file.card,
-                    file.fold,
-                    Health::Unverified,
-                ));
+                let mut slot = self.new_slot(id.clone(), file.card, file.fold, Health::Unverified);
+                slot.durable_dirty = row.dirty;
+                self.insert_slot(slot);
                 to_recover.push(id);
             }
             None => {
@@ -604,6 +601,7 @@ impl Store {
                     Ok(Some((card, fold, health))) => {
                         let mut slot = self.new_slot(id.clone(), card, fold, Health::Unverified);
                         slot.health = health;
+                        slot.durable_dirty = row.dirty;
                         self.insert_slot(slot);
                         to_recover.push(id);
                     }
@@ -822,7 +820,12 @@ impl Store {
                         detail: format!("line {seq}: type {kind:?} v {v}"),
                     });
                 }
-                self.persist(&mut slot)?;
+                if slot.fold.active_run_id.is_some() && matches!(slot.health, Health::Ready) {
+                    // Settlement appends and persists this thread right after recovery.
+                    slot.stale = true;
+                } else {
+                    self.persist(&mut slot)?;
+                }
             }
             Err(StoreError::CorruptLog { detail, .. }) => {
                 slot.health = Health::Corrupt(detail.clone());
@@ -973,7 +976,8 @@ impl Store {
     }
 
     /// Write card.json and the index row for the slot's current state, after syncing the log.
-    /// The row stays dirty while a run is active.
+    /// The row stays dirty while a run is active. card.json is replaced atomically but not synced:
+    /// startup trusts the index row, and a card.json lost to power failure is refolded on rebuild.
     fn persist(&self, slot: &mut Slot) -> Result<()> {
         if self.opts.fsync && slot.synced_len < slot.len {
             let file = match slot.writer.as_ref() {
@@ -984,7 +988,7 @@ impl Store {
         }
         slot.synced_len = slot.len;
         let doc = card_doc(&slot.card, &slot.fold)?;
-        atomic_write(&slot.dir.join(CARD_FILE), doc.as_bytes(), self.opts.fsync)?;
+        atomic_write(&slot.dir.join(CARD_FILE), doc.as_bytes(), false)?;
         let active = slot.fold.active_run_id.is_some();
         {
             let mut shared = lock(&self.shared);
