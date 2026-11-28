@@ -200,6 +200,11 @@ pub enum EngineEvent {
     /// `steer.updated`, `ProviderAdapter.ts:149-157`; Claude `command_lifecycle`, Pi). An
     /// accepted steer is v1 `pending` until the engine reads it. Not stored as such; the host
     /// decides what a cancelled steer means for its inputs.
+    ///
+    /// Contract: a driver reports `SteerUpdated` for every steer it accepted in a turn
+    /// (`Cancelled` for any left unread) before that turn's `TurnFinished`. The host reads events
+    /// in order, so a cancel lands while its run is still active; one after `TurnFinished` is
+    /// ignored.
     SteerUpdated {
         turn_id: String,
         input_ids: Vec<InputId>,
