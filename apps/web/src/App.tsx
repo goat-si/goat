@@ -52,7 +52,7 @@ export function App({ ui: store, scene }: { ui: UiStore; scene: string | null })
       {build.commit.slice(0, 7)} · {build.branch}
     </span>
   ) : snap.demo && scene === null ? (
-    <span data-demo-tag="" title="No GOAT host is connected: this prototype runs a demo host in the page." style={{ color: "#8F8F8F", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 11, lineHeight: "16px", marginRight: 8, padding: "0 6px", borderRadius: 4, background: "#F3F3F3" }}>Demo</span>
+    <span data-demo-tag="" title="No GOAT host is connected: this prototype runs a demo host in the page." style={{ color: "#8F8F8F", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 11, lineHeight: "16px", marginRight: 8, padding: "0 6px", borderRadius: 4, background: "#F3F3F3" }}>{import.meta.env.VITE_GOAT2_COMMIT ? `Demo · ${import.meta.env.VITE_GOAT2_COMMIT}` : "Demo"}</span>
   ) : null;
   const topRight = (
     <P.TopRight>
