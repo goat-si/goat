@@ -1,0 +1,1475 @@
+{
+  "$defs": {
+    "AcpRegistryUrlAuthAction": {
+      "description": "v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the\nperson to open, answered by its elicitation id.\n\nv1's length checks on these strings are not carried: the registry driver bounds what it reads,\nand serde and the JSON Schema accept the same values.",
+      "properties": {
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elicitationId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitationId",
+        "url",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ApprovalCapabilities": {
+      "description": "v1 `OrchestrationV2ApprovalCapabilities`.",
+      "properties": {
+        "approvalCallbacksAreLiveOnly": {
+          "type": "boolean"
+        },
+        "approvalsCanOriginateFromSubagents": {
+          "type": "boolean"
+        },
+        "approvalsHaveNativeRequestIds": {
+          "type": "boolean"
+        },
+        "supportsApplyPatchApproval": {
+          "type": "boolean"
+        },
+        "supportsCommandApproval": {
+          "type": "boolean"
+        },
+        "supportsFileChangeApproval": {
+          "type": "boolean"
+        },
+        "supportsFileReadApproval": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supportsCommandApproval",
+        "supportsFileReadApproval",
+        "supportsFileChangeApproval",
+        "supportsApplyPatchApproval",
+        "approvalsHaveNativeRequestIds",
+        "approvalCallbacksAreLiveOnly",
+        "approvalsCanOriginateFromSubagents"
+      ],
+      "type": "object"
+    },
+    "CheckpointCapabilities": {
+      "description": "v1 `OrchestrationV2CheckpointCapabilities`.",
+      "properties": {
+        "appCanCheckpointFilesystem": {
+          "type": "boolean"
+        },
+        "providerCanReadConversationSnapshot": {
+          "type": "boolean"
+        },
+        "providerCanRollbackConversation": {
+          "type": "boolean"
+        },
+        "providerRollbackReturnsSnapshot": {
+          "type": "boolean"
+        },
+        "supportsNestedCheckpointScopes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "appCanCheckpointFilesystem",
+        "supportsNestedCheckpointScopes",
+        "providerCanRollbackConversation",
+        "providerRollbackReturnsSnapshot",
+        "providerCanReadConversationSnapshot"
+      ],
+      "type": "object"
+    },
+    "CloudSourceRestriction": {
+      "description": "v1 `OrchestrationV2CloudSourceRestriction`.",
+      "enum": [
+        "published-ref",
+        "clean-pushed-sha",
+        "project-folder"
+      ],
+      "type": "string"
+    },
+    "ContextCapabilities": {
+      "description": "v1 `OrchestrationV2ContextCapabilities`.",
+      "properties": {
+        "acceptsDeveloperContext": {
+          "type": "boolean"
+        },
+        "acceptsSyntheticUserContext": {
+          "type": "boolean"
+        },
+        "acceptsSystemContext": {
+          "type": "boolean"
+        },
+        "canConsumeHandoffSummaries": {
+          "type": "boolean"
+        },
+        "canGenerateSummaries": {
+          "type": "boolean"
+        },
+        "maxRecommendedHandoffChars": {
+          "description": "v1 `NullOr(PositiveInt)`: zero is rejected.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "supportsDeltaHandoff": {
+          "type": "boolean"
+        },
+        "supportsFullThreadHandoff": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "acceptsSystemContext",
+        "acceptsDeveloperContext",
+        "acceptsSyntheticUserContext",
+        "canGenerateSummaries",
+        "canConsumeHandoffSummaries",
+        "supportsDeltaHandoff",
+        "supportsFullThreadHandoff"
+      ],
+      "type": "object"
+    },
+    "CredentialOwner": {
+      "enum": [
+        "provider",
+        "t3"
+      ],
+      "type": "string"
+    },
+    "ExecutionLocation": {
+      "description": "v1 session `executionLocation`.",
+      "enum": [
+        "local",
+        "cloud"
+      ],
+      "type": "string"
+    },
+    "FollowUpSupport": {
+      "description": "v1 session `followUp`.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supported": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supported"
+      ],
+      "type": "object"
+    },
+    "IdentityCapabilities": {
+      "description": "v1 `OrchestrationV2IdentityCapabilities`.",
+      "properties": {
+        "nativeItemIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        },
+        "nativeRequestIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        },
+        "nativeThreadIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        },
+        "nativeTurnIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        }
+      },
+      "required": [
+        "nativeThreadIds",
+        "nativeTurnIds",
+        "nativeItemIds",
+        "nativeRequestIds"
+      ],
+      "type": "object"
+    },
+    "MemoryCapabilities": {
+      "description": "v1 `MemoryProviderCapabilities`.",
+      "properties": {
+        "generateMemorySummary": {
+          "type": "boolean"
+        },
+        "mcp": {
+          "type": "boolean"
+        },
+        "resolveMemoryConflict": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot",
+        "mcp",
+        "resolveMemoryConflict",
+        "generateMemorySummary"
+      ],
+      "type": "object"
+    },
+    "ModelBadge": {
+      "description": "v1 model `badge`.",
+      "enum": [
+        "new"
+      ],
+      "type": "string"
+    },
+    "ModelCapabilities": {
+      "description": "v1 `ModelCapabilities`.",
+      "properties": {
+        "optionDescriptors": {
+          "items": {
+            "$ref": "#/$defs/ProviderOptionDescriptor"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "NativeRefStrength": {
+      "description": "v1 `OrchestrationV2NativeRefStrength`.",
+      "enum": [
+        "strong",
+        "weak",
+        "none"
+      ],
+      "type": "string"
+    },
+    "PlanningCapabilities": {
+      "description": "v1 `OrchestrationV2PlanningCapabilities`.",
+      "properties": {
+        "emitsPlanUpdated": {
+          "type": "boolean"
+        },
+        "emitsProposedPlan": {
+          "type": "boolean"
+        },
+        "emitsTodoList": {
+          "type": "boolean"
+        },
+        "planDeltasHaveItemIds": {
+          "type": "boolean"
+        },
+        "supportsStructuredQuestions": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "emitsPlanUpdated",
+        "emitsTodoList",
+        "emitsProposedPlan",
+        "supportsStructuredQuestions",
+        "planDeltasHaveItemIds"
+      ],
+      "type": "object"
+    },
+    "ProviderAuthInteraction": {
+      "oneOf": [
+        {
+          "properties": {
+            "acceptsCallback": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "requiresConsent": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "browser",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "url",
+            "requiresConsent"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "deviceCode",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "userCode": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "url",
+            "userCode"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "outputOffset": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "terminal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/ProviderCredentialField"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "credentials",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "fields"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderAuthMethod": {
+      "properties": {
+        "accountEmail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "canRemove": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ProviderAuthMethodType"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ProviderAuthMethodType": {
+      "enum": [
+        "agent",
+        "terminal",
+        "credentials"
+      ],
+      "type": "string"
+    },
+    "ProviderAuthPhase": {
+      "enum": [
+        "idle",
+        "starting",
+        "waiting",
+        "verifying",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ProviderAuthState": {
+      "properties": {
+        "authorizationUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credentialOwner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialOwner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flowId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "interaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAuthInteraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "methods": {
+          "items": {
+            "$ref": "#/$defs/ProviderAuthMethod"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/ProviderAuthPhase"
+        }
+      },
+      "required": [
+        "instanceId",
+        "phase"
+      ],
+      "type": "object"
+    },
+    "ProviderCapabilities": {
+      "description": "All capability groups for one engine driver.",
+      "properties": {
+        "approvals": {
+          "$ref": "#/$defs/ApprovalCapabilities"
+        },
+        "checkpointing": {
+          "$ref": "#/$defs/CheckpointCapabilities"
+        },
+        "context": {
+          "$ref": "#/$defs/ContextCapabilities"
+        },
+        "identity": {
+          "$ref": "#/$defs/IdentityCapabilities"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "planning": {
+          "$ref": "#/$defs/PlanningCapabilities"
+        },
+        "runtimePolicy": {
+          "$ref": "#/$defs/RuntimePolicyCapabilities",
+          "default": {
+            "enforcement": "client-boundary"
+          },
+          "description": "v1 decodes a missing value as `{enforcement: \"client-boundary\"}`."
+        },
+        "sessions": {
+          "$ref": "#/$defs/SessionCapabilities"
+        },
+        "streaming": {
+          "$ref": "#/$defs/StreamingCapabilities"
+        },
+        "subagents": {
+          "$ref": "#/$defs/SubagentCapabilities"
+        },
+        "threads": {
+          "$ref": "#/$defs/ThreadCapabilities"
+        },
+        "tools": {
+          "$ref": "#/$defs/ToolCapabilities"
+        },
+        "turns": {
+          "$ref": "#/$defs/TurnCapabilities"
+        }
+      },
+      "required": [
+        "sessions",
+        "threads",
+        "turns",
+        "streaming",
+        "tools",
+        "approvals",
+        "planning",
+        "subagents",
+        "context",
+        "checkpointing",
+        "identity"
+      ],
+      "type": "object"
+    },
+    "ProviderCredentialField": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "secret"
+      ],
+      "type": "object"
+    },
+    "ProviderInstallPhase": {
+      "enum": [
+        "idle",
+        "downloading",
+        "extracting",
+        "verifying",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ProviderInstallSource": {
+      "enum": [
+        "managed",
+        "local"
+      ],
+      "type": "string"
+    },
+    "ProviderInstallState": {
+      "properties": {
+        "canRemove": {
+          "type": "boolean"
+        },
+        "downloadedBytes": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "executablePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "installedVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/ProviderInstallPhase"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInstallSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totalBytes": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "driver",
+        "phase",
+        "downloadedBytes",
+        "canRemove"
+      ],
+      "type": "object"
+    },
+    "ProviderInstanceId": {
+      "description": "A configured provider instance (v1 `ProviderInstanceId`), e.g. `codex`.",
+      "type": "string"
+    },
+    "ProviderOptionChoice": {
+      "description": "v1 `ProviderOptionChoice`.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "isDefault": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ProviderOptionDescriptor": {
+      "description": "v1 `ProviderOptionDescriptor` (`select` or `boolean`), e.g. reasoning effort.",
+      "oneOf": [
+        {
+          "properties": {
+            "currentValue": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/ProviderOptionChoice"
+              },
+              "type": "array"
+            },
+            "promptInjectedValues": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProviderOptionRole"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "select",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label",
+            "options"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "currentValue": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderOptionRole": {
+      "description": "v1 select option `role`.",
+      "enum": [
+        "reasoning"
+      ],
+      "type": "string"
+    },
+    "ProviderProbeResult": {
+      "description": "What `EngineFactory::probe()` returns: the v1 `ServerProvider` fields a probe can know\n(install, version, auth, models). The host adds instance identity and settings.",
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/ServerProviderAuth"
+        },
+        "binaryPath": {
+          "description": "Resolved executable path (GOAT 2; v1 kept it in provider settings).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checkedAt": {
+          "description": "RFC 3339 UTC timestamp of this probe.",
+          "type": "string"
+        },
+        "cli": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServerProviderCli"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "installedVersion": {
+          "description": "Version reported by the installed CLI when it differs from `version` (v1).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/ServerProviderModel"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/ServerProviderState"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "installed",
+        "status",
+        "auth",
+        "models",
+        "checkedAt"
+      ],
+      "type": "object"
+    },
+    "ProviderSetup": {
+      "properties": {
+        "canAuthenticate": {
+          "type": "boolean"
+        },
+        "canInstall": {
+          "type": "boolean"
+        },
+        "documentationUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "canAuthenticate",
+        "canInstall"
+      ],
+      "type": "object"
+    },
+    "RuntimePolicyCapabilities": {
+      "description": "v1 `OrchestrationV2RuntimePolicyCapabilities`.",
+      "properties": {
+        "enforcement": {
+          "$ref": "#/$defs/RuntimePolicyEnforcement"
+        }
+      },
+      "required": [
+        "enforcement"
+      ],
+      "type": "object"
+    },
+    "RuntimePolicyEnforcement": {
+      "description": "v1 runtime policy `enforcement`.",
+      "enum": [
+        "native",
+        "client-boundary"
+      ],
+      "type": "string"
+    },
+    "ServerProviderAuth": {
+      "description": "v1 `ServerProviderAuth`.",
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpRegistryUrlAuthAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Pending ACP registry sign-in (v1 `action`)."
+        },
+        "canLogout": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "description": "Origin of the custom endpoint the instance sends its requests to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profileId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ServerProviderAuthStatus"
+        },
+        "subscriptionSharing": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ServerProviderAuthStatus": {
+      "description": "v1 `ServerProviderAuthStatus`.",
+      "enum": [
+        "authenticated",
+        "unauthenticated",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ServerProviderCli": {
+      "description": "v1 `ServerProviderCli`: whether the probe found the provider's CLI.",
+      "enum": [
+        "present",
+        "missing",
+        "none"
+      ],
+      "type": "string"
+    },
+    "ServerProviderModel": {
+      "description": "v1 `ServerProviderModel`: one model the provider offers.",
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "badge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBadge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isCustom": {
+          "type": "boolean"
+        },
+        "isDefault": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "isLegacy": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "shortName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        },
+        "subProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supportsTextGeneration": {
+          "description": "False when sessions can use the model but application text generation cannot.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "slug",
+        "name",
+        "isCustom"
+      ],
+      "type": "object"
+    },
+    "ServerProviderState": {
+      "description": "v1 `ServerProviderState`.",
+      "enum": [
+        "ready",
+        "warning",
+        "error",
+        "disabled"
+      ],
+      "type": "string"
+    },
+    "SessionCapabilities": {
+      "description": "v1 `OrchestrationV2SessionCapabilities`. `sourceRestriction`, `executionLocation` and\n`followUp` decode with v1's defaults when missing and are always written.",
+      "properties": {
+        "executionLocation": {
+          "$ref": "#/$defs/ExecutionLocation",
+          "default": "local"
+        },
+        "followUp": {
+          "$ref": "#/$defs/FollowUpSupport",
+          "default": {
+            "supported": true
+          }
+        },
+        "ownsProcess": {
+          "description": "Whether this session controls the lifetime of its native process.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pendingRequestsSurviveRestart": {
+          "type": "boolean"
+        },
+        "sourceRestriction": {
+          "$ref": "#/$defs/CloudSourceRestriction",
+          "default": "published-ref"
+        },
+        "supportsModelSwitchInSession": {
+          "type": "boolean"
+        },
+        "supportsMultipleProviderThreadsPerSession": {
+          "type": "boolean"
+        },
+        "supportsProviderSwitchingViaHandoff": {
+          "type": "boolean"
+        },
+        "supportsRuntimeModeSwitchInSession": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supportsMultipleProviderThreadsPerSession",
+        "supportsModelSwitchInSession",
+        "supportsProviderSwitchingViaHandoff",
+        "supportsRuntimeModeSwitchInSession",
+        "pendingRequestsSurviveRestart"
+      ],
+      "type": "object"
+    },
+    "StreamingCapabilities": {
+      "description": "v1 `OrchestrationV2StreamingCapabilities`.",
+      "properties": {
+        "emitsMessageCompleted": {
+          "type": "boolean"
+        },
+        "streamsAssistantText": {
+          "type": "boolean"
+        },
+        "streamsPlanText": {
+          "type": "boolean"
+        },
+        "streamsReasoning": {
+          "type": "boolean"
+        },
+        "streamsToolOutput": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "streamsAssistantText",
+        "streamsReasoning",
+        "streamsToolOutput",
+        "streamsPlanText",
+        "emitsMessageCompleted"
+      ],
+      "type": "object"
+    },
+    "SubagentCapabilities": {
+      "description": "v1 `OrchestrationV2SubagentCapabilities`.",
+      "properties": {
+        "canCloseSubagents": {
+          "type": "boolean"
+        },
+        "canForkSubagentThread": {
+          "type": "boolean"
+        },
+        "canWaitForSubagents": {
+          "type": "boolean"
+        },
+        "emitsSubagentLifecycle": {
+          "type": "boolean"
+        },
+        "exposesSubagentThreadIds": {
+          "type": "boolean"
+        },
+        "supportsSubagents": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supportsSubagents",
+        "exposesSubagentThreadIds",
+        "emitsSubagentLifecycle",
+        "canWaitForSubagents",
+        "canCloseSubagents",
+        "canForkSubagentThread"
+      ],
+      "type": "object"
+    },
+    "TerminalStatusQuality": {
+      "description": "v1 turn `terminalStatusQuality`.",
+      "enum": [
+        "strong",
+        "weak",
+        "none"
+      ],
+      "type": "string"
+    },
+    "ThreadCapabilities": {
+      "description": "v1 `OrchestrationV2ThreadCapabilities`.",
+      "properties": {
+        "canCreateEmptyThread": {
+          "type": "boolean"
+        },
+        "canForkFromSubagentThread": {
+          "type": "boolean"
+        },
+        "canForkFromTurn": {
+          "type": "boolean"
+        },
+        "canForkThread": {
+          "type": "boolean"
+        },
+        "canForkWhileSourceRunning": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "canReadThreadSnapshot": {
+          "type": "boolean"
+        },
+        "canRollbackThread": {
+          "type": "boolean"
+        },
+        "exposesNativeThreadId": {
+          "type": "boolean"
+        },
+        "forkHonorsTargetCwd": {
+          "description": "Native fork starts the new provider thread in the target thread's cwd.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "canCreateEmptyThread",
+        "canReadThreadSnapshot",
+        "canRollbackThread",
+        "canForkThread",
+        "canForkFromTurn",
+        "canForkFromSubagentThread",
+        "exposesNativeThreadId"
+      ],
+      "type": "object"
+    },
+    "ToolCapabilities": {
+      "description": "v1 `OrchestrationV2ToolCapabilities`.",
+      "properties": {
+        "emitsToolCompleted": {
+          "type": "boolean"
+        },
+        "emitsToolOutput": {
+          "type": "boolean"
+        },
+        "emitsToolStarted": {
+          "type": "boolean"
+        },
+        "exposesToolItemIds": {
+          "type": "boolean"
+        },
+        "supportsDynamicToolCallbacks": {
+          "type": "boolean"
+        },
+        "supportsMcpTools": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exposesToolItemIds",
+        "emitsToolStarted",
+        "emitsToolCompleted",
+        "emitsToolOutput",
+        "supportsMcpTools",
+        "supportsDynamicToolCallbacks"
+      ],
+      "type": "object"
+    },
+    "TurnCapabilities": {
+      "description": "v1 `OrchestrationV2TurnCapabilities`.",
+      "properties": {
+        "activeSteeringAcceptsAttachments": {
+          "description": "Some take text only, so a steer with attachments restarts the turn instead.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "activeSteeringDuringCompaction": {
+          "description": "Only where a steer leaves a running automatic compaction intact.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "activeSteeringInterruptsTools": {
+          "description": "Some native steering mechanisms cancel pending tools before consuming the message.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "emitsTurnCompleted": {
+          "type": "boolean"
+        },
+        "emitsTurnStarted": {
+          "type": "boolean"
+        },
+        "exposesNativeTurnId": {
+          "type": "boolean"
+        },
+        "supportsActiveSteering": {
+          "type": "boolean"
+        },
+        "supportsInterrupt": {
+          "type": "boolean"
+        },
+        "supportsNativeGoals": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsNativeResume": {
+          "description": "Continues an interrupted turn without a new message.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsQueuedMessages": {
+          "type": "boolean"
+        },
+        "supportsSteeringByInterruptRestart": {
+          "type": "boolean"
+        },
+        "terminalStatusQuality": {
+          "$ref": "#/$defs/TerminalStatusQuality"
+        }
+      },
+      "required": [
+        "exposesNativeTurnId",
+        "emitsTurnStarted",
+        "emitsTurnCompleted",
+        "supportsInterrupt",
+        "supportsActiveSteering",
+        "supportsSteeringByInterruptRestart",
+        "supportsQueuedMessages",
+        "terminalStatusQuality"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "acpAgentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "authFlow": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderAuthState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capabilities": {
+      "$ref": "#/$defs/ProviderCapabilities"
+    },
+    "displayName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "driver": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "install": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderInstallState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "instanceId": {
+      "$ref": "#/$defs/ProviderInstanceId"
+    },
+    "probe": {
+      "$ref": "#/$defs/ProviderProbeResult"
+    },
+    "setup": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderSetup"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "instanceId",
+    "driver",
+    "enabled",
+    "capabilities",
+    "probe"
+  ],
+  "title": "ServerProviderEntry",
+  "type": "object"
+}

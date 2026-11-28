@@ -1,0 +1,8 @@
+{
+  "type": "write_bot_notes",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "botId": "b",
+  "text": "hello",
+  "expectedRevision": "r"
+}

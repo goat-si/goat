@@ -1,0 +1,7 @@
+{
+  "type": "update_bot",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "botId": "b",
+  "instructions": "Be helpful"
+}

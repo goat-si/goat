@@ -39,4 +39,31 @@ pub struct BotProfile {
     pub session_thread_id: ThreadId,
     /// v1 `defaultModelSelection`.
     pub default_model_selection: ModelSelection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[serde(deserialize_with = "crate::serde_util::instructions::deserialize")]
+    #[schemars(length(max = 16384))]
+    pub instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelBotNote {
+    pub index: u32,
+    pub date: Option<String>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaces: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replaced_by: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelListBotNotesResult {
+    pub revision: Option<String>,
+    pub notes: Vec<ChannelBotNote>,
+    pub truncated: bool,
 }
