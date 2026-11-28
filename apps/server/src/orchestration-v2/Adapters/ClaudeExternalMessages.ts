@@ -20,7 +20,7 @@ const CLAUDE_TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024;
 // A long terminal exchange pushes that message out of the tail; one wider read looks for it.
 const CLAUDE_TRANSCRIPT_WIDE_TAIL_BYTES = 32 * 1024 * 1024;
 
-export const claudeProjectsDir = Effect.fnUntraced(function* (input: {
+const claudeProjectsDir = Effect.fnUntraced(function* (input: {
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string;
   readonly path: Path.Path;
@@ -59,7 +59,7 @@ const locateClaudeTranscript = Effect.fnUntraced(function* (input: {
  * an emitted message can be missing from it. Lines with no anchor before them prove nothing:
  * they can all predate the process, so the answer is undefined.
  */
-export function claudeTranscriptHasUnseenMessages(
+function claudeTranscriptHasUnseenMessages(
   lines: ReadonlyArray<string>,
   emittedUuids: ReadonlySet<string>,
 ): boolean | undefined {
@@ -92,7 +92,7 @@ export function claudeTranscriptHasUnseenMessages(
 }
 
 // A failed read keeps the process: replacing it is only right when the file proves a miss.
-export const liveProcessMissedTranscriptMessages = Effect.fn(
+const liveProcessMissedTranscriptMessages = Effect.fn(
   "ClaudeAdapterV2.liveProcessMissedTranscriptMessages",
 )(
   function* (input: {

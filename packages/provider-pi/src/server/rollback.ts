@@ -29,9 +29,7 @@ import {
 } from "./rpc.ts";
 import { sessionFileInCwd } from "./sessionCwd.ts";
 
-export function piTurnEntryId(
-  turn: OrchestrationV2ProviderTurn | null | undefined,
-): string | undefined {
+function piTurnEntryId(turn: OrchestrationV2ProviderTurn | null | undefined): string | undefined {
   const ref = turn?.nativeTurnRef;
   return ref?.strength === "strong" ? (ref.nativeId ?? undefined) : undefined;
 }

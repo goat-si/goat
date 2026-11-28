@@ -178,7 +178,7 @@ export const boundaryAfter = (
 export const agentFor = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
   input.runtimePolicy.interactionMode === "plan" ? "plan" : "build";
 
-export const skillMentions = (text: string) => [
+const skillMentions = (text: string) => [
   ...new Set([...text.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => match[2] ?? [])),
 ];
 
@@ -196,26 +196,24 @@ export const executionEnd = (type: string) =>
   type === "session.execution.failed" ||
   type === "session.execution.interrupted";
 
-export const availableSkillMentions = Effect.fn("OpenCode2Adapter.availableSkillMentions")(
-  function* <E, R>(
-    mentions: ReadonlyArray<string>,
-    listSkills: Effect.Effect<Set<string>>,
-    readModels: Effect.Effect<unknown, E, R>,
-  ) {
-    const known = yield* listSkills;
-    if (mentions.some((name) => !known.has(name))) {
-      // OpenCode answers model inventory after its directory scan completes.
-      yield* readModels;
-      for (const name of yield* listSkills) known.add(name);
-    }
-    return mentions.filter((name) => known.has(name));
-  },
-);
+const availableSkillMentions = Effect.fn("OpenCode2Adapter.availableSkillMentions")(function* <
+  E,
+  R,
+>(
+  mentions: ReadonlyArray<string>,
+  listSkills: Effect.Effect<Set<string>>,
+  readModels: Effect.Effect<unknown, E, R>,
+) {
+  const known = yield* listSkills;
+  if (mentions.some((name) => !known.has(name))) {
+    // OpenCode answers model inventory after its directory scan completes.
+    yield* readModels;
+    for (const name of yield* listSkills) known.add(name);
+  }
+  return mentions.filter((name) => known.has(name));
+});
 
-export const listDirectorySkills = (
-  client: OpenCodeClient,
-  location: { readonly directory: string },
-) =>
+const listDirectorySkills = (client: OpenCodeClient, location: { readonly directory: string }) =>
   client.skill.list({ location }).pipe(
     Effect.timeout(INVENTORY_TIMEOUT),
     Effect.map((list) => new Set<string>(list.data.map((skill) => skill.id))),

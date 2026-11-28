@@ -33,7 +33,7 @@ export interface SnapshotIdentity {
   readonly continuationKey: string;
 }
 
-export function baseSnapshot(
+function baseSnapshot(
   input: SnapshotIdentity & {
     readonly settings: AcpRegistrySettings;
     readonly checkedAt: string;

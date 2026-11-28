@@ -67,7 +67,7 @@ export interface PiSessionListing {
   readonly leafId: string | null;
 }
 
-export function readPiSessionEntry(entry: unknown): [string, PiSessionEntry] | null {
+function readPiSessionEntry(entry: unknown): [string, PiSessionEntry] | null {
   const id = piRecordString(entry, "id");
   const parentId = piRecordField(entry, "parentId");
   if (id === undefined || (parentId !== null && typeof parentId !== "string")) return null;

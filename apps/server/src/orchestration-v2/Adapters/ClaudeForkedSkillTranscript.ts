@@ -30,7 +30,7 @@ type ForkedSkillSubagent = {
 };
 
 // A `context: fork` skill's task_started names no tool call; its frames use this parent id instead.
-export function claudeForkedSkillToolUseId(
+function claudeForkedSkillToolUseId(
   message: Extract<SDKMessage, { readonly type: "system"; readonly subtype: "task_started" }>,
 ): string | undefined {
   const skill = message.description.trim();

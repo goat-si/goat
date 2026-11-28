@@ -172,7 +172,7 @@ export const makeOpenCode2CatalogWatch = Effect.fn(
 });
 
 /** A catalog read after the check reports the same health the check would have. */
-export const withOpenCode2Catalog = (
+const withOpenCode2Catalog = (
   snapshot: ServerProvider,
   settings: Pick<OpenCodeSettings, "customModels">,
   catalog: ReadonlyArray<OpenCode2Model>,

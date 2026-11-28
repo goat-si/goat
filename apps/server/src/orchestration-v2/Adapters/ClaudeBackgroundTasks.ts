@@ -192,14 +192,14 @@ function splitClaudeSleepTimerSteps(tail: string): string[] | undefined {
 // A background command that only sleeps for a finite time, then at most prints the time or a
 // note, is a timer the agent set to check back, which Claude wakes it for when it ends. Any other
 // step (`sleep 5 && npm run dev`) may never end, so that command is not a timer.
-export function isClaudeSleepTimer(command: string | undefined): boolean {
+function isClaudeSleepTimer(command: string | undefined): boolean {
   const start = command === undefined ? null : CLAUDE_SLEEP_TIMER_START.exec(command);
   if (command === undefined || start === null) return false;
   const steps = splitClaudeSleepTimerSteps(command.slice(start[0].length));
   return steps !== undefined && steps.every((step) => CLAUDE_SLEEP_TIMER_REPORT.test(step));
 }
 
-export function startsAwaitedClaudeBackgroundTask(
+function startsAwaitedClaudeBackgroundTask(
   task: OrchestrationV2PendingBackgroundTask,
   previous: OrchestrationV2PendingBackgroundTask | undefined,
 ): boolean {

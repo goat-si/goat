@@ -60,7 +60,6 @@ export {
   listAcpRegistryProviders,
   listAcpRegistrySessions,
   logoutAcpRegistry,
-  makeAcpRegistryManagementRuntime,
   setAcpRegistryProvider,
 } from "./probeManagement.ts";
 
