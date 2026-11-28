@@ -547,10 +547,10 @@
           },
           "type": "array"
         },
-        "queuedInputIds": {
-          "description": "Inputs accepted but not yet delivered, in order.",
+        "queuedInputs": {
+          "description": "Inputs accepted but not yet delivered, in order, with `input.changed` edits applied, so a\nclient gets the whole queue from a checkpoint.",
           "items": {
-            "$ref": "#/$defs/InputId"
+            "$ref": "#/$defs/QueuedInput"
           },
           "type": "array"
         },
@@ -565,7 +565,7 @@
       "required": [
         "activeRunInputIds",
         "activeRunReachedEngine",
-        "queuedInputIds",
+        "queuedInputs",
         "heldInputs",
         "openRequests",
         "runningChildIds",
@@ -623,11 +623,11 @@
       ]
     },
     "HeldInputs": {
-      "description": "Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the\nfront of `queuedInputIds`; `dropped` discards them.",
+      "description": "Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the\nfront of `queuedInputs`; `dropped` discards them.",
       "properties": {
-        "inputIds": {
+        "inputs": {
           "items": {
-            "$ref": "#/$defs/InputId"
+            "$ref": "#/$defs/QueuedInput"
           },
           "type": "array"
         },
@@ -642,7 +642,7 @@
       "required": [
         "requestId",
         "runId",
-        "inputIds"
+        "inputs"
       ],
       "type": "object"
     },
@@ -656,10 +656,8 @@
           "type": "array"
         },
         "clientRequestId": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Idempotency key, kept so the host dedupes across restarts. Host-generated for child and\nsystem inputs.",
+          "type": "string"
         },
         "from": {
           "$ref": "#/$defs/InputSource"
@@ -679,7 +677,8 @@
         "inputId",
         "from",
         "mode",
-        "text"
+        "text",
+        "clientRequestId"
       ],
       "type": "object"
     },
@@ -1105,6 +1104,36 @@
       },
       "required": [
         "attempt"
+      ],
+      "type": "object"
+    },
+    "QueuedInput": {
+      "description": "One queued (or held) input as it stands after `input.changed` edits.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/ChatAttachment"
+          },
+          "type": "array"
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "mode": {
+          "$ref": "#/$defs/InputMode"
+        },
+        "source": {
+          "$ref": "#/$defs/InputSource"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputId",
+        "text",
+        "mode",
+        "source"
       ],
       "type": "object"
     },

@@ -11,4 +11,9 @@ export type InputAccepted = { inputId: InputId, from: InputSource,
 /**
  * The mode the sender asked for. What reached the engine is in `input.delivered`.
  */
-mode: InputMode, text: string, attachments?: Array<ChatAttachment>, clientRequestId?: string, };
+mode: InputMode, text: string, attachments?: Array<ChatAttachment>, 
+/**
+ * Idempotency key, kept so the host dedupes across restarts. Host-generated for child and
+ * system inputs.
+ */
+clientRequestId: string, };

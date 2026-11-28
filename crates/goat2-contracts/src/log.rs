@@ -223,9 +223,9 @@ pub struct InputAccepted {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ChatAttachment>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub client_request_id: Option<String>,
+    /// Idempotency key, kept so the host dedupes across restarts. Host-generated for child and
+    /// system inputs.
+    pub client_request_id: String,
 }
 
 /// `input.changed`: a person edited an input that is still queued (`edit_queued`,
@@ -498,8 +498,9 @@ pub struct Fold {
     /// `input.delivered {as: turn, outcome: accepted}` for one of its inputs is folded (steer
     /// deliveries do not count). Restart settlement: true -> `interrupted`, false -> `unknown`.
     pub active_run_reached_engine: bool,
-    /// Inputs accepted but not yet delivered, in order.
-    pub queued_input_ids: Vec<InputId>,
+    /// Inputs accepted but not yet delivered, in order, with `input.changed` edits applied, so a
+    /// client gets the whole queue from a checkpoint.
+    pub queued_inputs: Vec<QueuedInput>,
     /// Inputs whose delivery is ambiguous, held by a resend request (one hold per run).
     pub held_inputs: Vec<HeldInputs>,
     /// Requests still open (including `resend`), so the inbox renders without earlier lines.
@@ -511,15 +512,27 @@ pub struct Fold {
     pub counters: FoldCounters,
 }
 
+/// One queued (or held) input as it stands after `input.changed` edits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedInput {
+    pub input_id: InputId,
+    pub text: String,
+    pub mode: InputMode,
+    pub source: InputSource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChatAttachment>,
+}
+
 /// Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the
-/// front of `queuedInputIds`; `dropped` discards them.
+/// front of `queuedInputs`; `dropped` discards them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldInputs {
     /// `resend:<runId>`.
     pub request_id: RequestId,
     pub run_id: RunId,
-    pub input_ids: Vec<InputId>,
+    pub inputs: Vec<QueuedInput>,
 }
 
 /// Running totals kept by the fold. Each at most [crate::limits::MAX_SAFE_WIRE_INTEGER].

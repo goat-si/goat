@@ -76,6 +76,7 @@ export type * from "./ProviderFailure.ts";
 export type * from "./ProviderFailureClass.ts";
 export type * from "./ProviderRequestKind.ts";
 export type * from "./ProviderRetry.ts";
+export type * from "./QueuedInput.ts";
 export type * from "./RequestId.ts";
 export type * from "./RequestKind.ts";
 export type * from "./RequestOpened.ts";
