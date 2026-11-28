@@ -964,13 +964,25 @@ impl Actor {
                 self.append(events);
             }
             EngineEvent::RequestClosed { key } => {
-                let request = match &mut self.phase {
+                let mut request = match &mut self.phase {
                     Phase::Running(run) => {
                         let found = run.engine_requests.iter().position(|(k, _)| *k == key);
                         found.map(|i| run.engine_requests.remove(i).1)
                     }
                     _ => None,
                 };
+                // The engine closed a keyed sign-in itself (e.g. an interrupt cancelled the
+                // agent's request): close the person's sign-in too, and treat the key as
+                // answered so nothing answers it later.
+                if request.is_none()
+                    && let Some(index) = self.signin_keys.iter().position(|(_, k)| *k == key)
+                {
+                    let (request_id, _) = self.signin_keys.remove(index);
+                    self.undeclined_signin_keys.retain(|k| *k != key);
+                    self.settled_signin_keys.insert(key.clone());
+                    self.host.forget_signin_link(&request_id);
+                    request = Some(request_id);
+                }
                 if let Some(request_id) = request
                     && self.is_open(&request_id)
                 {

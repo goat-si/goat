@@ -3163,3 +3163,51 @@ async fn a_completed_steer_is_not_requeued_by_a_later_cancel() {
         "the read steer is not queued again"
     );
 }
+
+#[tokio::test]
+async fn an_engine_closed_keyed_signin_closes_and_is_never_answered() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-closed", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-C-8801".into()),
+            turn_id: turn.clone(),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestClosed {
+            key: "KEY-C-8801".into(),
+        },
+    );
+    eventually("closed", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+    // A later repeat of the closed key and the run end never answer it.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-C-8801".into()),
+            turn_id: turn,
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(signins(&t, &id).len(), 1, "no new request for a closed key");
+    assert!(
+        !t.fake
+            .calls()
+            .iter()
+            .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-C-8801")),
+        "the engine is never answered for a key it closed"
+    );
+}

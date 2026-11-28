@@ -208,8 +208,10 @@ pub enum EngineEvent {
     /// reports `SteerUpdated` for each such steer, `Cancelled` for any left unread, before that
     /// turn's `TurnFinished`. The host reads events in order, so a cancel lands while its run is
     /// still active; one after `TurnFinished` is ignored. An accepted steer with no
-    /// `SteerUpdated` counts as `Completed`: engines that take a steer straight into the turn
-    /// (Codex; v1 never emits `steer.updated` for it) send nothing.
+    /// `SteerUpdated` is treated as `Completed`. That is the host's v1-compatible policy, not
+    /// proof the engine read it: v1 never emits `steer.updated` for Codex, and the Codex driver
+    /// sends none, although Codex queues an accepted steer and can discard queued input. Known
+    /// limitation: such an input is not requeued.
     SteerUpdated {
         turn_id: String,
         input_ids: Vec<InputId>,
