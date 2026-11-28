@@ -56,6 +56,7 @@ use crate::launch::{
 };
 use crate::process::{ChildProcess, StderrTail, group_rss_bytes_of};
 use crate::protocol::{self, Inbound};
+use crate::usage::{self, UsageSample};
 use crate::util;
 
 /// v1 `ClaudeBackgroundWorkBlocksQueryReplacementError` message (ClaudeQueryRunnerErrors.ts:66).
@@ -211,6 +212,13 @@ struct Turn {
     blocks: HashMap<String, u32>,
     /// Message id of the message being streamed.
     stream_message: Option<String>,
+    /// The root message whose usage the meter follows and its usage so far (v1 `streamUsage`);
+    /// the usage is cleared by a compaction.
+    stream_usage: Option<(String, Option<Value>)>,
+    /// The last context measurement emitted (v1 `lastContextUsage`).
+    last_usage: Option<UsageSample>,
+    /// Where Claude compacts for this turn's model (v1 `autoCompactWindow`).
+    auto_compact_window: Option<u64>,
     /// Claude's result, held while the answer to an interrupt of this turn is pending; that
     /// answer decides whether the result is a completion or the interrupt.
     held_for_interrupt: Option<Value>,
@@ -275,6 +283,10 @@ struct State {
     interrupt_request: Option<(String, String)>,
     /// Why the process is going away when it is not the CLI's own doing.
     exit_hint: Option<String>,
+    /// The `--settings` object from the launch arguments.
+    launch_settings: Map<String, Value>,
+    /// Context windows Claude reported per API model id (v1 `createClaudeReportedContext`).
+    reported_windows: HashMap<String, u64>,
 }
 
 struct Process {
@@ -400,6 +412,8 @@ async fn start_session(
             interrupt_request: None,
             last_finished: None,
             exit_hint: None,
+            launch_settings: Map::new(),
+            reported_windows: HashMap::new(),
         }),
         events,
         controls: Mutex::new(HashMap::new()),
@@ -431,6 +445,37 @@ async fn start_session(
 }
 
 impl Inner {
+    /// An environment variable as the CLI sees it: the instance env over the inherited one.
+    fn launch_env(&self, name: &str) -> Option<String> {
+        self.launch
+            .env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+            .or_else(|| std::env::var(name).ok())
+    }
+
+    /// Where Claude compacts for the current model (v1 resolveAutoCompactWindow, per turn).
+    fn auto_compact_window(&self) -> Option<u64> {
+        let (model, launch_settings) = {
+            let state = self.state.lock().ok()?;
+            (
+                state.model.api_model_id.clone(),
+                state.launch_settings.clone(),
+            )
+        };
+        let config_dir = self
+            .launch_env("CLAUDE_CONFIG_DIR")
+            .filter(|dir| !dir.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))?;
+        let files = usage::settings_files(&self.cwd, &config_dir);
+        usage::resolve_auto_compact_window(&model, &launch_settings, &files, &|name| {
+            self.launch_env(name)
+        })
+    }
+
     /// Every reason that leaves the driver is redacted: Claude's errors can echo request headers.
     fn emit(&self, mut event: EngineEvent) {
         let redact = |text: &mut String| *text = util::redact_secrets(text, &self.mcp_token);
@@ -605,6 +650,7 @@ impl Inner {
                 Ok(mut state) if !state.shutting_down => {
                     state.permission_mode = effective_mode;
                     state.pinned_mode = folds.permission_mode;
+                    state.launch_settings = folds.settings.clone();
                     state.model = model.clone();
                     state.exited = false;
                     state.background_commands.clear();
@@ -1338,6 +1384,16 @@ impl Inner {
                 let after = metadata
                     .and_then(|m| m.get("post_tokens"))
                     .and_then(Value::as_u64);
+                // v1: a compaction resets the measurement to the compacted size.
+                if let Some(turn) = state.turn.as_mut() {
+                    if let Some((_, usage)) = turn.stream_usage.as_mut() {
+                        *usage = None;
+                    }
+                    turn.last_usage = None;
+                }
+                if let Some(after) = after.filter(|tokens| *tokens > 0) {
+                    self.emit_usage(state, UsageSample::Count(after), None);
+                }
                 let item = self.item(
                     state,
                     &turn_id,
@@ -1543,11 +1599,33 @@ impl Inner {
         };
         match event.get("type").and_then(Value::as_str) {
             Some("message_start") => {
-                turn.stream_message = event
+                let message_id = event
                     .get("message")
                     .and_then(|m| m.get("id"))
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                turn.stream_message = message_id.clone();
+                // v1: message_start begins a new measurement.
+                turn.last_usage = None;
+                let usage = event
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .filter(|u| !u.is_null())
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                turn.stream_usage = Some((message_id.unwrap_or_default(), Some(usage.clone())));
+                self.emit_usage(state, UsageSample::Message(usage), None);
+            }
+            Some("message_delta") => {
+                let Some(delta) = event.get("usage").filter(|u| !u.is_null()) else {
+                    return;
+                };
+                let Some((_, Some(current))) = turn.stream_usage.as_mut() else {
+                    return;
+                };
+                *current = usage::merge_stream_usage(current, delta);
+                let merged = current.clone();
+                self.emit_usage(state, UsageSample::Message(merged), None);
             }
             Some("content_block_delta") => {
                 let delta = event.get("delta");
@@ -1588,6 +1666,10 @@ impl Inner {
                 return;
             }
         }
+        self.track_snapshot_usage(state, &body);
+        let Some(turn_id) = state.turn.as_ref().map(|t| t.id.clone()) else {
+            return;
+        };
         let message_id = body
             .get("id")
             .and_then(Value::as_str)
@@ -1596,7 +1678,6 @@ impl Inner {
         let Some(content) = body.get("content").and_then(Value::as_array) else {
             return;
         };
-        let turn_id = turn.id.clone();
         for block in content {
             let index = {
                 let Some(turn) = state.turn.as_mut() else {
@@ -1695,6 +1776,86 @@ impl Inner {
         }
     }
 
+    /// v1 assistant-snapshot usage (`ClaudeAdapterV2.ts:7176-7201`): a root snapshot of a message
+    /// the stream did not start is measured; one the stream started only fills in input the
+    /// stream lacked. CLI-generated `<synthetic>` frames report zero usage, not context usage.
+    fn track_snapshot_usage(&self, state: &mut State, body: &Value) {
+        if body.get("model").and_then(Value::as_str) == Some("<synthetic>") {
+            return;
+        }
+        let Some(snapshot) = body.get("usage").filter(|u| !u.is_null()) else {
+            return;
+        };
+        let message_id = body
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(turn) = state.turn.as_mut() else {
+            return;
+        };
+        let sample = match turn.stream_usage.as_mut() {
+            Some((id, _)) if *id != message_id => None,
+            None => None,
+            Some((_, None)) => return,
+            Some((_, Some(stream))) => {
+                if usage::message_input_tokens(stream) > 0
+                    || usage::message_input_tokens(snapshot) == 0
+                {
+                    return;
+                }
+                let output = usage::token_count(snapshot.get("output_tokens"))
+                    .unwrap_or(0)
+                    .max(usage::token_count(stream.get("output_tokens")).unwrap_or(0));
+                let mut combined = snapshot.clone();
+                if let Some(map) = combined.as_object_mut() {
+                    map.insert("output_tokens".into(), json!(output));
+                }
+                *stream = combined.clone();
+                Some(combined)
+            }
+        };
+        let sample = match sample {
+            Some(sample) => sample,
+            None => {
+                turn.last_usage = None;
+                turn.stream_usage = Some((message_id, Some(snapshot.clone())));
+                snapshot.clone()
+            }
+        };
+        self.emit_usage(state, UsageSample::Message(sample), None);
+    }
+
+    /// The model's context window: the bundled catalog, else what Claude reported for it.
+    fn context_window(state: &State) -> Option<u64> {
+        let model = &state.model.api_model_id;
+        usage::catalog_context_window(model).or_else(|| state.reported_windows.get(model).copied())
+    }
+
+    /// Emit the turn's context usage (v1 emitContextUsage); usage without input is skipped and
+    /// is not remembered.
+    fn emit_usage(
+        &self,
+        state: &mut State,
+        sample: UsageSample,
+        cost: Option<goat2_contracts::TokenUsageCost>,
+    ) {
+        let max_tokens = Self::context_window(state);
+        let Some(turn) = state.turn.as_mut() else {
+            return;
+        };
+        let Some(mut snapshot) = usage::snapshot(&sample, max_tokens, turn.auto_compact_window)
+        else {
+            return;
+        };
+        snapshot.cost = cost;
+        turn.last_usage = Some(sample);
+        self.emit(EngineEvent::TokenUsage {
+            turn_id: Some(turn.id.clone()),
+            usage: snapshot,
+        });
+    }
+
     fn on_user(&self, state: &mut State, message: &Value) {
         if state.turn.is_none() || message.get("isReplay").and_then(Value::as_bool) == Some(true) {
             return;
@@ -1785,6 +1946,16 @@ impl Inner {
     fn on_result(&self, state: &mut State, message: &Value) {
         if state.turn.is_none() {
             return;
+        }
+        // v1 reportedContext.record: a newly reported window re-measures the last usage. GOAT 2
+        // also carries Claude's total_cost_usd on that measurement, before the turn settles.
+        let changed =
+            usage::record_reported_windows(&mut state.reported_windows, message.get("modelUsage"));
+        let cost = usage::result_cost(message);
+        if (changed || cost.is_some())
+            && let Some(last) = state.turn.as_ref().and_then(|t| t.last_usage.clone())
+        {
+            self.emit_usage(state, last, cost);
         }
         // A uuid echo is Claude's acceptance and read of that steer (v1 markSteersAccepted): it
         // goes through the same path as a lifecycle verdict, settling a waiting `steer` call.
@@ -2471,6 +2642,7 @@ impl EngineSession for ClaudeSession {
             Ok(content) => content,
             Err(reason) => return TurnStartResult::Declined { reason },
         };
+        let auto_compact_window = inner.auto_compact_window();
         let turn_id = format!("turn:{}", util::uuid());
         let prompt_uuid = util::uuid();
         {
@@ -2494,6 +2666,9 @@ impl EngineSession for ClaudeSession {
                 held_text: None,
                 blocks: HashMap::new(),
                 stream_message: None,
+                stream_usage: None,
+                last_usage: None,
+                auto_compact_window,
                 held_for_interrupt: None,
                 saw_text: false,
                 auth_failure: false,

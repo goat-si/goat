@@ -20,7 +20,7 @@ use tokio::process::Command;
 use crate::launch::LaunchOptions;
 use crate::util;
 
-const MANIFEST: &str = include_str!("../data/model-manifest.claudeAgent.json");
+pub(crate) const MANIFEST: &str = include_str!("../data/model-manifest.claudeAgent.json");
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 async fn run(options: &LaunchOptions, args: &[&str]) -> Result<(bool, String), String> {

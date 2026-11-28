@@ -1748,3 +1748,74 @@ async fn a_subagent_finished_before_its_start_does_not_block_a_reopen() {
     assert_eq!(run.starts().len(), 2);
     handle.session.shutdown().await;
 }
+
+/// Context usage follows the current root request (v1 emitContextUsage): a placeholder without
+/// input is skipped, message_delta completes message_start, a snapshot of a measured message adds
+/// nothing, a subagent's message is ignored, a compaction resets to its post size, and the result
+/// carries Claude's total_cost_usd, all before TurnFinished.
+#[tokio::test]
+async fn token_usage_follows_the_current_request() {
+    let run = Run::new("wire/token_usage.ndjson");
+    let home = run.dir.join("claude-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut spec = run.spec(MODEL, RuntimeMode::ApprovalRequired, None);
+    let env = &mut spec.launch.as_mut().unwrap().env;
+    env.insert("CLAUDE_CONFIG_DIR".into(), home.display().to_string());
+    env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), "400000".into());
+    env.insert("DISABLE_COMPACT".into(), "0".into());
+    env.insert("DISABLE_AUTO_COMPACT".into(), "0".into());
+    let mut handle = goat2_engine_api::EngineFactory::start(&run.factory(), spec)
+        .await
+        .expect("start");
+    let turn_id = turn(
+        &handle,
+        "Count the files.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    let events = until_finished(&mut handle).await;
+    assert!(matches!(finished(&events), TurnOutcome::Done));
+    let usages: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::TokenUsage { turn_id: t, usage } => {
+                assert_eq!(t.as_deref(), Some(turn_id.as_str()));
+                Some(usage.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let used: Vec<u64> = usages.iter().map(|u| u.used_tokens).collect();
+    assert_eq!(used, vec![2050, 900, 3501, 3501], "{usages:?}");
+    for usage in &usages {
+        assert_eq!(usage.max_tokens, Some(1_000_000));
+        assert_eq!(usage.auto_compact_threshold, Some(367_000));
+    }
+    let first = &usages[0];
+    assert_eq!(first.input_tokens, Some(2000));
+    assert_eq!(first.cached_input_tokens, Some(800));
+    assert_eq!(first.output_tokens, Some(50));
+    assert_eq!(first.last_used_tokens, Some(2050));
+    assert_eq!(first.last_input_tokens, Some(2000));
+    assert_eq!(first.cost, None);
+    assert_eq!(
+        usages[1].input_tokens, None,
+        "a compaction reports its size only"
+    );
+    assert_eq!(usages[2].cost, None);
+    let cost = usages[3].cost.as_ref().expect("result cost");
+    assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.amount.as_f64(), Some(0.0123));
+    let last_usage = events
+        .iter()
+        .rposition(|e| matches!(e, EngineEvent::TokenUsage { .. }))
+        .unwrap();
+    let finished_at = events
+        .iter()
+        .position(|e| matches!(e, EngineEvent::TurnFinished { .. }))
+        .unwrap();
+    assert!(last_usage < finished_at);
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
