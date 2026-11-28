@@ -146,3 +146,13 @@ attachments, virtualized lists, thread menus, pinning, PR/machine metadata (mach
 
 Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.ts is plain LF JSONL request/response plus events over stdio; a Node hop would add a process and a failure point with no SDK to host.
 
+
+## P2-S opencode
+
+| GOAT 2 path | v1 path at 916b5ccc1b2 | Kind and note |
+|---|---|---|
+| `apps/engine-helper/src/engines/opencode/goatMcpConfig.ts` | `packages/provider-opencode/src/server/goatMcpConfig.ts:1-10` | adapted: remote GOAT MCP configuration shape. |
+| `apps/engine-helper/src/engines/opencode/openCodeConfigContent.ts` | `packages/provider-opencode/src/server/openCodeConfigContent.ts:1-10` | adapted: launch and inherited config precedence. |
+| `apps/engine-helper/test/opencode.test.ts` | `packages/provider-opencode/src/server/goatMcpConfig.ts:5-10`, `openCodeConfigContent.ts:1-10` | new: isolated checks of the lifted configuration rules. |
+
+Not lifted yet: adapter, server lifecycle, probe, usage/limits, account pools, text generation, cloud, checkpoints, and OpenCode 2 generation.

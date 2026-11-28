@@ -12,7 +12,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@opencode-ai/sdk": "1.15.13"
+  },
   "devDependencies": {
     "@goat2/contracts-rs": "workspace:*",
     "@types/node": "catalog:",
