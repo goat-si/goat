@@ -6,6 +6,7 @@ import type * as FileSystem from "effect/FileSystem";
 import type * as ProcessRunner from "../processRunner.ts";
 
 const isThreadId = Schema.is(ThreadId);
+const devToolsPortArgument = /(?:^|[\s\0])--remote-debugging-port=/;
 
 const threadFromEnvironment = (text: string) => {
   const value = /(?:^|[\s\0])GOAT_THREAD_ID=([^\s\0]+)/.exec(text)?.[1];
@@ -36,7 +37,12 @@ export const annotateAgentServers = Effect.fn("PortDiscovery.annotateAgentServer
         unread,
         (pid) =>
           input.fileSystem.readFileString(`/proc/${pid}/environ`).pipe(
-            Effect.map(threadFromEnvironment),
+            Effect.flatMap((environment) =>
+              input.fileSystem.readFileString(`/proc/${pid}/cmdline`).pipe(
+                Effect.map((cmdline) => devToolsPortArgument.test(cmdline) ? null : threadFromEnvironment(environment)),
+                Effect.orElseSucceed(() => threadFromEnvironment(environment)),
+              ),
+            ),
             Effect.orElseSucceed(() => null),
             Effect.map((value) => input.cache.set(pid, value)),
           ),
@@ -55,7 +61,7 @@ export const annotateAgentServers = Effect.fn("PortDiscovery.annotateAgentServer
         for (const line of result.value.stdout.split("\n")) {
           const match = /^\s*(\d+)\s+(.*)$/.exec(line);
           if (match?.[1] !== undefined && match[2] !== undefined)
-            input.cache.set(Number(match[1]), threadFromEnvironment(match[2]));
+            input.cache.set(Number(match[1]), devToolsPortArgument.test(match[2]) ? null : threadFromEnvironment(match[2]));
         }
       } else input.retry?.();
     }

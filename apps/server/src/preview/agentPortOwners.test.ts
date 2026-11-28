@@ -35,3 +35,19 @@ it.effect("attributes a Linux listener to its inherited thread and forgets exite
     ),
   ),
 );
+
+it.effect.each(["linux", "darwin"] as const)("does not attribute an agent browser DevTools listener on %s", (platform) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const server: DiscoveredLocalServer = {
+      host: "localhost", port: 4321, url: "http://localhost:4321", processName: "chrome", pid: 123, terminal: null,
+    };
+    const result = yield* annotateAgentServers({
+      servers: [server], platform, fileSystem, cache: new Map(),
+      runner: { run: () => Effect.succeed({ code: 0, stdout: "123 chrome --remote-debugging-port=0 GOAT_THREAD_ID=thread-pi", stderr: "", timedOut: false }) } as ProcessRunner.ProcessRunner["Service"],
+    });
+    assert.isUndefined(result[0]?.agent);
+  }).pipe(Effect.provide(FileSystem.layerNoop({
+    readFileString: (path) => Effect.succeed(path.endsWith("cmdline") ? "chrome\0--remote-debugging-port=0\0" : "GOAT_THREAD_ID=thread-pi\0"),
+  }))),
+);
