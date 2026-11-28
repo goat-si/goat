@@ -1,5 +1,4 @@
 import {
-  isSideChatThread,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -86,10 +85,6 @@ export function matchesLineage(
       delegatedBy === filter.childrenOf)
   );
 }
-
-/** What goat_thread_list shows without includeSubagents:false, like the user's thread list. */
-export const listedByDefault = (shell: OrchestrationV2ThreadShell) =>
-  shell.lineage.relationshipToParent !== "subagent" && !isSideChatThread(shell);
 
 const LIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
   "preparing",

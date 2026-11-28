@@ -99,6 +99,8 @@ const shellReads = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
     projectId?: ProjectId | undefined;
     threadIds?: ReadonlyArray<ThreadId> | undefined;
     settled?: boolean | undefined;
+    statuses?: ReadonlyArray<string> | undefined;
+    titleContains?: string | undefined;
     includeSubagents: boolean;
     offset: number;
     limit: number;
@@ -108,6 +110,10 @@ const shellReads = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
         (input.projectId === undefined || shell.projectId === input.projectId) &&
         (input.threadIds === undefined || input.threadIds.includes(shell.id)) &&
         (input.settled === undefined || (shell.settledOverride === "settled") === input.settled) &&
+        (input.statuses === undefined ||
+          input.statuses.includes(shell.activityRunStatus ?? shell.status)) &&
+        (input.titleContains === undefined ||
+          shell.title.toLocaleLowerCase().includes(input.titleContains.toLocaleLowerCase())) &&
         (input.includeSubagents ||
           (shell.lineage.relationshipToParent !== "subagent" && shell.sideChatOf == null)),
     );
@@ -178,6 +184,36 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("complex filters count and page across SQL-ordered candidate batches", () => {
+    const shells = Array.from({ length: 205 }, (_, index) =>
+      finished(ThreadId.make(`thread:batch-${String(index).padStart(3, "0")}`), {
+        activityRunStatus: index % 3 === 0 ? "waiting" : null,
+      }),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, {
+        projectId,
+        statuses: ["waiting"],
+        cursor: 65,
+        limit: 3,
+      });
+      assert.equal(result.total, 69);
+      assert.equal(result.nextCursor, 68);
+      assert.deepEqual(
+        result.threads.map((thread) => thread.threadId),
+        ["thread:batch-195", "thread:batch-198", "thread:batch-201"],
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads(shells),
+          listProjectThreads: () => Effect.die("complex filters must use bounded pages"),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   it.effect("refuses a project that does not exist", () =>
     Effect.gen(function* () {
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;

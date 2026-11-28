@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ShellSnapshotOptions, ShellSnapshotRead } from "./ProjectionStore.ts";
+import { makeShellThreadRows } from "./ProjectionShellThreadRows.ts";
 
 const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
@@ -16,6 +17,8 @@ export interface McpThreadPageInput {
   readonly projectId?: ProjectId | undefined;
   readonly includeSubagents: boolean;
   readonly settled?: boolean | undefined;
+  readonly statuses?: ReadonlyArray<string> | undefined;
+  readonly titleContains?: string | undefined;
   readonly threadIds?: ReadonlyArray<ThreadId> | undefined;
   readonly offset: number;
   readonly limit: number;
@@ -25,6 +28,7 @@ export interface McpThreadPage {
   readonly total: number;
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
 }
+export type PageOperation<E> = (input: McpThreadPageInput) => Effect.Effect<McpThreadPage, E>;
 
 export const selectPage = Effect.fn("ProjectionMcpThreadPage.selectPage")(function* <E>(
   sql: SqlClient.SqlClient,
@@ -54,13 +58,30 @@ export const selectPage = Effect.fn("ProjectionMcpThreadPage.selectPage")(functi
             : input.settled
               ? sql`AND json_extract(payload_json, '$.settledOverride') IS 'settled'`
               : sql`AND json_extract(payload_json, '$.settledOverride') IS NOT 'settled'`;
+        const { isSilentShellRun } = makeShellThreadRows(sql);
+        const statuses =
+          input.statuses === undefined
+            ? sql``
+            : sql`
+      AND (SELECT r.status FROM orchestration_v2_projection_runs r
+        INDEXED BY orchestration_v2_projection_runs_thread_status_idx
+        WHERE r.thread_id = orchestration_v2_projection_threads.thread_id
+          AND r.status IN ('preparing', 'starting', 'running', 'waiting')
+          AND NOT ${isSilentShellRun("r")}
+        ORDER BY r.ordinal DESC, r.run_id DESC LIMIT 1)
+        IN (SELECT value FROM json_each(${encodeIds(input.statuses)}))`;
+        const title =
+          input.titleContains === undefined
+            ? sql``
+            : sql`
+          AND goat_case_contains(title, ${input.titleContains}) = 1`;
         const count = yield* sql<{ readonly total: number }>`
       SELECT COUNT(*) AS total FROM orchestration_v2_projection_threads
-      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled}
+      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled} ${statuses} ${title}
     `;
         const rows = yield* sql<{ readonly thread_id: string }>`
       SELECT thread_id FROM orchestration_v2_projection_threads
-      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled}
+      WHERE deleted_at IS NULL AND archived_at IS NULL ${project} ${listed} ${threadIds} ${settled} ${statuses} ${title}
       ORDER BY updated_at DESC, thread_id DESC LIMIT ${input.limit} OFFSET ${input.offset}
     `;
         const ids = rows.map((row) => ThreadId.make(row.thread_id));
@@ -95,6 +116,11 @@ export const memoryPage = (
       (thread) =>
         (input.projectId === undefined || thread.projectId === input.projectId) &&
         (input.threadIds === undefined || input.threadIds.includes(thread.id)) &&
+        (input.statuses === undefined ||
+          (thread.activityRunStatus != null &&
+            input.statuses.includes(thread.activityRunStatus))) &&
+        (input.titleContains === undefined ||
+          thread.title.toLocaleLowerCase().includes(input.titleContains.toLocaleLowerCase())) &&
         (input.settled === undefined || (thread.settledOverride === "settled") === input.settled) &&
         (input.includeSubagents ||
           (thread.lineage.relationshipToParent !== "subagent" && !isSideChatThread(thread))),

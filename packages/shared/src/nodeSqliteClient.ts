@@ -40,6 +40,7 @@ import {
 export { recentSlowSql } from "./slowSqlOperations.ts";
 
 import { readerWorkerSource } from "./sqliteWorkerSources.ts";
+import { sqliteCaseContains } from "./sqliteCaseContains.ts";
 import * as RowBatches from "./sqliteRowBatches.ts";
 import {
   CHECKPOINT_BACKPRESSURE_FRAMES,
@@ -817,11 +818,19 @@ const make = Effect.fn("makeWithDatabase")(function* (
   const makeConnection = Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const db = yield* Effect.try({
-      try: () =>
-        new NodeSqlite.DatabaseSync(options.filename, {
+      try: () => {
+        const db = new NodeSqlite.DatabaseSync(options.filename, {
           readOnly: options.readonly ?? false,
           allowExtension: options.allowExtension ?? false,
-        }),
+        });
+        try {
+          db.function("goat_case_contains", { deterministic: true }, sqliteCaseContains);
+          return db;
+        } catch (cause) {
+          db.close();
+          throw cause;
+        }
+      },
       catch: (cause) =>
         new SqlError({
           reason: classifyError(cause, "Failed to open database", "open"),

@@ -170,6 +170,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as McpThreadPage from "./ProjectionMcpThreadPage.ts";
+import * as ShellFreshFlight from "./ShellFreshFlight.ts";
 import { mapShellChunks, partitionShells, reduceShellChunks } from "./shellChunks.ts";
 import type * as Statement from "effect/sql/Statement";
 
@@ -694,9 +695,7 @@ export interface ProjectionStoreV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, ProjectionStoreV2Error>;
-  readonly listMcpThreadPage: (
-    input: McpThreadPage.McpThreadPageInput,
-  ) => Effect.Effect<McpThreadPage.McpThreadPage, ProjectionStoreV2Error>;
+  readonly listMcpThreadPage: McpThreadPage.PageOperation<ProjectionStoreV2Error>;
   readonly listActiveSubagentThreadIds: (
     page?: SubagentPage,
   ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
@@ -7238,11 +7237,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.map((rows) => decodeShellSnapshot(rows, options?.omitIdleSubagents)),
       );
 
-    const getShellSnapshot: ProjectionStoreV2Shape["getShellSnapshot"] = (options) =>
-      sql.withTransaction(readShellSnapshotRows(options)).pipe(
-        Effect.mapError(shellSnapshotReadError),
-        Effect.flatMap((rows) => decodeShellSnapshot(rows, options?.omitIdleSubagents)),
-      );
+    const getShellSnapshot = yield* ShellFreshFlight.makeSnapshot(
+      sql,
+      readShellSnapshotRows,
+      decodeShellSnapshot,
+      shellSnapshotReadError,
+    );
 
     const countThreads = Effect.fn("ProjectionStore.countThreads")(function* () {
       const rows = yield* sql<{ readonly count: number }>`

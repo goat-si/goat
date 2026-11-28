@@ -1,9 +1,16 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectId } from "@goat/contracts";
+import { EventId, MessageId, NodeId, ProjectId, RunId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { createD10Thread, layerTest } from "./ProjectionStore.testkit.ts";
+import {
+  createD10Thread,
+  driver,
+  layerTest,
+  modelSelection,
+  providerInstanceId,
+} from "./ProjectionStore.testkit.ts";
 
 it.effect("thread-list pages count and order active threads before decoding their shells", () =>
   Effect.gen(function* () {
@@ -84,6 +91,84 @@ it.effect.each([
     assert.deepEqual(
       second.threads.map((thread) => thread.id),
       ["thread:order-b", "thread:order-a"],
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("title filtering matches JavaScript Unicode case folding before paging", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    yield* createD10Thread("title-a");
+    yield* createD10Thread("title-b");
+    yield* sql`UPDATE orchestration_v2_projection_threads
+      SET title = 'Kelvin', payload_json = json_set(payload_json, '$.title', 'Kelvin')
+      WHERE thread_id = 'thread:title-a'`;
+    yield* sql`UPDATE orchestration_v2_projection_threads
+      SET title = 'Other', payload_json = json_set(payload_json, '$.title', 'Other')
+      WHERE thread_id = 'thread:title-b'`;
+    const page = yield* store.listMcpThreadPage({
+      includeSubagents: true,
+      titleContains: "k",
+      offset: 0,
+      limit: 1,
+    });
+    assert.equal(page.total, 1);
+    assert.deepEqual(
+      page.threads.map((thread) => thread.id),
+      ["thread:title-a"],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([
+  ["SQL", layerTest],
+  ["memory", ProjectionStore.layerMemory],
+] as const)("%s pages filter active run statuses before decoding", ([, layer]) =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    yield* createD10Thread("status-idle");
+    const threadId = yield* createD10Thread("status-running");
+    const now = yield* DateTime.now;
+    const runId = RunId.make("run:status-running");
+    const nodeId = NodeId.make("node:status-running");
+    yield* store.apply({
+      id: EventId.make("event:status-running"),
+      type: "run.created",
+      threadId,
+      runId,
+      nodeId,
+      driver,
+      providerInstanceId,
+      occurredAt: now,
+      payload: {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId,
+        modelSelection,
+        providerThreadId: null,
+        userMessageId: MessageId.make("message:status-running"),
+        rootNodeId: nodeId,
+        activeAttemptId: null,
+        status: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    });
+    const page = yield* store.listMcpThreadPage({
+      includeSubagents: true,
+      statuses: ["running"],
+      offset: 0,
+      limit: 10,
+    });
+    assert.equal(page.total, 1);
+    assert.deepEqual(
+      page.threads.map((thread) => thread.id),
+      [threadId],
     );
   }).pipe(Effect.provide(layer)),
 );
