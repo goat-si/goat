@@ -1260,3 +1260,15 @@ test("1.x emits only the latest todo snapshot once before every terminal outcome
     } finally { await session.shutdown(); }
   }
 });
+
+test("1.x first-message preamble survives an initial compact turn", async () => {
+  fake.reset(); const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, instructions: { firstMessagePreamble: "REQUIRED-PREAMBLE" } }, host);
+  try {
+    assert.equal((await session.startTurn([{ inputId: "i", text: "/compact", attachments: [] }], settings)).status, "accepted"); await finished.promise;
+    assert.equal((await session.startTurn([{ inputId: "j", text: "hello", attachments: [] }], settings)).status, "accepted");
+    const call = fake.calls.find((entry) => entry.method === "prompt")?.args as { parts: Array<{ text?: string }> };
+    assert.match(call.parts[0]?.text ?? "", /REQUIRED-PREAMBLE/);
+  } finally { await session.shutdown(); }
+});
