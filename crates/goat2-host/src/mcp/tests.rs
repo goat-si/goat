@@ -182,7 +182,7 @@ async fn http_surface_auth_and_dispatch() {
         json!({"path":"goat_thread_start","args":{"task":"two","clientRequestId":"x"}}),
     )
     .await;
-    assert_eq!(conflict["error"]["reason"], "idempotency_conflict");
+    assert_eq!(conflict["error"]["reason"], "idempotency_mismatch");
     let refused = call(
         &url,
         "inactive",

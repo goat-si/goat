@@ -427,7 +427,7 @@ impl Service {
                 if old != &args {
                     return SurfaceResult::err(
                         ErrorCode::Conflict,
-                        "idempotency_conflict",
+                        "idempotency_mismatch",
                         "Key already used with different arguments",
                         false,
                     );
@@ -441,7 +441,7 @@ impl Service {
                     if rx.changed().await.is_err() {
                         return SurfaceResult::err(
                             ErrorCode::UnknownOutcome,
-                            "reservation_lost",
+                            "outcome_unknown",
                             "The original call did not complete",
                             false,
                         );
@@ -467,7 +467,7 @@ impl Service {
                 if rx.changed().await.is_err() {
                     return SurfaceResult::err(
                         ErrorCode::UnknownOutcome,
-                        "reservation_lost",
+                        "outcome_unknown",
                         "The original call did not complete",
                         false,
                     );
