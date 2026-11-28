@@ -158,23 +158,25 @@ impl crate::engine::AcpEngineFactory {
         self.open_probe_within(spec, PROBE_TIMEOUT).await
     }
 
-    /// [Self::open_probe] with v1's `resolveProviderProbeTimeoutMs` deadline.
+    /// [Self::open_probe] with v1's `resolveProviderProbeTimeoutMs` deadline. The session start
+    /// and the advertisement waits share it (v1 probe.ts:535-569 runs both under one
+    /// `timeoutOrElse`; final review finding 20).
     pub async fn open_probe_within(
         &self,
         spec: goat2_engine_api::SessionSpec,
         timeout: std::time::Duration,
     ) -> Result<AcpProbeSession, AcpProbeFailure> {
-        let started = match tokio::time::timeout(timeout, self.start_inner(spec)).await {
-            Err(_) => {
-                return Err(AcpProbeFailure {
-                    message: probe_timeout_message(timeout),
-                    auth_required: false,
-                    auth_methods: Vec::new(),
-                    auth_url: None,
-                    timed_out: true,
-                    initialize_raw: None,
-                });
-            }
+        let deadline = tokio::time::Instant::now() + timeout;
+        let timed_out = || AcpProbeFailure {
+            message: probe_timeout_message(timeout),
+            auth_required: false,
+            auth_methods: Vec::new(),
+            auth_url: None,
+            timed_out: true,
+            initialize_raw: None,
+        };
+        let started = match tokio::time::timeout_at(deadline, self.start_inner(spec)).await {
+            Err(_) => return Err(timed_out()),
             Ok(Ok(started)) => started,
             Ok(Err(failure)) => {
                 let mut auth_url = None;
@@ -199,14 +201,23 @@ impl crate::engine::AcpEngineFactory {
                 });
             }
         };
-        started
-            .session
-            .wait_for_advertisements(MODEL_ADVERTISEMENT_GRACE, COMMAND_ADVERTISEMENT_GRACE)
-            .await;
-        Ok(AcpProbeSession {
+        let probe = AcpProbeSession {
             session: started.session,
             events: started.events,
-        })
+        };
+        let advertised = tokio::time::timeout_at(
+            deadline,
+            probe
+                .session
+                .wait_for_advertisements(MODEL_ADVERTISEMENT_GRACE, COMMAND_ADVERTISEMENT_GRACE),
+        )
+        .await;
+        if advertised.is_err() {
+            // v1's scope finalizer deletes the probe session and stops the agent (probe.ts:521-525).
+            probe.close().await;
+            return Err(timed_out());
+        }
+        Ok(probe)
     }
 
     /// The instance settings [crate::engine::AcpEngineFactory]'s `EngineFactory::probe` reads.

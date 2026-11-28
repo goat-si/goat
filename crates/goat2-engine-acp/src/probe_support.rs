@@ -17,6 +17,7 @@ use goat2_contracts::{
 };
 use tokio::io::AsyncReadExt;
 
+use crate::registry::command_path;
 use crate::registry::settings::CustomModelSetting as CustomModel;
 
 /// v1 snapshotProbe.ts:47.
@@ -385,23 +386,55 @@ pub fn executable_exists(
     }
 }
 
-/// The first existing executable file for `binary` on the environment's PATH (or the path itself
-/// when it names a file). GOAT 2: the resolved path goes to `ProviderProbeResult.binaryPath`.
-pub fn resolve_executable(binary: &Path, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+/// The executable a child started in `cwd` with `env` runs for `binary` (the host process's own
+/// directory when `cwd` is None): a path with a separator is taken from `cwd`, a bare name from
+/// the environment's PATH (relative entries also from `cwd`), and only a file the platform can
+/// execute counts, with Windows' PATHEXT names (v1 AntigravityInstallationLookup.ts:60-70 checks
+/// the execute bit, v1 shell.ts:99-154 via [command_path::resolve_executable]; final review
+/// finding 19). GOAT 2: the resolved path goes to `ProviderProbeResult.binaryPath`.
+pub fn resolve_executable(
+    binary: &Path,
+    cwd: Option<&Path>,
+    env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
     let text = binary.to_string_lossy();
     if text.is_empty() {
         return None;
     }
+    let platform = if cfg!(windows) {
+        "win32"
+    } else {
+        std::env::consts::OS
+    };
+    let anchored = |path: &Path| match cwd {
+        Some(cwd) if path.is_relative() => cwd.join(path),
+        _ => path.to_path_buf(),
+    };
     if text.contains('/') || text.contains('\\') {
-        return binary.is_file().then(|| binary.to_path_buf());
+        let path = anchored(binary);
+        return command_path::resolve_executable(&path.to_string_lossy(), platform, env);
     }
-    env.get("PATH")
-        .map(String::as_str)
-        .unwrap_or("/usr/bin:/bin")
+    let mut env = env.clone();
+    let key = ["PATH", "Path", "path"]
+        .into_iter()
+        .find(|k| env.contains_key(*k))
+        .unwrap_or("PATH");
+    let value = env
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| "/usr/bin:/bin".to_owned());
+    let entries: Vec<String> = value
         .split(path_separator())
-        .filter(|dir| !dir.is_empty())
-        .map(|dir| Path::new(dir).join(binary))
-        .find(|candidate| candidate.is_file())
+        .map(|entry| {
+            if entry.is_empty() {
+                // POSIX: an empty entry is the current directory (command_path anchors it).
+                return cwd.map_or_else(String::new, |cwd| cwd.display().to_string());
+            }
+            anchored(Path::new(entry)).display().to_string()
+        })
+        .collect();
+    env.insert(key.to_owned(), entries.join(&path_separator().to_string()));
+    command_path::resolve_executable(&text, platform, &env)
 }
 
 /// v1 `spawnFailureMessage` (spawnFailure.ts:130-144).
@@ -628,6 +661,28 @@ pub fn child_environment<'a>(
     }
     provider_probe_environment(&mut env);
     env
+}
+
+/// [instance_environment] and [child_environment] for a launch command. A command that replaces
+/// the whole inherited environment ([crate::process::REMOVE_INHERITED], registry agents) starts
+/// from its own variables, as its agent does (final review finding 3).
+pub fn command_environments(
+    command: &crate::flavor::LaunchCommand,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    if command
+        .env_remove
+        .iter()
+        .any(|name| name == crate::process::REMOVE_INHERITED)
+    {
+        let own: BTreeMap<String, String> = command.env.iter().cloned().collect();
+        let mut child = own.clone();
+        provider_probe_environment(&mut child);
+        return (own, child);
+    }
+    (
+        instance_environment([command.env.as_slice()]),
+        child_environment([command.env.as_slice()]),
+    )
 }
 
 /// v1 probeHelpers.ts:12-13.

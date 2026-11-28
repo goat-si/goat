@@ -75,11 +75,11 @@ pub fn resolve_antigravity_executable(
     env: &std::collections::BTreeMap<String, String>,
 ) -> Result<PathBuf, &'static str> {
     if let Some(custom) = custom.filter(|c| !c.as_os_str().is_empty()) {
-        return resolve_executable(custom, env).ok_or(CUSTOM_MISSING);
+        return resolve_executable(custom, None, env).ok_or(CUSTOM_MISSING);
     }
     [default_program, Path::new("agy")]
         .into_iter()
-        .find_map(|candidate| resolve_executable(candidate, env))
+        .find_map(|candidate| resolve_executable(candidate, None, env))
         .ok_or(NOT_INSTALLED)
 }
 
@@ -206,6 +206,16 @@ mod tests {
             Err(NOT_INSTALLED)
         );
         std::fs::write(dir.path().join("agy"), b"").unwrap();
+        // Only an executable file counts (v1 AntigravityInstallationLookup.ts:60-70).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                dir.path().join("agy"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
         assert_eq!(
             resolve_antigravity_executable(None, Path::new("agy_acp_server"), &env),
             Ok(dir.path().join("agy"))

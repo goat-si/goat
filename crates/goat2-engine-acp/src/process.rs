@@ -19,6 +19,13 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 /// Called with each stderr line, without its line ending.
 pub type StderrHook = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// In a launch command's `env_remove` (see [Launch::remove_env]): a name ending in `*` removes
+/// every inherited variable with that prefix, so `*` alone removes the whole inherited
+/// environment and the child gets exactly the variables set for it. Registry agents use it to
+/// run with the complete environment the registry resolved (v1 AcpRegistrySupport.ts:1739-1743,
+/// 1840-1856; final review finding 3).
+pub const REMOVE_INHERITED: &str = "*";
+
 /// How to start a child.
 #[derive(Debug, Clone)]
 pub struct Launch {
@@ -27,7 +34,8 @@ pub struct Launch {
     pub cwd: Option<PathBuf>,
     /// Exact variable names removed from the inherited environment.
     pub env_remove: Vec<OsString>,
-    /// Prefixes: inherited variables whose names start with one of these are removed.
+    /// Prefixes: inherited variables whose names start with one of these are removed. The empty
+    /// prefix removes the whole inherited environment.
     pub env_remove_prefixes: Vec<String>,
     pub env_set: Vec<(OsString, OsString)>,
     /// Added to the host's own priority (higher = lower priority). 10 by default.
@@ -53,6 +61,17 @@ impl Launch {
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
         self.args.push(arg.into());
         self
+    }
+
+    /// Remove these names from the inherited environment: exact names, or prefixes written with a
+    /// trailing `*` ([REMOVE_INHERITED] removes everything).
+    pub fn remove_env(&mut self, names: impl IntoIterator<Item = String>) {
+        for name in names {
+            match name.strip_suffix('*') {
+                Some(prefix) => self.env_remove_prefixes.push(prefix.to_owned()),
+                None => self.env_remove.push(name.into()),
+            }
+        }
     }
 
     /// The host's own agent identity must not leak into an agent child.
@@ -149,14 +168,20 @@ impl ChildProcess {
         if let Some(cwd) = &launch.cwd {
             command.current_dir(cwd);
         }
-        for (name, _) in std::env::vars_os() {
-            let text = name.to_string_lossy();
-            if launch
-                .env_remove_prefixes
-                .iter()
-                .any(|prefix| text.starts_with(prefix.as_str()))
-            {
-                command.env_remove(&name);
+        if launch.env_remove_prefixes.iter().any(String::is_empty) {
+            // Nothing is inherited: the child gets exactly `env_set`, whatever the host process
+            // holds at spawn time.
+            command.env_clear();
+        } else {
+            for (name, _) in std::env::vars_os() {
+                let text = name.to_string_lossy();
+                if launch
+                    .env_remove_prefixes
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix.as_str()))
+                {
+                    command.env_remove(&name);
+                }
             }
         }
         for name in &launch.env_remove {

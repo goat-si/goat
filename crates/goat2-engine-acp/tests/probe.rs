@@ -195,3 +195,26 @@ async fn probe_skips_eager_signin() {
     probe.close().await;
     assert!(!methods(&log).contains(&"authenticate".to_owned()));
 }
+
+/// The advertisement wait shares the probe deadline (v1 probe.ts:535-569 runs the session start
+/// and both waits under one timeout; final review finding 20). Without a model option the probe
+/// would wait MODEL_ADVERTISEMENT_GRACE; the shorter deadline ends it first.
+#[tokio::test]
+async fn advertisement_wait_counts_against_the_probe_deadline() {
+    let deadline = std::time::Duration::from_secs(2);
+    assert!(goat2_engine_acp::probe::MODEL_ADVERTISEMENT_GRACE > deadline);
+    let dir = tempfile::tempdir().unwrap();
+    match factory(&[("GOAT_ACP_NO_MODEL_OPTION", "1")])
+        .open_probe_within(spec(dir.path()), deadline)
+        .await
+    {
+        Ok(_) => panic!("the probe outlived its deadline while waiting for advertisements"),
+        Err(failure) => {
+            assert!(failure.timed_out, "{failure:?}");
+            assert_eq!(
+                failure.message,
+                goat2_engine_acp::probe::probe_timeout_message(deadline)
+            );
+        }
+    }
+}

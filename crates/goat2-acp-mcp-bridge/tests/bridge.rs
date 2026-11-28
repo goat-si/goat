@@ -240,3 +240,151 @@ fn transport_failure_replies_to_request() {
             .starts_with("GOAT MCP bridge request failed: ")
     );
 }
+
+/// A non-SSE response body is bounded like an input line (final review finding 18): an
+/// oversized body fails the request instead of growing the bridge without limit.
+#[test]
+fn oversized_json_response_fails_the_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        let body =
+            json!({"jsonrpc":"2.0","id":7,"result":"x".repeat(16 * 1024 * 1024)}).to_string();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(body.as_bytes());
+    });
+    let mut child = command()
+        .env("GOAT_ACP_MCP_ENDPOINT", endpoint)
+        .env("GOAT_ACP_MCP_AUTHORIZATION", "token")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "{}",
+        json!({"jsonrpc":"2.0","id":7,"method":"big"})
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    server.join().unwrap();
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["id"], 7);
+    assert!(
+        value.get("result").is_none(),
+        "an oversized body was relayed"
+    );
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("GOAT MCP bridge request failed: ")
+    );
+}
+
+enum Event {
+    Connection(TcpStream),
+    Refused,
+}
+
+/// At most MAX_CONCURRENT_REQUESTS requests are in flight; one more is refused at once, and a
+/// finished request frees its slot without waiting for end of input (v1
+/// AcpMcpStdioBridge.ts:500-510 drops finished work; final review finding 18).
+#[test]
+fn in_flight_requests_are_bounded_and_finished_ones_are_reaped() {
+    // goat2_acp_mcp_bridge::MAX_CONCURRENT_REQUESTS
+    const LIMIT: usize = 64;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (events, received) = std::sync::mpsc::channel();
+    let accepted = events.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            if accepted.send(Event::Connection(stream)).is_err() {
+                return;
+            }
+        }
+    });
+    let server = thread::spawn(move || {
+        // Hold every request until the bridge refuses one, or one more than the limit arrived.
+        let mut held = Vec::new();
+        while held.len() <= LIMIT {
+            match received.recv().unwrap() {
+                Event::Connection(stream) => held.push(stream),
+                Event::Refused => break,
+            }
+        }
+        let forwarded = held.len();
+        for mut stream in held {
+            let (_, value) = read_request(&mut stream);
+            reply(
+                &mut stream,
+                "200 OK",
+                "Content-Type: application/json\r\n",
+                &json!({"jsonrpc":"2.0","id":value["id"],"result":"held"}).to_string(),
+            );
+        }
+        let Event::Connection(mut stream) = received.recv().unwrap() else {
+            panic!("expected the late request")
+        };
+        let (_, value) = read_request(&mut stream);
+        reply(
+            &mut stream,
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            &json!({"jsonrpc":"2.0","id":value["id"],"result":"late"}).to_string(),
+        );
+        forwarded
+    });
+    let mut child = command()
+        .env("GOAT_ACP_MCP_ENDPOINT", endpoint)
+        .env("GOAT_ACP_MCP_AUTHORIZATION", "token")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for id in 1..=LIMIT + 1 {
+        writeln!(
+            input,
+            "{}",
+            json!({"jsonrpc":"2.0","id":id,"method":"work"})
+        )
+        .unwrap();
+    }
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    let first: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(first["id"], LIMIT + 1, "{first}");
+    assert!(first.get("error").is_some(), "{first}");
+    events.send(Event::Refused).unwrap();
+    for _ in 0..LIMIT {
+        line.clear();
+        stdout.read_line(&mut line).unwrap();
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["result"], "held", "{value}");
+    }
+    // Every held request finished: a new one is admitted before input ends.
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":1000,"method":"work"})
+    )
+    .unwrap();
+    line.clear();
+    stdout.read_line(&mut line).unwrap();
+    let late: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(late["id"], 1000);
+    assert_eq!(late["result"], "late", "{late}");
+    drop(input);
+    assert!(child.wait().unwrap().success());
+    assert_eq!(server.join().unwrap(), LIMIT);
+}

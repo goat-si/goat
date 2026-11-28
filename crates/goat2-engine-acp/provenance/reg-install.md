@@ -27,3 +27,11 @@ Reference: GOAT v1 commit 916b5ccc1b2. One row per GOAT 2 file; line ranges are 
 
 Source paths without a package prefix are under `packages/provider-acp-registry/src/server/`.
 
+Final review fixes (review on c5b44fee4b), each with a regression test that failed before the fix:
+- finding 3, `catalog.rs` `launch_command` with `process.rs` `REMOVE_INHERITED`: the agent runs with exactly the resolved environment, as v1 spawns with it (`AcpRegistrySupport.ts` 1739-1743, 1840-1856); test `catalog_tests::the_agent_process_gets_exactly_the_resolved_environment`.
+- finding 6, `install.rs` `http_stream` (and `cache.rs` `HttpsFetch`): only a 2xx final response is a download, so a redirect the policy stopped fails (`AcpRegistrySupport.ts` 1313-1315 `filterStatusOk`); test `install::tests::a_stopped_redirect_is_not_a_download`.
+- finding 12, `archive.rs` `zip_target`: the normalized name is only the safety check; entries keep their own names, as `unzip` does (`registryArchive.ts` 15-20, `AcpRegistrySupport.ts` 1402-1416); test `archive::tests::zip_extraction_keeps_the_original_entry_names`.
+- finding 13, `install.rs` `read_capped`/`read_tail`: a failed read of a command's output fails the command (`AcpRegistrySupport.ts` 742-758); test `install::tests::command_output_read_errors_fail`.
+- finding 14, `contracts.rs` `nullable`/`present`: `Schema.NullOr` keys are required, `optionalKey`/`optional` keys are never null (`acpRegistry.ts` 63-72, 163-167; `model.ts` 10-44); test `contracts::tests::missing_null_and_value_are_distinct`.
+- finding 22, `cache.rs` `disk`: the cached index is read with the 1 MiB limit applied while reading; test `cache::tests::oversized_disk_cache_is_not_read_past_the_limit`.
+- finding 23, `coordinator.rs` `run_background_probe`: a lagged subscription rechecks the agent's foreground start count, standing in for v1's unbounded PubSub (`AcpRegistryRuntimeCoordinator.ts` 165-183); test `coordinator::tests::a_lagged_probe_still_sees_the_foreground_start_of_its_agent`.

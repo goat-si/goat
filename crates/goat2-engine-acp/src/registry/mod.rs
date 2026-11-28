@@ -118,10 +118,15 @@ impl AcpFlavor for RegistryAgentFlavor {
     fn launch(&self, _spec: &SessionSpec) -> Result<LaunchCommand, EngineError> {
         let mut command = self.command.clone();
         // v1 sessionEnvironmentKey.ts:13-22: claude-agent-acp runs its v2 protocol unless told not to.
+        // A command with its complete environment says alone whether the variable is set.
         let name = agents::claude::CLAUDE_AGENT_ACP_EXPERIMENTAL_V2;
+        let complete = command
+            .env_remove
+            .iter()
+            .any(|n| n == crate::process::REMOVE_INHERITED);
         if self.kind() == AgentKind::Claude
             && !command.env.iter().any(|(n, _)| n == name)
-            && std::env::var_os(name).is_none()
+            && (complete || std::env::var_os(name).is_none())
         {
             command.env.push((name.to_owned(), "1".to_owned()));
         }

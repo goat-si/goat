@@ -1242,7 +1242,21 @@ async fn resolves_local_presets() {
     );
     assert!(launch.flavor.local);
     assert_eq!(launch.flavor.agent_id, "omp");
-    assert!(launch.flavor.command.env.is_empty());
+    // The agent runs with exactly the resolved environment (final review finding 3).
+    assert_eq!(
+        launch.flavor.command.env,
+        launch
+            .resolved
+            .spawn
+            .env
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        launch.flavor.command.env_remove,
+        [crate::process::REMOVE_INHERITED]
+    );
     let mcode = LocalPreset::find("minimax-code").unwrap().settings();
     assert_eq!(
         c.resolve(
@@ -1404,11 +1418,27 @@ async fn launch_gives_antigravity_a_run_temp_directory_and_claude_its_v2_flag() 
     let lease = launch.runtime_temp.expect("antigravity temp");
     let tmp = lease.directory().to_path_buf();
     assert!(tmp.starts_with(dir.path().join("runtime-tmp/acp-registry")));
+    assert!(
+        launch
+            .flavor
+            .command
+            .env
+            .contains(&("TMPDIR".to_owned(), tmp.display().to_string()))
+    );
     assert_eq!(
         launch.flavor.command.env,
-        [("TMPDIR".to_owned(), tmp.display().to_string())]
+        launch
+            .resolved
+            .spawn
+            .env
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>()
     );
-    assert!(launch.flavor.command.env_remove.is_empty());
+    assert_eq!(
+        launch.flavor.command.env_remove,
+        [crate::process::REMOVE_INHERITED]
+    );
     drop(lease);
     assert!(!tmp.exists());
 
@@ -1430,4 +1460,59 @@ async fn launch_gives_antigravity_a_run_temp_directory_and_claude_its_v2_flag() 
         "1".to_owned()
     )));
     assert!(launch.flavor.command.env.iter().any(|(k, _)| k == "PATH"));
+}
+
+/// The agent process gets exactly the environment the registry resolved: a variable the GOAT
+/// process holds outside the host snapshot is not inherited, and a snapshot value wins over the
+/// process's own (v1 AcpRegistrySupport.ts:1739-1743,1840-1856 spawns with the whole resolved
+/// environment; final review finding 3).
+#[tokio::test]
+async fn the_agent_process_gets_exactly_the_resolved_environment() {
+    let outside = std::env::vars()
+        .map(|(name, _)| name)
+        .find(|name| name != "PATH" && !crate::probe::support::is_host_identity(name))
+        .expect("the test process has an environment variable besides PATH");
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start().await;
+    let dump = dir.path().join("env.txt");
+    let agent = dir.path().join("agent");
+    executable(
+        &agent,
+        &format!("#!/bin/sh\n/usr/bin/env > '{}'\n", dump.display()),
+    );
+    let c = catalog(dir.path(), &server, base_env());
+    let settings = RegistrySettings {
+        source: Source::Local,
+        command_path: agent.display().to_string(),
+        ..RegistrySettings::default()
+    };
+    let launch = c.launch(&settings, dir.path(), None, true).await.unwrap();
+    let resolved = launch.resolved.spawn.env.clone();
+    assert!(!resolved.contains_key(&outside));
+    let factory = crate::AcpEngineFactory::new(Arc::new(launch.flavor)).for_probe();
+    // The script exits without speaking ACP; the start fails after it wrote its environment.
+    assert!(
+        factory
+            .start_inner(crate::probe::probe_spec(dir.path(), None))
+            .await
+            .is_err()
+    );
+    let child: Environment = std::fs::read_to_string(&dump)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    assert!(
+        !child.contains_key(&outside),
+        "the agent inherited {outside} from the GOAT process"
+    );
+    assert_eq!(child.get("PATH"), resolved.get("PATH"));
+    // /bin/sh itself adds PWD, SHLVL, OLDPWD and _.
+    for name in child.keys() {
+        assert!(
+            resolved.contains_key(name) || ["PWD", "SHLVL", "OLDPWD", "_"].contains(&name.as_str()),
+            "the agent got {name}, which the registry did not resolve"
+        );
+    }
 }

@@ -234,8 +234,8 @@ pub async fn check_fx_provider_status(
     let probe_env = child_environment([command.env.as_slice()]);
     let program = command.program.clone();
     let binary = program.to_string_lossy().into_owned();
-    let binary_path =
-        resolve_executable(&program, &probe_env).map(|p| p.to_string_lossy().into_owned());
+    let binary_path = resolve_executable(&program, spawn_cwd.as_deref(), &probe_env)
+        .map(|p| p.to_string_lossy().into_owned());
     let version_result = spawn_and_collect(
         &program,
         &["--version".to_owned()],

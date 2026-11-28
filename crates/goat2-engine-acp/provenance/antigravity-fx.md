@@ -51,4 +51,3 @@ resolution and updates.
 
 fx: replay
 fixtures (`record-fx-acp-replay-fixture.ts`) belong to P2-D; probes (`status.ts`) belong to the probe slice.
-

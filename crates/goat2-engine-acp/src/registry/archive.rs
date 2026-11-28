@@ -130,17 +130,38 @@ fn inside(root: &Path, path: &Path) -> io::Result<bool> {
     Ok(fs::canonicalize(parent)?.starts_with(fs::canonicalize(root)?))
 }
 
+/// Where a zip entry lands. v1 checks the listing with the normalized form
+/// (`registryArchive.ts:15-20`) and then `unzip` writes each entry under its own name
+/// (`AcpRegistrySupport.ts:1402-1416`): the check and the output name are separate, so spaces and
+/// (on Unix) backslashes in a name are kept.
 fn zip_target(destination: &Path, name: &str) -> io::Result<Option<PathBuf>> {
+    let unsafe_entry = || io::Error::new(io::ErrorKind::InvalidData, "unsafe archive entry");
     if name.trim() == "./" {
         return Ok(None);
     }
-    let segments = normalize_registry_command_path(name)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unsafe archive entry"))?;
-    Ok(Some(
-        segments
-            .iter()
-            .fold(destination.to_path_buf(), |p, s| p.join(s)),
-    ))
+    normalize_registry_command_path(name).ok_or_else(unsafe_entry)?;
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    let mut segments = name.split(separators).filter(|s| !s.is_empty()).peekable();
+    // `unzip` drops a leading `./`; the check above already accepted it.
+    if segments.peek() == Some(&".") {
+        segments.next();
+    }
+    let mut target = destination.to_path_buf();
+    let mut any = false;
+    for segment in segments {
+        // Windows drops trailing dots and spaces, so `.. ` would climb; refuse such names.
+        let effective = if cfg!(windows) {
+            segment.trim_end_matches(['.', ' '])
+        } else {
+            segment
+        };
+        if segment == "." || segment == ".." || effective.is_empty() {
+            return Err(unsafe_entry());
+        }
+        target.push(segment);
+        any = true;
+    }
+    Ok(any.then_some(target))
 }
 
 /// Extract a validated archive into `destination` (v1 `tar -x -C` / `unzip -q -d`).
@@ -418,5 +439,33 @@ pub(crate) mod tests {
             assert!(!outside.join("new").exists());
             assert!(!outside.join("deep").exists());
         }
+    }
+
+    /// v1 validates the listing, then `unzip` extracts each entry under its own name
+    /// (registryArchive.ts:15-20, AcpRegistrySupport.ts:1402-1416): the trimmed, slash-normalized
+    /// form is only for the safety check (final review finding 12).
+    #[cfg(unix)]
+    #[test]
+    fn zip_extraction_keeps_the_original_entry_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("agent.zip");
+        fs::write(
+            &zip,
+            zip_bytes(&[(" bin /agent ", b"a", 0o755), ("dir\\name", b"b", 0o644)]),
+        )
+        .unwrap();
+        let listing = list_entries(ArchiveKind::Zip, &zip).unwrap().unwrap();
+        assert!(validate_archive_entries(&listing));
+        let out = dir.path().join("out");
+        fs::create_dir(&out).unwrap();
+        extract(ArchiveKind::Zip, &zip, &out).unwrap();
+        let mut names: Vec<String> = fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, [" bin ", "dir\\name"]);
+        assert_eq!(fs::read(out.join(" bin ").join("agent ")).unwrap(), b"a");
+        assert_eq!(fs::read(out.join("dir\\name")).unwrap(), b"b");
     }
 }
