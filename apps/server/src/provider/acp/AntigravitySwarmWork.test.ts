@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- mkfifo and fs/promises simulate race swaps before open.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -80,6 +84,34 @@ it.layer(NodeServices.layer)("readDiskSwarmMembersByConversationId", (it) => {
         readDiskSwarmMembersByConversationId(profileRoot ?? profile, "root-1", 4096, NATIVE_ID),
       );
       expect(linked.size).toBe(0);
+
+      // Replacing the validated file with a symlink before open fails closed without following it.
+      yield* fs.remove(rosterPath);
+      yield* fs.writeFileString(rosterPath, validRoster);
+      const swappedSymlink = yield* Effect.promise(() =>
+        readDiskSwarmMembersByConversationId(profileRoot ?? profile, "root-1", 4096, NATIVE_ID, {
+          beforeOpen: async () => {
+            await NodeFSP.unlink(rosterPath);
+            await NodeFSP.symlink(outside, rosterPath);
+          },
+        }),
+      );
+      expect(swappedSymlink.size).toBe(0);
+
+      // Replacing the validated file with a FIFO before open returns immediately without blocking.
+      if (NodeFS.constants.O_NONBLOCK !== undefined) {
+        yield* fs.remove(rosterPath);
+        yield* fs.writeFileString(rosterPath, validRoster);
+        const swappedFifo = yield* Effect.promise(() =>
+          readDiskSwarmMembersByConversationId(profileRoot ?? profile, "root-1", 4096, NATIVE_ID, {
+            beforeOpen: async () => {
+              await NodeFSP.unlink(rosterPath);
+              NodeChildProcess.execFileSync("mkfifo", [rosterPath]);
+            },
+          }),
+        );
+        expect(swappedFifo.size).toBe(0);
+      }
     }),
   );
 });

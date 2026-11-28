@@ -100,6 +100,7 @@ export async function readDiskSwarmMembersByConversationId(
   rootSessionId: string,
   maxStepBytes: number,
   nativeIdPattern: RegExp,
+  options?: { readonly beforeOpen?: () => Promise<void> },
 ): Promise<ReadonlyMap<string, DiskSwarmMember>> {
   const segments = [
     "antigravity-acp",
@@ -111,11 +112,16 @@ export async function readDiskSwarmMembersByConversationId(
   ] as const;
   const file = await antigravityManagedPath(profileRoot, segments, "file");
   if (file === undefined || file.info.size > maxStepBytes) return new Map();
+  if (options?.beforeOpen !== undefined) {
+    await options.beforeOpen();
+  }
   let handle: NodeFSP.FileHandle;
   try {
     handle = await NodeFSP.open(
       file.path,
-      NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
+      NodeFS.constants.O_RDONLY |
+        (NodeFS.constants.O_NOFOLLOW ?? 0) |
+        (NodeFS.constants.O_NONBLOCK ?? 0),
     );
   } catch {
     return new Map();

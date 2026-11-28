@@ -167,7 +167,7 @@ describe("ACP tracked file changes", () => {
     ).toBe("ask");
   });
 
-  it("counts every tool call as unread once too many are recorded", () => {
+  it("counts every tool call as unread once too many are recorded and stops allocating past the cap", () => {
     const unread = makeAcpUnreadToolCalls();
     for (let index = 0; index < MAX_UNREAD_TOOL_CALLS; index += 1) {
       unread.add({ sessionId: "session-1", toolCallId: `tool-${index}` }, []);
@@ -177,6 +177,20 @@ describe("ACP tracked file changes", () => {
     unread.add({ sessionId: "session-1", toolCallId: "one-more" }, []);
     expect(unread.has("session-1", "one-more")).toBe(true);
     expect(unread.has("session-2", "never-named")).toBe(true);
+
+    // Distinct sessions arriving after saturation must remain O(1) without growing maps.
+    for (let index = 0; index < MAX_UNREAD_TOOL_CALLS * 2; index += 1) {
+      unread.add({ sessionId: `distinct-session-${index}`, toolCallId: "t" }, []);
+    }
+    expect(unread.has("another-session", "never-named")).toBe(true);
+
+    // Global taint also saturates immediately across distinct sessions.
+    const globalUnread = makeAcpUnreadToolCalls();
+    globalUnread.add({}, []);
+    for (let index = 0; index < MAX_UNREAD_TOOL_CALLS * 2; index += 1) {
+      globalUnread.add({ sessionId: `global-session-${index}`, toolCallId: "t" }, []);
+    }
+    expect(globalUnread.has("any-session", "any-tool")).toBe(true);
   });
 
   it("makes the paths of a tool call with a dropped notification unknown", () => {

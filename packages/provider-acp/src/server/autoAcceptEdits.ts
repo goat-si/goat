@@ -86,24 +86,46 @@ export function makeAcpUnreadToolCalls(): AcpUnreadToolCalls {
   const allInSession = new Set<string>();
   let anySessionAllTools = false;
   let size = 0;
+  const saturate = () => {
+    anySessionAllTools = true;
+    bySession.clear();
+    allInSession.clear();
+  };
   return {
     add: (unread) => {
+      if (anySessionAllTools || size > MAX_UNREAD_TOOL_CALLS) return;
       if (unread.toolCallId === undefined) {
         if (unread.sessionId === undefined) {
-          anySessionAllTools = true;
+          saturate();
           return;
         }
-        if (!allInSession.has(unread.sessionId)) {
-          if (size < MAX_UNREAD_TOOL_CALLS) allInSession.add(unread.sessionId);
-          size += 1;
+        if (allInSession.has(unread.sessionId)) return;
+        const previous = bySession.get(unread.sessionId);
+        if (previous !== undefined) {
+          size -= previous.size;
+          bySession.delete(unread.sessionId);
         }
+        if (size >= MAX_UNREAD_TOOL_CALLS) {
+          size = MAX_UNREAD_TOOL_CALLS + 1;
+          saturate();
+          return;
+        }
+        allInSession.add(unread.sessionId);
+        size += 1;
         return;
       }
+      if (unread.sessionId !== undefined && allInSession.has(unread.sessionId)) return;
       const session = unread.sessionId ?? ANY_SESSION;
-      const ids = bySession.get(session) ?? new Set<string>();
-      bySession.set(session, ids);
-      if (ids.has(unread.toolCallId)) return;
-      if (size < MAX_UNREAD_TOOL_CALLS) ids.add(unread.toolCallId);
+      const existing = bySession.get(session);
+      if (existing?.has(unread.toolCallId) === true) return;
+      if (size >= MAX_UNREAD_TOOL_CALLS) {
+        size = MAX_UNREAD_TOOL_CALLS + 1;
+        saturate();
+        return;
+      }
+      const ids = existing ?? new Set<string>();
+      if (existing === undefined) bySession.set(session, ids);
+      ids.add(unread.toolCallId);
       size += 1;
     },
     has: (sessionId, toolCallId) =>
