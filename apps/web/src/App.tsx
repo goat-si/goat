@@ -1,5 +1,5 @@
 // GOAT 2 web UI. Layout and every visual value come from the Paper boards through generated parts
-// (src/paper/parts.tsx, scripts/paper-to-parts.py); this file only wires data and interaction.
+// (src/paper/parts.tsx, scripts/paper-parts.py); this file only wires data and interaction.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ProviderGlyph } from "@goat2/provider-icons";
 import * as P from "./paper/parts.tsx";
@@ -51,7 +51,7 @@ export function App({ ui: store, scene }: { ui: UiStore; scene: string | null })
     <span data-build-stamp="" title={`${build.branch} · built ${build.builtAt}`} style={{ color: "#8F8F8F", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 11, lineHeight: "16px", marginRight: 8, whiteSpace: "nowrap" }}>
       {build.commit.slice(0, 7)}{build.dirty ? "+" : ""} · {build.branch}
     </span>
-  ) : snap.demo && scene === null ? (
+  ) : snap.demo ? (
     <span data-demo-tag="" title="No GOAT host is connected: this prototype runs a demo host in the page." style={{ color: "#8F8F8F", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 11, lineHeight: "16px", marginRight: 8, padding: "0 6px", borderRadius: 4, background: "#F3F3F3" }}>{import.meta.env.VITE_GOAT2_COMMIT ? `Demo · ${import.meta.env.VITE_GOAT2_COMMIT}` : "Demo"}</span>
   ) : null;
   const topRight = (

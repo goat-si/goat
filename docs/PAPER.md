@@ -31,7 +31,7 @@ built from clones of the SSOT board.
 
 1. Change Paper first. Code follows the board, not the other way round.
 2. Export the board: Paper `get_jsx` on the SSOT artboard with `includeNodeIds: false`.
-3. Generate the static parts: `scripts/paper-parts.py <export.jsx> > apps/web/src/paper/parts.tsx`.
+3. Generate the static parts: `scripts/paper-parts.py design/paper/part1 > apps/web/src/paper/parts.tsx` (the generator and its part list, PARTS, are one file).
    That file is generated. Do not edit it by hand. When the board's structure changes, fix the
    line ranges in the script.
 4. Interactive pieces (`BotHome.tsx`, `RuntimePicker.tsx`) copy their style values from the same
@@ -63,7 +63,7 @@ built from clones of the SSOT board.
 
 - [ ] Paper board updated first; one SSOT board, no duplicates
 - [ ] Platform boards (section 7) re-synced after an SSOT change
-- [ ] `ssotParts.tsx` regenerated from the latest export
+- [ ] `apps/web/src/paper/parts.tsx` regenerated from the latest export (`scripts/paper-parts.py`)
 - [ ] Side-by-side screenshot at 1440 × 900 matches
 - [ ] Every run shows the real provider chip; versions only in Overview → Runtime
 - [ ] Motion and interactions work on the published site; the Paper comment links to it
