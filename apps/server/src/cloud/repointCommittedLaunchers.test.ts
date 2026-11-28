@@ -8,6 +8,33 @@ import * as Option from "effect/Option";
 import { repointCommittedLaunchers } from "./repointCommittedLaunchers.ts";
 
 it.layer(NodeServices.layer)("goat command after a committed remote update", (it) => {
+  it.effect.each([
+    { search: ":/missing", moves: true },
+    { search: "/missing:", moves: true },
+    { search: "", moves: false },
+  ])("uses a nonempty PATH's empty entry when repointing", ({ search, moves }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const baseDir = path.join(root, "home");
+      const old = path.join(baseDir, "runtime/goat/versions/1.0.0/goat");
+      const next = path.join(baseDir, "runtime/goat/versions/1.1.0/goat");
+      for (const file of [old, next]) {
+        yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+        yield* fs.writeFileString(file, "", { mode: 0o755 });
+      }
+      const launcher = path.join(root, "goat");
+      yield* fs.symlink(old, launcher);
+      yield* repointCommittedLaunchers({ baseDir, targetVersion: "1.1.0" }).pipe(
+        Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(HostProcess.HomeDirectory, root),
+        Effect.provideService(HostProcess.WorkingDirectory, root),
+        Effect.provideService(HostProcess.Environment, { PATH: search }),
+      );
+      assert.equal(yield* fs.readLink(launcher), moves ? next : old);
+    }),
+  );
   it.effect("writes an absolute script when the committed runtime advertises support", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import packageJson from "../../package.json" with { type: "json" };
 import {
+  hostShellWord,
   resolveCliCommand,
   resolveEntryPath,
   resolveNpmUpdateCommand,
@@ -24,6 +25,25 @@ const joinWindowsPath = (...segments: ReadonlyArray<string>) =>
       return parts;
     }, [])
     .join("\\");
+
+it.layer(NodeServices.layer)("PATH-dependent host commands", (it) => {
+  it.effect("pins a relative PATH match before the working directory changes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const bin = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(bin, "goat"), "#!/bin/sh\n", { mode: 0o755 });
+      const result = yield* resolveHostCliCommand("doctor").pipe(
+        Effect.provideService(HostProcess.ExecutablePath, "/usr/bin/node"),
+        Effect.provideService(HostProcess.Arguments, ["/usr/bin/node", "/opt/goat/dist/bin.mjs"]),
+        Effect.provideService(HostProcess.IsExecutable, false),
+        Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(HostProcess.Environment, { PATH: path.relative(process.cwd(), bin) }),
+      );
+      expect(result.command).toBe(`${hostShellWord("linux", path.join(bin, "goat"))} doctor`);
+    }).pipe(Effect.scoped),
+  );
+});
 
 it.layer(NodeServices.layer)("root CLI commands", (it) => {
   const rootCommand = (input: {

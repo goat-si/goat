@@ -35,10 +35,13 @@ export const repointCommittedLaunchers = Effect.fn("cloud.repoint_committed_laun
     }
     const installBinDir = environment["GOAT_INSTALL_BIN_DIR"] || path.join(home, ".local", "bin");
     candidates.add(path.join(installBinDir, "goat"));
-    for (const directory of (environment["PATH"] ?? "").split(":")) {
-      if (!path.isAbsolute(directory)) continue;
-      const candidate = path.join(directory, "goat");
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+    const searchPath = environment["PATH"] ?? "";
+    const cwd = yield* HostProcess.WorkingDirectory;
+    for (const directory of searchPath.split(":")) {
+      if (directory.length === 0 && searchPath.length === 0) continue;
+      const candidate = path.resolve(cwd, directory, "goat");
+      const info = yield* fs.stat(candidate).pipe(Effect.option);
+      if (Option.isSome(info) && info.value.type === "File" && (info.value.mode & 0o111) !== 0) {
         candidates.add(candidate);
         break;
       }

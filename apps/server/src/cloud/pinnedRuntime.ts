@@ -915,8 +915,9 @@ export const resolveLauncherPath = Effect.gen(function* () {
     return path.resolve(cwd, invokedAs);
   }
   const delimiter = platform === "win32" ? ";" : ":";
-  for (const directory of (environment["PATH"] ?? "").split(delimiter)) {
-    if (directory.length === 0) continue;
+  const searchPath = environment["PATH"] ?? "";
+  for (const directory of searchPath.split(delimiter)) {
+    if (directory.length === 0 && (platform === "win32" || searchPath.length === 0)) continue;
     const candidate = path.resolve(cwd, directory, invokedAs);
     const info = yield* fs.stat(candidate).pipe(Effect.option);
     // Like the shell, pass over directories and non-executable files named the same.

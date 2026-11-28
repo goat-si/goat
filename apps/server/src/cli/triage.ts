@@ -5,7 +5,7 @@ import * as NodeReadlinePromises from "node:readline/promises";
 
 import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
+import { isCommandAvailable, resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
@@ -288,7 +288,12 @@ export const triageCommand = Command.make("triage", {
 
       const model = Option.getOrUndefined(flags.model);
       const launchPrompt = buildTriageLaunchPrompt(promptFilePath);
-      const spawnSpec = yield* resolveSpawnCommand(selected.command, [
+      const onPath =
+        (yield* HostProcess.Platform) === "win32"
+          ? null
+          : yield* resolveCommandPath(selected.command);
+      const command = onPath === null ? selected.command : path.resolve(onPath);
+      const spawnSpec = yield* resolveSpawnCommand(command, [
         ...(model === undefined ? [] : ["--model", model]),
         ...(selected.promptArgs ?? []),
         launchPrompt,
