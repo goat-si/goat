@@ -244,7 +244,7 @@ test("thread mode guards: one thread per submit, send while running, one answer 
 test("a slow host still gets one start_thread and one resolve_request per action", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?fake=1NEM-1&latency=600");
-  await page.waitForTimeout(1500);
+  await expect(page.getByText("Priority (2)")).toBeVisible({ timeout: 10000 });
   const count = (type: string) => page.evaluate((t) => ((window as unknown as { __goat2Fake: { received: Array<{ type: string }> } }).__goat2Fake.received.filter((f) => f.type === t).length), type);
   await page.getByLabel("New thread").click();
   const box = page.getByLabel("Message", { exact: true });
