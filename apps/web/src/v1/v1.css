@@ -1,0 +1,404 @@
+/* Adapted from apps/web/src/index.css@916b5cc — dropped: preflight, dark palette, global shell styles. */
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+@source "./**/*.{ts,tsx}";
+@custom-variant dark (&:is(.dark, .dark *));
+@custom-variant light (&:not(.dark, .dark *));
+@custom-variant wco (&:is(.wco, .wco *));
+@custom-variant redesign (&:where([data-redesign] *));
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  --font-brand: "Pretendard", sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Named stacking layers (z-drawer, z-modal, ...); see the layer order note on --z-sheet. */
+  --z-index-drawer: 45;
+  --z-index-player: 47;
+  --z-index-player-chrome: 49;
+  --z-index-modal: 50;
+  --z-index-modal-raised: 60;
+  --z-index-overlay: 100;
+  --z-index-toast: 100;
+  --z-index-panel: 110;
+  --z-index-popover: 130;
+  --z-index-tooltip: 140;
+  --z-index-context-menu: 10000;
+  /* Mirrors MOTION in @goat/shared/motionTokens. */
+  --duration-adjust: 120ms;
+  --duration-enter: 200ms;
+  --duration-exit: 150ms;
+  --transition-duration-adjust: var(--duration-adjust);
+  --transition-duration-enter: var(--duration-enter);
+  --transition-duration-exit: var(--duration-exit);
+}
+@theme inline {
+  --z-index-sheet: var(--z-sheet);
+  /* Two steps below Tailwind's text-xs (12px) for dense UI: metadata rows,
+     badges, counters, keyboard hints and diagnostics tables. 2xs is 11px,
+     3xs is 10px. Provider icon overlays use 4xs (8px) and 5xs (7px) to fit
+     their smaller badges. Registered with tailwind-merge in
+     lib/utils.ts so cn() treats them as font sizes, not colours. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: calc(1 / 0.6875);
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: calc(0.875 / 0.625);
+  --text-4xs: 0.5rem;
+  --text-4xs--line-height: 1;
+  --text-5xs: 0.4375rem;
+  --text-5xs--line-height: 1;
+  /* Work-log rows (tool calls, their group summaries, thinking and reasoning): a
+     half step under text-sm so the activity stays quieter than the conversation. */
+  --text-work-log: 0.78125rem;
+  --text-work-log--line-height: 1.625;
+  /* Composer footer labels. A container scales them with
+     --composer-control-text-scale (the expanded footer uses 0.8). */
+  --text-composer-control: calc(var(--text-base) * var(--composer-control-text-scale, 1));
+  --text-composer-control-sm: calc(var(--text-sm) * var(--composer-control-text-scale, 1));
+  /* Motion. drawer is the decelerating curve for surfaces that slide or pop in
+     (composer context, pills). */
+  --inset-shadow-control-highlight: 0 1px rgb(255 255 255 / 16%);
+  --inset-shadow-control-pressed: 0 1px rgb(0 0 0 / 8%);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  /* The composer's elevation: a soft drop pulled in under the surface, shared
+     by the composer, its context strip and attached banners. */
+  --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
+  --shadow-composer-dark: 0 14px 32px -18px rgb(0 0 0 / 75%);
+  /* Overlap the lower toolbar backdrop by one pixel to cover the composer seam. */
+  --spacing-composer-seam: calc(var(--spacing) * 4 - 1px);
+  /* Dark-mode shade where an attached surface meets the composer: 10px of
+     shadow fading away from the seam. Inline, so the offsets resolve on the
+     element. below: the context strip under the composer (1rem seam, faint
+     white fill). above: an attached banner over it (its tint on top). */
+  --background-image-composer-seam-below:
+    linear-gradient(
+      to bottom,
+      transparent 0 1rem,
+      rgb(0 0 0 / 18%) 1rem,
+      transparent calc(1rem + 10px)
+    ),
+    linear-gradient(rgb(255 255 255 / 1%), rgb(255 255 255 / 1%));
+  --background-image-composer-seam-above:
+    linear-gradient(var(--chat-composer-attached-tint), var(--chat-composer-attached-tint)),
+    linear-gradient(
+      to top,
+      transparent 0 var(--chat-composer-attachment-overlap),
+      rgb(0 0 0 / 18%) var(--chat-composer-attachment-overlap),
+      transparent calc(var(--chat-composer-attachment-overlap) + 10px)
+    );
+  --color-zinc-25: oklch(99.2% 0 0);
+  --animate-skeleton: skeleton 2.4s infinite;
+  /* Duty-cycled indicator animations: long holds with stepped ramps, so the
+     compositor updates discrete frames instead of every vsync. */
+  --animate-status-pulse: status-pulse 2s infinite;
+  --animate-status-ping: status-ping 2s infinite;
+  /* GOAT Bot's replying dots: a short hop, then a long hold, stepped like the status pulses. */
+  --animate-typing-wave: typing-wave 1.4s 6;
+  /* Stash pulses hold a highlight for 1.2s; the row then eases back over 200ms, the count snaps.
+     The row alternates two identical keyframes so each stash restarts it without a remount. */
+  --animate-stash-pulse-row: stash-pulse-row 1400ms;
+  --animate-stash-pulse-row-alt: stash-pulse-row-alt 1400ms;
+  --animate-stash-pulse-count: stash-pulse-count 1400ms step-start;
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
+  --color-heat-warm: var(--heat-warm);
+  --color-heat-hot: var(--heat-hot);
+  --color-heat-burning: var(--heat-burning);
+  --color-heat-ember: var(--heat-ember);
+  /* The face tints its surface (canvas, selected row, glass) without an opaque disc. */
+  --color-goat-avatar: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --color-goat-avatar-border: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --color-goat-avatar-foreground: color-mix(in oklab, var(--foreground) 82%, transparent);
+  /* The bot's eyes on its solid head: the canvas, or a member's color where it fills the circle. */
+  --color-goat-face-eyes: var(--goat-face-eyes, var(--background));
+  /* The person's messages in GOAT Bot's conversation; mobile keeps the same values. */
+  --color-goat-person-message: var(--goat-person-message);
+  --color-goat-person-message-foreground: var(--goat-person-message-foreground);
+  /* The bot's replies: a soft neutral card that tints whichever theme it sits on. */
+  --color-goat-bot-message: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --color-channel-dev: var(--channel-dev);
+  --color-channel-nightly: var(--channel-nightly);
+  --color-error-foreground: var(--error-foreground);
+  --color-tool-error-icon: var(--tool-error-icon);
+  --color-error: var(--error);
+  --color-error-surface: var(--error-surface);
+  --color-update-foreground: var(--update-foreground);
+  --color-update: var(--update);
+  --color-update-surface: var(--update-surface);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  /* Pull request lifecycle tones. Each state's hue is folded into the muted text around it, so
+     PR glyphs and counts read as quiet metadata and pick up every theme's text tint. */
+  --color-pr-open: color-mix(
+    in oklab,
+    var(--success-foreground) 55%,
+    var(--contrast-muted-foreground)
+  );
+  --color-pr-closed: color-mix(
+    in oklab,
+    var(--error-foreground) 55%,
+    var(--contrast-muted-foreground)
+  );
+  --color-pr-merged: color-mix(
+    in oklab,
+    var(--merged-foreground) 55%,
+    var(--contrast-muted-foreground)
+  );
+  --color-diff-addition: var(--diff-addition);
+  --color-diff-deletion: var(--diff-deletion);
+  --color-diff-addition-foreground: var(--diff-addition-foreground);
+  --color-diff-deletion-foreground: var(--diff-deletion-foreground);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-guest: var(--guest);
+  --color-guest-foreground: var(--guest-foreground);
+  --color-guest-surface: var(--guest-surface);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-ring: var(--ring);
+  --color-input: var(--contrast-input);
+  --color-border: var(--contrast-border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--contrast-accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--contrast-muted-foreground);
+  --color-muted: var(--muted);
+  --color-placeholder: var(--contrast-placeholder);
+  --color-secondary-label: var(--contrast-secondary-label);
+  --color-icon-muted: var(--contrast-icon-muted);
+  --color-secondary-foreground: var(--contrast-secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--contrast-popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--contrast-card-foreground);
+  --color-card: var(--card);
+  --color-code: var(--code-background);
+  --color-code-foreground: var(--code-foreground);
+  --color-foreground: var(--contrast-foreground);
+  --color-background: var(--background);
+  --color-surface-raised: var(--surface-raised);
+  --color-message: var(--message-surface);
+  --color-message-foreground: var(--contrast-message-foreground);
+  --color-message-action: var(--message-action);
+  --color-message-action-foreground: var(--message-action-foreground);
+  --color-message-action-hover: var(--message-action-hover);
+  /* The composer's send and stop buttons: the theme's action and destructive colors taken a step
+     deeper, so the two buttons a user reaches for most stay solid on every palette. Hover lifts
+     them back to the plain theme color. */
+  --color-composer-send: color-mix(in oklab, var(--message-action) 86%, black);
+  --color-composer-stop: color-mix(in oklab, var(--destructive) 86%, black);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--contrast-sidebar-foreground);
+  --color-sidebar-muted-foreground: var(--contrast-sidebar-muted-foreground);
+  --color-sidebar-control-surface: var(--sidebar-control-surface);
+  --color-sidebar-row-hover: var(--sidebar-row-hover);
+  --color-sidebar-row-active: var(--sidebar-row-active);
+  --color-sidebar-row-selected: var(--sidebar-row-selected);
+  --color-sidebar-border: var(--contrast-sidebar-border);
+  --color-chrome-divider: var(--contrast-chrome-divider);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  @keyframes skeleton {
+    /* The single loading-bar breath used by every skeleton: one opacity pulse
+       per container, stepped so however many bars sit under it, the compositor
+       draws a handful of discrete frames per cycle rather than one per vsync —
+       which on a 120Hz display is the difference between ~14 and ~288 updates. */
+    0%,
+    42% {
+      opacity: 1;
+      animation-timing-function: steps(4);
+    }
+    50%,
+    92% {
+      opacity: 0.55;
+      animation-timing-function: steps(4);
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  @keyframes typing-wave {
+    0% {
+      translate: 0 0;
+      animation-timing-function: steps(3);
+    }
+    15% {
+      translate: 0 -3px;
+      animation-timing-function: steps(3);
+    }
+    30%,
+    100% {
+      translate: 0 0;
+    }
+  }
+  @keyframes stash-pulse-row {
+    from,
+    85.7% {
+      color: var(--color-foreground);
+    }
+  }
+  @keyframes stash-pulse-row-alt {
+    from,
+    85.7% {
+      color: var(--color-foreground);
+    }
+  }
+  @keyframes stash-pulse-count {
+    from,
+    85.7% {
+      color: var(--color-primary);
+    }
+  }
+  @keyframes status-pulse {
+    0%,
+    40% {
+      opacity: 1;
+      animation-timing-function: steps(6);
+    }
+    50%,
+    90% {
+      opacity: 0.5;
+      animation-timing-function: steps(6);
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  @keyframes status-ping {
+    /* Burst first (immediate feedback for click ripples), then hold
+       invisible for the rest of the cycle. Mirrors animate-ping's
+       75%-scale start. */
+    0% {
+      opacity: 0.9;
+      scale: 0.75;
+      animation-timing-function: steps(8);
+    }
+    40%,
+    100% {
+      opacity: 0;
+      scale: 2;
+    }
+  }
+}
+:root {
+  color-scheme: light;
+  /* Ink on paper in light; dark raises it to a gray pill below. */
+  --goat-person-message: var(--foreground);
+  --goat-person-message-foreground: var(--background);
+  /* A raised field on the canvas, as in Grok: white with a hairline in light. */
+  --goat-composer-fill: #ffffff;
+  --goat-hairline: rgb(0 0 0 / 8%);
+  --radius: 0.5rem;
+  /* Neutral grays without a cool cast and an ink primary, after the ChatGPT
+     desktop palette. Every blue in the default look (links, focus, info,
+     updates, unread) is this one token. */
+  --blue: #0169cc;
+  --background: #ffffff;
+  --app-chrome-background: var(--background);
+  --toolbar-background: var(--app-chrome-background);
+  --toolbar-foreground: var(--foreground);
+  --toolbar-border: var(--border);
+  --toolbar-control: var(--popover);
+  --toolbar-control-foreground: var(--foreground);
+  --toolbar-control-hover: var(--accent);
+  --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
+  --foreground: #0d0d0d;
+  --card: var(--color-white);
+  --card-foreground: var(--foreground);
+  --popover: var(--color-white);
+  --popover-foreground: var(--foreground);
+  --primary: var(--foreground);
+  --primary-foreground: var(--color-white);
+  --secondary: #f9f9f9;
+  --secondary-foreground: var(--foreground);
+  --muted: #f9f9f9;
+  --muted-foreground: #5d5d5d;
+  --placeholder: var(--muted-foreground);
+  --secondary-label: var(--muted-foreground);
+  --icon-muted: var(--muted-foreground);
+  --message-surface: #f3f3f3;
+  --message-foreground: var(--foreground);
+  --message-action: var(--primary);
+  --message-action-foreground: var(--primary-foreground);
+  --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
+  --accent: #f3f3f3;
+  --accent-opaque: var(--accent);
+  --accent-foreground: var(--foreground);
+  --error: var(--color-red-500);
+  --error-foreground: var(--color-red-700);
+  --tool-error-icon: var(--error);
+  --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
+  --destructive: var(--error);
+  --border: #ececec;
+  --input: #dfdfdf;
+  --ring: var(--blue);
+  --destructive-foreground: var(--error-foreground);
+  --info: var(--blue);
+  --info-foreground: var(--blue);
+  /* Messages from a guest link, and the sidebar Request status. */
+  --guest: var(--color-fuchsia-500);
+  --guest-foreground: var(--color-fuchsia-600);
+  --guest-surface: color-mix(in srgb, var(--guest) 14%, var(--message-surface));
+  --success: var(--color-emerald-500);
+  --success-foreground: var(--color-emerald-700);
+  --merged-foreground: var(--color-violet-700);
+  --warning: var(--color-amber-500);
+  --warning-foreground: var(--color-amber-700);
+  --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
+  /* Fleet machine heat (FleetGraph): warm, hot, and burning, plus the ember
+     highlight its flames fade into. */
+  --heat-warm: var(--color-amber-500);
+  --heat-hot: var(--color-orange-500);
+  --heat-burning: var(--color-red-500);
+  --heat-ember: var(--color-amber-400);
+  --update: var(--blue);
+  --update-foreground: var(--update);
+  --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
+  /* Keep every sidebar primitive on the same light surface hierarchy, including
+     portaled mobile sheets and settings navigation outside the app sidebar.
+     The gray panel against the white canvas carries the layout, so the default
+     light look draws no chrome hairlines (--chrome-divider). */
+  --sidebar: #f7f7f7;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-muted-foreground: var(--muted-foreground);
+  --sidebar-control-surface: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
+  --sidebar-row-hover: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
+  --sidebar-row-active: color-mix(in srgb, var(--color-black) 6%, var(--sidebar));
+  --sidebar-row-selected: color-mix(in srgb, var(--color-black) 6%, var(--sidebar));
+  --sidebar-border: var(--border);
+  --chrome-divider: transparent;
+  --code-background: #f9f9f9;
+  --code-foreground: var(--foreground);
+  --terminal-background: var(--background);
+  --terminal-foreground: var(--foreground);
+  --terminal-cursor: rgb(38 56 78);
+  --terminal-selection-background: rgb(37 63 99 / 20%);
+
+}
+/* Default light appearance resolves the contrast controls to their base colors. */
+:root {
+  --contrast-foreground: var(--foreground);
+  --contrast-muted-foreground: var(--muted-foreground);
+  --contrast-secondary-label: var(--secondary-label);
+  --contrast-icon-muted: var(--icon-muted);
+  --contrast-border: var(--border);
+  --contrast-message-foreground: var(--message-foreground);
+  --contrast-accent-foreground: var(--accent-foreground);
+  --contrast-sidebar-foreground: var(--sidebar-foreground);
+  --contrast-sidebar-muted-foreground: var(--sidebar-muted-foreground);
+}
+/* The v1 fragments relied on preflight; scope the needed element defaults to the fragments. */
+:where(.v1), :where(.v1 *) { box-sizing: border-box; border-width: 0; border-style: solid; }
+:where(.v1 button, .v1 textarea) { font: inherit; color: inherit; background: transparent; padding: 0; }
+:where(.v1 button) { cursor: pointer; }
+:where(.v1 button:disabled) { cursor: default; }
+:where(.v1 ol, .v1 ul, .v1 h2) { margin: 0; padding: 0; list-style: none; }
+@keyframes v1-shimmer { from { background-position: 150% 0; } to { background-position: -150% 0; } }
+.v1-shimmer { color: transparent; background-image: linear-gradient(90deg, transparent, var(--foreground), transparent); background-size: 50% 100%; background-repeat: no-repeat; background-clip: text; animation: v1-shimmer 2.4s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .v1-shimmer { animation: none; } }
