@@ -926,6 +926,14 @@ impl Actor {
                 // is no live wire frame for it yet (structure/30_wire.md).
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
             }
+            EngineEvent::SteerUpdated {
+                turn_id, status, ..
+            } => {
+                // What a cancelled steer does to its inputs (v1 marks the message cancelled; a
+                // re-queue as followup like SteerResult::Declined is proposed) is pending the
+                // owner's decision; until then the accepted delivery stands, as before.
+                tracing::debug!(thread = %self.id, %turn_id, ?status, "steer settled (not acted on yet)");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {

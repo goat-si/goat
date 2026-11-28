@@ -711,7 +711,7 @@
       ]
     },
     "CommandError": {
-      "description": "`command_result.error`, the v1 `AgentSurfaceError` shape.\n\nReasons the host uses (code / reason): `not_found` / `thread_not_found`, `request_not_found`,\n`bot_not_found`; `permission_denied` / `not_allowed`; `conflict` / `steer_refused` (a steer\nrefused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different\narguments), `notes_changed` (stale notes revision); `failed_precondition` / `not_queued` (the input left the queue, or\n`reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,\n`payload_too_large`; `invalid_request` / `invalid_request`; `internal` / `internal`.",
+      "description": "`command_result.error`, the v1 `AgentSurfaceError` shape.\n\nReasons the host uses (code / reason): `not_found` / `thread_not_found`, `request_not_found`,\n`bot_not_found`; `permission_denied` / `not_allowed`; `conflict` / `steer_refused` (a steer\nrefused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different\narguments), `notes_changed` (stale notes revision); `failed_precondition` / `not_queued` (the input left the queue, or\n`reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,\n`payload_too_large`; `unavailable` / `not_available` (the command's host module has not\nlanded yet); `invalid_request` / `invalid_request`; `internal` / `internal`.",
       "properties": {
         "code": {
           "$ref": "#/$defs/AgentSurfaceErrorCode"
