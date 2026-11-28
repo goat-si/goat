@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import * as Schema from "effect/Schema";
 import { AcpRegistrySearchResult, DEFAULT_SERVER_SETTINGS, ProviderAuthState, ProviderInstallState } from "@goat/contracts";
 import { DEMO_REGISTRY, FakeProviders, demoProviderEntries } from "../../../host/fakeProviders.ts";
-import { toServerProvider, withHostInstances, type Goat2ProviderEntry } from "./providerPort";
+import { toServerProvider, unservedPlaceholders, withHostInstances, type Goat2ProviderEntry } from "./providerPort";
 
 const AT = "2026-11-29T00:00:00.000Z";
 
@@ -31,5 +31,13 @@ describe("provider seam: fake host data through v1 schemas", () => {
     expect(s.providerInstances["acp-kimi-code" as never]).toMatchObject({ driver: "acpRegistry", enabled: true, displayName: "Kimi Code", config: { agentId: "kimi-code" } });
     expect(s.providerInstances["codex" as never]).toBeUndefined();
     expect(withHostInstances(s, demoProviderEntries(AT) as unknown as Goat2ProviderEntry[])).toBe(s);
+  });
+  it("drivers the host does not report show switched off with the reason; host entries win", () => {
+    const codexOnly = demoProviderEntries(AT).filter((e) => e.instanceId === "codex") as unknown as Goat2ProviderEntry[];
+    const placeholders = unservedPlaceholders(codexOnly, AT);
+    expect(placeholders.map((p) => p.driver).sort()).toEqual(["antigravity", "claudeAgent", "claudeCloud", "cursor", "cursorCloud", "devinCloud", "fx", "grok", "muse", "omo", "opencode", "pi"]);
+    const claude = toServerProvider(placeholders.find((p) => p.driver === "claudeAgent")!);
+    expect(claude).toMatchObject({ enabled: false, installed: false, status: "disabled", message: "This GOAT build does not include the Claude driver yet." });
+    expect(unservedPlaceholders(demoProviderEntries(AT) as unknown as Goat2ProviderEntry[], AT).map((p) => p.driver)).toEqual(["claudeCloud", "cursorCloud", "devinCloud"]);
   });
 });

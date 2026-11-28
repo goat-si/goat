@@ -134,7 +134,7 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
       unsubscribe();
       unsubscribe = port
         ? port.subscribe((entries) => {
-            const all = [...entries, ...cloudPlaceholders(entries, entries[0]?.probe.checkedAt ?? new Date().toISOString())];
+            const all = [...entries, ...unservedPlaceholders(entries, entries[0]?.probe.checkedAt ?? new Date().toISOString())];
             get.set(goat2SettingsAtom, withHostInstances(get.once(goat2SettingsAtom), all));
             get.setSelf<ReadonlyArray<ServerProviderType> | null>(all.map(toServerProvider));
           })
@@ -151,27 +151,32 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
 ).pipe(Atom.keepAlive, Atom.withLabel("goat2:providers"));
 
 /**
- * v1's cloud defaults (Claude Cloud, Cursor Cloud, Devin Cloud) list themselves whenever their local sibling is on
- * (contracts settings.ts CLOUD_SIBLING_DRIVERS, implicitDefaultInstance). GOAT 2 runs cloud providers in a later part
- * (PRD part2/providers), so the host never reports them; instead of v1's endless "Waiting for the server" they show
- * switched off with that reason. Host-reported entries for these drivers win.
+ * Drivers v1 lists (providerDriverMeta.ts) that the host does not report. The host lists only drivers built into it
+ * (lane E providers module); v1 would show such a slot as "Waiting for the server" forever, so each shows switched off
+ * with the reason. Host-reported entries always win.
+ *  - v1's cloud defaults (Claude Cloud, Cursor Cloud, Devin Cloud) follow their local sibling (contracts settings.ts
+ *    CLOUD_SIBLING_DRIVERS); GOAT 2 runs cloud providers in a later part (PRD part2/providers).
+ *  - The ten local kinds with a default instance (ACP registry agents appear only once added) arrive as their drivers
+ *    merge into the host.
  */
 export const GOAT2_CLOUD_DRIVERS = ["claudeCloud", "cursorCloud", "devinCloud"] as const;
-export function cloudPlaceholders(entries: ReadonlyArray<Goat2ProviderEntry>, checkedAt: string): Goat2ProviderEntry[] {
-  return GOAT2_CLOUD_DRIVERS.filter((driver) => !entries.some((e) => e.driver === driver)).map((driver) => ({
+export const GOAT2_LOCAL_DRIVERS: Readonly<Record<string, string>> = {
+  codex: "Codex", claudeAgent: "Claude", grok: "Grok", fx: "fx", antigravity: "Antigravity", opencode: "OpenCode",
+  cursor: "Cursor", muse: "Muse", pi: "Pi", omo: "OmO",
+};
+export function unservedPlaceholders(entries: ReadonlyArray<Goat2ProviderEntry>, checkedAt: string): Goat2ProviderEntry[] {
+  const missing = (driver: string) => !entries.some((e) => e.driver === driver);
+  const placeholder = (driver: string, message: string): Goat2ProviderEntry => ({
     instanceId: driver,
     driver,
     enabled: false,
-    probe: {
-      installed: false,
-      version: null,
-      status: "disabled",
-      auth: { status: "unknown" },
-      models: [],
-      checkedAt,
-      message: "Cloud providers come in a later GOAT 2 release.",
-    },
-  }));
+    probe: { installed: false, version: null, status: "disabled", auth: { status: "unknown" }, models: [], checkedAt, message },
+  });
+  return [
+    ...Object.entries(GOAT2_LOCAL_DRIVERS).filter(([driver]) => missing(driver))
+      .map(([driver, label]) => placeholder(driver, `This GOAT build does not include the ${label} driver yet.`)),
+    ...GOAT2_CLOUD_DRIVERS.filter(missing).map((driver) => placeholder(driver, "Cloud providers come in a later GOAT 2 release.")),
+  ];
 }
 
 /**
