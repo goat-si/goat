@@ -32,6 +32,7 @@ import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
+import { officialAcpRegistryIconUrlForAgentId } from "@goat/contracts";
 
 import type { AtomCommandResult, EnvironmentAtomCommand } from "@goat/client-runtime/state/runtime";
 import { GOAT2_ENVIRONMENT_ID, GOAT2_ENVIRONMENT_LABEL } from "../goat2/environment";
@@ -104,12 +105,42 @@ const decodeProvidersPayload = (value: unknown): ServerProviderUpdatedPayload =>
   });
 
 type SettingsUpdateInput = typeof ServerSettingsUpdateInput.Type;
+type InstanceConfig = ServerSettings["providerInstances"][ProviderInstanceId];
+
+/** What the host stores for an instance (set_provider_instance): driver, enablement, name and the ACP registry agent. */
+function wireInstance(instanceId: string, inst: InstanceConfig, enabled: boolean) {
+  const agentId = inst.driver === "acpRegistry" ? (inst.config as { agentId?: unknown } | undefined)?.agentId : undefined;
+  return {
+    instanceId, driver: inst.driver, enabled,
+    ...(inst.displayName ? { displayName: inst.displayName } : {}),
+    ...(typeof agentId === "string" && agentId ? { acpAgentId: agentId } : {}),
+  };
+}
+
+/** Instance fields beyond the wire ones, with v1's wizard defaults removed: distribution "auto" is the decoding
+ * default and registryIconUrl is v1's official icon URL for the agent (contracts acpRegistry.ts:16-23), so neither is
+ * lost when the host reports the instance back. */
+function extraInstanceFields(inst: InstanceConfig | undefined): string {
+  if (!inst) return "{}"; // a new instance may be created when it carries only what the host stores
+  const { driver: _d, enabled: _e, displayName: _n, config, ...rest } = inst;
+  const extra: Record<string, unknown> = { ...rest };
+  if (config && typeof config === "object" && !Array.isArray(config)) {
+    const { agentId, distribution, registryIconUrl, ...cfg } = config as Record<string, unknown>;
+    if (distribution !== undefined && distribution !== "auto") cfg.distribution = distribution;
+    if (registryIconUrl !== undefined && registryIconUrl !== officialAcpRegistryIconUrlForAgentId(typeof agentId === "string" ? agentId : null)) {
+      cfg.registryIconUrl = registryIconUrl;
+    }
+    if (Object.keys(cfg).length) extra.config = cfg;
+  } else if (config !== undefined) extra.config = config;
+  return JSON.stringify(extra);
+}
 
 /**
- * v1 server.updateSettings, applied here the way v1's server does (apps/server/src/serverSettings.ts:902,218-231): the
- * patch through the lifted applyServerSettingsPatch, then the provider-instance mutation. GOAT 2 keeps server settings
- * in this window (goat2SettingsAtom); a provider instance whose driver, enablement, name or ACP agent changed is sent
- * to the host with set_provider_instance (a removed one as disabled: the wire has no delete).
+ * v1 server.updateSettings, applied the way v1's server does (apps/server/src/serverSettings.ts:902, 218-231): the
+ * patch through the lifted applyServerSettingsPatch, then the provider-instance mutation. The GOAT 2 host stores only
+ * provider instances (set_provider_instance: driver, enablement, name, ACP agent), so a change it cannot keep (any
+ * other setting, other instance fields, removing an instance) is refused with what was not saved, and nothing is
+ * changed; a change it can keep is sent to the host first and shown only when the host took it.
  */
 const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>, ServerSettings, Error> = {
   label: "environment-data:server:update-settings",
@@ -119,28 +150,32 @@ const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>,
       return AsyncResult.failure(Cause.fail(new Error("Unknown environment " + environmentId)));
     }
     try {
-      const current = registry.get(goat2SettingsAtom);
+      // Normalized through the same function (v1 fills derived keys such as idleCompaction on every patch), so only
+      // what the patch itself changes counts.
+      const current = applyServerSettingsPatch(registry.get(goat2SettingsAtom), {});
       let next = applyServerSettingsPatch(current, input.patch);
       const mutation = input.providerInstanceMutation;
-      if (mutation) {
-        const providerInstances = { ...next.providerInstances };
-        if (mutation.operation === "remove") delete providerInstances[mutation.instanceId];
-        else providerInstances[mutation.instanceId] = mutation.instance;
-        next = { ...next, providerInstances };
+      if (mutation?.operation === "remove") {
+        throw new Error("Removing a provider from GOAT is not available yet. Turn it off instead.");
       }
-      const ids = new Set([...Object.keys(current.providerInstances), ...Object.keys(next.providerInstances)]);
-      for (const instanceId of ids) {
-        const before = current.providerInstances[instanceId as ProviderInstanceId];
-        const after = next.providerInstances[instanceId as ProviderInstanceId];
-        const wire = (inst: typeof after, enabled: boolean) => inst && {
-          instanceId, driver: inst.driver, enabled,
-          ...(inst.displayName ? { displayName: inst.displayName } : {}),
-          ...(inst.driver === "acpRegistry" && typeof (inst.config as { agentId?: unknown } | undefined)?.agentId === "string"
-            ? { acpAgentId: (inst.config as { agentId: string }).agentId } : {}),
-        };
-        const was = wire(before, before?.enabled !== false);
-        const now = after ? wire(after, after.enabled !== false) : wire(before, false);
-        if (now && JSON.stringify(now) !== JSON.stringify(was)) await currentProviderPort().call("goat2.setProviderInstance", now);
+      if (mutation) next = { ...next, providerInstances: { ...next.providerInstances, [mutation.instanceId]: mutation.instance } };
+      const unsaved = Object.keys({ ...current, ...next }).filter(
+        (key) => key !== "providerInstances" && JSON.stringify(current[key as keyof ServerSettings]) !== JSON.stringify(next[key as keyof ServerSettings]),
+      );
+      const ids = [...new Set([...Object.keys(current.providerInstances), ...Object.keys(next.providerInstances)])] as ProviderInstanceId[];
+      for (const id of ids) {
+        if (!next.providerInstances[id]) unsaved.push(`providerInstances.${id}`);
+        else if (extraInstanceFields(current.providerInstances[id]) !== extraInstanceFields(next.providerInstances[id])) {
+          unsaved.push(`providerInstances.${id} (only on/off, name and registry agent are saved)`);
+        }
+      }
+      if (unsaved.length) throw new Error(`GOAT does not save this setting yet: ${unsaved.join(", ")}.`);
+      for (const id of ids) {
+        const before = current.providerInstances[id];
+        const after = next.providerInstances[id]!;
+        const now = wireInstance(id, after, after.enabled !== false);
+        const was = before ? wireInstance(id, before, before.enabled !== false) : null;
+        if (JSON.stringify(now) !== JSON.stringify(was)) await currentProviderPort().call("goat2.setProviderInstance", now);
       }
       registry.set(goat2SettingsAtom, next);
       return AsyncResult.success(next);

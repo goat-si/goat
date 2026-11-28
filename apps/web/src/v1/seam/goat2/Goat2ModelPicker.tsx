@@ -18,6 +18,8 @@ export interface Goat2ModelPickerProps {
   popupAlign?: "start" | "end";
   ariaLabel?: string;
   disabled?: boolean;
+  /** The host's refusal of the last choice, shown next to the trigger. */
+  error?: string | null;
 }
 
 export function Goat2ModelPicker(props: Goat2ModelPickerProps) {
@@ -27,6 +29,7 @@ export function Goat2ModelPicker(props: Goat2ModelPickerProps) {
   const entries = sortProviderInstanceEntries(applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null));
   const options = getCustomModelOptionsByInstance(settings, providers, instanceId, props.model);
   return (
+    <>
     <ProviderModelPicker
       environmentId={GOAT2_ENVIRONMENT_ID}
       activeInstanceId={instanceId}
@@ -40,5 +43,11 @@ export function Goat2ModelPicker(props: Goat2ModelPickerProps) {
       {...(props.disabled ? { disabled: true } : {})}
       onInstanceModelChange={(next, model) => props.onChange({ instanceId: next, model })}
     />
+    {props.error ? (
+      <span role="alert" title={props.error} className="ms-1 max-w-56 truncate text-xs text-destructive-foreground">
+        {props.error}
+      </span>
+    ) : null}
+    </>
   );
 }

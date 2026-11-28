@@ -32,9 +32,10 @@ export function ModelChip({ selection, onChange, label, disabled, error }: {
   error?: string | null;
 }) {
   return (
-    <V1Boundary style={{ display: "contents" }} title={error ?? undefined}>
+    <V1Boundary style={{ display: "contents" }}>
       <ModelPicker composer instanceId={selection.instanceId} model={selection.model} popupAlign="end"
-        ariaLabel={`${label} model: ${selection.model}`} disabled={disabled === true || onChange === null} onChange={(s) => onChange?.(s)} />
+        ariaLabel={`${label} model: ${selection.model}`} disabled={disabled === true || onChange === null} onChange={(s) => onChange?.(s)}
+        error={error ?? null} />
     </V1Boundary>
   );
 }

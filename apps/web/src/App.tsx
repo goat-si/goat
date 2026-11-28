@@ -40,8 +40,9 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   const { desktop, build } = useHostContext();
   // The lifted v1 provider screens read providers through this port (docs/part2/provider-wire.md).
   useEffect(() => {
-    installProviderPort(hostProviderPort(client));
-    return () => installProviderPort(null);
+    const port = hostProviderPort(client);
+    installProviderPort(port);
+    return () => { installProviderPort(null); port.dispose(); };
   }, [client]);
   // Where lifted v1 code navigates (v1 useNavigate / Link): settings paths open Settings, v1's thread route
   // "/<environmentId>/<threadId>" opens the thread in thread mode.
@@ -272,10 +273,10 @@ function RailSearchPopover({ rows, railBots, onAdd, onClose }: { rows: BotRowDat
 
 /** Settings > GOAT Bot: the bot's model (board 1QYE-2), the same picker and change_thread as the composer. */
 function BotSettingsPage({ bot }: { bot: BotRowData | null }) {
-  const { change } = useThreadModelChange(bot?.threadId ?? null);
+  const { change, error } = useThreadModelChange(bot?.threadId ?? null);
   if (!bot) return <div style={{ padding: 32, color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13 }}>Loading bots…</div>;
   const selection = bot.card?.engine.modelSelection ?? DEFAULT_SELECTION;
-  return <BotModelSettings botName={bot.name} instanceId={selection.instanceId} model={selection.model} onChange={change} />;
+  return <BotModelSettings botName={bot.name} instanceId={selection.instanceId} model={selection.model} onChange={change} error={error} />;
 }
 
 function BotModelPicker({ bot }: { bot: BotRowData }) {

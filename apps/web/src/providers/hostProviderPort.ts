@@ -45,9 +45,8 @@ export function toCommand(method: ProviderPortMethod, payload: unknown): Provide
 }
 
 /** The v1 result a method resolves with, from the command_result value and the latest provider list. */
-function toResult(method: ProviderPortMethod, value: ProviderCommandValue, providers: ServerProviderEntry[]): unknown {
+function toResult(method: ProviderPortMethod, value: ProviderCommandValue): unknown {
   switch (method) {
-    case "server.refreshProviders": return { providers };
     case "server.searchAcpRegistry": return value.registrySearch;
     case "server.prepareAcpRegistryAgent": return value.registryPrepare;
     case "server.acceptAcpRegistryUrlAuth": return { accepted: value.accepted === true };
@@ -63,36 +62,76 @@ export const idleAuth = (instanceId: string): ProviderAuthState =>
 export const idleInstall = (driver: string): ProviderInstallState =>
   ({ driver, operationId: null, phase: "idle", downloadedBytes: 0, totalBytes: null, version: null, installedVersion: null, canRemove: false, message: null });
 
-export function hostProviderPort(client: HostClient): ProviderPortShape {
-  let latest: ServerProviderEntry[] = [];
-  let firstList: Promise<void> | null = null;
-  const listUntil = (pred: (p: ServerProviderEntry[]) => boolean) => new Promise<void>((resolve) => {
-    const stop = client.watchProviders((p) => { latest = p; if (pred(p)) { queueMicrotask(() => stop()); resolve(); } });
+export interface HostProviderPort extends ProviderPortShape {
+  /** Ends the port's providers subscription and any pending waits (the app uninstalls the port). */
+  dispose(): void;
+}
+
+export interface HostProviderPortOptions {
+  /** How long a refresh waits for the host's providers frame after its command_result, ms. */
+  refreshListTimeoutMs?: number;
+}
+
+/**
+ * One providers subscription for the port's life; subscribe and watch streams fan out from it, so no call leaves a
+ * subscription behind. A refresh resolves with the list the host sent for it: the host sends that providers frame
+ * before the refresh's command_result (docs/part2/provider-wire.md, refresh_providers), so the latest list when the
+ * result arrives is the refreshed one if any frame arrived after the request; otherwise the next frame is awaited,
+ * bounded, and a missing list is an error. Other commands resolve from their command_result alone.
+ */
+export function hostProviderPort(client: HostClient, opts: HostProviderPortOptions = {}): HostProviderPort {
+  const timeoutMs = opts.refreshListTimeoutMs ?? 15_000;
+  let latest: ServerProviderEntry[] | null = null;
+  let frames = 0;
+  const listeners = new Set<(list: ServerProviderEntry[]) => void>();
+  const waiters = new Set<() => void>();
+  const stop = client.watchProviders((list) => {
+    latest = list;
+    frames += 1;
+    for (const wake of [...waiters]) wake();
+    for (const listener of [...listeners]) listener(list);
+  });
+  const listen = (listener: (list: ServerProviderEntry[]) => void) => {
+    listeners.add(listener);
+    if (latest) listener(latest);
+    return () => { listeners.delete(listener); };
+  };
+  /** Resolves once a providers frame numbered above `after` has arrived; rejects after the bound; always cleans up. */
+  const frameAfter = (after: number) => new Promise<void>((resolve, reject) => {
+    if (frames > after) { resolve(); return; }
+    const wake = () => { if (frames > after) { cleanup(); resolve(); } };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("The host did not send its provider list after the refresh.")); }, timeoutMs);
+    const cleanup = () => { waiters.delete(wake); clearTimeout(timer); };
+    waiters.add(wake);
   });
   return {
-    subscribe: (listener) => client.watchProviders((p) => { latest = p; listener(p); }),
+    subscribe: (listener) => listen(listener),
     call: async (method, payload) => {
       const unserved = UNSERVED[method];
       if (unserved) throw new Error(unserved);
       const body = toCommand(method, payload);
       if (!body) throw new Error(`GOAT does not serve ${method}.`);
-      // A refresh resolves with the list the host sends after it (the subscription carries it, not the result).
-      const before = latest;
-      const next = method === "server.refreshProviders" ? listUntil((p) => p !== before) : null;
-      firstList ??= listUntil(() => true);
+      const before = frames;
       const r = await client.providerCommand(body);
       if (!r.ok) throw new Error(r.error?.message ?? "The host refused this request.");
-      if (next) await Promise.race([next, new Promise((res) => setTimeout(res, 3000))]);
-      await firstList;
-      return toResult(method, r.value ?? {}, latest);
+      if (method === "server.refreshProviders") {
+        await frameAfter(before);
+        return { providers: latest ?? [] };
+      }
+      return toResult(method, r.value ?? {});
     },
     watch: (method: ProviderPortStream, payload, listener) => {
       const instanceId = str((payload ?? {}) as Obj, "instanceId") ?? "";
-      return client.watchProviders((providers) => {
+      return listen((providers) => {
         const entry = providers.find((e) => e.instanceId === instanceId);
         if (!entry) return;
         listener(method === "providerAuth.subscribe" ? entry.authFlow ?? idleAuth(instanceId) : entry.install ?? idleInstall(entry.driver));
       });
+    },
+    dispose: () => {
+      stop();
+      listeners.clear();
+      for (const wake of [...waiters]) waiters.delete(wake);
     },
   };
 }

@@ -11,6 +11,8 @@ export interface BotModelSettingsProps {
   model: string;
   /** Null until the bot has a thread to change. */
   onChange: ((selection: { instanceId: string; model: string }) => void) | null;
+  /** The host's refusal of the last change. */
+  error?: string | null;
 }
 
 export function BotModelSettings(props: BotModelSettingsProps) {
@@ -21,7 +23,9 @@ export function BotModelSettings(props: BotModelSettingsProps) {
           <SettingsSection title={props.botName}>
             <SettingsRow
               title="Model"
-              description={props.onChange ? `Used for ${props.botName}'s next turn` : `Send ${props.botName} a first message, then pick its model here`}
+              description={props.error
+                ? <span role="alert" className="text-destructive-foreground">{props.error}</span>
+                : props.onChange ? `Used for ${props.botName}'s next turn` : `Send ${props.botName} a first message, then pick its model here`}
               control={
                 <Goat2ModelPicker instanceId={props.instanceId} model={props.model} popupAlign="end" ariaLabel={`${props.botName} model: ${props.model}`}
                   disabled={props.onChange === null} onChange={(s) => props.onChange?.(s)} />

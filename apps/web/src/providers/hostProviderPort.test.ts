@@ -107,3 +107,48 @@ describe("hostProviderPort + fake host", () => {
     await expect(port.call("server.searchAcpRegistry", { query: "" })).rejects.toThrow("Not connected to the host.");
   });
 });
+
+describe("hostProviderPort: refresh correlation and cleanup (review 1 P1s)", () => {
+  class SilentRefresh extends FakeProviders {
+    /** A host that answers refresh_providers without sending a providers frame. */
+    override run(body: { type: string } & Record<string, unknown>) {
+      return body.type === "refresh_providers" ? { ok: true as const, value: {} } : super.run(body);
+    }
+  }
+  const make = (providers: FakeProviders) => {
+    const fake = new FakeHost({ ...demoWorld(), providers }, { connect: "open" });
+    const client = new HostClient(fake, { outbox: memoryStorage(), cache: null, demo: "test" });
+    return { fake, client, port: hostProviderPort(client, { refreshListTimeoutMs: 30 }) };
+  };
+
+  it("a refresh whose list never comes is an error, not the old list", async () => {
+    const { port } = make(new SilentRefresh(demoProviderEntries(AT), undefined, { now: () => AT }));
+    await tick(5);
+    await expect(port.call("server.refreshProviders", {})).rejects.toThrow("The host did not send its provider list after the refresh.");
+  });
+
+  it("the subscription's first list does not answer a refresh sent after it", async () => {
+    const providers = new SilentRefresh(demoProviderEntries(AT), undefined, { now: () => AT });
+    const { port } = make(providers);
+    await tick(5); // first list delivered
+    const pending = port.call("server.refreshProviders", {});
+    await expect(pending).rejects.toThrow(/did not send its provider list/);
+  });
+
+  it("other commands resolve from their result without waiting for a list", async () => {
+    class NoList extends FakeProviders { override onList() { return () => {}; } }
+    const { port } = make(new NoList(demoProviderEntries(AT), undefined, { now: () => AT }));
+    await tick(5);
+    const found = await port.call("server.searchAcpRegistry", { query: "qwen" }) as { agents: Array<{ id: string }> };
+    expect(found.agents.map((a) => a.id)).toEqual(["qwen-code"]);
+  });
+
+  it("dispose ends the one providers subscription", async () => {
+    const { port, fake } = make(new FakeProviders(demoProviderEntries(AT), undefined, { now: () => AT }));
+    await tick(5);
+    const subs = fake.received.filter((f) => (f as { type: string }).type === "subscribe_providers");
+    expect(subs).toHaveLength(1);
+    port.dispose();
+    expect(fake.received.at(-1)).toEqual({ type: "unsubscribe", subId: (subs[0] as unknown as { subId: string }).subId });
+  });
+});

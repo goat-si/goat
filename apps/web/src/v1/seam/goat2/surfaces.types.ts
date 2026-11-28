@@ -75,6 +75,8 @@ export interface ModelPickerProps {
   popupAlign?: "start" | "end";
   ariaLabel?: string;
   disabled?: boolean;
+  /** The host's refusal of the last choice, shown next to the trigger. */
+  error?: string | null;
 }
 export declare const ModelPicker: ComponentType<ModelPickerProps>;
 /** Settings > bot: the Model row (board 1QYE-2). onChange null until the bot has a thread. */
@@ -83,4 +85,5 @@ export declare const BotModelSettings: ComponentType<{
   instanceId: string;
   model: string;
   onChange: ((selection: { instanceId: string; model: string }) => void) | null;
+  error?: string | null;
 }>;
