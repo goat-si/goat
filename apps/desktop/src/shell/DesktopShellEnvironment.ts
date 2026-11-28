@@ -327,6 +327,8 @@ export class DesktopShellEnvironment {
     }
     const cache = decodeCache(text);
     if (cache === undefined || cache.key !== this.#key) return false;
+    // Only a good answer (a PATH) is ever cached; one without a PATH cannot stand in for discovery.
+    if (trimmed(cache.environment.PATH) === undefined) return false;
     const cached: Record<string, string> = {};
     for (const name of CACHED_ENV_NAMES) {
       const value = cache.environment[name];

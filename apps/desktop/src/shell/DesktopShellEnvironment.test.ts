@@ -171,6 +171,9 @@ describe("DesktopShellEnvironment", () => {
       JSON.stringify({ version: 1, key, environment: null }),
       JSON.stringify({ version: 1, key, environment: [] }),
       JSON.stringify({ version: 1, key, environment: { PATH: 7 } }),
+      JSON.stringify({ version: 1, key, environment: {} }),
+      JSON.stringify({ version: 1, key, environment: { PATH: "" } }),
+      JSON.stringify({ version: 1, key, environment: { PATH: "  ", JAVA_HOME: "/j" } }),
       JSON.stringify({ version: 2, key, environment: { PATH: "/x" } }),
       JSON.stringify({ version: 1, key, environment: { PATH: "/x".padEnd(1024 * 1024 + 10, "x") } }),
     ]) {
