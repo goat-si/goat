@@ -29,8 +29,10 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
 - Toolchain 1.95 (`rust-toolchain.toml`). `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test -p <crate>`.
 
 ## How to work
-- Run as a loop (plan -> build -> verify -> repeat) until your lane's done criteria pass. Use the
-  cxc-loop / PABCD skill if available.
+- Run under the **cxc-loop** skill (`$cxc-loop`), required: `cxc loop init --objective ... --session <threadId>
+  --criterion ...` (criteria = your lane's done criteria), phases via `cxc orchestrate <phase>` (PABCD gates),
+  tasks via `cxc loop add-work-phase` / `add-task` / `complete-task`, `meet-criterion` with evidence,
+  owner questions via `cxc loop ask` plus `aside session queue`.
 - Use subagents on `gpt-6.1-terra` (Codex instance) freely for parallel implementation, tests and
   review. Heavy builds/tests may go to other GOAT hosts with `goat_task_create`
   (`target.host`: `linux` 32 cores, `mac-studio`, `lidge`, `desktop-c795oh4` for Windows), which
