@@ -929,9 +929,10 @@ impl Actor {
             EngineEvent::SteerUpdated {
                 turn_id, status, ..
             } => {
-                // What a cancelled steer does to its inputs (v1 marks the message cancelled; a
-                // re-queue as followup like SteerResult::Declined is proposed) is pending the
-                // owner's decision; until then the accepted delivery stands, as before.
+                // Owner decision: a cancelled steer is requeued as a followup with the same
+                // inputId (a second input.delivered {as: steer, outcome: declined}, which the
+                // store folds back into the queue). The host side of that lands in a later merge
+                // (lane E); until then the accepted delivery stands and this is only logged.
                 tracing::debug!(thread = %self.id, %turn_id, ?status, "steer settled (not acted on yet)");
             }
             EngineEvent::Exited { reason } => {
