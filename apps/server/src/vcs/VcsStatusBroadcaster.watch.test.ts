@@ -57,7 +57,7 @@ describe("VCS HEAD watchers", () => {
             insertions: 40,
             deletions: 0,
           },
-        },
+        } as typeof baseLocalStatus,
         currentRemoteStatus: null,
         localStatusCalls: 0,
         remoteStatusCalls: 0,

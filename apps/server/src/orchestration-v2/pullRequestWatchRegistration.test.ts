@@ -37,7 +37,7 @@ const detail = (
   author: { login: "agent-user", name: null, avatarUrl: null },
   ...overrides,
 });
-const noRemarks = [];
+const noRemarks: Parameters<typeof evaluatePullRequestWatch>[2] = [];
 const policy = Schema.decodeSync(PullRequestWatchPolicy)({});
 const evaluate = (
   current: Parameters<typeof evaluatePullRequestWatch>[0],

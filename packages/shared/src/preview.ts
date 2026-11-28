@@ -223,9 +223,7 @@ export function normalizePreviewUrl(rawUrl: string): string {
   }
   const useHttp = LOOPBACK_PREFIX_PATTERN.test(trimmed);
   const hasExplicitScheme = URL_SCHEME_WITH_AUTHORITY_PATTERN.test(trimmed);
-  const candidate = hasExplicitScheme
-    ? trimmed
-    : `${useHttp ? "http" : "https"}://${trimmed}`;
+  const candidate = hasExplicitScheme ? trimmed : `${useHttp ? "http" : "https"}://${trimmed}`;
   let parsed: URL;
   try {
     parsed = new URL(candidate);

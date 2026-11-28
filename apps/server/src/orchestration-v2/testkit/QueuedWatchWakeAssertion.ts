@@ -15,70 +15,69 @@ import * as Orchestrator from "../Orchestrator.ts";
 
 export const assertQueuedWatchWake = (modelSelection: ModelSelection) => {
   // A thread watching a pull request, with a wake queued behind a running turn.
-  const queuedWatchWake = (prefix: string) =>
-    Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const threadId = ThreadId.make(`${prefix}-auto-settle`);
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make(`${prefix}-create`),
-        threadId,
-        projectId: ProjectId.make(`${prefix}-project`),
-        title: "Queued watch wake",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: process.cwd(),
-      });
-      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
-      yield* orchestrator.dispatch({
-        type: "thread.pull-request.watch",
-        commandId: CommandId.make(`${prefix}-start`),
-        threadId,
-        ...key,
-        watching: true,
-        link: { url: "https://github.com/pingdotgg/t3code/pull/7", source: "agent" },
-      });
-      const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
-      assert.isDefined(started);
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make(`${prefix}-active`),
-        threadId,
-        messageId: MessageId.make(`${prefix}-active`),
-        text: "Merge it",
-        attachments: [],
-        modelSelection,
-        dispatchMode: { type: "start_immediately" },
-      });
-      const wakeMessageId = MessageId.make(prefix);
-      yield* orchestrator.dispatch({
-        type: "thread.pull-request-watch.sync",
-        commandId: CommandId.make(`${prefix}-sync`),
-        threadId,
-        ...key,
-        startedAt: started.startedAt,
-        watch: { ...started, headSha: "merged", wakes: 1 },
-        wake: {
-          messageId: wakeMessageId,
-          text: "Update",
-          notification: { source: { kind: "monitor" }, outcome: "updated", summary: "#7 merged" },
-        },
-      });
-      const before = yield* orchestrator.getThreadProjection(threadId);
-      const activeRun = before.runs.find((run) => run.status === "starting");
-      const wakeRun = before.runs.find((run) => run.userMessageId === wakeMessageId);
-      assert.isDefined(activeRun);
-      assert.isDefined(wakeRun);
-      assert.equal(wakeRun.status, "queued");
-      assert.notEqual(wakeRun.queueHeld, true);
-      return { threadId, activeRun, wakeRun };
+  const queuedWatchWake = Effect.fn("queuedWatchWake")(function* (prefix: string) {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make(`${prefix}-auto-settle`);
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(`${prefix}-create`),
+      threadId,
+      projectId: ProjectId.make(`${prefix}-project`),
+      title: "Queued watch wake",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: process.cwd(),
     });
+    const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
+    yield* orchestrator.dispatch({
+      type: "thread.pull-request.watch",
+      commandId: CommandId.make(`${prefix}-start`),
+      threadId,
+      ...key,
+      watching: true,
+      link: { url: "https://github.com/pingdotgg/t3code/pull/7", source: "agent" },
+    });
+    const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+    assert.isDefined(started);
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make(`${prefix}-active`),
+      threadId,
+      messageId: MessageId.make(`${prefix}-active`),
+      text: "Merge it",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+    });
+    const wakeMessageId = MessageId.make(prefix);
+    yield* orchestrator.dispatch({
+      type: "thread.pull-request-watch.sync",
+      commandId: CommandId.make(`${prefix}-sync`),
+      threadId,
+      ...key,
+      startedAt: started.startedAt,
+      watch: { ...started, headSha: "merged", wakes: 1 },
+      wake: {
+        messageId: wakeMessageId,
+        text: "Update",
+        notification: { source: { kind: "monitor" }, outcome: "updated", summary: "#7 merged" },
+      },
+    });
+    const before = yield* orchestrator.getThreadProjection(threadId);
+    const activeRun = before.runs.find((run) => run.status === "starting");
+    const wakeRun = before.runs.find((run) => run.userMessageId === wakeMessageId);
+    assert.isDefined(activeRun);
+    assert.isDefined(wakeRun);
+    assert.equal(wakeRun.status, "queued");
+    assert.notEqual(wakeRun.queueHeld, true);
+    return { threadId, activeRun, wakeRun };
+  });
 
   // regression: #29898 settle on merge cancelled a watch wake queued behind the finished run
   return Effect.gen(function* () {

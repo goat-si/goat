@@ -412,8 +412,11 @@ it.effect("link guidance restarts a live server and starts an absent server", ()
       assert.notInclude(next, "serve`");
     }
   }).pipe(
-    Effect.provide(ServerConfig.layerTest("/", { prefix: "goat-connect-next-test-" })),
-    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer)),
+    Effect.provide(
+      ServerConfig.layerTest("/", { prefix: "goat-connect-next-test-" }).pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer)),
+      ),
+    ),
     Effect.scoped,
   ),
 );

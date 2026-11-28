@@ -32,10 +32,6 @@ function parseCloneUrl(url: string): {
   return null;
 }
 
-export function isScpLikeCloneUrl(url: string): boolean {
-  return SCP_LIKE_URL.test(url);
-}
-
 export function cloneUrlProtocol(url: string): CloneProtocol | null {
   return parseCloneUrl(url)?.protocol ?? null;
 }

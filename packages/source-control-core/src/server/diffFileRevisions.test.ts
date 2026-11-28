@@ -16,6 +16,7 @@ describe("truncateLongDiffLines", () => {
     const lines = ["+", "-", " "].map((prefix) => `${prefix}${"a".repeat(999)}😀z${ending}`);
     const truncated = truncateLongDiffLines(header + lines.join(""), 1000);
 
+    assert.isNotNull(truncated);
     assert.isTrue(truncated.isWellFormed());
     assert.strictEqual(
       truncated,

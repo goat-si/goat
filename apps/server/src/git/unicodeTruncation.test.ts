@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { sanitizeCommitMessage, sanitizeProgressText } from "./commitMessage.ts";
 import { summarizeGitActionResult } from "./gitActionSummary.ts";
 
@@ -12,8 +12,8 @@ describe("Git action text truncation", () => {
   it("does not split emoji in toast descriptions", () => {
     const result = {
       commit: { status: "created", subject: "a".repeat(68) + "😀more", commitSha: "12345678" },
-      push: { status: "skipped" },
-      pr: { status: "skipped" },
+      push: { status: "skipped_not_requested" },
+      pr: { status: "skipped_not_requested" },
     } as const;
     expect(summarizeGitActionResult(result, { shortLabel: "PR" } as never).description).toBe(
       "a".repeat(68) + "...",

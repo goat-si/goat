@@ -135,6 +135,10 @@ import { normalizeChildCommandName } from "./childCommandName.ts";
 import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
 import { toSessionKey } from "./terminalSessionKey.ts";
 import { truncateTerminalWireLabel } from "./terminalWireLabel.ts";
+import {
+  quietSnapshotEveryTicks as resolveQuietSnapshotEveryTicks,
+  type QuietTerminalSession,
+} from "./quietSubprocessPolling.ts";
 
 export {
   TerminalCwdError,
@@ -162,10 +166,6 @@ const MAX_SUBPROCESS_POLL_INTERVAL_MS = 60_000;
 const PROCESS_TABLE_QUERY_TIMEOUT = "15 seconds";
 // closeIdle uses a short budget for its immediate inspection.
 const CLOSE_IDLE_QUERY_TIMEOUT = { posix: "1 second", win32: "1500 millis" } as const;
-// Discover children started without terminal input or output.
-const QUIET_SUBPROCESS_SNAPSHOT_EVERY_TICKS = 30;
-// Bounds how late a steady command's silent exit or new child is seen.
-const STEADY_SUBPROCESS_SNAPSHOT_EVERY_TICKS = 5;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
@@ -472,13 +472,6 @@ function advanceEventSequence(session: TerminalSessionState): {
 
 function terminalActivityMark(session: TerminalSessionState): number {
   return session.eventSequence + session.inputCount;
-}
-
-interface QuietTerminalSession {
-  readonly process: PtyAdapter.PtyProcess | null;
-  readonly mark: number;
-  readonly processKey: string | null;
-  readonly idleSnapshots: number;
 }
 
 function cleanupProcessHandles(session: TerminalSessionState): void {
@@ -1938,20 +1931,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   // Process identity prevents a restarted shell from inheriting quiet state.
   let quietSessions = new WeakMap<TerminalSessionState, QuietTerminalSession>();
   let skippedQuietTicks = 0;
-  const quietSnapshotEveryTicks = (session: TerminalSessionState & { pid: number }) => {
-    const quiet = quietSessions.get(session);
-    if (
-      quiet === undefined ||
-      quiet.idleSnapshots < 2 ||
-      quiet.process !== session.process ||
-      quiet.mark !== terminalActivityMark(session)
-    ) {
-      return 1;
-    }
-    return quiet.processKey === null
-      ? QUIET_SUBPROCESS_SNAPSHOT_EVERY_TICKS
-      : STEADY_SUBPROCESS_SNAPSHOT_EVERY_TICKS;
-  };
+  const quietSnapshotEveryTicks = (session: TerminalSessionState & { pid: number }) =>
+    resolveQuietSnapshotEveryTicks(
+      quietSessions.get(session),
+      session.process,
+      terminalActivityMark(session),
+    );
 
   const pollSubprocessActivity = Effect.fn("terminal.pollSubprocessActivity")(function* () {
     const state = yield* readManagerState;

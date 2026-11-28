@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { decodeGitText } from "./gitTextDecoder.ts";
 
 describe("Git text decoding", () => {

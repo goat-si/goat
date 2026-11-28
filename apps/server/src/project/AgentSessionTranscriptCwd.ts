@@ -9,7 +9,7 @@ import {
 } from "./AgentSessionJson.ts";
 import type { AgentSessionSource } from "./AgentSessionScanner.ts";
 
-export function normalizeForWorktreeMatch(value: string, caseFold: boolean): string {
+function normalizeForWorktreeMatch(value: string, caseFold: boolean): string {
   const normalized = `${value.replaceAll("\\", "/")}/`;
   return caseFold ? normalized.toLowerCase() : normalized;
 }
@@ -57,7 +57,7 @@ export function makeExcludedProjectPath(
     isGoatManagedWorktree(candidate, realWorktrees, fold);
 }
 
-export const selectCwdPath = createTranscriptJsonSelector(
+const selectCwdPath = createTranscriptJsonSelector(
   Schema.Struct({
     cwd: Schema.String,
     type: Schema.String,

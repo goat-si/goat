@@ -52,7 +52,7 @@ export function makeStopDelegatedTasks(deps: {
             threadId,
             ["runs", "providerThreads", "turnItems", "subagents"],
             {
-              turnItemTypes: ["command_execution", "dynamic_tool", "subagent", "link_request"],
+              turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
               turnItemStatuses: ["pending", "running", "waiting"],
             },
           );
@@ -87,7 +87,7 @@ export function makeStopDelegatedTasks(deps: {
         ),
       );
     }
-    if (failures[0] !== undefined) return yield* Effect.fail(failures[0]);
+    if (failures[0] !== undefined) return yield* failures[0];
   });
   return stopDelegatedTasks;
 }

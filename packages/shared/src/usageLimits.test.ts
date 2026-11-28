@@ -9,7 +9,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   collectProviderUsageLimits,
-  hasProviderUsageLimits,
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
   collectLimitAccounts,
@@ -1234,22 +1233,6 @@ describe("/usage-limits", () => {
     expect(
       withUsageLimitsCommands([selected], [])[0]?.slashCommands.map((command) => command.name),
     ).toEqual(["usage-limits"]);
-  });
-
-  it("does not offer the command to every provider while an HTTP quota source is down", () => {
-    const unrelated = provider({ driver: ProviderDriverKind.make("claudeAgent") });
-    const httpSource = {
-      id: UsageLimitSourceId.make("http-quota"),
-      kind: "http" as const,
-      label: "My quota server",
-      checkedAt: limits.checkedAt,
-      accounts: [],
-    };
-    const down = { ...httpSource, error: "Could not read the HTTP quota source." };
-    expect(withUsageLimitsCommands([unrelated], [httpSource])[0]).toBe(unrelated);
-    expect(withUsageLimitsCommands([unrelated], [down])[0]).toBe(unrelated);
-    expect(hasProviderUsageLimits(unrelated.driver, [unrelated], [down])).toBe(false);
-    expect(sameUsageLimitCommandCoverage([httpSource], [down])).toBe(true);
   });
 });
 

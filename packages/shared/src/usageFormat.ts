@@ -185,11 +185,16 @@ function formatHour(formatter: Intl.DateTimeFormat, date: Date, hour12: boolean)
  * Repeated wall-clock hours during a fall-back transition include their short zone name so the
  * two distinct buckets remain distinguishable.
  */
-export function formatHourShort(hourStart: string, timeZone?: string, hour12 = true): string {
+export function formatHourShort(
+  hourStart: string,
+  timeZone?: string,
+  hour12 = true,
+  locale = "en-US",
+): string {
   const instant = new Date(hourStart);
   if (Number.isNaN(instant.getTime())) return hourStart;
   const options = timeZone === undefined ? {} : { timeZone };
-  const hourFormat = dateTimeFormatter("en-US", {
+  const hourFormat = dateTimeFormatter(locale, {
     ...options,
     ...hourOptions(hour12),
   });
@@ -207,7 +212,7 @@ export function formatHourShort(hourStart: string, timeZone?: string, hour12 = t
   );
 
   if (!isRepeatedHour) return formatHour(hourFormat, instant, hour12);
-  const zonedHourFormat = dateTimeFormatter("en-US", {
+  const zonedHourFormat = dateTimeFormatter(locale, {
     ...options,
     ...hourOptions(hour12),
     timeZoneName: "short",
@@ -215,10 +220,15 @@ export function formatHourShort(hourStart: string, timeZone?: string, hour12 = t
   return formatHour(zonedHourFormat, instant, hour12);
 }
 
-export function formatDateTimeShort(instant: string, timeZone?: string, hour12 = true): string {
+export function formatDateTimeShort(
+  instant: string,
+  timeZone?: string,
+  hour12 = true,
+  locale = "en-US",
+): string {
   const date = new Date(instant);
   if (Number.isNaN(date.getTime())) return instant;
-  const dateHourFormat = dateTimeFormatter("en-US", {
+  const dateHourFormat = dateTimeFormatter(locale, {
     ...(timeZone === undefined ? {} : { timeZone }),
     month: "short",
     day: "numeric",

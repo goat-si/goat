@@ -1,4 +1,4 @@
-import { it, expect } from "vitest";
+import { it, expect } from "vite-plus/test";
 import { assetResponseHeaders } from "./http.ts";
 
 it("chooses the sandbox from the same type it serves", () => {

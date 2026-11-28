@@ -39,7 +39,10 @@ export const refreshNewWorktreeIndex = Effect.fn("refreshNewWorktreeIndex")(func
       "GitVcsDriver.createWorktree.refreshIndex",
       worktreePath,
       ["update-index", "-q", "--refresh", "--force-write-index"],
-      { timeoutMs: Duration.toMillis(Duration.minutes(5)), env },
+      {
+        timeoutMs: Duration.toMillis(Duration.minutes(5)),
+        ...(env === undefined ? {} : { env }),
+      },
     );
   const checkoutSecond = yield* indexSecond;
   yield* refresh();

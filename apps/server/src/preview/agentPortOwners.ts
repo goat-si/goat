@@ -39,7 +39,9 @@ export const annotateAgentServers = Effect.fn("PortDiscovery.annotateAgentServer
           input.fileSystem.readFileString(`/proc/${pid}/environ`).pipe(
             Effect.flatMap((environment) =>
               input.fileSystem.readFileString(`/proc/${pid}/cmdline`).pipe(
-                Effect.map((cmdline) => devToolsPortArgument.test(cmdline) ? null : threadFromEnvironment(environment)),
+                Effect.map((cmdline) =>
+                  devToolsPortArgument.test(cmdline) ? null : threadFromEnvironment(environment),
+                ),
                 Effect.orElseSucceed(() => threadFromEnvironment(environment)),
               ),
             ),
@@ -61,7 +63,10 @@ export const annotateAgentServers = Effect.fn("PortDiscovery.annotateAgentServer
         for (const line of result.value.stdout.split("\n")) {
           const match = /^\s*(\d+)\s+(.*)$/.exec(line);
           if (match?.[1] !== undefined && match[2] !== undefined)
-            input.cache.set(Number(match[1]), devToolsPortArgument.test(match[2]) ? null : threadFromEnvironment(match[2]));
+            input.cache.set(
+              Number(match[1]),
+              devToolsPortArgument.test(match[2]) ? null : threadFromEnvironment(match[2]),
+            );
         }
       } else input.retry?.();
     }

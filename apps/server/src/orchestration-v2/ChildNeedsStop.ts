@@ -47,7 +47,6 @@ export const childNeedsStop = (
       activeProviderThreadId: child.thread.activeProviderThreadId,
       runs: child.runs,
     }).length > 0 ||
-    child.turnItems.some((item) => item.type === "link_request" && item.linkStatus === "pending") ||
     hasPendingSubagent
   );
 };

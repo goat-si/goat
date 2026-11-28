@@ -797,7 +797,7 @@ export const TERMINAL_PALETTES = {
 } as const;
 
 function xtermColor(index: number, palette: ReadonlyArray<string>): string {
-  if (index < 16) return palette[index]!;
+  if (index < 16) return palette[index] ?? "";
   if (index >= 232) {
     const level = 8 + (index - 232) * 10;
     return `rgb(${level},${level},${level})`;
@@ -813,9 +813,10 @@ function resolveColor(
   palette: ReadonlyArray<string>,
 ): string | undefined {
   const parts = code.split(";").map(Number);
-  const head = parts[0]!;
+  const head = parts[0];
+  if (head === undefined) return undefined;
   if (head === base + 8) {
-    if (parts[1] === 5) return xtermColor(parts[2]!, palette);
+    if (parts[1] === 5 && parts[2] !== undefined) return xtermColor(parts[2], palette);
     return `rgb(${parts[2]},${parts[3]},${parts[4]})`;
   }
   if (head >= base && head <= base + 7) return palette[head - base];
@@ -933,7 +934,7 @@ export function terminalOutputPlainText(text: string): string {
 // redraws leave on the line. Walking the frames from the last keeps this linear.
 function lastFrame(line: string): string {
   const frames = line.split("\r");
-  let row = frames.pop()!;
+  let row = frames.pop() ?? "";
   if (frames.length === 0) return row;
   let width = textWidth(row);
   for (const frame of frames.reverse()) {

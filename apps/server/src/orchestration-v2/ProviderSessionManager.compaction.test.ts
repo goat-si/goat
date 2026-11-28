@@ -82,7 +82,17 @@ const idleReleaseAroundRun = (start: "compactThread" | "resumeTurn") =>
               attachments: [],
             },
           })
-        : runtime.resumeTurn!({ ...run, messageId });
+        : runtime.resumeTurn!({
+            ...run,
+            cloudTask: {
+              taskId: "cloud-task-resume-idle",
+              status: "running",
+              tracking: "live",
+              source: { repository: "goat-si/goat", branch: "dev" },
+              localChangesExcluded: false,
+              updatedAt: DateTime.formatIso(now),
+            },
+          });
 
       // A running compaction or continuation can go minutes without a provider event.
       yield* TestClock.adjust("2 seconds");

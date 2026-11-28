@@ -6,7 +6,7 @@ import { trackingFetchArgs, trackingFetchError } from "./gitTrackingFetch.ts";
 import { checkCheckoutResult } from "./checkoutFailureDetail.ts";
 import type { ExecuteGitOptions } from "./executeGitOptions.ts";
 import { refuseOptionLikeRefName } from "./refuseOptionLikeRefName.ts";
-import { parseUpstreamRefWithRemoteNames } from "./parseUpstreamRemote.ts";
+import { fallbackDefaultRemote, parseUpstreamRefWithRemoteNames } from "./parseUpstreamRemote.ts";
 import { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
 export { parseGitCheckoutProgressLine } from "./gitCheckoutProgress.ts";
 import type { GitRepositoryPaths, GitRefsSnapshot } from "./gitRepositoryTypes.ts";
@@ -1001,16 +1001,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const resolveDefaultBranchName = (
     cwd: string,
     remoteName: string,
+    gitDirArgs: readonly string[] = [],
   ): Effect.Effect<string | null, GitCommandError> =>
-    executeGit("GitVcsDriver.resolveDefaultBranchName", cwd, remoteHeadRefArgs(remoteName), {
-      allowNonZeroExit: true,
-    }).pipe(
-      Effect.map((result) => {
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        return parseDefaultBranchFromRemoteHeadRef(result.stdout, remoteName);
-      }),
+    executeGit(
+      "GitVcsDriver.resolveDefaultBranchName",
+      cwd,
+      [...gitDirArgs, ...remoteHeadRefArgs(remoteName)],
+      { allowNonZeroExit: true },
+    ).pipe(
+      Effect.map((result) =>
+        result.exitCode === 0
+          ? parseDefaultBranchFromRemoteHeadRef(result.stdout, remoteName)
+          : null,
+      ),
     );
 
   const remoteBranchExists: GitVcsDriver.GitVcsDriver["Service"]["remoteBranchExists"] = (input) =>
@@ -3368,14 +3371,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       { concurrency: 16 },
     );
     const worktreeMap = new Map(existingWorktreeEntries);
-    // Same fallback as resolvePrimaryDefaultBranchName: without an origin, the first remote is primary.
-    const [firstRemoteName] = remoteNamesInGitOrder;
-    const fallbackRemoteName =
-      originDefaultBranch === null &&
-      firstRemoteName !== undefined &&
-      !remoteNamesInGitOrder.includes("origin")
-        ? firstRemoteName
-        : null;
+    const fallbackRemoteName = fallbackDefaultRemote(originDefaultBranch, remoteNamesInGitOrder);
     const defaultBranch =
       fallbackRemoteName === null
         ? originDefaultBranch

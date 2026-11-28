@@ -38,8 +38,7 @@ export function hasProviderUsageLimits(
     providersWithLimits(providers).some((provider) => provider.driver === driver) ||
     sources.some(
       (source) =>
-        source.accounts.some((account) => account.driver === driver) ||
-        unreadableHub(source),
+        source.accounts.some((account) => account.driver === driver) || unreadableHub(source),
     )
   );
 }
@@ -51,9 +50,7 @@ export function sameUsageLimitCommandCoverage(
   const coverage = (sources: UsageLimitSourceSnapshots) =>
     new Set(
       sources.flatMap((source) =>
-        unreadableHub(source)
-          ? ["*"]
-          : source.accounts.map((account) => String(account.driver)),
+        unreadableHub(source) ? ["*"] : source.accounts.map((account) => String(account.driver)),
       ),
     );
   const before = coverage(previous);

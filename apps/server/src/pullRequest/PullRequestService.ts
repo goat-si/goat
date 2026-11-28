@@ -1,6 +1,11 @@
 import { pinnedReviewHead } from "./pinnedReviewHead.ts";
 import { guardDiffFileContents, withListedCommit } from "./withListedCommit.ts";
-import { addressedProjectOf, observeRead } from "./addressedProject.ts";
+import {
+  addressedProjectOf,
+  observeRead,
+  ownProjectShells,
+  type WorkspaceProjects,
+} from "./addressedProject.ts";
 import { missingProjectError } from "./pullRequestMissingProject.ts";
 import { supersedesReading, type PullRequestReading } from "./pullRequestReading.ts";
 import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
@@ -346,18 +351,6 @@ export interface SupportedProject {
   readonly upstream: boolean;
 }
 
-interface WorkspaceProjects {
-  /** Every project read, with its repository identity resolved. */
-  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
-  readonly supported: ReadonlyArray<SupportedProject>;
-  readonly unimplemented: ReadonlyMap<
-    string,
-    { readonly kind: SourceControlProviderKind; readonly projectCount: number }
-  >;
-  readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
-  readonly refinedProjectIdsByHost: ReadonlyMap<string, ReadonlyArray<ProjectId>>;
-}
-
 // Inherited by fibers forked inside the scope, so it is closed, not just dropped, when the scope ends.
 const sharedProjectReads = Context.Reference<{
   open: boolean;
@@ -633,7 +626,13 @@ export const make = Effect.gen(function* () {
             upstream,
           });
         }
-        return { projects, supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
+        return {
+          projects: ownProjectShells(repositories),
+          supported,
+          unimplemented,
+          viewerRoots,
+          refinedProjectIdsByHost,
+        };
       }),
     );
 

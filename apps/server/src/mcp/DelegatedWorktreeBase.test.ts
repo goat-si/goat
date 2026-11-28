@@ -8,7 +8,7 @@ it.effect("uses the parent branch only when it still points to the parent commit
     const git = {
       resolveCommit: ({ revision }: { revision: string }) =>
         Effect.succeed({ commitSha: revision === "refs/heads/current" ? "abc" : "other" }),
-    } as GitVcsDriver.GitVcsDriver["Service"];
+    } as unknown as GitVcsDriver.GitVcsDriver["Service"];
     expect((yield* delegatedWorktreeBase(git, "/repo", "current", "abc")).baseRef).toBe("current");
     expect((yield* delegatedWorktreeBase(git, "/repo", "moved", "abc")).baseRef).toBe("abc");
     expect((yield* delegatedWorktreeBase(git, "/repo", null, "abc")).baseRef).toBe("abc");
