@@ -324,6 +324,9 @@ async fn dispatch(
             if a.kind == api::AskKind::Decision && a.options.is_empty() {
                 return invalid(e, "decision requires options".into());
             }
+            if let Err(message) = crate::bot::asks::check(&a) {
+                return invalid(e, message);
+            }
             host.request_ask(caller, a).await
         }
         "surface.describe" => describe(&args),

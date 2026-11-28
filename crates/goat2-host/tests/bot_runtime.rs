@@ -402,3 +402,142 @@ async fn notes_are_in_the_brief_and_a_changed_note_rotates_the_session() {
     assert!(third.contains("Jun prefers short answers"));
     assert!(third.contains("## Recent conversation\nPerson: who am I?\nGOAT Bot: You are Jun.\nPerson: thanks\nGOAT Bot: Any time."), "{third}");
 }
+
+async fn reopen(t: T) -> T {
+    let T { host, fake, dir } = t;
+    host.shutdown().await;
+    drop(host);
+    let path = dir.path().to_path_buf();
+    let (store, report) = LaneAStore::open(&path).unwrap();
+    let settled: Vec<ThreadId> = report
+        .settled
+        .iter()
+        .map(|s| ThreadId::new(s.thread_id.clone()))
+        .collect();
+    let stall = StallRecorder::open(&path).unwrap();
+    let opts = HostOptions {
+        idle_stop: Duration::from_secs(30),
+        bot_guards: guards(),
+        ..HostOptions::new(path.clone(), 2, "ui-token".into(), "/tmp".into())
+    };
+    let host = Host::open(opts, Arc::new(store), Arc::new(fake.clone()), stall).unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&settled).await.unwrap();
+    T { host, fake, dir }
+}
+
+fn option(label: &str) -> goat2_contracts::UserInputOption {
+    goat2_contracts::UserInputOption {
+        label: label.into(),
+        description: format!("about {label}"),
+        value: None,
+        preview: None,
+    }
+}
+
+fn question(id: &str, labels: &[&str]) -> goat2_contracts::UserInputQuestion {
+    goat2_contracts::UserInputQuestion {
+        id: id.into(),
+        header: id.into(),
+        question: format!("Which {id}?"),
+        options: labels.iter().map(|l| option(l)).collect(),
+        multi_select: None,
+        allow_custom_answer: None,
+        initial_answer: None,
+        required: None,
+    }
+}
+
+#[tokio::test]
+async fn a_bot_question_card_survives_a_restart_and_its_answer_wakes_the_bot() {
+    let t = setup().await;
+    let (_, id) = bot(&t);
+    say(&t, &id, "d-1", "fix the tests").await;
+    eventually("running", || running(&t, &id)).await;
+    let me = caller(&t, &id).await;
+    let asked = t
+        .host
+        .request_ask(
+            &me,
+            goat2_host::api::RequestAskArgs {
+                kind: goat2_host::api::AskKind::Question,
+                summary: "How should I fix the tests?".into(),
+                detail: None,
+                options: Vec::new(),
+                recommended: None,
+                questions: vec![
+                    question("scope", &["Unit tests (Recommended)", "E2E tests"]),
+                    question(
+                        "delivery",
+                        &["One PR (Recommended)", "Separate PRs", "Just tell me"],
+                    ),
+                ],
+                client_request_id: Some("plan-1".into()),
+            },
+        )
+        .await;
+    let request_id = match asked {
+        SurfaceResult::NeedsHuman { handoff, .. } => handoff.handoff_id,
+        other => panic!("{other:?}"),
+    };
+    assert!(request_id.starts_with("ask_"));
+    let card = t.host.store().card(&id).unwrap();
+    assert_eq!(
+        card.needs_you.as_ref().map(|n| n.kind),
+        Some(goat2_contracts::RequestKind::Question)
+    );
+    // The app quits while the bot's turn is still running.
+    let t = reopen(t).await;
+    let fold = t.host.store().fold(&id).unwrap();
+    let open = fold
+        .open_requests
+        .iter()
+        .find(|r| r.request_id.as_str() == request_id)
+        .expect("the card survives the restart");
+    let item = open
+        .item_id
+        .clone()
+        .expect("the card points at its questions");
+    let questions = t
+        .host
+        .store()
+        .read_after(&id, 0)
+        .unwrap()
+        .into_iter()
+        .find_map(|l| match l.event {
+            LogEvent::ItemCompleted(done) if done.item.id == item => Some(done.item.body),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        matches!(questions, TurnItemBody::UserInputRequest { ref questions, .. } if questions.len() == 2)
+    );
+    let mut answers = serde_json::Map::new();
+    answers.insert(
+        "scope".into(),
+        serde_json::json!("Unit tests (Recommended)"),
+    );
+    answers.insert("delivery".into(), serde_json::json!(["Separate PRs"]));
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "answer-1".into(),
+            thread_id: id.clone(),
+            request_id: goat2_contracts::RequestId::new(request_id.clone()),
+            outcome: goat2_contracts::RequestOutcome::Answered,
+            text: None,
+            answers: Some(answers),
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    eventually("the bot works on with the answer", || {
+        t.fake.turn_texts(&id).iter().any(|text| {
+            text.contains(
+                "- Which scope?: Unit tests (Recommended)\n- Which delivery?: Separate PRs",
+            )
+        })
+    })
+    .await;
+    assert!(t.host.store().card(&id).unwrap().needs_you.is_none());
+}

@@ -211,6 +211,14 @@ pub struct RequestAskArgs {
     /// Required for `decision`: the choices a person picks from.
     #[serde(default)]
     pub options: Vec<DecisionOption>,
+    /// `decision`: the option id the agent recommends. Silence never approves it.
+    #[serde(default)]
+    pub recommended: Option<String>,
+    /// `question` with choices: 1 to 4 questions shown on one card in turn, each with 2 to 4
+    /// options (v1 `OrchestrationV2UserInputQuestion`; limits of Claude's AskUserQuestion,
+    /// which v1 maps to the same item).
+    #[serde(default)]
+    pub questions: Vec<goat2_contracts::UserInputQuestion>,
     #[serde(default)]
     pub client_request_id: Option<String>,
 }

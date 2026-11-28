@@ -454,7 +454,7 @@
     "path": "request.ask",
     "name": "goat_ask",
     "summary": "Request a durable decision",
-    "description": "Create a question, approval, or decision request. Retry with the same clientRequestId to reuse the result. Silence never approves.",
+    "description": "Create a question, approval, or decision request. A question can carry 1 to 4 questions with 2 to 4 options each, shown on one card. Retry with the same clientRequestId to reuse the result. Silence never approves.",
     "effect": "write",
     "requires": "thread",
     "inputSchema": {
@@ -497,6 +497,62 @@
         },
         "clientRequestId": {
           "type": "string"
+        },
+        "recommended": {
+          "type": "string"
+        },
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "header": {
+                "type": "string"
+              },
+              "question": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "multiSelect": {
+                "type": "boolean"
+              },
+              "allowCustomAnswer": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "header",
+              "question",
+              "options"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -526,11 +582,51 @@
           ],
           "clientRequestId": "merge-decision-1"
         }
+      },
+      {
+        "title": "Ask the person to choose, two questions on one card",
+        "args": {
+          "kind": "question",
+          "summary": "How should I fix the failing tests?",
+          "questions": [
+            {
+              "id": "scope",
+              "header": "Scope",
+              "question": "Which tests should I fix first?",
+              "options": [
+                {
+                  "label": "Unit tests (Recommended)",
+                  "description": "Fast, isolated failures"
+                },
+                {
+                  "label": "E2E tests",
+                  "description": "Slower, need the dev server"
+                }
+              ]
+            },
+            {
+              "id": "pr",
+              "header": "Delivery",
+              "question": "How should I deliver the fix?",
+              "options": [
+                {
+                  "label": "One PR (Recommended)",
+                  "description": "Single review"
+                },
+                {
+                  "label": "Separate PRs",
+                  "description": "One per area"
+                }
+              ]
+            }
+          ],
+          "clientRequestId": "fix-tests-plan-1"
+        }
       }
     ],
     "idempotency": "key",
     "reconcile": "thread.read",
-    "guide": "A decision requires at least two options. The host returns a needs_human handoff.",
+    "guide": "A decision requires at least two options; recommended names one of their ids. For choices, ask kind question with questions[{id, header, question, options[{label, description}]}]; put the option you recommend first and end its label with \" (Recommended)\". End your turn after asking: the person's answer arrives as a new message. The host returns a needs_human handoff.",
     "annotations": {
       "idempotentHint": false,
       "openWorldHint": false
@@ -538,7 +634,9 @@
     "parameters": {
       "summary": "The decision, as one short question.",
       "detail": "What the person needs to know to decide.",
-      "options": "Choices as {id, label, consequence}; a decision needs at least two."
+      "options": "Choices as {id, label, consequence}; a decision needs at least two.",
+      "questions": "1 to 4 questions shown in turn on one card, each {id, header (12 characters or fewer), question, options: 2 to 4 {label, description}}.",
+      "recommended": "decision: the option id you recommend."
     }
   }
 ]

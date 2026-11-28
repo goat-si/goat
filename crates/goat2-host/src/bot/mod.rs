@@ -2,6 +2,7 @@
 //! rotation, receipt guards for a person's messages, decisions and multi-question asks, bot
 //! notes. The core calls in through the single-call hooks below (boundary agreed with lane E).
 
+pub mod asks;
 pub mod brief;
 pub mod guards;
 pub mod notes;

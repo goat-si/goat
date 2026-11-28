@@ -604,7 +604,13 @@ impl Store {
                 .fold
                 .open_requests
                 .iter()
-                .filter(|r| r.run_id.as_ref() == Some(&run_id) && r.kind != RequestKind::Resend)
+                // An agent's own request (`ask_`, MCP request.ask) is durable like a v1 decision:
+                // its answer arrives as a new input, so it outlives the run (lane P2-E).
+                .filter(|r| {
+                    r.run_id.as_ref() == Some(&run_id)
+                        && r.kind != RequestKind::Resend
+                        && !r.request_id.as_str().starts_with("ask_")
+                })
                 .map(|r| {
                     LogEvent::RequestResolved(RequestResolved {
                         request_id: r.request_id.clone(),

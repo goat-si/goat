@@ -710,7 +710,8 @@ impl McpHost for Host {
                 "ask_{}",
                 crate::util::stable_id(&[caller.thread_id.as_str(), "request.ask", key])
             )),
-            None => RequestId::new(new_id("req")),
+            // `ask_`: an agent's own request, answered as an input and kept across restarts.
+            None => RequestId::new(new_id("ask")),
         };
         if args.client_request_id.is_some() {
             if self
@@ -731,10 +732,29 @@ impl McpHost for Host {
                 return handoff(&request_id, "resolved");
             }
         }
+        // Questions with choices: the waiting item goes into the timeline first, so the card
+        // renders them (as for an engine's user_input_request), and the request points at it.
+        let mut events = Vec::new();
+        let item_id = (!args.questions.is_empty()).then(|| {
+            let item = crate::bot::asks::question_item(
+                &caller.thread_id,
+                &caller.run_id,
+                &request_id,
+                args.questions.clone(),
+            );
+            let id = item.id.clone();
+            events.push(LogEvent::ItemCompleted(goat2_contracts::ItemCompleted {
+                run_id: caller.run_id.clone(),
+                item,
+                engine_locator: None,
+                blob: None,
+            }));
+            id
+        });
         let opened = RequestOpened {
             request_id: request_id.clone(),
             run_id: Some(caller.run_id.clone()),
-            item_id: None,
+            item_id,
             kind,
             summary: summary.clone(),
             // `detail` is what the person needs to know to decide (v1 DecisionItem.context).
@@ -745,9 +765,14 @@ impl McpHost for Host {
                 .filter(|d| !d.is_empty())
                 .map(|d| clamp_chars(d, goat2_contracts::limits::REQUEST_CONTEXT_MAX_CHARS)),
             options: (kind == RequestKind::Decision).then(|| args.options.clone()),
-            recommended: None,
+            recommended: if kind == RequestKind::Decision {
+                args.recommended.clone()
+            } else {
+                None
+            },
         };
-        if let Err(e) = self.append(&caller.thread_id, vec![LogEvent::RequestOpened(opened)]) {
+        events.push(LogEvent::RequestOpened(opened));
+        if let Err(e) = self.append(&caller.thread_id, events) {
             return internal(e);
         }
         handoff(&request_id, "open")

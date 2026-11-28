@@ -1356,6 +1356,7 @@ impl Actor {
             }
         } else if request.item_id.is_some()
             && !matches!(request.kind, RequestKind::Resend | RequestKind::Signin)
+            && !crate::bot::asks::is_agent_ask(&request.request_id)
             && r.outcome != RequestOutcome::Cancel
         {
             return Err(Refusal::new(
@@ -1379,14 +1380,21 @@ impl Actor {
             self.host.forget_signin_link(&r.request_id);
         }
         // An agent's own question (MCP request.ask): the answer comes back as an input.
-        if request.item_id.is_none()
-            && request.kind != RequestKind::Resend
+        if (request.item_id.is_none() || crate::bot::asks::is_agent_ask(&request.request_id))
+            && !matches!(request.kind, RequestKind::Resend | RequestKind::Signin)
             && r.outcome != RequestOutcome::Cancel
         {
-            let answer = match (&chosen, &r.text) {
-                (Some(option), _) => format!("chose \"{}\" ({})", option.label, option.id),
-                (None, Some(text)) => text.clone(),
-                (None, None) => format!("{:?}", r.outcome).to_lowercase(),
+            let questions = match &request.item_id {
+                Some(item) => crate::bot::asks::questions_of(&self.host, &self.id, item),
+                None => Vec::new(),
+            };
+            let answer = match (&chosen, &r.answers, &r.text) {
+                (Some(option), _, _) => format!("chose \"{}\" ({})", option.label, option.id),
+                (None, Some(answers), _) if !questions.is_empty() => {
+                    crate::bot::asks::answers_text(&questions, answers, r.text.as_deref())
+                }
+                (None, _, Some(text)) => text.clone(),
+                (None, _, None) => format!("{:?}", r.outcome).to_lowercase(),
             };
             let _ = self
                 .accept(NewInput {
