@@ -372,13 +372,23 @@ it("locator and coordinate clicks refuse native select and file input elements b
         <option value="ca">CA</option>
       </select>
       <input id="upload" type="file" style="position:absolute;left:10px;top:60px;width:200px;height:30px">
-      <label id="upload-label" for="upload" style="position:absolute;left:10px;top:160px;width:140px;height:30px;display:block"><span>Choose file</span></label>
+      <div id="upload-wrapper" style="position:absolute;left:10px;top:160px;width:140px;height:30px">
+        <label id="upload-label" for="upload" style="display:block;width:100%;height:100%"><span>Choose file</span></label>
+      </div>
       <div id="shadow-host" style="position:absolute;left:10px;top:110px"></div>
+      <iframe id="select-frame" style="position:absolute;left:240px;top:10px;width:160px;height:60px;border:0"
+        srcdoc='<body style="margin:0"><select style="width:160px;height:60px"><option>One</option></select></body>'></iframe>
+      <iframe id="deep-frame" style="position:absolute;left:240px;top:90px;width:120px;height:40px;border:0"></iframe>
       <script>
         window.pointerEvents = [];
         addEventListener("pointerdown", (event) => window.pointerEvents.push(event.target.id || event.target.tagName), true);
         const root = document.querySelector("#shadow-host").attachShadow({ mode: "open" });
         root.innerHTML = '<select style="width:120px;height:30px"><option value="a">A</option></select>';
+        let doc = '<body style="margin:0"><input type="file" style="width:120px;height:40px"></body>';
+        for (let depth = 0; depth < 9; depth++) {
+          doc = '<body style="margin:0"><iframe style="width:120px;height:40px;border:0" srcdoc="' + doc.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '"></iframe></body>';
+        }
+        document.querySelector("#deep-frame").srcdoc = doc;
       </script>`);
     await expect(ServerBrowserPage.click(page, { locator: "#country" })).rejects.toMatchObject({
       tag: "PreviewAutomationExecutionError",
@@ -436,6 +446,17 @@ it("locator and coordinate clicks refuse native select and file input elements b
         },
       },
     );
+    await expect(
+      ServerBrowserPage.click(page, { locator: "#upload-wrapper" }),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_upload"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
     await expect(ServerBrowserPage.click(page, { x: 40, y: 175 })).rejects.toMatchObject({
       tag: "PreviewAutomationExecutionError",
       message: expect.stringContaining("goat_preview_upload"),
@@ -443,6 +464,23 @@ it("locator and coordinate clicks refuse native select and file input elements b
         beforeInput: true,
         clickRefusal: "special_element_refused",
         kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: 300, y: 35 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_select"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: 300, y: 110 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      detail: {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
       },
     });
     await expect(ServerBrowserPage.click(page, { x: -50, y: -50 })).rejects.toMatchObject({

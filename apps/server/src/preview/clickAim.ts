@@ -121,6 +121,10 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
   const targetControl = labelControl(targetLabel);
   let inside: boolean | undefined;
   let associated: boolean | undefined;
+  let hitTagName = "";
+  let hitInputType: string | undefined;
+  let hitLabelControlTagName = "";
+  let hitLabelControlInputType: string | undefined;
   if (at !== null) {
     let hit = element.ownerDocument.elementFromPoint(at[0], at[1]);
     while (hit?.shadowRoot) {
@@ -131,6 +135,10 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     inside = within(hit, element);
     const hitLabel = enclosingLabel(hit);
     const hitControl = labelControl(hitLabel);
+    hitTagName = typeof hit?.tagName === "string" ? hit.tagName : "";
+    hitInputType = typeof hit?.type === "string" ? hit.type : undefined;
+    hitLabelControlTagName = typeof hitControl?.tagName === "string" ? hitControl.tagName : "";
+    hitLabelControlInputType = typeof hitControl?.type === "string" ? hitControl.type : undefined;
     associated =
       (hitLabel !== null &&
         (hitControl === element ||
@@ -149,6 +157,10 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     inputType: typeof element.type === "string" ? element.type : undefined,
     labelControlTagName: typeof targetControl?.tagName === "string" ? targetControl.tagName : "",
     labelControlInputType: typeof targetControl?.type === "string" ? targetControl.type : undefined,
+    hitTagName,
+    hitInputType,
+    hitLabelControlTagName,
+    hitLabelControlInputType,
     rects: Array.from(element.getClientRects(), ({ x, y, width, height }) => ({
       x,
       y,
@@ -268,6 +280,10 @@ export const aimClickPoint = async (
     const hitTest = async (element: ElementHandle, point: Point) => {
       let inside = false;
       let associated = false;
+      let hitTagName = "";
+      let hitInputType: string | undefined;
+      let hitLabelControlTagName = "";
+      let hitLabelControlInputType: string | undefined;
       let hitTestError: string | undefined;
       try {
         const probed = await actionCall(gate, () =>
@@ -275,6 +291,14 @@ export const aimClickPoint = async (
         );
         inside = probed.inside === true;
         associated = probed.associated === true;
+        hitTagName = typeof probed.hitTagName === "string" ? probed.hitTagName : "";
+        hitInputType = typeof probed.hitInputType === "string" ? probed.hitInputType : undefined;
+        hitLabelControlTagName =
+          typeof probed.hitLabelControlTagName === "string" ? probed.hitLabelControlTagName : "";
+        hitLabelControlInputType =
+          typeof probed.hitLabelControlInputType === "string"
+            ? probed.hitLabelControlInputType
+            : undefined;
       } catch (cause) {
         if (gate.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
         hitTestError = cause instanceof Error ? cause.message : String(cause);
@@ -286,7 +310,14 @@ export const aimClickPoint = async (
         ...(hitTestError === undefined ? {} : { hitTestError }),
       });
       if (!verdict.ok) throw await refusal(verdict.detail.kind, verdict.message);
-      return { inside, associated };
+      return {
+        inside,
+        associated,
+        hitTagName,
+        hitInputType,
+        hitLabelControlTagName,
+        hitLabelControlInputType,
+      };
     };
     let offset: Point = { x: 0, y: 0 };
     for (const [index, element] of elements.entries()) {
@@ -296,6 +327,18 @@ export const aimClickPoint = async (
     }
     const local = { x: aimed.point.x - offset.x, y: aimed.point.y - offset.y };
     const targetHit = await hitTest(target, local);
+    const hitGuard = checkSpecialElementClickGuard({
+      tagName: targetHit.hitTagName,
+      inputType: targetHit.hitInputType,
+    });
+    if (!hitGuard.ok) throw await refusal("special_element_refused", hitGuard.message);
+    if (targetHit.hitLabelControlTagName !== "") {
+      const hitLabelGuard = checkSpecialElementClickGuard({
+        tagName: targetHit.hitLabelControlTagName,
+        inputType: targetHit.hitLabelControlInputType,
+      });
+      if (!hitLabelGuard.ok) throw await refusal("special_element_refused", hitLabelGuard.message);
+    }
     return {
       point: aimed.point,
       position: {
@@ -384,10 +427,21 @@ const probePointElement = (at: readonly [number, number]) => {
 };
 
 export const assertCoordinateClickAllowed = async (
-  frame: Frame,
+  frame: Frame | undefined,
   point: Point,
   gate: ReadinessGate,
 ): Promise<void> => {
+  if (frame === undefined) {
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "Could not resolve the frame target at those coordinates, so nothing was clicked.",
+      {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
+      },
+    );
+  }
   let probed: {
     readonly tagName?: unknown;
     readonly inputType?: unknown;
@@ -421,8 +475,21 @@ export const assertCoordinateClickAllowed = async (
       },
     );
   }
+  const tagName = typeof probed.tagName === "string" ? probed.tagName : "";
+  const upperTag = tagName.toUpperCase();
+  if (upperTag === "IFRAME" || upperTag === "FRAME") {
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "Could not resolve the frame target at those coordinates, so nothing was clicked.",
+      {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
+      },
+    );
+  }
   const guard = checkSpecialElementClickGuard({
-    tagName: typeof probed.tagName === "string" ? probed.tagName : "",
+    tagName,
     inputType: typeof probed.inputType === "string" ? probed.inputType : undefined,
   });
   if (!guard.ok) {

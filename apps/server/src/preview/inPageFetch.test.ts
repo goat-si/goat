@@ -348,6 +348,9 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
 
   it("refuses 302 redirects to blocked hosts or non-http schemes without leaking response data", async () => {
     let blockedHostHits = 0;
+    let raceHits = 0;
+    const releaseFirstRace = Promise.withResolvers<void>();
+    const firstRaceArrived = Promise.withResolvers<void>();
     const server = NodeHttp.createServer((request, response) => {
       const port = (server.address() as NodeNet.AddressInfo).port;
       if (request.url === "/page") {
@@ -407,6 +410,21 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
         response.end();
         return;
       }
+      if (request.url === "/race-redirect") {
+        raceHits++;
+        if (raceHits === 1) {
+          firstRaceArrived.resolve();
+          void releaseFirstRace.promise.then(() => {
+            response.writeHead(302, { location: "/allowed-final" });
+            response.end();
+          });
+          return;
+        }
+        releaseFirstRace.resolve();
+        response.writeHead(302, { location: `http://localhost:${port}/secret` });
+        response.end();
+        return;
+      }
       response.writeHead(404);
       response.end();
     });
@@ -441,6 +459,14 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     await expect(
       inPageFetch(redirectPage, control, { url: "/to-file" }, undefined, validateUrl),
     ).rejects.toThrow(/Only http and https|Refused redirect without a valid Location header/);
+    const backgroundFetch = redirectPage.evaluate(() =>
+      fetch("/race-redirect", { redirect: "manual" }).then((res) => res.type),
+    );
+    await firstRaceArrived.promise;
+    await expect(
+      inPageFetch(redirectPage, control, { url: "/race-redirect" }, undefined, validateUrl),
+    ).rejects.toThrow("blocked_redirect_host");
+    await backgroundFetch;
     expect(blockedHostHits).toBe(0);
     expect(blockedUrls.some((entry) => entry.includes("/secret"))).toBe(true);
     expect(blockedUrls.some((entry) => entry.includes("/hop"))).toBe(true);

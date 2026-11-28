@@ -332,58 +332,90 @@ type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
 
 const DNS_ERRORS = new Set(["net::ERR_NAME_NOT_RESOLVED", "net::ERR_NAME_RESOLUTION_FAILED"]);
 
+type RedirectObservation =
+  | { readonly kind: "location"; readonly value: string | undefined }
+  | { readonly kind: "ambiguous" };
+
 const watchFetchFailure = (page: FetchPage, url: string) => {
   const requested = url.split("#")[0];
+  const started = new Set<Request>();
   let failed: Request | undefined;
-  let redirectLocation: string | undefined;
+  let redirectObservation: RedirectObservation | undefined;
   let redirectSettled = false;
-  let resolveRedirect: ((value: string | undefined) => void) | undefined;
-  const redirectPromise = new Promise<string | undefined>((resolve) => {
+  let resolveRedirect: ((value: RedirectObservation) => void) | undefined;
+  const redirectPromise = new Promise<RedirectObservation>((resolve) => {
     resolveRedirect = resolve;
   });
-  const settleRedirect = (value: string | undefined) => {
+  const settleRedirect = (value: RedirectObservation) => {
     if (redirectSettled) return;
     redirectSettled = true;
-    redirectLocation = value;
+    redirectObservation = value;
     resolveRedirect?.(value);
+  };
+  const matchesTargetRequest = (request: Request) =>
+    request.resourceType() === "fetch" &&
+    request.method() === "GET" &&
+    request.url() === requested &&
+    request.redirectedFrom() === null;
+  const onRequest = (request: Request) => {
+    if (!matchesTargetRequest(request)) return;
+    started.add(request);
+    if (started.size > 1) settleRedirect({ kind: "ambiguous" });
   };
   const onResponse = (response: Response) => {
     const request = response.request();
-    if (request.resourceType() !== "fetch" || request.url() !== requested) return;
+    if (!started.has(request)) return;
+    if (started.size > 1) {
+      settleRedirect({ kind: "ambiguous" });
+      return;
+    }
     const status = response.status();
     if (status < 300 || status >= 400) return;
     const direct = response.headers()["location"];
     if (direct !== undefined && direct.trim() !== "") {
-      settleRedirect(direct.trim());
+      settleRedirect({ kind: "location", value: direct.trim() });
       return;
     }
     void response
       .headerValue("location")
       .then((value) => {
-        settleRedirect(value !== null && value.trim() !== "" ? value.trim() : undefined);
+        if (started.size > 1) {
+          settleRedirect({ kind: "ambiguous" });
+          return;
+        }
+        settleRedirect({
+          kind: "location",
+          value: value !== null && value.trim() !== "" ? value.trim() : undefined,
+        });
       })
       .catch(() => {
-        settleRedirect(undefined);
+        settleRedirect({ kind: "location", value: undefined });
       });
   };
   const onFailed = (request: Request) => {
-    if (failed === undefined && request.resourceType() === "fetch" && request.url() === requested) {
+    if (failed === undefined && started.has(request)) {
       failed = request;
-      settleRedirect(undefined);
+      settleRedirect({ kind: "location", value: undefined });
     }
   };
+  page.on("request", onRequest);
   page.on("response", onResponse);
   page.on("requestfailed", onFailed);
   return {
     dispose: () => {
+      page.off("request", onRequest);
       page.off("response", onResponse);
       page.off("requestfailed", onFailed);
-      settleRedirect(undefined);
+      settleRedirect({ kind: "location", value: undefined });
     },
-    redirectLocation: (deadline: number) =>
-      redirectSettled
-        ? Promise.resolve(redirectLocation)
-        : beforeDeadline(redirectPromise, deadline, url),
+    redirectLocation: (deadline: number): Promise<RedirectObservation> => {
+      if (started.size > 1) return Promise.resolve({ kind: "ambiguous" });
+      if (redirectSettled)
+        return Promise.resolve(redirectObservation ?? { kind: "location", value: undefined });
+      return beforeDeadline(redirectPromise, deadline, url).then((result) =>
+        started.size > 1 ? { kind: "ambiguous" } : result,
+      );
+    },
     classify: (outcome: { readonly reachable?: boolean; readonly policyBlocked?: boolean }) => {
       if (outcome.policyBlocked)
         return {
@@ -497,7 +529,7 @@ const fetchInPage = async (
     const watch = watchFetchFailure(page, currentUrl);
     let step:
       | { readonly kind: "done"; readonly result: InPageFetchResult }
-      | { readonly kind: "redirect"; readonly location: string | undefined };
+      | { readonly kind: "redirect"; readonly observation: RedirectObservation };
     try {
       step = await fetchHeld(
         page,
@@ -520,12 +552,17 @@ const fetchInPage = async (
         "PreviewAutomationExecutionError",
         `Fetching ${initialUrl} exceeded the maximum redirect limit (${MAX_REDIRECT_HOPS}).`,
       );
-    if (step.location === undefined)
+    if (step.observation.kind === "ambiguous")
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "Refused redirect because concurrent fetches to the same URL prevented unambiguous redirect verification.",
+      );
+    if (step.observation.value === undefined)
       throw new ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         "Refused redirect without a valid Location header.",
       );
-    currentUrl = resolveFetchUrl(step.location, currentUrl);
+    currentUrl = resolveFetchUrl(step.observation.value, currentUrl);
   }
 };
 
@@ -542,7 +579,7 @@ const fetchHeld = async (
   validateUrl?: FetchUrlValidator,
 ): Promise<
   | { readonly kind: "done"; readonly result: InPageFetchResult }
-  | { readonly kind: "redirect"; readonly location: string | undefined }
+  | { readonly kind: "redirect"; readonly observation: RedirectObservation }
 > => {
   await gate?.();
   const expression = `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`;
@@ -583,7 +620,7 @@ const shapeOutcome = async (
   validateUrl?: FetchUrlValidator,
 ): Promise<
   | { readonly kind: "done"; readonly result: InPageFetchResult }
-  | { readonly kind: "redirect"; readonly location: string | undefined }
+  | { readonly kind: "redirect"; readonly observation: RedirectObservation }
 > => {
   const outcome = await beforeDeadline(
     held.evaluate((value) => value.outcome, undefined),
@@ -612,7 +649,7 @@ const shapeOutcome = async (
     );
   }
   if (outcome.kind === "redirect")
-    return { kind: "redirect", location: await watch.redirectLocation(deadline) };
+    return { kind: "redirect", observation: await watch.redirectLocation(deadline) };
   const finalUrl = assertHttpUrl(outcome.url);
   await validateUrl?.(finalUrl);
   const cookies = await tabCookies(page, [url, finalUrl]);

@@ -682,14 +682,16 @@ const clickTarget = async (
     };
     page.once("dialog", onDialog);
   });
-  const aim = await aimClick(page, locator, point, gate);
+  const aim = await aimClick(
+    page,
+    locator,
+    point,
+    gate,
+    locator === null ? Math.min(2_000, remaining(deadline)) : undefined,
+  );
   const watch = await (
     locator === null && !dialogBeforePress
-      ? assertCoordinateClickAllowed(
-          aim.frame ?? page.mainFrame(),
-          "point" in aim ? aim.point : point,
-          gate,
-        )
+      ? assertCoordinateClickAllowed(aim.frame, "point" in aim ? aim.point : point, gate)
       : Promise.resolve()
   )
     .then(() => pointer(point, "click"))
