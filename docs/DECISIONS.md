@@ -87,4 +87,4 @@ Newest at the bottom.
   types, algorithms, copy, icons, tokens, tests) is carried over; new code only where v1 has nothing usable or a
   GOAT 2 decision differs. Agents must read v1 source (`~/Developer/goat` `origin/dev`), never screenshots or
   memory, and record every lift in `docs/PROVENANCE.md`. Applies to code and to Paper boards.
-- **Workspace flush to the window bottom.** No bottom/right inset around the workspace; only its top-left corner is rounded (v1 workspace-content-frame). Paper boards fixed 2026-11-28.
+- **Workspace flush to the window bottom.** No bottom/right inset around the workspace; left corners rounded 14px (top-left and bottom-left), borders top + left only: no bottom or right line. Paper boards fixed 2026-11-28.
