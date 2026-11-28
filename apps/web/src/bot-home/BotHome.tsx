@@ -1,184 +1,238 @@
-// GOAT 2 bot-first home: Roster | Chat | Overview. Layout follows the Paper SSOT
-// (https://app.paper.design/file/01M8GDWPDQSBBWW8RMTG12PGCC). Versions are NOT shown in the
-// roster; the roster carries only the provider chip. Runtime details live in the chat runtime bar
-// and the Overview "Runtime" section.
+// GOAT 2 bot home. Matches the Paper SSOT 1:1 (docs/PAPER.md):
+// static markup comes from ./ssotParts.tsx (generated from the Paper export); this file only adds
+// the parts that move or respond: roster selection and folding, the runtime picker, worker-thread
+// folds, and overview section folds. Style values below are copied from the same export.
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { AvatarWithChip, ProviderGlyph } from "@goat2/provider-icons";
+import { ProviderGlyph } from "@goat2/provider-icons";
 import { bots, catalog, initialRuntimes, type BotRow, type BotRuntime } from "./placeholder.ts";
 import { RuntimePicker } from "./RuntimePicker.tsx";
+import {
+  ApprovalCard, BotBody, BotBubble, ChatHeader, Composer, EvidenceCard, OverviewHeader,
+  RosterFooter, RosterTop, RoutineEvent, ThreadsBody,
+} from "./ssotParts.tsx";
 
-const ink = "#111113";
-const muted = "#5E5E64";
-const faint = "#8A8A90";
-const line = "#ECECEE";
-const mono: CSSProperties = { fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12 };
+const INTER = '"Inter", "Noto Sans KR", system-ui, sans-serif';
+const MONO = '"Geist Mono", ui-monospace, monospace';
+const PANEL = "#F7F7F8";
+const SELECTED = "#E9E9EC";
+const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
+const GLYPH_PX: Record<string, number> = { codex: 10, claudeAgent: 10, antigravity: 11, pi: 9, opencode: 9 };
 
-function Face({ color }: { color: string }) {
+function Chevron({ open, dir = "right" }: { open: boolean; dir?: "right" | "down" }) {
+  const base = dir === "right" ? 0 : 90;
   return (
-    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
-      <circle cx="20" cy="20" r="18" fill={color} />
-      <ellipse cx="15" cy="19" rx="2.8" ry="3.8" fill={color === "#111113" ? "#fff" : "#1A1A1A"} />
-      <ellipse cx="25" cy="19" rx="2.8" ry="3.8" fill={color === "#111113" ? "#fff" : "#1A1A1A"} />
+    <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"
+      style={{ flexShrink: 0, transform: `rotate(${open ? base + 90 : base}deg)`, transition: `transform 200ms ${EASE}` }}>
+      <path d="M9 6l6 6-6 6" fill="none" stroke="#3A3A3F" strokeWidth="2.4" strokeLinecap="round" />
     </svg>
   );
 }
 
-function RosterRow({ bot, driver, selected, onSelect }: { bot: BotRow; driver: string; selected: boolean; onSelect: () => void }) {
+function SectionChevron({ open }: { open: boolean }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      style={{
-        all: "unset",
-        cursor: "pointer",
-        display: "flex",
-        gap: 12,
-        alignItems: "center",
-        padding: 10,
-        borderRadius: 12,
-        background: selected ? "#E9E9EC" : "transparent",
-      }}
-    >
-      <AvatarWithChip driver={driver} working={bot.status === "working"} needsYou={bot.status === "needs-you"} ringColor={selected ? "#E9E9EC" : "#F7F7F8"}>
-        <Face color={bot.color} />
-      </AvatarWithChip>
-      <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-          <strong style={{ fontSize: 15, color: ink }}>{bot.name}</strong>
-          <span style={{ fontSize: 12, fontWeight: bot.status === "needs-you" ? 600 : 400, color: bot.status === "needs-you" ? "#C8333A" : faint }}>{bot.when}</span>
-        </span>
-        <span style={{ fontSize: 13, lineHeight: "18px", color: muted }}>{bot.lastLine}</span>
-      </span>
+    <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"
+      style={{ transform: open ? "none" : "rotate(180deg)", transition: `transform 200ms ${EASE}` }}>
+      <path d="M6 15l6-6 6 6" fill="none" stroke="#8A8A90" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Avatar: body + needs-you dot (32,2) + knockout provider chip (28,28, 16px) + working ring (25,25, 22px). */
+function Avatar({ bot, driver, surface }: { bot: BotRow; driver: string; surface: string }) {
+  return (
+    <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
+      <div style={{ position: "absolute", left: 0, top: 0 }}><BotBody id={bot.id} /></div>
+      {bot.status === "needs-you" && (
+        <div aria-label="Needs you" style={{ position: "absolute", left: 32, top: 2, width: 10, height: 10, borderRadius: 9999, background: "#E5484D", boxShadow: `${surface} 0px 0px 0px 2px` }} />
+      )}
+      <div title={catalog.find((c) => c.driver === driver)?.label ?? driver}
+        style={{ position: "absolute", left: 28, top: 28, width: 16, height: 16, borderRadius: 9999, background: surface, boxShadow: `${surface} 0px 0px 0px 2px`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <ProviderGlyph driver={driver} size={GLYPH_PX[driver] ?? 10} />
+      </div>
+      {bot.status === "working" && (
+        <svg aria-label="Working" width="22" height="22" viewBox="0 0 28 28" style={{ position: "absolute", left: 25, top: 25, animation: "goat2-spin 1.2s linear infinite" }}>
+          <circle cx="14" cy="14" r="12.6" fill="none" stroke="#DCDCE0" strokeWidth="1.6" />
+          <circle cx="14" cy="14" r="12.6" transform="rotate(-90 14 14)" fill="none" stroke="#111113" strokeWidth="1.8" strokeLinecap="round" strokeDasharray="24 56" />
+        </svg>
+      )}
+    </div>
+  );
+}
+
+const STATUS_COLOR = (b: BotRow) => (b.status === "needs-you" ? "#C8333A" : b.status === "working" ? "#5E5E64" : "#8A8A90");
+
+function RosterRow({ bot, driver, selected, onSelect }: { bot: BotRow; driver: string; selected: boolean; onSelect: () => void }) {
+  const surface = selected ? SELECTED : PANEL;
+  return (
+    <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined}
+      style={{ all: "unset", cursor: "pointer", alignItems: "center", backgroundColor: selected ? SELECTED : "transparent", borderRadius: 12, boxSizing: "border-box", display: "flex", gap: 12, padding: 10 }}>
+      <Avatar bot={bot} driver={driver} surface={surface} />
+      <div style={{ display: "flex", flexBasis: "0%", flexDirection: "column", flexGrow: 1, gap: 2, minWidth: 0 }}>
+        <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between" }}>
+          <div style={{ color: "#111113", fontFamily: INTER, fontSize: 15, fontWeight: 700, lineHeight: "18px" }}>{bot.name}</div>
+          <div style={{ color: STATUS_COLOR(bot), fontFamily: INTER, fontSize: 12, fontWeight: bot.status === "needs-you" ? 600 : 400, lineHeight: "16px" }}>{bot.when}</div>
+        </div>
+        <div style={{ color: "#5E5E64", fontFamily: INTER, fontSize: 13, lineHeight: "18px" }}>{bot.lastLine}</div>
+      </div>
     </button>
   );
 }
 
-function Roster({ selectedId, onSelect, folded, onToggle, runtimes }: { selectedId: string; onSelect: (id: string) => void; folded: boolean; onToggle: () => void; runtimes: Record<string, BotRuntime> }) {
+function Roster({ selectedId, onSelect, folded, onToggle, runtimes }: {
+  selectedId: string; onSelect: (id: string) => void; folded: boolean; onToggle: () => void; runtimes: Record<string, BotRuntime>;
+}) {
   const [main, ...rest] = bots;
-  return (
-    <aside style={{ width: folded ? 64 : 288, flexShrink: 0, background: "#F7F7F8", borderRight: `1px solid ${line}`, padding: "16px 12px", display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        {!folded && <input placeholder="Search bots and threads" style={{ flex: 1, height: 36, border: 0, borderRadius: 10, background: "#EEEEF0", padding: "0 12px" }} />}
-        <button type="button" onClick={onToggle} aria-label={folded ? "Expand roster" : "Collapse roster"} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${line}`, background: "#fff" }}>⇤</button>
-      </div>
-      {folded ? (
-        bots.map((bot) => (
-          <button key={bot.id} type="button" onClick={() => onSelect(bot.id)} style={{ all: "unset", cursor: "pointer" }}>
-            <AvatarWithChip driver={runtimes[bot.id]?.driver ?? bot.driver} working={bot.status === "working"} needsYou={bot.status === "needs-you"}>
-              <Face color={bot.color} />
-            </AvatarWithChip>
+  const col: CSSProperties = { backgroundColor: PANEL, borderRight: "1px solid #ECECEE", boxSizing: "border-box", display: "flex", flexDirection: "column", flexShrink: 0, gap: 16, height: "100%", padding: "16px 12px", width: folded ? 72 : 288, transition: `width 200ms ${EASE}`, overflow: "hidden" };
+  if (folded) {
+    return (
+      <aside style={col}>
+        <button type="button" onClick={onToggle} aria-label="Unfold roster" style={{ all: "unset", cursor: "pointer", alignSelf: "center", width: 36, height: 36, borderRadius: 10, border: "1px solid #E6E6E9", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <svg width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="#3A3A3F" strokeWidth="2" /><path d="M9 4v16" fill="none" stroke="#3A3A3F" strokeWidth="2" /></svg>
+        </button>
+        {bots.map((b) => (
+          <button key={b.id} type="button" onClick={() => onSelect(b.id)} aria-label={b.name}
+            style={{ all: "unset", cursor: "pointer", alignSelf: "center", padding: 2, borderRadius: 12, background: b.id === selectedId ? SELECTED : "transparent" }}>
+            <Avatar bot={b} driver={runtimes[b.id]!.driver} surface={b.id === selectedId ? SELECTED : PANEL} />
           </button>
-        ))
-      ) : (
-        <>
-          {main ? <RosterRow bot={main} driver={runtimes[main.id]?.driver ?? main.driver} selected={selectedId === main.id} onSelect={() => onSelect(main.id)} /> : null}
-          <div style={{ borderTop: `1px solid ${line}` }} />
-          {rest.map((bot) => (
-            <RosterRow key={bot.id} bot={bot} driver={runtimes[bot.id]?.driver ?? bot.driver} selected={selectedId === bot.id} onSelect={() => onSelect(bot.id)} />
-          ))}
-          <div style={{ marginTop: "auto", borderTop: `1px solid ${line}`, paddingTop: 12, fontSize: 14, color: "#3A3A3F", display: "flex", flexDirection: "column", gap: 10 }}>
-            <span>+ New bot</span>
-            <span>Connect apps and machines</span>
-          </div>
-        </>
-      )}
+        ))}
+      </aside>
+    );
+  }
+  return (
+    <aside style={col}>
+      <RosterTop onFold={onToggle} />
+      <div style={{ borderBottom: "1px solid #ECECEE", display: "flex", flexDirection: "column", gap: 2, paddingBottom: 12 }}>
+        {main && <RosterRow bot={main} driver={runtimes[main.id]!.driver} selected={selectedId === main.id} onSelect={() => onSelect(main.id)} />}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {rest.map((b) => <RosterRow key={b.id} bot={b} driver={runtimes[b.id]!.driver} selected={selectedId === b.id} onSelect={() => onSelect(b.id)} />)}
+      </div>
+      <RosterFooter />
     </aside>
   );
 }
 
-function Fold({ title, meta, children, defaultOpen = false }: { title: string; meta: string; children: ReactNode; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
+/** A worker thread in the transcript: one line folded (Paper "Run fold (collapsed)"), steps when open. */
+function RunFold(props: { title: string; driver: string; model: string; right: ReactNode; steps: string[]; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(props.defaultOpen ?? false);
+  const head: CSSProperties = { alignItems: "center", display: "flex", gap: 10, padding: "10px 14px", cursor: "pointer" };
   return (
-    <div style={{ border: `1px solid ${line}`, borderRadius: 12 }}>
-      <button type="button" onClick={() => setOpen(!open)} style={{ all: "unset", cursor: "pointer", display: "flex", gap: 10, alignItems: "center", padding: "10px 14px", width: "100%", boxSizing: "border-box" }}>
-        <span>{open ? "▾" : "▸"}</span>
-        <strong style={{ fontSize: 13 }}>{title}</strong>
-        <span style={{ ...mono, color: faint, flex: 1 }}>{meta}</span>
-        <span style={{ fontSize: 13, textDecoration: "underline" }}>Open thread</span>
-      </button>
-      {open ? <div style={{ padding: "4px 14px 12px 36px", fontSize: 13, color: "#3A3A3F" }}>{children}</div> : null}
+    <div style={{ alignSelf: "flex-start", border: "1px solid #ECECEE", borderRadius: 12, boxSizing: "border-box", display: "flex", flexDirection: "column", width: 560 }}>
+      <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen(!open)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}
+        style={{ ...head, borderBottom: open ? "1px solid #F0F0F2" : "1px solid transparent" }}>
+        <Chevron open={open} />
+        <div style={{ color: "#111113", fontFamily: INTER, fontSize: 13, fontWeight: 500, lineHeight: "16px" }}>{props.title}</div>
+        <div style={{ alignItems: "center", display: "flex", flexGrow: 1, gap: 6 }}>
+          <ProviderGlyph driver={props.driver} size={12} />
+          <div style={{ color: "#8A8A90", fontFamily: MONO, fontSize: 12, lineHeight: "16px" }}>{props.model}</div>
+        </div>
+        {props.right}
+      </div>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 14px 12px 36px" }}>
+          {props.steps.map((s) => <div key={s} style={{ color: "#3A3A3F", fontFamily: INTER, fontSize: 13, lineHeight: "16px" }}>{s}</div>)}
+        </div>
+      )}
     </div>
   );
 }
 
 function Chat({ bot, runtime, onRuntime }: { bot: BotRow; runtime: BotRuntime; onRuntime: (r: BotRuntime) => void }) {
   return (
-    <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-      <header style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ display: "flex", gap: 8, alignItems: "center", padding: "5px 14px", border: `1px solid ${line}`, borderRadius: 9999 }}>
-          <strong style={{ fontSize: 14 }}>{bot.name}</strong>
-        </span>
-      </header>
-      {/* Runtime bar: chip + model only. Opens the same picker as the composer. */}
-      <div style={{ display: "flex", justifyContent: "center", paddingBottom: 8 }}>
+    <main style={{ backgroundColor: "#FFFFFF", display: "flex", flexBasis: "0%", flexDirection: "column", flexGrow: 1, height: "100%", minWidth: 0 }}>
+      <ChatHeader botId={bot.id} botName={bot.name} />
+      <div style={{ display: "flex", flexShrink: 0, justifyContent: "center", paddingBottom: 8, paddingInline: 40 }}>
         <RuntimePicker value={runtime} onChange={onRuntime} placement="below" variant="bar" />
       </div>
-      <section style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center", padding: "8px 40px" }}>
-        <div style={{ width: 640, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ textAlign: "center", fontSize: 13, color: faint }}>Routine "Review on PR open" ran · 3:02 PM · PR #7712</div>
-          <div style={{ alignSelf: "flex-start", maxWidth: 560, padding: "12px 16px", borderRadius: 18, background: "#F2F2F3", fontSize: 15, lineHeight: "24px" }}>
-            Finished reviewing opencodex #7712. Tests pass. One concern: an account-list failure shows an empty list; keeping the last list looks safer.
-          </div>
-          <Fold title="Worker thread · 23 steps" meta={`${runtime.model} · 4:12`}>
-            Steps load from the CLI's own session log when opened (not stored in GOAT's DB).
-          </Fold>
-          <div style={{ border: `1px solid ${line}`, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-            <strong>Merge PR #7712 into main?</strong>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" style={{ padding: "9px 16px", borderRadius: 10, background: ink, color: "#fff", border: 0 }}>Merge #7712</button>
-              <button type="button" style={{ padding: "9px 16px", borderRadius: 10, background: "#fff", border: "1px solid #E0E0E4" }}>Fix first, then merge</button>
-              <button type="button" style={{ padding: "9px 12px", border: 0, background: "transparent", color: muted }}>Hold</button>
-            </div>
-          </div>
+      <div style={{ alignItems: "center", display: "flex", flexBasis: "0%", flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "auto", paddingInline: 40, paddingTop: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, width: 640, paddingBottom: 16 }}>
+          <RoutineEvent />
+          <BotBubble />
+          <RunFold
+            title="Worker thread · 23 steps" driver={runtime.driver} model={`${runtime.model} · 4:12`}
+            right={<span style={{ color: "#3A3A3F", fontFamily: INTER, fontSize: 13, lineHeight: "16px", textDecoration: "underline 1px" }}>Open thread</span>}
+            steps={["✓ Checked out codex/pr-7712 on Wicked", "✓ Ran 81 tests: 81 passed", "✓ Wrote 12 review comments"]}
+          />
+          <EvidenceCard />
+          <RunFold
+            title="Asked CI Watch to check" driver="claudeAgent" model="sonnet-5" defaultOpen
+            right={<span style={{ color: "#5E5E64", fontFamily: INTER, fontSize: 12, lineHeight: "16px" }}>Done · 0:38</span>}
+            steps={["✓ Rebuilt on latest main", "✓ Merge dry run: no conflicts", '✓ Reply: "No impact on main"']}
+          />
+          <ApprovalCard />
         </div>
-      </section>
-      <footer style={{ display: "flex", justifyContent: "center", padding: "12px 40px 20px" }}>
-        <div style={{ width: 640, display: "flex", gap: 10, alignItems: "center", padding: "8px 8px 8px 16px", borderRadius: 9999, border: "1px solid #E0E0E4" }}>
-          <input placeholder={`Message ${bot.name}`} style={{ flex: 1, border: 0, outline: 0, fontSize: 15 }} />
-          <RuntimePicker value={runtime} onChange={onRuntime} placement="above" variant="composer" />
-        </div>
-      </footer>
+      </div>
+      <Composer botName={bot.name} picker={<RuntimePicker value={runtime} onChange={onRuntime} placement="above" variant="composer" />} />
     </main>
   );
 }
 
+function FoldRow({ label, hint, children }: { label: string; hint: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ borderTop: "1px solid #F2F2F3", paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen(!open)} onKeyDown={(e) => e.key === "Enter" && setOpen(!open)}
+        style={{ alignItems: "center", display: "flex", justifyContent: "space-between", cursor: "pointer" }}>
+        <div style={{ color: "#111113", fontFamily: INTER, fontSize: 13, fontWeight: 700, lineHeight: "16px" }}>
+          {label} <span style={{ color: "#8A8A90", fontWeight: 400 }}>{hint}</span>
+        </div>
+        <SectionChevron open={open} />
+      </div>
+      {open && <div style={{ color: "#5E5E64", fontFamily: INTER, fontSize: 13, lineHeight: "18px" }}>{children}</div>}
+    </div>
+  );
+}
+
 function Overview({ bot, runtime, folded, onToggle }: { bot: BotRow; runtime: BotRuntime; folded: boolean; onToggle: () => void }) {
-  const cli = catalog.find((c) => c.driver === runtime.driver);
+  const [runtimeOpen, setRuntimeOpen] = useState(true);
+  const [threadsOpen, setThreadsOpen] = useState(true);
   if (folded) {
     return (
-      <aside style={{ width: 48, borderLeft: `1px solid ${line}`, padding: 8 }}>
-        <button type="button" onClick={onToggle} aria-label="Open overview">⇥</button>
+      <aside style={{ width: 56, flexShrink: 0, borderLeft: "1px solid #ECECEE", padding: "16px 12px", boxSizing: "border-box" }}>
+        <button type="button" onClick={onToggle} aria-label="Unfold overview" style={{ all: "unset", cursor: "pointer", width: 32, height: 32, borderRadius: 8, border: "1px solid #ECECEE", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <svg width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="#3A3A3F" strokeWidth="2" /><path d="M15 4v16" fill="none" stroke="#3A3A3F" strokeWidth="2" /></svg>
+        </button>
       </aside>
     );
   }
+  const cli = catalog.find((c) => c.driver === runtime.driver);
   const rows: Array<[string, string]> = [
     ["CLI", cli ? `${cli.label} ${cli.version}` : runtime.driver],
     ["Model", `${runtime.model} · ${runtime.effort}`],
     ["Machine", runtime.machine],
     ["Account", runtime.account],
-    ["Permissions", runtime.permissions],
+    ["Access", runtime.permissions],
     ["Workspace", runtime.workspace],
   ];
+  const header = (label: ReactNode, open: boolean, toggle: () => void) => (
+    <div role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => e.key === "Enter" && toggle()}
+      style={{ alignItems: "center", display: "flex", justifyContent: "space-between", cursor: "pointer" }}>
+      <div style={{ color: "#111113", fontFamily: INTER, fontSize: 13, fontWeight: 700, lineHeight: "16px" }}>{label}</div>
+      <SectionChevron open={open} />
+    </div>
+  );
   return (
-    <aside style={{ width: 340, flexShrink: 0, borderLeft: `1px solid ${line}`, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <strong style={{ fontSize: 16 }}>{bot.name}</strong>
-        <button type="button" onClick={onToggle} aria-label="Collapse overview">⇥</button>
+    <aside style={{ backgroundColor: "#FFFFFF", borderLeft: "1px solid #ECECEE", boxSizing: "border-box", display: "flex", flexDirection: "column", flexShrink: 0, gap: 20, height: "100%", overflow: "auto", padding: "16px 20px", width: 340 }}>
+      <OverviewHeader botId={bot.id} botName={bot.name} onFold={onToggle} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {header("Runtime", runtimeOpen, () => setRuntimeOpen(!runtimeOpen))}
+        {runtimeOpen && (
+          <div style={{ border: "1px solid #ECECEE", borderRadius: 12, display: "flex", flexDirection: "column" }}>
+            {rows.map(([k, v], i) => (
+              <div key={k} style={{ borderBottom: i < rows.length - 1 ? "1px solid #F2F2F3" : "none", display: "flex", justifyContent: "space-between", gap: 12, padding: "9px 12px" }}>
+                <div style={{ color: "#5E5E64", fontFamily: INTER, fontSize: 13, lineHeight: "16px" }}>{k}</div>
+                <div style={{ color: "#111113", fontFamily: MONO, fontSize: 12, fontWeight: k === "CLI" ? 500 : 400, lineHeight: "16px", textAlign: "right" }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      <section>
-        <strong style={{ fontSize: 13 }}>Runtime</strong>
-        <div style={{ marginTop: 10, border: `1px solid ${line}`, borderRadius: 12 }}>
-          {rows.map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "9px 12px", borderBottom: `1px solid #F2F2F3` }}>
-              <span style={{ fontSize: 13, color: muted }}>{k}</span>
-              <span style={{ ...mono, color: ink }}>{v}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section style={{ fontSize: 13 }}>
-        <strong>Worker threads</strong> <span style={{ color: faint }}>3</span>
-      </section>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ paddingBottom: 4 }}>{header(<>Threads <span style={{ color: "#8A8A90", fontWeight: 400 }}>3</span></>, threadsOpen, () => setThreadsOpen(!threadsOpen))}</div>
+        {threadsOpen && <ThreadsBody />}
+      </div>
+      <FoldRow label="Computer" hint="Wicked · asleep">The bot's machine is asleep. Opening it wakes Wicked and shows its screen here.</FoldRow>
+      <FoldRow label="Routines" hint="On PR opened">On PR opened → review on Wicked with this bot's runtime.</FoldRow>
     </aside>
   );
 }
@@ -192,7 +246,8 @@ export function BotHome() {
   const runtime = runtimes[bot.id]!;
   const setRuntime = (r: BotRuntime) => setRuntimes((m) => ({ ...m, [bot.id]: r }));
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "Inter, 'Noto Sans KR', system-ui, sans-serif", color: ink, background: "#fff" }}>
+    <div style={{ backgroundColor: "#FFFFFF", display: "flex", height: "100vh", minWidth: 1180, fontSynthesis: "none", WebkitFontSmoothing: "antialiased", overflow: "hidden" }}>
+      <style>{"@keyframes goat2-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){[aria-label=Working]{animation:none!important}}"}</style>
       <Roster selectedId={selectedId} onSelect={setSelectedId} folded={rosterFolded} onToggle={() => setRosterFolded(!rosterFolded)} runtimes={runtimes} />
       <Chat bot={bot} runtime={runtime} onRuntime={setRuntime} />
       <Overview bot={bot} runtime={runtime} folded={overviewFolded} onToggle={() => setOverviewFolded(!overviewFolded)} />

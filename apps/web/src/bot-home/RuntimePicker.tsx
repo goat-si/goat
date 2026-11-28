@@ -73,7 +73,10 @@ export function RuntimePicker(props: {
           background: open ? "#E9E9EC" : "#F2F2F3", transition: `background-color 100ms ${EASE}`,
         }}
       >
-        <ProviderGlyph driver={props.value.driver} size={bar ? 12 : 13} />
+        {/* Paper SSOT: white disc (18px bar / 20px composer) holding the real provider mark */}
+        <span style={{ width: bar ? 18 : 20, height: bar ? 18 : 20, borderRadius: 9999, background: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <ProviderGlyph driver={props.value.driver} size={bar ? 11 : 12} />
+        </span>
         <span style={{ ...mono, color: "#3A3A3F" }}>{props.value.model}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={faint} strokeWidth="2.6" strokeLinecap="round" aria-hidden="true"
           style={{ transform: open ? "rotate(180deg)" : "none", transition: `transform 200ms ${EASE}` }}>

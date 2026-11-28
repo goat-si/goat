@@ -12,11 +12,11 @@ export interface BotRow {
 }
 
 export const bots: BotRow[] = [
-  { id: "main", name: "GOAT", driver: "claudeAgent", status: "idle", lastLine: "2 decisions are waiting. Everything else is running.", when: "3:41 PM", color: "#111113" },
-  { id: "reviewer", name: "Reviewer", driver: "codex", status: "needs-you", lastLine: "PR #7712 reviewed. Decide whether to merge.", when: "Needs you", color: "#FF8A1F" },
-  { id: "ci", name: "CI Watch", driver: "claudeAgent", status: "working", lastLine: "Fixing 2 red checks on main. 3/5 tests pass.", when: "Working", color: "#9C6B3E" },
+  { id: "main", name: "GOAT", driver: "claudeAgent", status: "idle", lastLine: "2 decisions waiting. Everything else is running.", when: "3:41 PM", color: "#111113" },
+  { id: "reviewer", name: "Reviewer", driver: "codex", status: "needs-you", lastLine: "Reviewed PR #7712. Your call on merging.", when: "Needs you", color: "#FF8A1F" },
+  { id: "ci", name: "CI Watch", driver: "claudeAgent", status: "working", lastLine: "Fixing 2 red checks on main. 3/5 passing.", when: "Working", color: "#9C6B3E" },
   { id: "browser", name: "Browser Hand", driver: "antigravity", status: "needs-you", lastLine: "Needs a Luma login code. Check your phone.", when: "Needs you", color: "#2FB36B" },
-  { id: "standup", name: "Standup", driver: "pi", status: "idle", lastLine: "Posted Mapo and Gangnam threads. Next run 07:00.", when: "Yesterday", color: "#B9B9C0" },
+  { id: "standup", name: "Standup", driver: "pi", status: "idle", lastLine: "Posted Mapo and Gangnam threads. Next 7:00 AM.", when: "Yesterday", color: "#B9B9C0" },
   { id: "release", name: "Release Notes", driver: "opencode", status: "working", lastLine: "Drafting v2.93.0. Features first, fixes below.", when: "Working", color: "#3D5AFE" },
 ];
 

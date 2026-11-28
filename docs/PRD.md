@@ -27,6 +27,7 @@ Electron. It is also thread-first, while the product direction is bot-first.
 
 ## Design guidelines and motion
 
+- Paper ↔ code: [PAPER.md](PAPER.md) (Paper owns looks, code owns motion and clicks, the published site is linked from a Paper comment, code matches the board 1:1 through a generated parts file).
 - Guidelines: [DESIGN.md](DESIGN.md) (principles, tokens, avatar + provider chip anatomy, folding, copy, checklist).
 - Bot motion: [MOTION.md](MOTION.md), states idle / ack / think / work / needs_you / done / error mapped to
   ledger states, with timing; live reference [motion/playground.html](motion/playground.html); code `@goat2/bot-face`.

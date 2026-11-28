@@ -31,3 +31,5 @@ pnpm typecheck
 pnpm dev:web      # http://127.0.0.1:5733
 pnpm dev:server   # http://127.0.0.1:5734/health
 ```
+
+Design workflow: [docs/PAPER.md](docs/PAPER.md). Live: https://goat-si.github.io/goat2-design/

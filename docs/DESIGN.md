@@ -2,7 +2,7 @@
 
 Status: draft 2026-11-28. Read this before drawing a screen or writing a component. Screen SSOT:
 Paper [GOAT 봇 워크스페이스 · 봇 홈 — SSOT](https://app.paper.design/file/01M8GDWPDQSBBWW8RMTG12PGCC).
-Motion: [MOTION.md](MOTION.md) and the live [motion playground](motion/playground.html).
+Paper ↔ code rules: [PAPER.md](PAPER.md). Motion: [MOTION.md](MOTION.md) and the live [motion playground](motion/playground.html).
 
 How the references keep their guidelines, and what we take:
 
