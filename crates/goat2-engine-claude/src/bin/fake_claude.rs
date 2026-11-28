@@ -19,7 +19,8 @@
 //!
 //! `initialize`, `mcp_set_servers` and `keep_alive` are answered whenever they arrive. GOAT 2 adds
 //! `emit_wire` (a raw stdout frame), `expect_wire` (a raw stdin frame matched as a subset) and
-//! `expect_argv` for wire details v1's SDK-level transcripts do not carry.
+//! `expect_argv` for wire details v1's SDK-level transcripts do not carry, plus `close_stdin`
+//! (close stdin just before answering the named transport request, stdout stays open) and `sleep`.
 //!
 //! Environment: `GOAT2_FAKE_CLAUDE_SCRIPT` (transcript path, required), `GOAT2_FAKE_CLAUDE_LOG`
 //! (JSON lines: argv, selected env, cwd, every stdin frame, errors, `done`).
@@ -115,6 +116,12 @@ impl Fake {
 
     /// Next stdin frame that needs the script; answers transport frames itself.
     fn next_frame(&mut self) -> Option<Value> {
+        self.next_frame_closing(None)
+    }
+
+    /// [Self::next_frame]; when `close_before` names a transport request, stdin is closed just
+    /// before that request is answered and None is returned.
+    fn next_frame_closing(&mut self, close_before: Option<&str>) -> Option<Value> {
         loop {
             let line = match self.stdin.next() {
                 Some(Ok(line)) => line,
@@ -134,13 +141,27 @@ impl Fake {
             }
             if kind == "control_request" {
                 let id = frame["request_id"].as_str().unwrap_or_default().to_string();
-                match frame["request"]["subtype"].as_str() {
+                let subtype = frame["request"]["subtype"].as_str();
+                let closing = close_before.is_some() && subtype == close_before;
+                if closing {
+                    self.stdin = Box::new(std::iter::empty());
+                    #[cfg(unix)]
+                    // SAFETY: closes this process's own stdin; nothing reads fd 0 any more.
+                    unsafe {
+                        libc::close(0);
+                    }
+                    self.log(json!({"kind": "stdin_closed"}));
+                }
+                match subtype {
                     Some("initialize") => {
                         self.write(&json!({"type": "control_response", "response": {
                         "subtype": "success", "request_id": id, "response": {
                             "commands": [], "agents": [], "output_style": "default",
                             "available_output_styles": ["default"], "models": [], "account": {}
                         }}}));
+                        if closing {
+                            return None;
+                        }
                         continue;
                     }
                     Some("mcp_set_servers") => {
@@ -151,6 +172,9 @@ impl Fake {
                         self.write(&json!({"type": "control_response", "response": {
                             "subtype": "success", "request_id": id,
                             "response": {"added": names, "removed": [], "errors": {}}}}));
+                        if closing {
+                            return None;
+                        }
                         continue;
                     }
                     _ => {}
@@ -372,6 +396,16 @@ impl Fake {
                     self.write(&frame);
                 }
                 "expect_outbound" => self.expect(&label, &entry["frame"]),
+                "close_stdin" => {
+                    let before = entry["before"].as_str().unwrap_or("mcp_set_servers").to_string();
+                    if let Some(frame) = self.next_frame_closing(Some(&before)) {
+                        self.fail(format!("{label}: unexpected frame {frame}"));
+                    }
+                }
+                "sleep" => {
+                    let ms = entry["ms"].as_u64().unwrap_or(0);
+                    std::thread::sleep(Duration::from_millis(ms));
+                }
                 "expect_wire" => {
                     let Some(actual) = self.next_frame() else {
                         self.fail(format!("stdin closed while expecting {label}"));
@@ -483,7 +517,9 @@ fn main() {
         .collect();
     let mut segments: Vec<Vec<Value>> = vec![Vec::new()];
     for entry in entries.iter().skip(head.len()) {
-        segments.last_mut().map(|s| s.push(entry.clone()));
+        if let Some(segment) = segments.last_mut() {
+            segment.push(entry.clone());
+        }
         if entry["type"] == "runtime_exit" {
             segments.push(Vec::new());
         }

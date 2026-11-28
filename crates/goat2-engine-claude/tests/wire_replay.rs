@@ -393,3 +393,171 @@ async fn a_crash_fails_the_turn_and_exits() {
     );
     handle.session.shutdown().await;
 }
+
+/// Review finding 1 (v1 `ClaudeAdapterV2.ts:9755-9818`, `ClaudeStopTeardown.ts`): an interrupt
+/// closes the CLI, so frames the stopped CLI would still send can never reach a later turn.
+#[tokio::test]
+async fn interrupt_closes_claude_so_a_later_turn_never_sees_the_stopped_turn() {
+    let run = Run::new("wire/interrupt_late_frames.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work slowly.", MODEL, RuntimeMode::FullAccess).await;
+    handle.session.interrupt(&turn_id).await.unwrap();
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Interrupted);
+    let after = handle
+        .session
+        .start_turn(input("Next."), &settings(MODEL, RuntimeMode::FullAccess))
+        .await;
+    assert!(
+        !matches!(after, TurnStartResult::Accepted { .. }),
+        "a turn started onto the stopped CLI: {after:?}"
+    );
+    match next(&mut handle).await {
+        EngineEvent::Exited { .. } => {}
+        other => panic!("expected Exited after the stop, got {other:?}"),
+    }
+    assert!(
+        run.stdin_frames()
+            .iter()
+            .any(|f| f["request"]["subtype"] == "interrupt")
+    );
+    handle.session.shutdown().await;
+}
+
+/// Review finding 2: shutdown during a turn closes its requests and settles the turn before
+/// `Exited`.
+#[tokio::test]
+async fn shutdown_settles_the_turn_and_its_requests_before_exited() {
+    let run = Run::new("wire/interrupt_pending_approval.ndjson");
+    let mut handle = run
+        .start(MODEL, RuntimeMode::ApprovalRequired, None)
+        .await;
+    let turn_id = turn(&handle, "Run the tests.", MODEL, RuntimeMode::ApprovalRequired).await;
+    let opened = until(&mut handle, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened { key, .. }) = opened.last().cloned() else {
+        unreachable!()
+    };
+    handle.session.shutdown().await;
+    let mut rest = Vec::new();
+    loop {
+        let event = next(&mut handle).await;
+        let exited = matches!(event, EngineEvent::Exited { .. });
+        rest.push(event);
+        if exited {
+            break;
+        }
+    }
+    let closed = rest
+        .iter()
+        .position(|e| matches!(e, EngineEvent::RequestClosed { key: k } if *k == key));
+    let finished_at = rest.iter().position(
+        |e| matches!(e, EngineEvent::TurnFinished { turn_id: t, .. } if *t == turn_id),
+    );
+    assert!(closed.is_some(), "approval not closed: {rest:?}");
+    assert!(finished_at.is_some(), "turn not settled: {rest:?}");
+    assert!(matches!(
+        &rest[finished_at.unwrap()],
+        EngineEvent::TurnFinished { outcome: TurnOutcome::Interrupted, .. }
+    ));
+    assert!(
+        matches!(rest.last(), Some(EngineEvent::Exited { reason }) if reason == "shutdown"),
+        "{rest:?}"
+    );
+}
+
+/// Review finding 3: a frame Claude never read is not reported as delivered, and the broken
+/// session ends.
+#[tokio::test]
+async fn a_failed_stdin_write_is_not_reported_as_delivered() {
+    let run = Run::new("wire/stdin_closed.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let started = handle
+        .session
+        .start_turn(input("Hello."), &settings(MODEL, RuntimeMode::FullAccess))
+        .await;
+    assert!(
+        matches!(
+            started,
+            TurnStartResult::Unknown { .. } | TurnStartResult::Declined { .. }
+        ),
+        "{started:?}"
+    );
+    match next(&mut handle).await {
+        EngineEvent::Exited { .. } => {}
+        other => panic!("expected Exited, got {other:?}"),
+    }
+    handle.session.shutdown().await;
+}
+
+/// Review finding 4: a steer sent before Claude's first `command_lifecycle` frame still learns
+/// that Claude refused it, so the host can queue it as a followup.
+#[tokio::test]
+async fn an_early_steer_refused_by_claude_is_declined() {
+    let run = Run::new("wire/lifecycle_steer_early_refused.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle.session.steer(&turn_id, input("Too early.")).await;
+    assert!(matches!(steer, SteerResult::Declined { .. }), "{steer:?}");
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["1, 2, 3."]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Review finding 5 (v1 `ClaudeAdapterV2.ts:2572-2574` keeps background subagents past root
+/// settlement): a background subagent that finishes while the thread is idle completes on the
+/// turn that started it.
+#[tokio::test]
+async fn an_idle_background_subagent_completes_on_its_own_turn() {
+    let run = Run::new("wire/background_subagent_idle.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(
+        &handle,
+        "Research in the background.",
+        MODEL,
+        RuntimeMode::FullAccess,
+    )
+    .await;
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let later = until(&mut handle, |e| matches!(e, EngineEvent::ItemCompleted { .. })).await;
+    let Some(EngineEvent::ItemCompleted {
+        turn_id: item_turn,
+        item,
+        ..
+    }) = later.last()
+    else {
+        unreachable!()
+    };
+    assert_eq!(*item_turn, turn_id);
+    assert_eq!(item.status, TurnItemStatus::Completed);
+    match &item.body {
+        TurnItemBody::Subagent { subagent_id, .. } => assert_eq!(subagent_id, "toolu_agent1"),
+        other => panic!("{other:?}"),
+    }
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Review finding 6: when Claude dies on its own, its process (group) is reaped before `Exited`.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unexpected_exit_is_reaped_before_exited() {
+    let run = Run::new("wire/crash_mid_turn.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let pgid = handle.session.process_group_id().expect("pgid");
+    turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    until(&mut handle, |e| matches!(e, EngineEvent::Exited { .. })).await;
+    // SAFETY: signal 0 only checks whether the group still exists.
+    let rc = unsafe { libc::kill(-pgid, 0) };
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    assert!(
+        rc == -1 && errno == Some(libc::ESRCH),
+        "process group {pgid} still exists (rc {rc}, errno {errno:?})"
+    );
+    handle.session.shutdown().await;
+}
