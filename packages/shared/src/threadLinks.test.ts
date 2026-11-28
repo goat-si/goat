@@ -156,6 +156,9 @@ describe("thread links", () => {
         "After [New](goat-thread://v1/t1)",
       ].join("\n"),
     );
+    for (const escaped of ["\\``<t3-thread://v2/env-1/t1>`", "\\```<t3-thread://v2/env-1/t1>``"]) {
+      expect(threadLinkRefs(escaped, local)).toEqual([]);
+    }
   });
 
   it("ends code where CommonMark does, so a link after it stays live", () => {
@@ -176,6 +179,7 @@ describe("thread links", () => {
       ["Stray ` tick", `# ${after}`, "and `code`"],
       ["Stray ` tick", `- ${after}`, "and `code`"],
       ["Use `example", "```" + hidden + "`", after],
+      ["\\\\``" + after + "`"],
     ]) {
       expect(threadLinkIds(markdown.join("\n"))).toEqual(["t1"]);
     }
