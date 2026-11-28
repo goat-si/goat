@@ -542,6 +542,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           const analytics = yield* AnalyticsService.AnalyticsService;
           yield* analytics.record("test.before-discovery");
           yield* analytics.flush;
+          env.GOAT_TELEMETRY_ENABLED = "true";
           env.DO_NOT_TRACK = "1";
           delete env.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
           yield* analytics.record("test.opted-out");
