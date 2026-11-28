@@ -80,7 +80,43 @@ test("accepted steers settle before the turn finishes, including unread cancella
   }
 });
 
-test("a steer observed before its reply settles before an early turn failure", async () => {
+test("an unread accepted steer is cancelled when the native turn idles normally", async () => {
+  fake.reset(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal((await session.steer(turn.turnId, [{ inputId: "unread", text: "unread-steer", attachments: [] }])).status, "accepted");
+    fake.setNativeStatus(session.engineRef, "idle");
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settled = events.findIndex((event) => event.type === "steer_updated" && event.status.type === "cancelled");
+    const ended = events.findIndex((event) => event.type === "turn_finished" && event.outcome.type === "done");
+    assert.ok(settled >= 0 && settled < ended);
+  } finally { await session.shutdown(); }
+});
+
+test("idle observed before a steer reply is reconciled after acceptance", async () => {
+  fake.reset(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const gate = fake.holdPrompt(); const steering = session.steer(turn.turnId, [{ inputId: "steer-early-idle", text: "unread-steer", attachments: [] }]); await gate.reached;
+    fake.setNativeStatus(session.engineRef, "idle"); await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+    gate.release(); assert.equal((await steering).status, "accepted"); await new Promise<void>((resolve) => setImmediate(resolve));
+    const settled = events.findIndex((event) => event.type === "steer_updated" && event.status.type === "cancelled");
+    const ended = events.findIndex((event) => event.type === "turn_finished" && event.outcome.type === "done");
+    assert.ok(settled >= 0 && settled < ended);
+  } finally { await session.shutdown(); }
+});
+
+test("a steer observed before its reply remains unknown after an early turn failure", async () => {
   fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
   const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
   const session = await opencodeEngine.start(params, host);
@@ -89,17 +125,38 @@ test("a steer observed before its reply settles before an early turn failure", a
     assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
     await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    const gate = fake.holdPrompt(); const steering = session.steer(turn.turnId, [{ inputId: "steer-early", text: "unread-steer", attachments: [] }]);
+    const gate = fake.holdPrompt(true); const steering = session.steer(turn.turnId, [{ inputId: "steer-early", text: "unread-steer", attachments: [] }]);
     await gate.reached;
     const call = fake.calls.filter((entry) => entry.method === "prompt").at(-1)?.args as { messageID: string };
     await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: call.messageID, sessionID: session.engineRef, role: "user", time: { created: 1 }, agent: "build", model: { providerID: "test", modelID: "model" } } });
     await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
-    assert.equal(events.some((event) => event.type === "turn_finished"), false);
-    gate.release(); assert.equal((await steering).status, "accepted"); await finished.promise;
-    const settled = events.findIndex((event) => event.type === "steer_updated"); const ended = events.findIndex((event) => event.type === "turn_finished");
-    assert.ok(settled >= 0 && settled < ended);
-    const event = events[settled]; assert.ok(event?.type === "steer_updated" && event.status.type === "completed");
+    await finished.promise;
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
+    assert.equal(events.filter((event) => event.type === "steer_updated").length, 0);
+    const count = events.length; gate.release(); assert.equal((await steering).status, "unknown"); await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(events.length, count);
   } finally { await session.shutdown(); }
+});
+
+test("a terminal provider failure invalidates a stalled steer submission", async () => {
+  fake.reset(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  const gate = fake.holdPrompt();
+  try {
+    // Release the first submission, then install a separate barrier for steering.
+    const start = session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings); await gate.reached; gate.release();
+    const turn = await start; assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const steerGate = fake.holdPrompt();
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "stalled", text: "unread-steer", attachments: [] }]); await steerGate.reached;
+      await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(events.some((event) => event.type === "turn_finished" && event.outcome.type === "failed"));
+      assert.equal((await steering).status, "unknown");
+    } finally { steerGate.release(); }
+  } finally { gate.release(); await session.shutdown(); }
 });
 
 test("a server crash cancels an unread accepted steer before turn failure", async () => {
@@ -570,6 +627,37 @@ test("JSONL turn response precedes events received during native submission", as
   } finally { child.stdin.end(); await closed.promise; lines.close(); }
 });
 
+test("JSONL steer response precedes its settlement and the turn terminal", async () => {
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../src/main.ts", import.meta.url))], {
+    env: { ...process.env, GOAT2_ENGINE_HELPER_SDK_OPENCODE: fileURLToPath(new URL("./fakes/opencode-sdk.ts", import.meta.url)) }, stdio: ["pipe", "pipe", "ignore"],
+  });
+  const frames: Array<Record<string, unknown>> = [];
+  const initialized = Promise.withResolvers<void>(); const started = Promise.withResolvers<string>(); const ready = Promise.withResolvers<void>(); const settled = Promise.withResolvers<void>(); const finished = Promise.withResolvers<void>(); const closed = Promise.withResolvers<void>();
+  child.once("close", () => closed.resolve()); const lines = createInterface({ input: child.stdout });
+  lines.on("line", (line) => {
+    const frame = JSON.parse(line) as Record<string, unknown>; frames.push(frame);
+    if (frame.id === 1) initialized.resolve();
+    if (frame.id === 2) { const result = frame.result as { status?: string; turnId?: string }; if (result?.status === "accepted" && result.turnId) started.resolve(result.turnId); else started.reject(new Error("turn not accepted")); }
+    if (frame.id === 3 && (frame.result as { status?: string } | undefined)?.status !== "accepted") settled.reject(new Error("steer not accepted"));
+    const event = frame.event as { type?: string; item?: { type?: string } } | undefined;
+    if (event?.type === "item_completed" && event.item?.type === "assistant_message") ready.resolve();
+    if (event?.type === "steer_updated") settled.resolve();
+    if (event?.type === "turn_finished") finished.resolve();
+  });
+  try {
+    child.stdin.write(`${JSON.stringify({ id: 1, method: "initialize", params })}\n`); await initialized.promise;
+    child.stdin.write(`${JSON.stringify({ id: 2, method: "turn.start", params: { inputs: [{ inputId: "i", text: "hold-for-steer", attachments: [] }], settings } })}\n`);
+    const turnId = await started.promise; await ready.promise;
+    child.stdin.write(`${JSON.stringify({ id: 3, method: "turn.steer", params: { turnId, inputs: [{ inputId: "steer-jsonl", text: "inline-steer", attachments: [] }] } })}\n`);
+    await settled.promise;
+    child.stdin.write(`${JSON.stringify({ id: 4, method: "turn.interrupt", params: { turnId } })}\n`); await finished.promise;
+    const response = frames.findIndex((frame) => frame.id === 3);
+    const update = frames.findIndex((frame) => (frame.event as { type?: string } | undefined)?.type === "steer_updated");
+    const terminal = frames.findIndex((frame) => (frame.event as { type?: string } | undefined)?.type === "turn_finished");
+    assert.ok(response >= 0 && response < update && update < terminal);
+  } finally { child.stdin.end(); await closed.promise; lines.close(); }
+});
+
 test("a detached native child stays running until its session ends", async () => {
   fake.reset(); const events: EngineEvent[] = [];
   const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
@@ -631,6 +719,24 @@ test("a descendant abort failure fails the session rather than claiming interrup
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0]?.type === "turn_finished" && outcomes[0].outcome.type, "failed");
   } finally { await session.shutdown(); }
+});
+
+test("provider failure during descendant stop remains a failed outcome", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); fake.setChildren(session.engineRef, ["child-1"]); const child = fake.holdAbort("child-1");
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const stopping = session.interrupt(turn.turnId); await child.reached;
+    await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+    assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+    child.release(); await stopping; await finished.promise;
+    const terminal = events.find((event) => event.type === "turn_finished");
+    assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+  } finally { child.release(); await session.shutdown(); }
 });
 
 test("failed history reconciliation waits for descendant interruption cleanup", async () => {

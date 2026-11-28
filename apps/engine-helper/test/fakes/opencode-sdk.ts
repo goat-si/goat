@@ -6,6 +6,7 @@ let statusGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let statusReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let ignorePromptAbort = false;
 let historyGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let historyReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let historyFinished: ReturnType<typeof Promise.withResolvers<void>> | undefined;
@@ -21,7 +22,7 @@ const nativePermissions = new Map<string, Array<{ permission: string; pattern: s
 const nativeMetadata = new Map<string, Record<string, unknown>>();
 const nativeStatuses = new Map<string, "idle" | "busy">();
 let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
-export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
 export function setHistory(value: typeof history) { history = value; }
 export function setHealth(value: typeof health) { health = value; }
 export function setChildren(parent: string, ids: string[]) { children.set(parent, ids); }
@@ -38,9 +39,21 @@ export function holdStatus() {
   statusGate = Promise.withResolvers<void>(); statusReached = Promise.withResolvers<void>();
   return { reached: statusReached.promise, release: () => statusGate?.resolve() };
 }
-export function holdPrompt() {
+export function holdPrompt(ignoreAbort = false) {
+  ignorePromptAbort = ignoreAbort;
   promptGate = Promise.withResolvers<void>(); promptReached = Promise.withResolvers<void>();
   return { reached: promptReached.promise, release: () => promptGate?.resolve() };
+}
+async function awaitPromptGate(signal?: AbortSignal) {
+  if (!promptGate) return;
+  if (ignorePromptAbort) { await promptGate.promise; return; }
+  if (!signal) { await promptGate.promise; return; }
+  if (signal.aborted) throw new Error("fake prompt aborted");
+  let rejectAbort: (reason?: unknown) => void = () => {};
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(new Error("fake prompt aborted"));
+  signal.addEventListener("abort", onAbort, { once: true });
+  try { await Promise.race([promptGate.promise, aborted]); } finally { signal.removeEventListener("abort", onAbort); }
 }
 export function holdHistory() {
   historyGate = Promise.withResolvers<void>(); historyReached = Promise.withResolvers<void>(); historyFinished = Promise.withResolvers<void>();
@@ -86,12 +99,13 @@ export function createOpencodeClient() {
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
       async status() { calls.push({ method: "status", args: {} }); statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); },
       async promptAsync(args: { sessionID: string; messageID: string; model?: { providerID: string; modelID: string }; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
-        calls.push({ method: "prompt", args }); promptReached?.resolve(); if (promptGate) await promptGate.promise;
-        if (options?.signal?.aborted) throw new Error("fake prompt aborted");
+        calls.push({ method: "prompt", args }); promptReached?.resolve(); await awaitPromptGate(options?.signal);
+        if (options?.signal?.aborted && !ignorePromptAbort) throw new Error("fake prompt aborted");
         const { sessionID, messageID } = args; const text = args.parts[0]?.text ?? "";
         if (text.includes("reject-prompt")) return { error: { name: "BadRequestError" }, response: new Response(null, { status: 400 }) };
         if (text.includes("fail-prompt")) return { error: new TypeError("fake reset", { cause: { code: "ECONNRESET" } }), response: undefined };
         if (text.includes("unread-steer")) return data(undefined);
+        if (text.includes("inline-steer")) { push("message.updated", { sessionID, info: { id: messageID, sessionID, role: "user", time: {} } }); return data(undefined); }
         active = true;
         if (text.includes("inline-events")) { emitFinish(sessionID, messageID); return data(undefined); }
         setImmediate(() => {

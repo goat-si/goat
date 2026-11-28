@@ -129,7 +129,7 @@ export class OpenCodeSession implements EngineSession {
   private broken(reason: string) {
     if (this.closed) return;
     this.closed = true;
-    if (this.active?.admitted) { this.prepareTerminalSteers(this.active); this.active.stopPending = false; this.finish(this.active, { type: "failed", reason }); }
+    if (this.active?.admitted) { this.active.controller.abort(); this.prepareTerminalSteers(this.active); this.active.stopPending = false; this.finish(this.active, { type: "failed", reason }); }
     else this.active = undefined;
     this.abortEvents.abort();
     this.host.fail(reason);
@@ -146,7 +146,15 @@ export class OpenCodeSession implements EngineSession {
   }
   private finish(turn: Turn, outcome: TurnOutcome) {
     if (this.active !== turn) return;
-    if (turn.stopPending || [...turn.steers.values()].some((receipt) => !receipt.ready)) { turn.heldOutcome = outcome; return; }
+    if (outcome.type === "failed") {
+      let invalidated = false;
+      for (const [id, receipt] of turn.steers) if (!receipt.accepted) { turn.steers.delete(id); invalidated = true; }
+      if (invalidated) { this.uncertain = true; turn.controller.abort(); }
+    }
+    if (turn.stopPending || [...turn.steers.values()].some((receipt) => !receipt.ready)) {
+      if (turn.heldOutcome?.type !== "failed" || outcome.type === "failed") turn.heldOutcome = outcome;
+      return;
+    }
     if (outcome.type !== "failed" && (turn.earlyDeltas.size > 0 || this.hasUnknownRoles(turn))) {
       if (!turn.reconciling) {
         turn.reconciling = true;
@@ -179,10 +187,14 @@ export class OpenCodeSession implements EngineSession {
     if (receipt) { receipt.ready = true; if (receipt.observed) this.settleSteer(turn, id, true); }
     const outcome = turn.heldOutcome;
     if (outcome && turn.interrupted) {
-      if (!turn.stopPending && turn.stopIdle) { delete turn.heldOutcome; this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" }); }
+      if (!turn.stopPending && turn.stopIdle) { const final = this.stopOutcome(turn); delete turn.heldOutcome; this.finish(turn, final); }
       return;
     }
     if (outcome && !turn.stopPending && ![...turn.steers.values()].some((entry) => !entry.ready)) { delete turn.heldOutcome; this.finish(turn, outcome); }
+  }
+  private stopOutcome(turn: Turn): TurnOutcome {
+    if (turn.reconciliationFailure) return { type: "failed", reason: turn.reconciliationFailure };
+    return turn.heldOutcome?.type === "failed" ? turn.heldOutcome : { type: "interrupted" };
   }
   private hasUnknownRoles(turn: Turn) {
     return [...turn.parts.values()].some((part) => (part.type === "text" || part.type === "reasoning") && !turn.roles.has(part.messageID));
@@ -204,7 +216,7 @@ export class OpenCodeSession implements EngineSession {
       if (turn.earlyDeltas.size || this.hasUnknownRoles(turn)) throw new Error("unresolved message");
       turn.reconciling = false;
       if (turn.interrupted) {
-        if (!turn.stopPending && turn.stopIdle) this.finish(turn, { type: "interrupted" });
+        if (!turn.stopPending && turn.stopIdle) this.finish(turn, this.stopOutcome(turn));
         return;
       }
       this.finish(turn, outcome);
@@ -236,18 +248,23 @@ export class OpenCodeSession implements EngineSession {
   }
   private async admission(turn: Turn, signal: "accepted" | "observed" | "idle" | "completed") {
     const a = turn.admission; if (!a.pending || this.active !== turn) return;
-    if (signal === "idle") { a.idle = true; return; }
+    if (signal === "idle") {
+      a.idle = true;
+      // A steer already accepted by OpenCode can be cancelled if a fresh native status confirms idle.
+      if (!a.accepted || !turn.steers.get(a.id)?.accepted) return;
+    }
     if (signal === "accepted" || signal === "completed") a.accepted = true;
     if (signal === "observed" || signal === "completed") a.observed = true;
-    if (!a.accepted || !a.observed) return;
+    if (!a.accepted || (!a.observed && !(signal === "idle" && turn.steers.get(a.id)?.accepted))) return;
     if (!a.idle) { a.pending = false; return; }
     try {
-      const result = await this.api.session.status({}, { throwOnError: true });
+      const result = await this.api.session.status({}, { throwOnError: true, signal: AbortSignal.timeout(10_000) });
       if (this.active !== turn || turn.admission !== a) return;
+      if (!result.data) throw new Error("missing status");
       const status = result.data?.[this.engineRef];
       if (!status || status.type === "idle") { a.pending = false; this.finish(turn, turn.interrupted ? { type: "interrupted" } : turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
       else a.pending = false;
-    } catch { /* Unknown status keeps admission open rather than falsely completing. */ }
+    } catch { if (this.active === turn && turn.admission === a) this.broken("OpenCode admission status could not be reconciled"); }
   }
   private async route(event: Event, replay = false) {
     if ((event.type === "session.created" || event.type === "session.updated") && event.properties.info.parentID && (event.properties.info.parentID === this.engineRef || this.childSessions.has(event.properties.info.parentID))) {
@@ -344,11 +361,11 @@ export class OpenCodeSession implements EngineSession {
         return;
       }
       case "session.status":
-        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
+        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
         else await this.admission(turn, "observed");
         return;
       case "session.idle":
-        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
+        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
       case "session.compacted": turn.overflow = false; return;
       case "session.error": {
@@ -460,7 +477,11 @@ export class OpenCodeSession implements EngineSession {
     try {
       await this.submit(turn, inputs, false);
       if (this.closed || this.active !== turn) return { status: "unknown" as const, reason: "OpenCode session ended during steering" };
-      receipt.accepted = true; setImmediate(() => this.releaseSteer(turn, id));
+      receipt.accepted = true;
+      setImmediate(() => { void (async () => {
+        if (this.active === turn && turn.admission.id === id && turn.admission.idle) await this.admission(turn, "idle");
+        this.releaseSteer(turn, id);
+      })().catch(() => this.broken("OpenCode steering reconciliation failed")); });
       return { status: "accepted" as const };
     } catch (error) {
       turn.steers.delete(id); setImmediate(() => this.releaseSteer(turn, id));
@@ -491,7 +512,7 @@ export class OpenCodeSession implements EngineSession {
     } catch { failed = true; }
     turn.stopPending = false;
     if (failed) { this.broken("OpenCode interrupt could not be confirmed"); throw new HelperError("transport", "OpenCode interrupt failed"); }
-    if (this.active === turn && turn.stopIdle) this.finish(turn, turn.reconciliationFailure ? { type: "failed", reason: turn.reconciliationFailure } : { type: "interrupted" });
+    if (this.active === turn && turn.stopIdle) this.finish(turn, this.stopOutcome(turn));
   }
   async answerRequest(key: string, answer: RequestAnswer) {
     const request = this.requests.get(key); if (!request) throw new HelperError("bad_request", "No open OpenCode request");
