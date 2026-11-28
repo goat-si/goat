@@ -64,7 +64,6 @@ import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import {
   makeShellThreadRows,
-  filterWorktreeRows,
   worktreePathsMatch,
   runMapsByThreadId,
   shellItemCountMap,
@@ -170,7 +169,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { mapShellChunks } from "./shellChunks.ts";
+import { mapShellChunks, reduceShellChunks } from "./shellChunks.ts";
 import type * as Statement from "effect/sql/Statement";
 
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
@@ -6650,7 +6649,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ThreadId,
         Array<OrchestrationV2ThreadProjection["providerThreads"][number]>
       >();
+      let processed = 0;
       for (const row of input.providerThreadRows) {
+        if (processed > 0 && processed % 250 === 0) yield* Effect.yieldNow;
+        processed++;
         const providerThread = yield* decodeProviderThreadPayload(row.payload_json);
         const threadId =
           row.thread_id.length > 0 ? ThreadId.make(row.thread_id) : providerThread.appThreadId;
@@ -6664,6 +6666,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
       const pendingTurnItemsByThreadId = new Map<ThreadId, Array<OrchestrationV2TurnItem>>();
       for (const row of input.pendingTurnItemRows) {
+        if (processed > 0 && processed % 250 === 0) yield* Effect.yieldNow;
+        processed++;
         const turnItem = {
           ...(yield* decodeTurnItemPayload(row.payload_json)),
           ...(row.owning_provider_instance_id === null
@@ -7052,18 +7056,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       options: (ShellSnapshotOptions & { readonly listedOnly?: boolean }) | undefined,
       awarenessOnly = false,
     ) {
-      const targetThreadRows = filterWorktreeRows(
+      const targetThreadIds = new Set<ThreadId>();
+      const rowsByThreadId = new Map<ThreadId, ShellThreadRow>();
+      const pendingSourceIds: Array<ThreadId> = [];
+      yield* reduceShellChunks(
         yield* selectShellThreadRows(undefined, options),
-        options?.worktreePath,
-      );
-      const targetThreadIds = new Set(targetThreadRows.map((row) => ThreadId.make(row.thread_id)));
-      const rowsByThreadId = new Map(
-        targetThreadRows.map((row) => [ThreadId.make(row.thread_id), row] as const),
-      );
-      const pendingSourceIds = (awarenessOnly ? [] : targetThreadRows).flatMap((row) =>
-        row.forked_from_run_source_thread_id === null
-          ? []
-          : [ThreadId.make(row.forked_from_run_source_thread_id)],
+        undefined,
+        (_, row) => {
+          if (!worktreePathsMatch(row.worktree_path, options?.worktreePath)) return;
+          const id = ThreadId.make(row.thread_id);
+          targetThreadIds.add(id);
+          rowsByThreadId.set(id, row);
+          if (!awarenessOnly && row.forked_from_run_source_thread_id !== null)
+            pendingSourceIds.push(ThreadId.make(row.forked_from_run_source_thread_id));
+        },
       );
       while (pendingSourceIds.length > 0) {
         const sourceId = pendingSourceIds.pop();
@@ -7177,20 +7183,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           pendingTurnItemsByThreadId,
         }),
       );
-      const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
+      const { statesByThreadId, targets } = yield* reduceShellChunks(
+        states,
+        {
+          statesByThreadId: new Map<ThreadId, ShellThreadState>(),
+          targets: [] as ShellThreadState[],
+        },
+        (result, state) => {
+          result.statesByThreadId.set(state.thread.id, state);
+          if (targetThreadIds.has(state.thread.id)) result.targets.push(state);
+        },
+      );
 
-      const shells = yield* mapShellChunks(
-        states.filter((state) => targetThreadIds.has(state.thread.id)),
-        (state) =>
-          Effect.sync(() =>
-            shellFromState({
-              state,
-              visibleItemCount: visibleItemCountForShell({
-                threadId: state.thread.id,
-                statesByThreadId,
-              }),
+      const shells = yield* mapShellChunks(targets, (state) =>
+        Effect.sync(() =>
+          shellFromState({
+            state,
+            visibleItemCount: visibleItemCountForShell({
+              threadId: state.thread.id,
+              statesByThreadId,
             }),
-          ),
+          }),
+        ),
       );
 
       return {

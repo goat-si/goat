@@ -565,9 +565,3 @@ export const worktreePathsMatch = (path: string | null, target: string | undefin
   target === undefined ||
   (path !== null &&
     normalizeProjectPathForComparison(path) === normalizeProjectPathForComparison(target));
-
-export const filterWorktreeRows = (
-  rows: ReadonlyArray<ShellThreadRow>,
-  target: string | undefined,
-) =>
-  target === undefined ? rows : rows.filter((row) => worktreePathsMatch(row.worktree_path, target));
