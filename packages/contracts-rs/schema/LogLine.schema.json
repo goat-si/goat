@@ -997,6 +997,14 @@
       ],
       "type": "string"
     },
+    "NotificationSource": {
+      "enum": [
+        "session",
+        "fallback",
+        "fixed"
+      ],
+      "type": "string"
+    },
     "NotifyKind": {
       "description": "`user.notified` kind (MCP `send_to_user`).",
       "enum": [
@@ -1587,6 +1595,11 @@
             }
           ]
         },
+        "openAsks": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "parent": {
           "anyOf": [
             {
@@ -1614,6 +1627,9 @@
         "title": {
           "description": "At most [CARD_TITLE_MAX_CHARS] characters.",
           "type": "string"
+        },
+        "unread": {
+          "type": "boolean"
         },
         "updatedAt": {
           "description": "RFC 3339 UTC timestamp.",
@@ -2565,6 +2581,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotificationSource"
             },
             {
               "type": "null"

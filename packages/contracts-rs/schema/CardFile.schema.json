@@ -746,6 +746,11 @@
             }
           ]
         },
+        "openAsks": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "parent": {
           "anyOf": [
             {
@@ -773,6 +778,9 @@
         "title": {
           "description": "At most [CARD_TITLE_MAX_CHARS] characters.",
           "type": "string"
+        },
+        "unread": {
+          "type": "boolean"
         },
         "updatedAt": {
           "description": "RFC 3339 UTC timestamp.",

@@ -16,4 +16,4 @@ sessionThreadId: ThreadId,
 /**
  * v1 `defaultModelSelection`.
  */
-defaultModelSelection: ModelSelection, };
+defaultModelSelection: ModelSelection, instructions?: string, };
