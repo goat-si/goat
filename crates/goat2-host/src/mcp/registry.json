@@ -640,6 +640,143 @@
     }
   },
   {
+    "path": "decision.list",
+    "name": "goat_decision_list",
+    "summary": "List open decisions and questions of this thread and its workers.",
+    "description": "List the open decisions and questions asked in this thread and in the worker threads it started, as inbox items with their asking thread (from.threadId) and parent (from.parentThreadId). Example: goat_decision_list {status: \"open\"}.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "answered",
+            "expired",
+            "withdrawn"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Open items",
+        "args": {
+          "status": "open"
+        }
+      }
+    ],
+    "guide": "Listing does not answer an item. A worker's question is also in the person's inbox; answer it here only when the person's earlier instructions already settle it.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "status": "Only open items are listed."
+    }
+  },
+  {
+    "path": "decision.read",
+    "name": "goat_decision_get",
+    "summary": "Read one open decision or question by id.",
+    "description": "Read one open durable decision or projected pending question by id, with its asking thread and parent. Example: goat_decision_get {id: \"pending:thr_…:ask_…\"}.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Read an item",
+        "args": {
+          "id": "pending:thr_1:ask_2"
+        }
+      }
+    ],
+    "guide": "Use the id from goat_decision_list: decision:<threadId>:<requestId> or pending:<threadId>:<requestId>.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "id": "The item id."
+    }
+  },
+  {
+    "path": "decision.answer",
+    "name": "goat_decision_answer",
+    "summary": "Answer a worker's open decision with optionId, or its question with answers, plus reason.",
+    "description": "Answer an open decision or question asked by a worker thread you started. Example: goat_decision_answer {id: \"decision:thr_…:ask_…\", optionId: \"sqlite\", reason: \"The task says no new servers\"}.",
+    "effect": "destructive",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "optionId": {
+          "type": "string"
+        },
+        "answers": {
+          "type": "object"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "accept",
+            "decline"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Pick an option",
+        "args": {
+          "id": "decision:thr_1:ask_2",
+          "optionId": "sqlite",
+          "reason": "The task says no new servers"
+        }
+      }
+    ],
+    "guide": "Use optionId for a durable decision; for a projected question send answers {questionId: label}. A reason is required. Approvals and sign-ins need the person and are refused here. Silence never approves. The answer goes to the asking thread as a new message.",
+    "annotations": {
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "id": "The item id.",
+      "optionId": "A decision's chosen option id.",
+      "answers": "A question's answers by question id.",
+      "decision": "Not accepted from agents (approvals need the person).",
+      "reason": "Why, 1 to 2000 characters."
+    },
+    "idempotencyReason": "An answered item is no longer open; a repeat is refused with decision_not_found."
+  },
+  {
     "path": "bot.notes_read",
     "name": "goat_bot_notes_read",
     "summary": "Read your bot notes",

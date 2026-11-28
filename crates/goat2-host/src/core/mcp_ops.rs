@@ -799,4 +799,28 @@ impl McpHost for Host {
         };
         crate::bot::mcp::notes_change(self, caller, args).await
     }
+
+    async fn decision_list(
+        &self,
+        caller: &Caller,
+        args: crate::bot::decisions::DecisionListArgs,
+    ) -> SurfaceResult {
+        crate::bot::decisions::list(self, caller, args).await
+    }
+
+    async fn decision_read(
+        &self,
+        caller: &Caller,
+        args: crate::bot::decisions::DecisionReadArgs,
+    ) -> SurfaceResult {
+        crate::bot::decisions::read(self, caller, args).await
+    }
+
+    async fn decision_answer(
+        &self,
+        caller: &Caller,
+        args: goat2_contracts::DecisionAnswerInput,
+    ) -> SurfaceResult {
+        crate::bot::decisions::answer(self, caller, args).await
+    }
 }

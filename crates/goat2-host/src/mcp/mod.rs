@@ -329,6 +329,27 @@ async fn dispatch(
             }
             host.request_ask(caller, a).await
         }
+        "decision.list" => {
+            host.decision_list(
+                caller,
+                decode!(args, e, crate::bot::decisions::DecisionListArgs),
+            )
+            .await
+        }
+        "decision.read" => {
+            host.decision_read(
+                caller,
+                decode!(args, e, crate::bot::decisions::DecisionReadArgs),
+            )
+            .await
+        }
+        "decision.answer" => {
+            host.decision_answer(
+                caller,
+                decode!(args, e, goat2_contracts::DecisionAnswerInput),
+            )
+            .await
+        }
         "bot.notes_read" => {
             host.bot_notes_read(caller, decode!(args, e, api::BotNotesReadArgs))
                 .await

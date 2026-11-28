@@ -274,6 +274,48 @@ pub trait McpHost: Send + Sync + 'static {
     async fn report_result(&self, caller: &Caller, args: ReportResultArgs) -> SurfaceResult;
     async fn user_send(&self, caller: &Caller, args: UserSendArgs) -> SurfaceResult;
     async fn request_ask(&self, caller: &Caller, args: RequestAskArgs) -> SurfaceResult;
+    /// Open decisions and questions of the caller and its workers (`decision.list`).
+    async fn decision_list(
+        &self,
+        caller: &Caller,
+        args: crate::bot::decisions::DecisionListArgs,
+    ) -> SurfaceResult {
+        let _ = (caller, args);
+        SurfaceResult::err(
+            ErrorCode::Unavailable,
+            "not_supported",
+            "no decisions here",
+            false,
+        )
+    }
+    /// One open decision (`decision.read`).
+    async fn decision_read(
+        &self,
+        caller: &Caller,
+        args: crate::bot::decisions::DecisionReadArgs,
+    ) -> SurfaceResult {
+        let _ = (caller, args);
+        SurfaceResult::err(
+            ErrorCode::Unavailable,
+            "not_supported",
+            "no decisions here",
+            false,
+        )
+    }
+    /// Answer a worker's decision or question (`decision.answer`).
+    async fn decision_answer(
+        &self,
+        caller: &Caller,
+        args: goat2_contracts::DecisionAnswerInput,
+    ) -> SurfaceResult {
+        let _ = (caller, args);
+        SurfaceResult::err(
+            ErrorCode::Unavailable,
+            "not_supported",
+            "no decisions here",
+            false,
+        )
+    }
     /// A bot reads its notes.
     async fn bot_notes_read(&self, caller: &Caller, args: BotNotesReadArgs) -> SurfaceResult {
         let _ = (caller, args);

@@ -703,3 +703,92 @@ async fn fix_tests_acks_starts_a_briefed_worker_and_reports_the_result() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_bot_lists_and_answers_its_workers_decision() {
+    let t = setup().await;
+    let (_, id) = bot(&t);
+    say(&t, &id, "dl-1", "pick a database and build it").await;
+    eventually("running", || running(&t, &id)).await;
+    let me = caller(&t, &id).await;
+    let started = t
+        .host
+        .thread_start(
+            &me,
+            goat2_host::api::ThreadStartArgs {
+                task: "Build the store".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+    let SurfaceResult::Ok { value } = started else {
+        panic!("{started:?}")
+    };
+    let worker = ThreadId::new(value["started"]["childThreadId"].as_str().unwrap());
+    eventually("worker running", || running(&t, &worker)).await;
+    let wme = caller(&t, &worker).await;
+    let opt = |id: &str, label: &str| goat2_contracts::DecisionOption {
+        id: id.into(),
+        label: label.into(),
+        consequence: format!("{label} it is"),
+    };
+    let asked = t
+        .host
+        .request_ask(
+            &wme,
+            goat2_host::api::RequestAskArgs {
+                kind: goat2_host::api::AskKind::Decision,
+                summary: "Pick a database".into(),
+                detail: None,
+                options: vec![opt("pg", "Postgres"), opt("sqlite", "SQLite")],
+                recommended: Some("sqlite".into()),
+                questions: Vec::new(),
+                client_request_id: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(asked, SurfaceResult::NeedsHuman { .. }),
+        "{asked:?}"
+    );
+    let listed = t
+        .host
+        .decision_list(&me, goat2_host::bot::decisions::DecisionListArgs::default())
+        .await;
+    let SurfaceResult::Ok { value } = listed else {
+        panic!("{listed:?}")
+    };
+    let items = value["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{value}");
+    let item_id = items[0]["id"].as_str().unwrap().to_owned();
+    assert!(item_id.starts_with(&format!("decision:{worker}:ask_")));
+    assert_eq!(items[0]["recommended"], "sqlite");
+    assert_eq!(items[0]["from"]["parentThreadId"], id.as_str());
+    let answer = |option: &str| goat2_contracts::DecisionAnswerInput {
+        id: item_id.clone(),
+        option_id: Some(option.into()),
+        answers: None,
+        decision: None,
+        reason: "The task says no new servers".into(),
+    };
+    // The asking worker cannot answer itself.
+    let own = t.host.decision_answer(&wme, answer("pg")).await;
+    assert!(
+        matches!(own, SurfaceResult::Error { ref error } if error.reason == "not_allowed"),
+        "{own:?}"
+    );
+    let done = t.host.decision_answer(&me, answer("sqlite")).await;
+    assert!(done.is_ok(), "{done:?}");
+    t.fake.finish_turn(&worker, "asked");
+    eventually("worker gets the answer", || {
+        t.fake
+            .turn_texts(&worker)
+            .iter()
+            .any(|x| x.contains("chose \"SQLite\" (sqlite)"))
+    })
+    .await;
+    let again = t.host.decision_answer(&me, answer("pg")).await;
+    assert!(
+        matches!(again, SurfaceResult::Error { ref error } if error.reason == "decision_not_found")
+    );
+}

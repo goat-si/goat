@@ -4,6 +4,7 @@
 
 pub mod asks;
 pub mod brief;
+pub mod decisions;
 pub mod guards;
 pub mod mcp;
 pub mod notes;
