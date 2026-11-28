@@ -988,6 +988,55 @@ mod tests {
         );
     }
 
+    /// v1 adapter.ts:6544-6556, 4640-4670, 7874-7900 (Grok `preserveRuntimeOnSettledInterrupt`): a
+    /// turn interrupted while the agent keeps running writes its subagents as interrupted, and their
+    /// later end only updates their status.
+    #[test]
+    fn subagents_of_a_kept_running_turn_end_quietly() {
+        let flavor = crate::agents::grok::Grok::default();
+        let mut tracker = tracker();
+        let mut projector = projector();
+        let mut out = Vec::new();
+        let child = "11111111-2222-3333-4444-555555555555";
+        {
+            let mut turn = Some(TurnRef {
+                turn_id: "turn-1",
+                projector: &mut projector,
+            });
+            let spawn = json!({"sessionUpdate": "tool_call", "toolCallId": "spawn-1", "title": "Task",
+                "status": "completed", "rawInput": {"prompt": "Count the files", "description": "File counter"},
+                "rawOutput": {"text": format!("Subagent started in background.\nsubagent_id: {child}")}});
+            assert_eq!(
+                tracker.root_tool(&flavor, false, &spawn, &mut turn, &mut out),
+                ToolRoute::Handled
+            );
+        }
+        assert!(tracker.blocks_turn("turn-1"));
+        out.clear();
+        tracker.turn_settled("turn-1", false, true, &mut out);
+        let written = subagent_items(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].1.status, TurnItemStatus::Interrupted);
+        out.clear();
+        tracker.injected_user_text(
+            &flavor,
+            &format!("Background subagent {child} (File counter) completed successfully"),
+            &mut None,
+            &mut out,
+        );
+        assert!(matches!(
+            &out[..],
+            [EngineEvent::SubagentUpdate {
+                turn_id: None,
+                status: TurnItemStatus::Completed,
+                ..
+            }]
+        ));
+        out.clear();
+        tracker.exited(&mut out);
+        assert!(out.is_empty(), "an ended subagent is not interrupted again");
+    }
+
     /// v1 adapter.ts:1816-1822: hydration without a known launch does not create a subagent.
     #[test]
     fn hydration_only_reports_are_ignored() {
