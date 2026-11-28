@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/goat2-contracts",
+  "crates/goat2-thread-store",
+  "crates/goat2-engine-codex",
+  "crates/goat2-parity",
+  "crates/goat2-host",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/goat-si/goat"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }

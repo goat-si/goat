@@ -1,0 +1,10 @@
+[package]
+name = "goat2-contracts"
+version = "0.0.0"
+description = "Wire and disk contracts shared by the host and the TypeScript UI (ts-rs, JSON Schema)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

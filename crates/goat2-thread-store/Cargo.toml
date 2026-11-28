@@ -1,0 +1,10 @@
+[package]
+name = "goat2-thread-store"
+version = "0.0.0"
+description = "Per-thread folder store: goat.jsonl, card.json, rebuildable card index, (epoch, seq) reads."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

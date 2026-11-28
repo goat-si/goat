@@ -1,0 +1,10 @@
+[package]
+name = "goat2-parity"
+version = "0.0.0"
+description = "GOAT v1 behaviour specs and recorded-session scenarios for equal-behaviour checks."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

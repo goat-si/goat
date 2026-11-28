@@ -1,0 +1,10 @@
+[package]
+name = "goat2-engine-codex"
+version = "0.0.0"
+description = "Codex app-server driver on the official codex-app-server-protocol crate."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

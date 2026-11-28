@@ -1,0 +1,10 @@
+[package]
+name = "goat2-host"
+version = "0.0.0"
+description = "GOAT 2 engine host binary (goat2-host)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
