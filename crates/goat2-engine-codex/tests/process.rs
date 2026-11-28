@@ -144,3 +144,16 @@ async fn host_identity_is_not_inherited() {
     assert_eq!(first_line(&mut child).await, "[][]");
     child.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_host_ui_token_is_not_inherited_but_other_host_settings_are() {
+    // SAFETY: test-only environment mutation before spawning.
+    unsafe {
+        std::env::set_var("GOAT2_HOST_TOKEN", "ui-secret");
+        std::env::set_var("GOAT2_PARITY_FAKE_DIR", "/tmp/parity");
+    }
+    let launch = sh("echo \"[$GOAT2_HOST_TOKEN][$GOAT2_PARITY_FAKE_DIR]\"").without_host_identity();
+    let mut child = ChildProcess::spawn(&launch).unwrap();
+    assert_eq!(first_line(&mut child).await, "[][/tmp/parity]");
+    child.shutdown().await;
+}
