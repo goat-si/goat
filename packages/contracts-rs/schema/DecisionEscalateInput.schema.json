@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "v1 `DecisionEscalateInput` (MCP `decision.escalate`): only the asking thread's parent.",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "reason"
+  ],
+  "title": "DecisionEscalateInput",
+  "type": "object"
+}

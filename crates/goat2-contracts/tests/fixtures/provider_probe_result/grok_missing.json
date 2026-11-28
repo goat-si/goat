@@ -1,0 +1,13 @@
+{
+  "installed": false,
+  "version": null,
+  "installedVersion": null,
+  "cli": "missing",
+  "status": "error",
+  "auth": {
+    "status": "unknown"
+  },
+  "models": [],
+  "checkedAt": "2026-11-28T13:00:00Z",
+  "message": "grok was not found on PATH"
+}
