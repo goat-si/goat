@@ -299,6 +299,10 @@ importers:
         version: 5.1.2(@types/node@24.12.4)(jsdom@31.0.1)(vite@8.4.0(@types/node@24.12.4))
 
   packages/bot-face:
+    dependencies:
+      '@goat2/contracts-rs':
+        specifier: workspace:*
+        version: link:../contracts-rs
     devDependencies:
       '@types/react':
         specifier: 'catalog:'

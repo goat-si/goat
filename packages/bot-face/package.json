@@ -24,5 +24,8 @@
   },
   "peerDependencies": {
     "react": "19.x"
+  },
+  "dependencies": {
+    "@goat2/contracts-rs": "workspace:*"
   }
 }

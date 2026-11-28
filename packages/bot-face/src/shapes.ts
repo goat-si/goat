@@ -1,4 +1,4 @@
-import type { BotFace } from "../../contracts-rs/src/generated/BotFace.ts";
+import type { BotFace } from "@goat2/contracts-rs";
 
 export const HORNS_PATH = "M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z";
 export const HAPPY_EYES = "M13 25 L15.4 22.4 L17.8 25 M22.2 25 L24.6 22.4 L27 25";

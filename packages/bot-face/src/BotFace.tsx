@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { BotFace as BotFaceProfile } from "../../contracts-rs/src/generated/BotFace.ts";
+import type { BotFace as BotFaceProfile } from "@goat2/contracts-rs";
 import { blendPose, facePose, reducedPose, type BotMood, type FacePose } from "./facePose.ts";
 import { FACE_CLOCK_FPS, MOOD_BLEND_SECONDS, STATIC_IDLE_MAX_PX } from "./motionTokens.ts";
 import { COLORS, DEFAULT_FACE, HAPPY_EYES, HORNS_PATH, SHAPES, SHUT_EYES } from "./shapes.ts";
