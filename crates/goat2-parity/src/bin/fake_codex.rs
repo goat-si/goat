@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         // Emit what the hold allows, in recorded order.
         while let Some(front) = pending.front() {
-            if is_turn_completed(front) && !take_completion(&dir, hold) {
+            if is_turn_completed(front) && !take_completion(&dir, hold)? {
                 break;
             }
             serde_json::to_writer(&mut stdout, front)?;

@@ -85,27 +85,46 @@ pub fn allowed_completions(dir: &Path, hold: bool) -> u64 {
 }
 
 /// Take one turn completion from the runner's budget. The count is shared by every fake process
-/// of the run (a restarted host or another thread starts a new process), under a directory lock,
-/// so a release spent by an earlier process is not spent again (review r14).
-pub fn take_completion(dir: &Path, hold: bool) -> bool {
+/// of the run (a restarted host or another thread starts a new process), so a release spent by an
+/// earlier process is not spent again (review r14). It is guarded by an OS file lock, released
+/// when its process exits, and any lock or counter error is returned: the caller then emits
+/// nothing and fails (review r15).
+pub fn take_completion(dir: &Path, hold: bool) -> Result<bool, String> {
     if !hold {
-        return true;
+        return Ok(true);
     }
-    let lock = dir.join("completed.lock");
-    while fs::create_dir(&lock).is_err() {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("completed.lock"))
+        .map_err(|e| format!("completion lock: {e}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5))
+            }
+            Err(fs::TryLockError::WouldBlock) => return Err("completion lock: timed out".into()),
+            Err(fs::TryLockError::Error(e)) => return Err(format!("completion lock: {e}")),
+        }
     }
     let path = dir.join("completed");
-    let done: u64 = fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    let done: u64 = match fs::read_to_string(&path) {
+        Ok(text) => text
+            .trim()
+            .parse()
+            .map_err(|e| format!("completion count {text:?}: {e}"))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => 0,
+        Err(e) => return Err(format!("completion count: {e}")),
+    };
     let ok = done < allowed_completions(dir, hold);
     if ok {
-        let _ = fs::write(&path, (done + 1).to_string());
+        fs::write(&path, (done + 1).to_string()).map_err(|e| format!("completion count: {e}"))?;
     }
-    let _ = fs::remove_dir(&lock);
-    ok
+    // Dropping the file releases the lock.
+    Ok(ok)
 }
 
 type Frames = Vec<(bool, Value)>;
@@ -658,12 +677,34 @@ mod tests {
     fn the_completion_budget_is_shared_across_processes() {
         let (_r, dir) = setup("simple_turn");
         fs::write(dir.join("release"), "1").unwrap();
-        assert!(take_completion(&dir, true));
+        assert!(take_completion(&dir, true).unwrap());
         // A later process (restarted host) does not get the spent release again.
-        assert!(!take_completion(&dir, true));
+        assert!(!take_completion(&dir, true).unwrap());
         fs::write(dir.join("release"), "2").unwrap();
-        assert!(take_completion(&dir, true));
-        assert!(take_completion(&dir, false));
+        assert!(take_completion(&dir, true).unwrap());
+        assert!(take_completion(&dir, false).unwrap());
+        // r15: an unwritable counter is an error, never a completion.
+        fs::write(dir.join("release"), "9").unwrap();
+        fs::remove_file(dir.join("completed")).unwrap();
+        fs::create_dir(dir.join("completed")).unwrap();
+        assert!(take_completion(&dir, true).is_err());
+        fs::remove_dir(dir.join("completed")).unwrap();
+        // r15: while another handle holds the OS lock it is not taken; once released it is.
+        let held = OpenOptions::new()
+            .write(true)
+            .open(dir.join("completed.lock"))
+            .unwrap();
+        held.lock().unwrap();
+        let other = OpenOptions::new()
+            .write(true)
+            .open(dir.join("completed.lock"))
+            .unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        assert!(take_completion(&dir, true).unwrap());
         fs::remove_dir_all(dir).unwrap();
     }
 }
