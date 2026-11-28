@@ -61,6 +61,11 @@ type Outcome =
 // anything (request ids, key fragments, echoed conversation), so it stays in the server log.
 const GENERATION_FAILED_MESSAGE = "Title generation failed.";
 const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
+// An auth, permission or quota refusal fails the same way on every attempt.
+const PROVIDER_REFUSAL = /\b(?:40[13]|forbidden|unauthori[sz]ed|quota|usage limit)\b/iu;
+
+const isRetryableFailure = (error: unknown) =>
+  !(isTextGenerationError(error) && PROVIDER_REFUSAL.test(error.detail));
 
 const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -223,6 +228,7 @@ const make = Effect.gen(function* () {
       Effect.retry({
         times: input.kind.type === "initial" ? 2 : 0,
         schedule: Schedule.exponential("2 seconds"),
+        while: isRetryableFailure,
       }),
       OwnedEffectDeadline.generateTitle,
       Effect.map(
