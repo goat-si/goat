@@ -40,3 +40,10 @@ GOAT v1 Nightly is a separate app with its own data (`~/.goat/desktop-nightly`);
 - Quit: SIGTERM to the host group, SIGKILL after 5 s. Crash: kill leftover group, restart with v1 backoff
   (jittered 1–30 s, 5 restarts per 10 min then pause; v1 `DesktopBackendRecoveryPolicy.ts`).
 - UI gets `{wsUrl, token}` from preload `window.goat2Host` and connects directly.
+
+## Window and build stamp (lane G, owner 2026-11-28)
+- `titleBarStyle: hiddenInset`, macOS buttons at x16 y13 (v1 `DesktopWindowAppearance.ts`), top bar 40px drawn by the UI as
+  `-webkit-app-region: drag` (controls `no-drag`), traffic-light area x16..~84 left empty in the desktop build.
+- Preload `window.goat2Host = {wsUrl, token, build: {commit, branch, builtAt}}`; Dev builds show the stamp in the top bar.
+- `scripts/build-dev-app.sh` installs only from branch `goat2`.
+- A host that exits 0 before its ready line / `/health` is not restarted ("host not running"); ready-then-exit or non-zero exit restarts with v1 backoff.
