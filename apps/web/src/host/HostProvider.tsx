@@ -8,7 +8,7 @@ import { OfflineTransport, WebSocketTransport } from "./transport.ts";
 import { FakeHost } from "./fakeHost.ts";
 import { FakeProviders, demoProviderEntries } from "./fakeProviders.ts";
 import { DEMO_NOW, demoWorld, withQueue } from "./demoWorld.ts";
-import { deriveThread, type DerivedThread } from "./store.ts";
+import { deriveThread, type DerivedThread, type ThreadView } from "./store.ts";
 
 export interface Goat2HostConfig { wsUrl: string | null; token: string; build?: { commit: string; branch: string; builtAt: string; dirty?: boolean } }
 declare global { interface Window { goat2Host?: Goat2HostConfig } }
@@ -80,4 +80,10 @@ export function useThread(threadId: string | null): DerivedThread & { caughtUp: 
   useEffect(() => (threadId ? client.watchThread(threadId) : undefined), [client, threadId]);
   const view = threadId ? snap.state.threads[threadId] : undefined;
   return { ...deriveThread(view), caughtUp: view?.caughtUp ?? false, hasOlder: view?.hasOlder ?? false };
+}
+
+/** The raw view of a thread (log lines, streaming text) for the v1 timeline; subscribe with useThread. */
+export function useThreadView(threadId: string | null): ThreadView | undefined {
+  const snap = useHost();
+  return threadId ? snap.state.threads[threadId] : undefined;
 }

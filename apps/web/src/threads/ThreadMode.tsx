@@ -5,7 +5,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ProviderGlyph } from "@goat2/provider-icons";
 import * as P from "../paper/parts.tsx";
-import { useClient, useHost, useHostContext, useThread } from "../host/HostProvider.tsx";
+import { useClient, useHost, useHostContext, useThread, useThreadView } from "../host/HostProvider.tsx";
+import { V1Boundary, V1ThreadTimeline } from "@v1/surfaces";
 import type { ThreadCard } from "../host/wire.ts";
 import type { TranscriptEntry, WorkStep } from "../host/store.ts";
 import { plannedProps } from "../planned/Planned.tsx";
@@ -112,24 +113,11 @@ export function WorkFold({ e, nowIso }: { e: Extract<TranscriptEntry, { kind: "w
   </>;
 }
 
-export function TimelineEntries({ entries, activeRunStartedAt, nowIso }: { entries: TranscriptEntry[]; activeRunStartedAt: string | null; nowIso: string }) {
-  const out: ReactNode[] = [];
-  for (const e of entries) {
-    if (e.kind === "user") out.push(<P.TlUser key={e.key} text={e.text} />);
-    else if (e.kind === "work") out.push(<WorkFold key={e.key} e={e} nowIso={nowIso} />);
-    else if (e.kind === "bot") out.push(<P.TlAnswer key={e.key} text={e.text} />);
-  }
-  // A run with no finished step yet still shows that it is working (v1 WorkingTimelineRow).
-  if (activeRunStartedAt && !entries.some((e) => e.kind === "work" && e.finishedAt === null)) {
-    out.push(<P.TlWorking key="working" label={`Working for ${duration(activeRunStartedAt, nowIso)}`} />);
-  }
-  return <>{out}</>;
-}
-
 function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted: (id: string) => void }) {
   const client = useClient();
   const { now } = useHostContext();
   const thread = useThread(card?.id ?? null);
+  const view = useThreadView(card?.id ?? null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -217,7 +205,10 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
         {card ? <P.Timeline root={{ "data-timeline": card.id }}>
           {thread.hasOlder && <div {...(btn("Load earlier messages", () => client.readOlder(card.id)) as object)} data-load-older=""
             style={{ color: "#5D5D5DD9", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12.5, padding: "0 0 12px", textAlign: "center" }}>Load earlier messages</div>}
-          <TimelineEntries entries={thread.entries} activeRunStartedAt={thread.activeRunStartedAt} nowIso={now().toISOString()} />
+          {view && <V1Boundary style={{ display: "contents" }}>
+            <V1ThreadTimeline threadId={card.id} lines={view.lines} streaming={view.streaming} onOpenThread={onStarted}
+              renderMessage={(m) => m.role === "user" ? <P.TlUser text={m.text} /> : <P.TlAnswer text={m.text} />} />
+          </V1Boundary>}
           {thread.openRequests.filter((rq) => !hidden.has(rq.requestId)).map((rq) => (
             <div key={rq.requestId} style={{ paddingBottom: 12 }}><RequestCard threadId={card.id} request={rq} item={thread.requestItems[rq.requestId]} onLoadDetails={thread.hasOlder ? () => client.readOlder(card.id) : undefined} onHide={() => setHidden((h) => new Set(h).add(rq.requestId))} /></div>
           ))}

@@ -9,6 +9,7 @@ import { ProvidersSettingsScreen as ProvidersScreen } from "./ProvidersSettingsS
 import { SettingsNavFrame } from "./SettingsNavFrame";
 import { Goat2ModelPicker } from "./Goat2ModelPicker";
 import { BotModelSettings as BotModel } from "./BotModelSettings";
+import { V1ThreadTimeline as ThreadTimeline } from "./timeline/V1ThreadTimeline.tsx";
 
 export const V1Boundary: typeof Api.V1Boundary = Boundary;
 export const V1Fixture: typeof Api.V1Fixture = Fixture;
@@ -20,6 +21,7 @@ export const ProvidersSettingsScreen: typeof Api.ProvidersSettingsScreen = Provi
 export const SettingsSidebarNav: typeof Api.SettingsSidebarNav = SettingsNavFrame;
 export const ModelPicker: typeof Api.ModelPicker = Goat2ModelPicker;
 export const BotModelSettings: typeof Api.BotModelSettings = BotModel;
+export const V1ThreadTimeline: typeof Api.V1ThreadTimeline = ThreadTimeline;
 
 let current: Required<Api.V1Location> = { pathname: "/settings/providers", hash: "", search: {} };
 export const setV1Location: typeof Api.setV1Location = (location) => {
