@@ -8,6 +8,7 @@ import {
   VcsCreateWorktreeInput,
   VcsRef,
 } from "./git.ts";
+import { WorktreeMcpHandoffInput } from "./worktreeMcp.ts";
 
 const encodeVcsRef = Schema.encodeUnknownSync(VcsRef);
 const decodeVcsRef = Schema.decodeUnknownSync(VcsRef);
