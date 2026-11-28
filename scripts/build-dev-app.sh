@@ -9,6 +9,8 @@
 #   --no-open     do not relaunch the app after installing (it is relaunched only if it was running)
 # Installs only from goat2: run it in ~/Developer/goat2 after each merge (docs/lanes/PART1.md).
 # Lane branches can build with --no-install.
+# Refuses to build when `pnpm -r typecheck` or `cargo test --workspace --locked` fails, so a broken
+# goat2 is never installed (owner 2026-11-28). --locked also refuses a Cargo.lock that is out of date.
 set -euo pipefail
 
 APP_NAME="GOAT 2 (Dev)"
@@ -53,8 +55,19 @@ if [[ ! -d "$ELECTRON_PKG/dist/Electron.app" ]]; then
   (cd "$ELECTRON_PKG" && node install.js)
 fi
 
+echo "==> checks: pnpm -r typecheck"
+if ! pnpm -r typecheck; then
+  echo "typecheck failed on $BRANCH $COMMIT: not building $APP_NAME" >&2
+  exit 1
+fi
+echo "==> checks: cargo test --workspace --locked"
+if ! cargo test --workspace --locked; then
+  echo "cargo test failed on $BRANCH $COMMIT: not building $APP_NAME" >&2
+  exit 1
+fi
+
 echo "==> goat2-host (cargo build --release)"
-cargo build --release -p goat2-host
+cargo build --release --locked -p goat2-host
 HOST_BIN="$REPO/target/release/goat2-host"
 
 echo "==> apps/web (vite build)"
@@ -70,8 +83,10 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 ditto "$ELECTRON_PKG/dist/Electron.app" "$APP"
 plist() { /usr/libexec/PlistBuddy -c "$1" "$2"; }
-# Set a string key, adding it when the plist does not have it (Electron's helper plists omit some).
-plist_set() { plist "Set :$1 $2" "$3" 2>/dev/null || plist "Add :$1 string $2" "$3"; }
+# Set a top-level string key, adding it when missing (Electron's helper plists omit some). plutil
+# takes the value as one argument, so quotes and apostrophes in it are safe (PlistBuddy's command
+# parser is not, and it exits 0 on a parse error).
+plist_set() { plutil -replace "$1" -string "$2" "$3"; }
 
 # Main executable and helpers carry the app name: Electron looks for "<executable> Helper*.app".
 mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/$APP_NAME"
