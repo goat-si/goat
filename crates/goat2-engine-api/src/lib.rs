@@ -113,6 +113,16 @@ pub enum SteerResult {
     },
 }
 
+/// How an accepted steer settled (v1 `steer.updated` status `completed | cancelled`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteerStatus {
+    /// The engine read the steer into the turn.
+    Completed,
+    /// Accepted earlier but never ran: cancelled, discarded or refused by the engine, or left
+    /// unread when the turn ended.
+    Cancelled { reason: String },
+}
+
 /// How a turn ended, as the engine reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
@@ -176,6 +186,15 @@ pub enum EngineEvent {
         status: TurnItemStatus,
         title: Option<String>,
         progress: Option<String>,
+    },
+    /// A steer the driver already answered `Accepted` settled later (v1 provider event
+    /// `steer.updated`, `ProviderAdapter.ts:149-157`; Claude `command_lifecycle`, Pi). An
+    /// accepted steer is v1 `pending` until the engine reads it. Not stored as such; the host
+    /// decides what a cancelled steer means for its inputs.
+    SteerUpdated {
+        turn_id: String,
+        input_ids: Vec<InputId>,
+        status: SteerStatus,
     },
     TurnFinished {
         turn_id: String,

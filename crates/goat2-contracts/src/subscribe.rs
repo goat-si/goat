@@ -547,7 +547,8 @@ pub enum AgentSurfaceErrorCode {
 /// refused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different
 /// arguments), `notes_changed` (stale notes revision); `failed_precondition` / `not_queued` (the input left the queue, or
 /// `reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,
-/// `payload_too_large`; `invalid_request` / `invalid_request`; `internal` / `internal`.
+/// `payload_too_large`; `unavailable` / `not_available` (the command's host module has not
+/// landed yet); `invalid_request` / `invalid_request`; `internal` / `internal`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
