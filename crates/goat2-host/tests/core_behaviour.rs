@@ -1717,6 +1717,7 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: t.fake.active_turn(&id),
             url: Some(url.clone()),
             message: format!("Sign in to Codex at {url}"),
@@ -1771,6 +1772,7 @@ async fn a_sign_in_for_an_ended_turn_is_dropped_and_run_end_closes_the_current_o
     assert_ne!(first, second);
     let auth =
         |turn: &str, url: &str, message: &str| goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: Some(turn.to_owned()),
             url: Some(url.to_owned()),
             message: message.to_owned(),
@@ -1819,6 +1821,7 @@ async fn a_sign_in_outside_a_turn_lasts_until_the_engine_stops() {
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: None,
             url: Some("https://auth.example.invalid/login?state=SECRET-STATE".into()),
             message: "Not logged in".into(),
@@ -1862,6 +1865,7 @@ async fn a_sign_in_message_never_reaches_the_log() {
         t.fake.emit(
             &id,
             goat2_host::engine::EngineEvent::AuthRequired {
+                key: None,
                 turn_id: t.fake.active_turn(&id),
                 url: None,
                 message: message.into(),
@@ -1986,4 +1990,446 @@ fn data_contains(t: &T, needle: &str) -> bool {
         })
     }
     walk(t._dir.as_ref().unwrap().path(), needle.as_bytes())
+}
+
+#[tokio::test]
+async fn usage_is_live_and_only_finished_snapshot_is_durable() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "usage", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let (mut rx, _) = t.host.watch_thread(&id);
+    let usage = |n| serde_json::from_value(serde_json::json!({"usedTokens": n})).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::TokenUsage {
+            turn_id: Some("stale".into()),
+            usage: usage(31_415_926),
+        },
+    );
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::TokenUsage {
+            turn_id: None,
+            usage: usage(27_182_818),
+        },
+    );
+    let live = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let goat2_host::api::ThreadLive::Usage { usage, updated_at } =
+                rx.recv().await.unwrap()
+            {
+                break (usage, updated_at);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(live.0.used_tokens, 27_182_818);
+    assert!(chrono::DateTime::parse_from_rfc3339(&live.1).is_ok());
+    t.fake.finish_turn(&id, "done");
+    eventually("finished", || count(&t, &id, "run.finished") == 1).await;
+    let finished = events(&t, &id)
+        .into_iter()
+        .find_map(|e| match e {
+            LogEvent::RunFinished(e) => Some(e),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.token_usage.unwrap().used_tokens, 27_182_818);
+    assert_eq!(
+        t.host
+            .store()
+            .card(&id)
+            .unwrap()
+            .context_usage
+            .unwrap()
+            .used_tokens,
+        27_182_818
+    );
+    assert!(!data_contains(&t, "thread_usage"));
+    assert!(!data_contains(&t, "31415926"));
+}
+
+#[tokio::test]
+async fn keyed_signin_answers_engine_and_declines_at_run_end() {
+    for (requested, expected) in [
+        (RequestOutcome::Answered, RequestOutcome::Accept),
+        (RequestOutcome::Decline, RequestOutcome::Decline),
+        (RequestOutcome::Cancel, RequestOutcome::Decline),
+    ] {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, "keyed", Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("SECRET-KEY".into()),
+                turn_id: t.fake.active_turn(&id),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("signin", || !signins(&t, &id).is_empty()).await;
+        let request_id = signins(&t, &id)[0].request_id.clone();
+        t.host
+            .command(ClientFrame::ResolveRequest {
+                req_id: "r".into(),
+                client_request_id: "resolve".into(),
+                thread_id: id.clone(),
+                request_id,
+                outcome: requested,
+                text: None,
+                answers: None,
+                option_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome, .. } if key == "SECRET-KEY" && *outcome == expected)));
+        assert!(!data_contains(&t, "SECRET-KEY"));
+    }
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-end", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-END".into()),
+            turn_id: t.fake.active_turn(&id),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-END")));
+    assert!(!data_contains(&t, "KEY-END"));
+}
+
+#[tokio::test]
+async fn a_repeated_keyed_signin_declines_the_replaced_key_and_errors_never_show_a_key() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-repeat", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    t.fake.emit(&id, auth("KEY-FIRST-7731"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.emit(&id, auth("KEY-SECOND-7732"));
+    eventually("first key declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-FIRST-7731"))
+    })
+    .await;
+    assert_eq!(signins(&t, &id).len(), 1, "one request per scope");
+    // The engine fails the answer with an error naming the key: the reply carries no key.
+    t.fake.fail_answers(true);
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    let reply = t
+        .host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-fail".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await;
+    let shown = format!("{reply:?}");
+    assert!(reply.is_err(), "{shown}");
+    assert!(!shown.contains("KEY-SECOND-7732"), "{shown}");
+    assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Accept, .. } if key == "KEY-SECOND-7732")));
+    assert!(!data_contains(&t, "KEY-FIRST-7731"));
+    assert!(!data_contains(&t, "KEY-SECOND-7732"));
+}
+
+#[tokio::test]
+async fn a_late_keyed_signin_is_declined_and_a_failed_decline_is_retried() {
+    // A keyed sign-in naming a turn that already ended is declined, not left waiting.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-late", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let ended = t.fake.active_turn(&id).unwrap();
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-LATE-4401".into()),
+            turn_id: Some(ended),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("late key declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-LATE-4401"))
+    })
+    .await;
+    assert!(signins(&t, &id).is_empty(), "no request for an ended turn");
+
+    // A decline that fails while a newer key replaces the old one is retried at run end.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-retry", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    t.fake.emit(&id, auth("KEY-OLD-4402"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-NEW-4403"));
+    let declines = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, outcome: RequestOutcome::Decline, .. } if k == key))
+            .count()
+    };
+    eventually("first decline attempted", || declines("KEY-OLD-4402") == 1).await;
+    t.fake.fail_answers(false);
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("old key retried", || declines("KEY-OLD-4402") == 2).await;
+    assert_eq!(
+        declines("KEY-NEW-4403"),
+        1,
+        "the current key is declined at run end"
+    );
+    assert!(!data_contains(&t, "KEY-OLD-4402"));
+}
+
+#[tokio::test]
+async fn a_key_answered_after_a_failed_decline_is_never_declined_later() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-aba", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    let answers = |key: &'static str, outcome: RequestOutcome| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, outcome: o, .. } if k == key && *o == outcome))
+            .count()
+    };
+    // A, then B while declines fail (A waits for a retry), then A again.
+    t.fake.emit(&id, auth("KEY-A-5501"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-B-5502"));
+    eventually("A decline failed", || {
+        answers("KEY-A-5501", RequestOutcome::Decline) == 1
+    })
+    .await;
+    t.fake.emit(&id, auth("KEY-B-5502"));
+    t.fake.emit(&id, auth("KEY-A-5501"));
+    eventually("B decline attempted", || {
+        answers("KEY-B-5502", RequestOutcome::Decline) >= 1
+    })
+    .await;
+    t.fake.fail_answers(false);
+    // The person accepts A; the run end must not decline it afterwards.
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-a".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(answers("KEY-A-5501", RequestOutcome::Accept), 1);
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("B retried", || {
+        answers("KEY-B-5502", RequestOutcome::Decline) >= 2
+    })
+    .await;
+    assert_eq!(
+        answers("KEY-A-5501", RequestOutcome::Decline),
+        1,
+        "A was only declined while it was replaced"
+    );
+    let b_retries = answers("KEY-B-5502", RequestOutcome::Decline);
+    assert_eq!(b_retries, 2, "B is queued once and retried once");
+}
+
+#[tokio::test]
+async fn one_engine_key_has_one_signin_and_one_answer() {
+    for (requested, expected) in [
+        (RequestOutcome::Answered, RequestOutcome::Accept),
+        (RequestOutcome::Decline, RequestOutcome::Decline),
+    ] {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, "keyed-shared", Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        let answers = || {
+            t.fake
+                .calls()
+                .iter()
+                .filter(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-SHARED-6601"))
+                .count()
+        };
+        let turn = t.fake.active_turn(&id).unwrap();
+        // The engine raises the same key at session level and for the running turn.
+        for turn_id in [None, Some(turn.clone())] {
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    key: Some("KEY-SHARED-6601".into()),
+                    turn_id,
+                    url: None,
+                    message: "signin".into(),
+                },
+            );
+        }
+        // A probe key on a turn that never ran is declined after both, settling the order.
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("KEY-PROBE-6602".into()),
+                turn_id: Some("turn-never".into()),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("probe declined", || {
+            t.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-PROBE-6602"))
+        })
+        .await;
+        assert_eq!(signins(&t, &id).len(), 1, "one key, one sign-in request");
+        // The person answers it: exactly one engine answer, with the person's outcome.
+        let request_id = signins(&t, &id)[0].request_id.clone();
+        t.host
+            .command(ClientFrame::ResolveRequest {
+                req_id: "r".into(),
+                client_request_id: "resolve-shared".into(),
+                thread_id: id.clone(),
+                request_id,
+                outcome: requested,
+                text: None,
+                answers: None,
+                option_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome, .. } if key == "KEY-SHARED-6601" && *outcome == expected)));
+        // Neither the run end nor a late repeat answers that key again.
+        t.fake.finish_turn(&id, "done");
+        eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("KEY-PROBE-6603".into()),
+                turn_id: Some("turn-never".into()),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("second probe declined", || {
+            t.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-PROBE-6603"))
+        })
+        .await;
+        assert_eq!(answers(), 1, "the shared key is answered once");
+    }
+}
+
+#[tokio::test]
+async fn a_settled_signin_key_is_never_answered_again() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-settled", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    let auth = |key: &str, turn_id: Option<String>| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id,
+        url: None,
+        message: "signin".into(),
+    };
+    let answered = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, .. } if k == key))
+            .count()
+    };
+    let probe = |n: &'static str| async move {
+        eventually("probe", || answered(n) == 1).await;
+    };
+    // The person accepts K.
+    t.fake.emit(&id, auth("KEY-K-7701", Some(turn.clone())));
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-k".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(answered("KEY-K-7701"), 1);
+    // K again for the live turn, at session level, and for a turn that ended: all ignored.
+    t.fake.emit(&id, auth("KEY-K-7701", Some(turn.clone())));
+    t.fake.emit(&id, auth("KEY-K-7701", None));
+    t.fake
+        .emit(&id, auth("KEY-K-7701", Some("turn-gone".into())));
+    t.fake
+        .emit(&id, auth("KEY-PROBE-7702", Some("turn-gone".into())));
+    probe("KEY-PROBE-7702").await;
+    assert_eq!(answered("KEY-K-7701"), 1, "K is answered once");
+    assert_eq!(
+        signins(&t, &id).len(),
+        1,
+        "no new request for a settled key"
+    );
+
+    // L: the first decline fails, a later one succeeds; the run end does not answer it again.
+    t.fake.fail_answers(true);
+    t.fake
+        .emit(&id, auth("KEY-L-7703", Some("turn-gone".into())));
+    eventually("failed decline", || answered("KEY-L-7703") == 1).await;
+    t.fake.fail_answers(false);
+    t.fake
+        .emit(&id, auth("KEY-L-7703", Some("turn-gone".into())));
+    eventually("successful decline", || answered("KEY-L-7703") == 2).await;
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake
+        .emit(&id, auth("KEY-PROBE-7704", Some("turn-gone".into())));
+    probe("KEY-PROBE-7704").await;
+    assert_eq!(
+        answered("KEY-L-7703"),
+        2,
+        "no retry after a successful decline"
+    );
 }

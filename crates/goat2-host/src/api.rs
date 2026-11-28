@@ -47,6 +47,11 @@ pub enum ThreadLive {
     },
     /// The item finished (its `item.completed` line follows or preceded); drop its buffer.
     TextDone { item_id: ItemId },
+    /// A live usage snapshot, never stored as a frame.
+    Usage {
+        usage: Box<goat2_contracts::ThreadTokenUsageSnapshot>,
+        updated_at: String,
+    },
     /// The thread's log was replaced or removed.
     Reset { epoch: Epoch, reason: ResetReason },
 }

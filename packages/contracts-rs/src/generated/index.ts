@@ -156,6 +156,8 @@ export type * from "./ThreadCursor.ts";
 export type * from "./ThreadId.ts";
 export type * from "./ThreadKind.ts";
 export type * from "./ThreadStatus.ts";
+export type * from "./ThreadTokenUsageSnapshot.ts";
+export type * from "./TokenUsageCost.ts";
 export type * from "./ToolCapabilities.ts";
 export type * from "./TurnCapabilities.ts";
 export type * from "./TurnItem.ts";

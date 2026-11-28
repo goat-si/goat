@@ -1,0 +1,9 @@
+{
+  "type": "thread_usage",
+  "subId": "sub",
+  "threadId": "thread",
+  "usage": {
+    "usedTokens": -1
+  },
+  "updatedAt": "2026-11-28T10:00:00Z"
+}

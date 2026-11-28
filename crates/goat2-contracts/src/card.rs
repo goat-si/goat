@@ -194,6 +194,12 @@ pub struct ThreadCard {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(as = "Option<bool>", optional)]
     pub unread: bool,
+    /// The last finished run's token usage (v1 provider thread `contextUsage`), folded from
+    /// `run.finished.tokenUsage`; a run without one keeps the previous value. Live numbers during a
+    /// run arrive as the non-stored `thread_usage` frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_usage: Option<Box<crate::ThreadTokenUsageSnapshot>>,
 }
 
 /// `threads/<threadId>/card.json`: `{"v":1,"card":ThreadCard,"fold":Fold}`, replaced atomically.

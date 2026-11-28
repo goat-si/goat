@@ -11,6 +11,7 @@ import type { ProjectId } from "./ProjectId.ts";
 import type { ThreadId } from "./ThreadId.ts";
 import type { ThreadKind } from "./ThreadKind.ts";
 import type { ThreadStatus } from "./ThreadStatus.ts";
+import type { ThreadTokenUsageSnapshot } from "./ThreadTokenUsageSnapshot.ts";
 
 /**
  * One row per thread. Every text field is bounded.
@@ -63,4 +64,10 @@ openAsks?: number,
  * is never written to `card.json` or `goat.jsonl` and is not part of the frozen format.
  * Omitted when false.
  */
-unread?: boolean, };
+unread?: boolean,
+/**
+ * The last finished run's token usage (v1 provider thread `contextUsage`), folded from
+ * `run.finished.tokenUsage`; a run without one keeps the previous value. Live numbers during a
+ * run arrive as the non-stored `thread_usage` frame.
+ */
+contextUsage?: ThreadTokenUsageSnapshot, };

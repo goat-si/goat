@@ -499,6 +499,7 @@ async fn thread(
                     for item in items { send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,text:item.text.clone()}); texts.insert(item.item_id,item.text); }
                 }
             },
+                Ok(ThreadLive::Usage{usage,updated_at})=>{send(&tx,HostFrame::ThreadUsage{sub_id:sub.clone(),thread_id:id.clone(),usage:*usage,updated_at});},
                 Ok(ThreadLive::TextDone{item_id})=>{texts.remove(&item_id);},
                 Ok(ThreadLive::Reset{reason,..}) => { let (new_rx,items)=host.watch_thread(&id);rx=new_rx;texts.clear(); let Some(seq)=do_replay(&host,&tx,&sub,&id,None,Some(reason)).await else {return};last=seq; for item in items {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,text:item.text.clone()});texts.insert(item.item_id,item.text);} },
                 Ok(_) => {},
@@ -952,6 +953,7 @@ mod tests {
                     run_id: run,
                     outcome: goat2_contracts::RunOutcome::Completed,
                     reason: None,
+                    token_usage: None,
                 })],
             )
             .unwrap();
