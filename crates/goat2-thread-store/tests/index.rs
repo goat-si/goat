@@ -27,7 +27,7 @@ fn deleting_the_index_rebuilds_it_from_the_folders() {
     };
     std::fs::remove_file(dir.path().join("cards.sqlite")).unwrap();
     let (store, report) = open(dir.path());
-    assert!(matches!(&report.index, IndexOutcome::Rebuilt { reason } if reason == "missing"));
+    assert!(matches!(&report.index, IndexOutcome::Rebuilt { reason, .. } if reason == "missing"));
     assert_eq!(report.threads, 5);
     assert_eq!(report.logs_opened, 5, "rebuild verifies every log's tail");
     for card in before {
@@ -48,7 +48,7 @@ fn a_garbage_index_file_is_rebuilt() {
     std::fs::write(dir.path().join("cards.sqlite"), vec![0x5a; 8192]).unwrap();
     let (_store, report) = open(dir.path());
     assert!(
-        matches!(&report.index, IndexOutcome::Rebuilt { reason } if reason.starts_with("corrupt")),
+        matches!(&report.index, IndexOutcome::Rebuilt { reason, .. } if reason.starts_with("corrupt")),
         "{:?}",
         report.index
     );

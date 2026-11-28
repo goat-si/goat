@@ -34,12 +34,34 @@ pub struct StoreOptions {
     /// Sync files, directories and index commits at the points DESIGN.md names. Turn off only for
     /// generated fixtures.
     pub fsync: bool,
+    /// Injected failures for crash and I/O tests. Not for production use.
+    #[doc(hidden)]
+    pub faults: Faults,
 }
 
 impl Default for StoreOptions {
     fn default() -> Self {
-        Self { fsync: true }
+        Self {
+            fsync: true,
+            faults: Faults::default(),
+        }
     }
+}
+
+/// Test-only fault switches (see `testing::set_faults`).
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Faults {
+    /// Opening or probing a thread's log or folder fails with an I/O error.
+    pub fail_log_reads: bool,
+    /// Syncing a thread's log fails with an I/O error.
+    pub fail_log_syncs: bool,
+    /// An index rebuild stops (returns an error) before it writes its rows.
+    pub stop_rebuild_before_rows: bool,
+}
+
+fn injected(what: &str) -> std::io::Error {
+    std::io::Error::other(format!("injected fault: {what}"))
 }
 
 /// What `Store::open` did.
@@ -57,6 +79,8 @@ pub struct StartupReport {
     pub removed_deleted: Vec<String>,
     pub corrupt: Vec<Problem>,
     pub unsupported: Vec<Problem>,
+    /// Folders an index rebuild could not index (the index stays incomplete).
+    pub unindexed: Vec<Problem>,
     pub timings: StartupTimings,
 }
 
@@ -64,7 +88,7 @@ pub struct StartupReport {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum IndexOutcome {
     Loaded,
-    Rebuilt { reason: String },
+    Rebuilt { reason: String, complete: bool },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +131,8 @@ pub struct StartupTimings {
 pub struct Appended {
     pub lines: Vec<LogLine>,
     pub card: ThreadCard,
+    /// The fold after these lines.
+    pub fold: Fold,
 }
 
 /// State a reader starts from.
@@ -293,6 +319,8 @@ pub struct Store {
     shared: Mutex<Shared>,
     crashed: std::sync::atomic::AtomicBool,
     logs_opened: std::sync::atomic::AtomicU64,
+    faults: Mutex<Faults>,
+    index_complete: std::sync::atomic::AtomicBool,
 }
 
 fn ms(since: Instant) -> f64 {
@@ -309,6 +337,16 @@ fn tail_problem(err: TailError) -> std::result::Result<String, StoreError> {
         TailError::Missing => Ok("goat.jsonl is missing".into()),
         TailError::BadHeader(d) => Ok(format!("header: {d}")),
         TailError::Corrupt(d) => Ok(d),
+    }
+}
+
+fn tail_error(id: &ThreadId, err: TailError) -> StoreError {
+    match tail_problem(err) {
+        Ok(detail) => StoreError::CorruptLog {
+            thread: id.to_string(),
+            detail,
+        },
+        Err(io) => io,
     }
 }
 
@@ -364,6 +402,7 @@ impl Store {
 
         let epoch = Epoch::new(new_uuid());
         index.set_meta("epoch", epoch.as_str())?;
+        let initial_faults = opts.faults;
         let store = Store {
             root,
             opts,
@@ -379,6 +418,8 @@ impl Store {
             }),
             crashed: std::sync::atomic::AtomicBool::new(false),
             logs_opened: std::sync::atomic::AtomicU64::new(0),
+            faults: Mutex::new(initial_faults),
+            index_complete: std::sync::atomic::AtomicBool::new(true),
         };
         let mut report = StartupReport {
             threads: 0,
@@ -391,6 +432,7 @@ impl Store {
             removed_deleted: Vec::new(),
             corrupt: Vec::new(),
             unsupported: Vec::new(),
+            unindexed: Vec::new(),
             timings: StartupTimings::default(),
         };
 
@@ -398,10 +440,11 @@ impl Store {
         match rebuild {
             Some(reason) => {
                 let t = Instant::now();
+                let complete = store.rebuild_from_folders(&mut report)?;
                 report.index = IndexOutcome::Rebuilt {
                     reason: reason.to_string(),
+                    complete,
                 };
-                store.rebuild_from_folders(&mut report)?;
                 timings.rebuild_ms = ms(t);
             }
             None => {
@@ -433,9 +476,6 @@ impl Store {
                             let epoch = shared.epoch.clone();
                             shared.index.set_meta("epoch", epoch.as_str())?;
                         }
-                        report.index = IndexOutcome::Rebuilt {
-                            reason: reason.to_string(),
-                        };
                         lock(&store.shared).cards.clear();
                         store
                             .slots
@@ -443,7 +483,11 @@ impl Store {
                             .unwrap_or_else(|p| p.into_inner())
                             .clear();
                         to_recover.clear();
-                        store.rebuild_from_folders(&mut report)?;
+                        let complete = store.rebuild_from_folders(&mut report)?;
+                        report.index = IndexOutcome::Rebuilt {
+                            reason: reason.to_string(),
+                            complete,
+                        };
                         timings.rebuild_ms = ms(t);
                     }
                 }
@@ -523,6 +567,32 @@ impl Store {
         self.threads_dir().join(id.as_str())
     }
 
+    fn faults(&self) -> Faults {
+        *lock(&self.faults)
+    }
+
+    /// Open a log for reading (honours injected read faults).
+    fn open_log_read(&self, path: &Path) -> std::io::Result<File> {
+        if self.faults().fail_log_reads {
+            return Err(injected("log read"));
+        }
+        log::open_read(path)
+    }
+
+    fn sync_file(&self, file: &File) -> std::io::Result<()> {
+        if self.faults().fail_log_syncs {
+            return Err(injected("log sync"));
+        }
+        file.sync_data()
+    }
+
+    /// False when the last index rebuild could not index every folder: the card list is degraded
+    /// until a later start rebuilds it completely.
+    pub fn index_complete(&self) -> bool {
+        self.index_complete
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn new_slot(&self, id: ThreadId, card: ThreadCard, fold: Fold, health: Health) -> Slot {
         Slot {
             dir: self.thread_dir(&id),
@@ -584,19 +654,30 @@ impl Store {
             }
             None => {
                 // No usable cached card: a create in progress, or a row to rebuild from the folder.
-                if !self.thread_dir(&id).join(LOG_FILE).exists() {
-                    if row.creating {
+                let dir = self.thread_dir(&id);
+                let log_path = dir.join(LOG_FILE);
+                let dir_meta = self.probe(&dir)?;
+                let log_meta = match dir_meta {
+                    Some(_) => self.probe(&log_path)?,
+                    None => None,
+                };
+                if row.creating {
+                    // Abandon only a create that provably never committed its one log write.
+                    let committed = log_meta.is_some() && self.create_committed(&log_path)?;
+                    if !committed {
                         self.abandon_create(&id)?;
                         report.abandoned_creates.push(row.id);
-                    } else if !self.thread_dir(&id).exists() {
-                        lock(&self.shared).index.delete(id.as_str())?;
-                        report.removed_deleted.push(row.id);
-                    } else {
-                        report.corrupt.push(Problem {
-                            thread_id: row.id,
-                            detail: "goat.jsonl is missing".into(),
-                        });
+                        return Ok(());
                     }
+                } else if dir_meta.is_none() {
+                    lock(&self.shared).index.delete(id.as_str())?;
+                    report.removed_deleted.push(row.id);
+                    return Ok(());
+                } else if log_meta.is_none() {
+                    report.corrupt.push(Problem {
+                        thread_id: row.id,
+                        detail: "goat.jsonl is missing".into(),
+                    });
                     return Ok(());
                 }
                 match self.replay_folder(&id) {
@@ -607,27 +688,47 @@ impl Store {
                         self.insert_slot(slot);
                         to_recover.push(id);
                     }
-                    Ok(None) | Err(_) if row.creating => {
-                        self.abandon_create(&id)?;
-                        report.abandoned_creates.push(row.id);
-                    }
                     Ok(None) => report.corrupt.push(Problem {
                         thread_id: row.id,
                         detail: "no thread.created line".into(),
                     }),
-                    Err(e) => report.corrupt.push(Problem {
+                    Err(StoreError::CorruptLog { detail, .. }) => report.corrupt.push(Problem {
                         thread_id: row.id,
-                        detail: e.to_string(),
+                        detail,
                     }),
+                    Err(e) => return Err(e),
                 }
             }
         }
         Ok(())
     }
 
+    /// Metadata of `path`: `None` when it does not exist; any other error propagates.
+    fn probe(&self, path: &Path) -> Result<Option<fs::Metadata>> {
+        if self.faults().fail_log_reads {
+            return Err(StoreError::Io(injected("probe")));
+        }
+        match fs::symlink_metadata(path) {
+            Ok(meta) => Ok(Some(meta)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// True when the log holds a newline-terminated first event line: `create_thread` writes the
+    /// header and `thread.created` in one write, so anything less never committed.
+    fn create_committed(&self, path: &Path) -> Result<bool> {
+        let file = self.open_log_read(path)?;
+        let len = file.metadata()?.len();
+        let n = len.min(1024 * 1024) as usize;
+        let mut buf = vec![0u8; n];
+        log::read_at(&file, &mut buf, 0)?;
+        Ok(buf.iter().filter(|&&b| b == b'\n').count() >= 2)
+    }
+
     fn abandon_create(&self, id: &ThreadId) -> Result<()> {
         let dir = self.thread_dir(id);
-        if dir.exists() {
+        if self.probe(&dir)?.is_some() {
             let trash =
                 self.threads_dir()
                     .join(format!(".trash-{}-{}", id.as_str(), random_hex(8)));
@@ -643,13 +744,14 @@ impl Store {
         let path = self.thread_dir(id).join(LOG_FILE);
         self.logs_opened
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let file = log::open_read(&path)?;
-        let len = file.metadata()?.len();
-        let (header, header_end) =
-            log::read_header(&file, len).map_err(|e| StoreError::CorruptLog {
-                thread: id.to_string(),
-                detail: tail_problem(e).unwrap_or_else(|e| e.to_string()),
-            })?;
+        if self.faults().fail_log_reads {
+            return Err(StoreError::Io(injected("log read")));
+        }
+        // Repair an incomplete tail first so a torn last write does not hide the thread.
+        let tail = log::verify_tail(&path, self.opts.fsync).map_err(|e| tail_error(id, e))?;
+        let file = self.open_log_read(&path)?;
+        let len = tail.len;
+        let (header, header_end) = log::read_header(&file, len).map_err(|e| tail_error(id, e))?;
         let mut state: Option<(ThreadCard, Fold)> = None;
         let mut health = Health::Ready;
         let mut expected = 1u64;
@@ -701,8 +803,12 @@ impl Store {
         Ok(state.map(|(card, fold)| (card, fold, health)))
     }
 
-    fn rebuild_from_folders(&self, report: &mut StartupReport) -> Result<()> {
-        let mut rows: Vec<(ThreadCard, bool, bool, String)> = Vec::new();
+    /// Rebuild the card index from the folders. Returns whether every folder was indexed; only then
+    /// is the completion marker written with the rows, so an interrupted or partial rebuild is
+    /// redone at the next start. I/O errors fail `open`; corrupt folders are kept and reported.
+    fn rebuild_from_folders(&self, report: &mut StartupReport) -> Result<bool> {
+        let mut complete = true;
+        let mut built: Vec<ThreadId> = Vec::new();
         let mut entries: Vec<_> =
             fs::read_dir(self.threads_dir())?.collect::<std::io::Result<_>>()?;
         entries.sort_by_key(|e| e.file_name());
@@ -720,64 +826,97 @@ impl Store {
                 continue;
             }
             let id = ThreadId::new(name);
-            let cached = read_card_file(&entry.path()).filter(|f| f.card.id == id);
-            let (card, fold) = match cached {
-                Some(file) => (file.card, file.fold),
+            let mut unindexed = |detail: String| {
+                complete = false;
+                report.unindexed.push(Problem {
+                    thread_id: id.to_string(),
+                    detail,
+                });
+            };
+            if self.faults().fail_log_reads {
+                return Err(StoreError::Io(injected("log read")));
+            }
+            self.logs_opened
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let tail = match log::verify_tail(&entry.path().join(LOG_FILE), self.opts.fsync) {
+                Ok(tail) => tail,
+                Err(TailError::Io(e)) => return Err(e.into()),
+                Err(e) => {
+                    unindexed(tail_problem(e)?);
+                    continue;
+                }
+            };
+            if let Some(repair) = &tail.repair {
+                report.repaired.push(Repaired {
+                    thread_id: id.to_string(),
+                    repair: repair_text(repair),
+                });
+            }
+            let cached = read_card_file(&entry.path()).filter(|f| {
+                f.card.id == id
+                    && f.card.epoch == tail.epoch
+                    && f.card.applied_seq <= tail.last_seq()
+            });
+            let mut slot = match cached {
+                Some(file) => {
+                    let mut slot =
+                        self.new_slot(id.clone(), file.card, file.fold, Health::Unverified);
+                    match self.apply_tail(&mut slot, &tail) {
+                        Ok(()) => slot,
+                        Err(StoreError::CorruptLog { detail, .. }) => {
+                            unindexed(detail);
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
                 None => match self.replay_folder(&id) {
-                    Ok(Some((card, fold, _))) => {
+                    Ok(Some((card, fold, health))) => {
                         report.refolded.push(id.to_string());
-                        (card, fold)
+                        let mut slot = self.new_slot(id.clone(), card, fold, health);
+                        slot.header_end = tail.header_end;
+                        slot.len = tail.len;
+                        slot.synced_len = 0;
+                        slot
                     }
                     Ok(None) => {
-                        report.corrupt.push(Problem {
-                            thread_id: id.to_string(),
-                            detail: "no thread.created line".into(),
-                        });
+                        unindexed("no thread.created line".into());
                         continue;
                     }
-                    Err(e) => {
-                        report.corrupt.push(Problem {
-                            thread_id: id.to_string(),
-                            detail: e.to_string(),
-                        });
+                    Err(StoreError::CorruptLog { detail, .. }) => {
+                        unindexed(detail);
                         continue;
                     }
+                    Err(e) => return Err(e),
                 },
             };
-            let mut slot = self.new_slot(id.clone(), card, fold, Health::Unverified);
-            // Every log's tail is checked on the rebuild path.
-            if let Err(e) = self.verify_and_refold(&mut slot, report) {
-                report.corrupt.push(Problem {
-                    thread_id: id.to_string(),
-                    detail: e.to_string(),
-                });
-                continue;
-            }
-            let active = slot.fold.active_run_id.is_some();
-            rows.push((slot.card.clone(), active, active, String::new()));
+            // The tail seen here may not be durable yet: sync it before its row is stored.
+            self.sync_log(&mut slot)?;
+            built.push(id.clone());
             self.insert_slot(slot);
         }
-        // Write all rows with their published cardSeq.
-        let slots = self.slots.read().unwrap_or_else(|p| p.into_inner());
-        let mut writes: Vec<(ThreadCard, bool, bool, String)> = Vec::new();
-        for (card, dirty, active, _) in rows {
-            if let Some(slot) = slots.get(&card.id) {
-                let slot = lock(slot);
-                writes.push((
-                    slot.card.clone(),
-                    dirty,
-                    active,
-                    card_doc(&slot.card, &slot.fold)?,
-                ));
+        let mut writes: Vec<(ThreadCard, bool, String)> = Vec::new();
+        {
+            let slots = self.slots.read().unwrap_or_else(|p| p.into_inner());
+            for id in &built {
+                if let Some(slot) = slots.get(id) {
+                    let slot = lock(slot);
+                    let active = slot.fold.active_run_id.is_some();
+                    writes.push((slot.card.clone(), active, card_doc(&slot.card, &slot.fold)?));
+                }
             }
         }
-        drop(slots);
+        if self.faults().stop_rebuild_before_rows {
+            return Err(StoreError::Io(injected("rebuild stopped before rows")));
+        }
         let refs: Vec<(&ThreadCard, bool, bool, String)> = writes
             .iter()
-            .map(|(c, d, a, doc)| (c, *d, *a, doc.clone()))
+            .map(|(c, active, doc)| (c, *active, *active, doc.clone()))
             .collect();
-        lock(&self.shared).index.upsert(&refs)?;
-        Ok(())
+        lock(&self.shared).index.finish_rebuild(&refs, complete)?;
+        self.index_complete
+            .store(complete, std::sync::atomic::Ordering::Relaxed);
+        Ok(complete)
     }
 
     /// Startup recovery for a row marked dirty / creating / active.
@@ -786,7 +925,7 @@ impl Store {
             return Ok(());
         };
         let mut slot = lock(&slot);
-        if !slot.dir.exists() {
+        if self.probe(&slot.dir)?.is_none() {
             // Deleted (row marked dirty before the folder moved to trash) or never created.
             drop(slot);
             self.slots
@@ -845,6 +984,9 @@ impl Store {
     fn verify_and_refold(&self, slot: &mut Slot, report: &mut StartupReport) -> Result<()> {
         self.logs_opened
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.faults().fail_log_reads {
+            return Err(StoreError::Io(injected("log read")));
+        }
         let tail = match log::verify_tail(&slot.log_path(), self.opts.fsync) {
             Ok(tail) => tail,
             Err(e) => {
@@ -867,7 +1009,8 @@ impl Store {
     fn apply_tail(&self, slot: &mut Slot, tail: &Tail) -> Result<()> {
         slot.header_end = tail.header_end;
         slot.len = tail.len;
-        slot.synced_len = tail.len;
+        // What was read may not be durable yet (written by a process that crashed before syncing).
+        slot.synced_len = if self.opts.fsync { 0 } else { tail.len };
         let last_seq = tail.last_seq();
         if tail.epoch != slot.card.epoch || last_seq < slot.card.applied_seq {
             // The cache does not belong to this log: replay the whole log.
@@ -898,7 +1041,7 @@ impl Store {
 
     /// Fold the lines after `appliedSeq` (read backwards from the end, applied in order).
     fn fold_after(&self, slot: &mut Slot) -> Result<()> {
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let after = slot.card.applied_seq;
         let mut lines: Vec<Parsed> = Vec::new();
         let id = slot.id.to_string();
@@ -961,6 +1104,7 @@ impl Store {
                 removed_deleted: Vec::new(),
                 corrupt: Vec::new(),
                 unsupported: Vec::new(),
+                unindexed: Vec::new(),
                 timings: StartupTimings::default(),
             };
             let before = slot.card.applied_seq;
@@ -981,14 +1125,39 @@ impl Store {
     /// The row stays dirty while a run is active. card.json is replaced atomically but not synced:
     /// startup trusts the index row, and a card.json lost to power failure is refolded on rebuild.
     fn persist(&self, slot: &mut Slot) -> Result<()> {
-        if self.opts.fsync && slot.synced_len < slot.len {
+        self.sync_log(slot)?;
+        self.write_cache(slot)
+    }
+
+    /// Sync the log up to its current length. A failure poisons the thread: the outcome of the
+    /// last write is uncertain until a reopen checks the actual tail.
+    fn sync_log(&self, slot: &mut Slot) -> Result<()> {
+        if !self.opts.fsync || slot.synced_len >= slot.len {
+            slot.synced_len = slot.len;
+            return Ok(());
+        }
+        let result = (|| -> std::io::Result<()> {
             let file = match slot.writer.as_ref() {
                 Some(w) => w.try_clone()?,
-                None => log::open_read(&slot.log_path())?,
+                None => log::open_append(&slot.log_path())?,
             };
-            file.sync_data()?;
+            self.sync_file(&file)
+        })();
+        match result {
+            Ok(()) => {
+                slot.synced_len = slot.len;
+                Ok(())
+            }
+            Err(e) => {
+                slot.health = Health::Poisoned(e.to_string());
+                slot.writer = None;
+                Err(e.into())
+            }
         }
-        slot.synced_len = slot.len;
+    }
+
+    /// Write card.json and the index row (the log must already be synced through appliedSeq).
+    fn write_cache(&self, slot: &mut Slot) -> Result<()> {
         let doc = card_doc(&slot.card, &slot.fold)?;
         atomic_write(&slot.dir.join(CARD_FILE), doc.as_bytes(), false)?;
         let active = slot.fold.active_run_id.is_some();
@@ -1250,6 +1419,7 @@ impl Store {
             return Ok(Appended {
                 lines,
                 card: slot.card.clone(),
+                fold: slot.fold.clone(),
             });
         }
         // Dirty mark before the log changes.
@@ -1275,6 +1445,13 @@ impl Store {
             slot.writer = None;
             return Err(e);
         }
+        // Written through (outside a run, status change, run end): the log must be durable before
+        // anything is published. A failure poisons the thread and nothing is published.
+        let write_through =
+            fold_state.active_run_id.is_none() || old_status != card.status || finished;
+        if write_through {
+            self.sync_log(slot)?;
+        }
         let card_changed = {
             let mut a = card.clone();
             a.card_seq = slot.card.card_seq;
@@ -1292,10 +1469,9 @@ impl Store {
                 .cards
                 .insert(slot.id.clone(), slot.card.clone());
         }
-        let active = slot.fold.active_run_id.is_some();
-        if !active || old_status != slot.card.status || finished {
+        if write_through {
             // The log is the source; a failed cache write keeps the row dirty and is retried.
-            if let Err(e) = self.persist(slot) {
+            if let Err(e) = self.write_cache(slot) {
                 slot.stale = true;
                 slot.cache_error = Some(e.to_string());
             }
@@ -1309,6 +1485,7 @@ impl Store {
         Ok(Appended {
             lines,
             card: slot.card.clone(),
+            fold: slot.fold.clone(),
         })
     }
 
@@ -1320,6 +1497,9 @@ impl Store {
         writer.write_all(bytes)?;
         slot.len += bytes.len() as u64;
         if sync && self.opts.fsync {
+            if self.faults().fail_log_syncs {
+                return Err(StoreError::Io(injected("log sync")));
+            }
             writer.sync_data()?;
             slot.synced_len = slot.len;
         } else if !self.opts.fsync {
@@ -1359,6 +1539,17 @@ impl Store {
         let mut slot = lock(&slot);
         self.ensure_ready(&mut slot)?;
         Ok(Some(slot.card.clone()))
+    }
+
+    /// The fold of one thread (queued / held inputs, active run, open requests), caught up like
+    /// `card`.
+    pub fn fold(&self, id: &ThreadId) -> Result<Option<Fold>> {
+        let Some(slot) = self.slot(id) else {
+            return Ok(None);
+        };
+        let mut slot = lock(&slot);
+        self.ensure_ready(&mut slot)?;
+        Ok(Some(slot.fold.clone()))
     }
 
     /// Cards matching the filter, from memory (the card index), newest update first.
@@ -1468,7 +1659,7 @@ impl Store {
 
     /// Lines with seq > `after` while within the replay limits. `None` when over the limits.
     fn lines_after(&self, slot: &mut Slot, after: u64) -> Result<Option<Vec<LogLine>>> {
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let mut out: Vec<LogLine> = Vec::new();
         let mut count = 0usize;
         let mut bytes = 0usize;
@@ -1513,7 +1704,7 @@ impl Store {
 
     /// The view for a reader with no usable cursor.
     fn initial_view(&self, slot: &mut Slot) -> Result<(Option<Snapshot>, Vec<LogLine>)> {
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let mut collected: Vec<LogLine> = Vec::new();
         let mut count = 0usize;
         let mut bytes = 0usize;
@@ -1619,7 +1810,7 @@ impl Store {
             .next()
             .map(|(_, offset)| *offset)
             .unwrap_or(slot.len);
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let mut out: Vec<LogLine> = Vec::new();
         let mut first_seq = None;
         let mut page_bytes = 0usize;
@@ -1666,7 +1857,7 @@ impl Store {
             .slot(id)
             .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
         let slot = lock(&slot);
-        let file = log::open_read(&slot.log_path())?;
+        let file = self.open_log_read(&slot.log_path())?;
         let len = file.metadata()?.len();
         let (_, header_end) = log::read_header(&file, len).map_err(|e| StoreError::CorruptLog {
             thread: slot.id.to_string(),
@@ -1774,6 +1965,11 @@ impl Drop for Store {
 /// Fault hooks for crash tests and benchmarks. Not part of the API.
 pub mod testing {
     use super::*;
+
+    /// Change the injected faults of a running store.
+    pub fn set_faults(store: &Store, faults: Faults) {
+        *lock(&store.faults) = faults;
+    }
 
     /// Drop the store without flushing batched card writes, as a crash would.
     pub fn crash(store: Store) {

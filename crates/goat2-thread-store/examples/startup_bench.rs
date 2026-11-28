@@ -142,7 +142,14 @@ fn run_events(r: usize, done: bool, accepted: bool) -> Vec<LogEvent> {
 }
 
 fn generate(dir: &Path, a: &Args) -> (usize, u64) {
-    let (store, _) = Store::open(dir, StoreOptions { fsync: false }).unwrap();
+    let (store, _) = Store::open(
+        dir,
+        StoreOptions {
+            fsync: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let mut active = 0;
     for i in 0..a.threads {
         let id = ThreadId::new(format!("thread-{i:05}"));
