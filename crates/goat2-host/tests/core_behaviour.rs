@@ -2273,57 +2273,87 @@ async fn a_key_answered_after_a_failed_decline_is_never_declined_later() {
 }
 
 #[tokio::test]
-async fn a_key_still_held_by_another_open_signin_is_never_declined() {
-    let t = setup(manual()).await;
-    let id = start_user_thread(&t, "keyed-shared", Some("hello")).await;
-    eventually("running", || running(&t, &id)).await;
-    let declines = || {
-        t.fake
-            .calls()
-            .iter()
-            .filter(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-SHARED-6601"))
-            .count()
-    };
-    let turn = t.fake.active_turn(&id).unwrap();
-    // The session scope and the running turn's scope both hold the same key.
-    for turn_id in [None, Some(turn.clone())] {
+async fn one_engine_key_has_one_signin_and_one_answer() {
+    for (requested, expected) in [
+        (RequestOutcome::Answered, RequestOutcome::Accept),
+        (RequestOutcome::Decline, RequestOutcome::Decline),
+    ] {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, "keyed-shared", Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        let answers = || {
+            t.fake
+                .calls()
+                .iter()
+                .filter(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-SHARED-6601"))
+                .count()
+        };
+        let turn = t.fake.active_turn(&id).unwrap();
+        // The engine raises the same key at session level and for the running turn.
+        for turn_id in [None, Some(turn.clone())] {
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    key: Some("KEY-SHARED-6601".into()),
+                    turn_id,
+                    url: None,
+                    message: "signin".into(),
+                },
+            );
+        }
+        // A probe key on a turn that never ran is declined after both, settling the order.
         t.fake.emit(
             &id,
             goat2_host::engine::EngineEvent::AuthRequired {
-                key: Some("KEY-SHARED-6601".into()),
-                turn_id,
+                key: Some("KEY-PROBE-6602".into()),
+                turn_id: Some("turn-never".into()),
                 url: None,
                 message: "signin".into(),
             },
         );
+        eventually("probe declined", || {
+            t.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-PROBE-6602"))
+        })
+        .await;
+        assert_eq!(signins(&t, &id).len(), 1, "one key, one sign-in request");
+        // The person answers it: exactly one engine answer, with the person's outcome.
+        let request_id = signins(&t, &id)[0].request_id.clone();
+        t.host
+            .command(ClientFrame::ResolveRequest {
+                req_id: "r".into(),
+                client_request_id: "resolve-shared".into(),
+                thread_id: id.clone(),
+                request_id,
+                outcome: requested,
+                text: None,
+                answers: None,
+                option_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome, .. } if key == "KEY-SHARED-6601" && *outcome == expected)));
+        // Neither the run end nor a late repeat answers that key again.
+        t.fake.finish_turn(&id, "done");
+        eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("KEY-PROBE-6603".into()),
+                turn_id: Some("turn-never".into()),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("second probe declined", || {
+            t.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-PROBE-6603"))
+        })
+        .await;
+        assert_eq!(answers(), 1, "the shared key is answered once");
     }
-    eventually("two sign-ins", || signins(&t, &id).len() == 2).await;
-    // The run ends: its sign-in closes, but the session's sign-in still holds the key.
-    t.fake.finish_turn(&id, "done");
-    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
-    // A late event for the ended turn with the same key is not declined either.
-    t.fake.emit(
-        &id,
-        goat2_host::engine::EngineEvent::AuthRequired {
-            key: Some("KEY-SHARED-6601".into()),
-            turn_id: Some(turn),
-            url: None,
-            message: "signin".into(),
-        },
-    );
-    t.fake.emit(
-        &id,
-        goat2_host::engine::EngineEvent::AuthRequired {
-            key: Some("KEY-PROBE-6602".into()),
-            turn_id: Some("turn-never".into()),
-            url: None,
-            message: "signin".into(),
-        },
-    );
-    // The probe key is declined after the shared one was processed, so the order is settled.
-    eventually("probe declined", || {
-        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-PROBE-6602"))
-    })
-    .await;
-    assert_eq!(declines(), 0, "the session sign-in still holds the key");
 }

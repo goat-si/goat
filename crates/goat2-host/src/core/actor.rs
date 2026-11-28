@@ -1001,6 +1001,26 @@ impl Actor {
             }
             return;
         };
+        // One engine key has at most one sign-in request: a key an open sign-in already holds
+        // refreshes that request, so every answer, decline and close stays one-to-one.
+        if let Some(key) = &key
+            && let Some(existing) = self
+                .signin_keys
+                .iter()
+                .find(|(id, held)| held == key && self.is_open(id))
+                .map(|(id, _)| id.clone())
+        {
+            match url.filter(|u| !u.trim().is_empty()) {
+                Some(url) => self.host.set_signin_link(crate::core::SigninLink {
+                    thread_id: self.id.clone(),
+                    request_id: existing,
+                    url,
+                    message,
+                }),
+                None => self.host.forget_signin_link(&existing),
+            }
+            return;
+        }
         let scope: &[RequestId] = match (&run_id, &self.phase) {
             (Some(_), Phase::Running(run)) => &run.signins,
             _ => &self.session_signins,
