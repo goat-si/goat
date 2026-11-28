@@ -142,9 +142,9 @@ kept; when half folded the hinge is the pane boundary (ReservedRegion), never th
 Galaxy Z Fold8 cover ~475x751dp is the phone layout; inner ~933x704dp (4:3) uses a navigation
 rail and 1+2 panes (chat left, two terminals stacked right). dp values assume the 420dpi bucket.
 State, drafts and the open pane survive fold/unfold; layout only reflows. Boards on the
-"모바일 (멀티플렉서 전환)" page: M1, M2, M4 to M7.
+"모바일 (봇 · 스레드 · 칸)" page: M1, M2, M4 to M7.
 
-Mobile pane switching (2026-11-28, page "모바일 (멀티플렉서 전환)", boards D0, X1 to X5). One pane
+Mobile pane switching (2026-11-28, page "모바일 (봇 · 스레드 · 칸)", boards D0, X1 to X5). One pane
 order everywhere (the pane list order). Five ways: (1) swipe left/right moves the whole pane,
 header and bottom included, 1:1 with the finger, settling in 240ms (velocity over 0.3 commits);
 only the status bar and the dot row stay put. (2) Title tap or pinch opens the overview: two
@@ -156,6 +156,24 @@ shrinks into its tile in 260ms. (3) A pane that needs you raises a glass banner 
 workspace). (5) Fold/unfold keeps the focused pane on the left and adds the next pane on the
 right; folding back keeps only the focused pane; drafts, scroll and terminal links survive.
 Reduced motion: every transition is a 120ms crossfade. Dials: variance 3, motion 4, density D5.
+
+Mobile flow (2026-11-28, page "모바일 (봇 · 스레드 · 칸)", N0 map, rows A/B). Top level is the
+Muse card's four tabs; inside a tab screens push from the right and the left 20pt edge swipe is
+Back. Threads tab = GOAT mobile ThreadListV2 as shipped (apps/mobile/src/features/threads/
+thread-list-v2-items.tsx, -row-meta.tsx, -shelf-header.tsx): Priority (n) with ⋯ (Mark all as
+read, Clear read threads), Working (n), Settled (n) collapsed; card row px-20 py-10: 15pt project
+favicon, 16pt medium title (2 lines), right status label + glyph (Working 3m / Waiting / Approval /
+Input / Done, GOAT colours) or time; second line inset 23: branch glyph, folder · via launcher,
+PR badge (lucide git-pull-request-*, mono #, GOAT PR accent), machine symbol + name, provider mark
+14 at 60% (real Codex / Claude SVG from components/ProviderIcon.tsx). Swipe left = Settle / Snooze;
+long press = GOAT row menu (Settle, Snooze, Pin, Arrange, Rename, Mark as unread, Archive,
+Delete) plus our "Open beside". Thread screen (ThreadDetail): glass header with title, machine
+glyph · folder · machine, lens and ⋯; feed with GOAT context chips (composerChipPresentation
+accents: terminal/PR #009f6e, image #d55665, file #0090cd, skill box #b261be, review #8a70dd,
+element #b87501) and PendingUserInputCard; ThreadComposer = chips row, +, text, provider mark,
+mic, send. The Muse card hides inside bot chat, thread and panes. Opening a second thread with
+"Open beside" turns the thread into panes (M1, X1 to X5). Icons are lucide 0.564 (GOAT web) for
+SF Symbol equivalents.
 
 Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
 no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
