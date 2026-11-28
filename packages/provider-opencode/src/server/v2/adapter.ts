@@ -3656,7 +3656,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               // A root thread's seed or generated title is left to OpenCode, which titles the session itself.
               if (
                 turnInput.appThread.titleRenamed === true ||
-                turnInput.appThread.lineage.parentThreadId !== null
+                turnInput.appThread.lineage?.parentThreadId != null
               ) {
                 yield* writeTitle(state, turnInput.appThread.title).pipe(
                   Effect.timeout(REQUEST_REPLY_TIMEOUT),
