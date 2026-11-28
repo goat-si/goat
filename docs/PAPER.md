@@ -8,7 +8,7 @@ Status: 2026-11-28. Read with [DESIGN.md](DESIGN.md) and [MOTION.md](MOTION.md).
 |---|---|---|
 | How a screen looks (layout, type, color, spacing, copy) | **Paper** | [GOAT 봇 워크스페이스 · 봇 홈 — SSOT](https://app.paper.design/file/01M8GDWPDQSBBWW8RMTG12PGCC) |
 | How it moves and responds (motion, clicks, dropdowns, folds) | **Code** | `apps/web` (bot home), `docs/motion/playground.html`, `@goat2/bot-face` |
-| Live, clickable version for review | **Published site** | https://goat-si.github.io/goat2-design/ (repo `goat-si/goat2-design`; mirror `goat2-design.pages.dev`) |
+| Live, clickable version for review | **Published site** | https://goat-si.github.io/goat2-design/ (repo `goat-si/goat2-design`, GitHub Pages only) |
 | Provider marks (Codex, Claude, Antigravity, Pi, OpenCode, ...) | **GOAT codebase** | `@goat2/provider-icons`, lifted from goat `origin/dev`. Never redraw them |
 
 One artboard is the SSOT. No v1/v2 artboards side by side: change the one board.
@@ -54,8 +54,9 @@ One artboard is the SSOT. No v1/v2 artboards side by side: change the one board.
 
 - Build: `pnpm --filter @goat2/web exec vite build --base=./`, plus `docs/motion/playground.html`
   as `motion/index.html`, into the `goat-si/goat2-design` repo, then push. GitHub Pages serves it.
-- Static hosting has no request or bandwidth limit on GitHub Pages or Cloudflare Pages for this
-  size. Only builds and file counts are capped.
+- GitHub Pages is the only host. A static site this size is far inside its limits, and it ships
+  with a push. Cloudflare Pages was tried and dropped on 2026-11-28 as a duplicate; add a host only
+  when the site needs server code or access control (then Cloudflare Access or Workers).
 - The site is public. Placeholder data only: no real emails, tokens, hostnames you would not show,
   or client names. Accounts use `you@example.com`. `noindex` stays on.
 
