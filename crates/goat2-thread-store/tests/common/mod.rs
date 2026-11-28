@@ -172,6 +172,7 @@ pub fn notified(text: &str) -> LogEvent {
         run_id: None,
         kind: NotifyKind::Result,
         text: text.into(),
+        source: None,
     })
 }
 
