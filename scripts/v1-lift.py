@@ -172,7 +172,8 @@ def main(check):
             problems.append(f"bridge not implemented: seam/{mirror(tgt)} (used by {', '.join(sorted(bridges[tgt]))})")
         if tgt.startswith("packages/"):
             if not os.path.exists(seam_file): problems.append(f"bridge not implemented: seam/{mirror(tgt)}")
-            continue
+            # Lifted package files reach sibling bridges by relative path (./state/runtime.ts), which the alias map
+            # does not cover, so package bridges get the same mirrored re-export as app bridges.
         mirror_path = os.path.join(OUT, mirror(tgt))
         rel = os.path.relpath(seam_file, os.path.dirname(mirror_path))
         body = f'// Bridge: v1 {tgt} is replaced by the GOAT 2 seam (docs/PROVENANCE.md bridge table).\nexport * from "{rel if rel.startswith(".") else "./" + rel}";\n'
