@@ -11,7 +11,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
 import { HostSupervisor, type HostState } from "./hostSupervisor.ts";
 import {
   getDesktopScheme,
@@ -20,6 +20,7 @@ import {
   registerDesktopSchemePrivilegesSync,
 } from "./electron/ElectronProtocol.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
+import { DesktopShellEnvironment } from "./shell/DesktopShellEnvironment.ts";
 import {
   configureApplicationMenu,
   type MainWindowContentsCommand,
@@ -127,14 +128,26 @@ const desktopLog = createWriteStream(join(logsDir, "desktop.log"), { flags: "a" 
 const hostLog = createWriteStream(join(logsDir, "host.log"), { flags: "a" });
 const log = (line: string) => desktopLog.write(`${new Date().toISOString()} ${line}\n`);
 
+// The host's environment: what the app inherited (launchd's minimal one when opened from Finder) plus
+// the person's login-shell PATH and friends (v1 DesktopShellEnvironment), so the host and the agent
+// CLIs it starts are found. The shell environment rewrites only its own names in this object; every
+// host spawn reads it, so a refresh reaches the next start.
+const hostEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  GOAT2_DATA_DIR: DATA_DIR,
+  GOAT2_HOST_PORT: String(HOST_PORT),
+  GOAT2_HOST_TOKEN: HOST_TOKEN,
+};
+const shellEnvironment = new DesktopShellEnvironment(process.env, {
+  platform: process.platform,
+  homeDirectory: homedir(),
+  cacheFile: join(app.getPath("userData"), "shell-environment-cache.json"),
+  log,
+});
+
 const supervisor = new HostSupervisor({
   command: hostBinary,
-  env: {
-    ...process.env,
-    GOAT2_DATA_DIR: DATA_DIR,
-    GOAT2_HOST_PORT: String(HOST_PORT),
-    GOAT2_HOST_TOKEN: HOST_TOKEN,
-  },
+  env: hostEnv,
   cwd: DATA_DIR,
   healthUrl: (announce) => `http://127.0.0.1:${announce.port ?? HOST_PORT}/health`,
   output: hostLog,
@@ -153,6 +166,7 @@ function hostGaveUp(state: HostState): boolean {
 const HOST_SUFFIX: Partial<Record<HostState["phase"], string>> = {
   starting: "host starting",
   restarting: "host restarting",
+  stuck: "old host will not exit",
   "crash-loop": "host stopped",
   exited: "host not running",
   stopping: "quitting",
@@ -489,18 +503,51 @@ if (!app.requestSingleInstanceLock()) {
       version: versionLabel,
     });
     registerDesktopProtocol(scheme, webRoot);
+    // The last login-shell answer starts the host at once; the probe refreshes it for later starts.
+    // Without one (first launch, new shell), every host start waits for the probe, the menu's Start
+    // Host included: started from Finder the host would otherwise not find codex & co, and a running
+    // host cannot take the answer later (review shellenv-4).
+    // v1 retries a login shell that does not answer (30 s, 2 min, 10 min, review shellenv2-1); a later
+    // answer reaches the next host start, and Restart Host… applies it to the running one.
+    const cached = shellEnvironment.installCached(hostEnv);
+    const discovery = shellEnvironment.startDiscovery(hostEnv, {
+      onLateAnswer: () => {
+        log("shell environment: the login shell answered on a retry; Restart Host… gives the running host its PATH");
+      },
+    });
+    void discovery.first.then((answered) => {
+      log(`shell environment: ${answered ? "login shell answered" : "login shell did not answer (retrying)"}`);
+    });
+    log(`shell environment: ${cached ? "cached answer applied" : "no cached answer, waiting for the login shell"}`);
+    const hostEnvironmentReady: Promise<unknown> = cached ? Promise.resolve() : discovery.first;
+    const startHost = () => void hostEnvironmentReady.then(() => supervisor.start());
+    const restartHost = () => {
+      const win = mainWindow();
+      const options = {
+        type: "warning" as const,
+        message: "Restart the host?",
+        detail: "Work that is running ends, as when the app quits.",
+        buttons: ["Restart Host", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+      };
+      void (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)).then(({ response }) => {
+        if (response === 0) void hostEnvironmentReady.then(() => supervisor.restart());
+      });
+    };
     configureApplicationMenu({
       displayName: DISPLAY_NAME,
       platform: process.platform,
-      startHost: () => supervisor.start(),
+      startHost,
+      restartHost,
       zoomMain,
       runMainContentsCommand,
     });
-    supervisor.start();
     for (const url of pendingOpenUrls.splice(0)) pendingAppUrl = url;
     for (const value of process.argv) if (isAppUrl(value)) pendingAppUrl = value;
     handleOpenUrl = openAppLink;
     createWindow();
+    startHost();
   });
 
   app.on("activate", () => {
@@ -512,14 +559,15 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Quitting ends the work: hold the quit until the host and its whole process group are gone.
+// Quitting ends the work: hold the quit until the host and its whole process group are gone, and
+// kill a login-shell probe still running (its deadline timer would die with the app).
 let hostStopped = false;
 app.on("before-quit", (event) => {
   if (hostStopped) return;
   event.preventDefault();
   if (supervisor.state.phase === "stopping") return;
   log("quit: stopping host group");
-  void supervisor.stop().finally(() => {
+  void Promise.allSettled([supervisor.stop(), shellEnvironment.stop()]).finally(() => {
     hostStopped = true;
     log("quit: host stopped");
     app.quit();
