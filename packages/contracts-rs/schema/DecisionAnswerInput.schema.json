@@ -39,8 +39,10 @@
       ]
     },
     "reason": {
+      "description": "v1 `UserInputResponseReason`: 1 to 2000 characters, not blank.",
       "maxLength": 2000,
       "minLength": 1,
+      "pattern": "\\S",
       "type": "string"
     }
   },

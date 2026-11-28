@@ -6,8 +6,10 @@
       "type": "string"
     },
     "reason": {
+      "description": "1 to 2000 characters, not blank.",
       "maxLength": 2000,
       "minLength": 1,
+      "pattern": "\\S",
       "type": "string"
     }
   },

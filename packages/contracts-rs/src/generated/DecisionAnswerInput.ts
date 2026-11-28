@@ -6,4 +6,8 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  * v1 `DecisionAnswerInput` (MCP `decision.answer`): `optionId` for a durable decision,
  * `answers` or `decision` for a projected request; `reason` is required.
  */
-export type DecisionAnswerInput = { id: string, optionId?: string, answers?: { [key in string]: JsonValue }, decision?: DecisionApprovalAnswer, reason: string, };
+export type DecisionAnswerInput = { id: string, optionId?: string, answers?: { [key in string]: JsonValue }, decision?: DecisionApprovalAnswer, 
+/**
+ * v1 `UserInputResponseReason`: 1 to 2000 characters, not blank.
+ */
+reason: string, };
