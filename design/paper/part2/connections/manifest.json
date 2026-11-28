@@ -1,0 +1,51 @@
+[
+ {
+  "key": "M1",
+  "id": "1RMD-2",
+  "name": "M1 · Machines — this Mac",
+  "page": "p-8-1",
+  "jsxBytes": 71390
+ },
+ {
+  "key": "M2",
+  "id": "1RWE-2",
+  "name": "M2 · Machine detail — Mac Studio (menu open)",
+  "page": "p-8-1",
+  "jsxBytes": 84993
+ },
+ {
+  "key": "M3",
+  "id": "1S8H-2",
+  "name": "M3 · Add a machine — choose how",
+  "page": "p-8-1",
+  "jsxBytes": 63511
+ },
+ {
+  "key": "M4",
+  "id": "1SHN-2",
+  "name": "M4 · Add over SSH — checks + sign-in prompt",
+  "page": "p-8-1",
+  "jsxBytes": 66814
+ },
+ {
+  "key": "M5",
+  "id": "1T69-2",
+  "name": "M5 · Pair with a link or QR",
+  "page": "p-8-1",
+  "jsxBytes": 82082
+ },
+ {
+  "key": "M6",
+  "id": "1TLF-2",
+  "name": "M6 · Problems — unreachable, unreadable list, other recoveries",
+  "page": "p-8-1",
+  "jsxBytes": 71908
+ },
+ {
+  "key": "M7",
+  "id": "1U8U-2",
+  "name": "M7 · Overview — all machines (fleet, incremental)",
+  "page": "p-8-1",
+  "jsxBytes": 91258
+ }
+]

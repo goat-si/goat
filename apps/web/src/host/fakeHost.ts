@@ -4,6 +4,7 @@
 // pretends an engine ran: a demo run answers that no engine is connected.
 import type { ConnectionState, Transport } from "./transport.ts";
 import type { FakeProviders } from "./fakeProviders.ts";
+import type { ServerProviderEntry } from "../providers/wire.ts";
 import type {
   BotProfile, ClientFrame, CommandResult, CommandValue, HostFrame, LogLine, ThreadCard, TurnItem,
 } from "./wire.ts";
@@ -40,12 +41,6 @@ export function item(threadId: string, runId: string, id: string, at: string, bo
     ordinal: 0, status: "completed", title: null, startedAt: at, completedAt: at, updatedAt: at, ...body,
   } as TurnItem;
 }
-
-/** The provider commands of docs/part2/provider-wire.md. */
-const PROVIDER_COMMANDS = new Set([
-  "refresh_providers", "provider_install_start", "provider_install_cancel", "provider_auth_start", "provider_auth_cancel",
-  "provider_auth_logout", "accept_acp_registry_url_auth", "search_acp_registry", "prepare_acp_registry_agent", "set_provider_instance",
-]);
 
 export class FakeHost implements Transport {
   state: ConnectionState = "connecting";
@@ -87,13 +82,6 @@ export class FakeHost implements Transport {
   send(frame: ClientFrame) {
     if (this.state !== "open") return;
     this.received.push(frame);
-    if ((frame as { type: string }).type === "subscribe_providers") {
-      const subId = (frame as unknown as { subId: string }).subId;
-      const emitList = (providers: unknown[]) => this.emit({ type: "providers", subId, providers } as unknown as HostFrame);
-      if (this.world.providers) this.providerSubs.set(subId, this.world.providers.onList(emitList));
-      else emitList([]);
-      return;
-    }
     switch (frame.type) {
       case "subscribe_cards": {
         this.cardSubs.add(frame.subId);
@@ -125,6 +113,14 @@ export class FakeHost implements Transport {
         const older = (t?.lines ?? []).filter((l) => l.seq < frame.before);
         const page = older.slice(-frame.limit);
         this.emit({ type: "page", reqId: frame.reqId, threadId: frame.threadId, lines: page, hasMore: older.length > page.length });
+        return;
+      }
+      case "subscribe_providers": {
+        // Provider scenes serve fakeProviders.ts; a world without one has no provider instances (empty state).
+        const subId = frame.subId;
+        const emitList = (providers: ServerProviderEntry[]) => this.emit({ type: "providers", subId, providers });
+        if (this.world.providers) this.providerSubs.set(subId, this.world.providers.onList(emitList));
+        else emitList([]);
         return;
       }
       case "resync_item":
@@ -161,11 +157,6 @@ export class FakeHost implements Transport {
 
   private run(frame: Extract<ClientFrame, { reqId: string; clientRequestId: string }>): Omit<CommandResult, "reqId"> {
     const now = this.opts.now();
-    if (PROVIDER_COMMANDS.has((frame as { type: string }).type)) {
-      const outcome = this.world.providers?.run(frame as unknown as { type: string } & Record<string, unknown>);
-      if (!outcome) return { type: "command_result", ok: false, error: { code: "unavailable", reason: "fake_host_unsupported", message: `The demo host does not serve ${frame.type}.`, retryable: false } };
-      return outcome.ok ? this.ok(outcome.value as CommandValue) : { type: "command_result", ok: false, error: outcome.error };
-    }
     switch (frame.type) {
       case "send_input": {
         const t = this.world.threads[frame.threadId];
@@ -278,7 +269,56 @@ export class FakeHost implements Transport {
         for (const sub of this.cardSubs) this.emit({ type: "bot_changed", subId: sub, bot });
         return this.ok({ botId, threadId });
       }
+      case "update_bot": {
+        const i = this.world.bots.findIndex((b) => b.botId === frame.botId);
+        if (i < 0) return this.unavailable("bot_not_found", "not_found", "No such bot.");
+        const prev = this.world.bots[i]!;
+        const bot: BotProfile = {
+          ...prev,
+          ...(frame.name !== undefined ? { name: frame.name } : {}),
+          ...(frame.purpose !== undefined ? { purpose: frame.purpose } : {}),
+          ...(frame.face !== undefined ? { face: frame.face } : {}),
+          ...(frame.defaultModelSelection !== undefined ? { defaultModelSelection: frame.defaultModelSelection } : {}),
+          ...(frame.instructions !== undefined ? { instructions: frame.instructions } : {}),
+        };
+        this.world.bots[i] = bot;
+        for (const sub of this.cardSubs) this.emit({ type: "bot_changed", subId: sub, bot });
+        return this.ok({ botId: bot.botId, bot });
+      }
+      case "get_turn_item": {
+        const t = this.world.threads[frame.threadId];
+        if (!t) return this.fail("thread_not_found", "No such thread.");
+        const item = t.lines.flatMap((l) => (l.type === "item.completed" && l.item.id === frame.itemId ? [l.item] : []))[0];
+        if (!item) return this.unavailable("item_not_found", "not_found", "No such item.");
+        return this.ok({ threadId: t.card.id, turnItem: item });
+      }
+      // The demo host keeps no read state (the real host stores lastReadSeq in ui-state.json),
+      // so mark_read is refused like the other commands it does not serve.
+      case "refresh_providers":
+      case "provider_install_start":
+      case "provider_install_cancel":
+      case "provider_auth_start":
+      case "provider_auth_cancel":
+      case "provider_auth_logout":
+      case "accept_acp_registry_url_auth":
+      case "search_acp_registry":
+      case "prepare_acp_registry_agent":
+      case "set_provider_instance": {
+        // Provider scenes answer from fakeProviders.ts; without a provider world the demo host says it does not serve them.
+        const outcome = this.world.providers?.run(frame);
+        if (!outcome) return this.unavailable("fake_host_unsupported", "unavailable", `The demo host does not serve ${frame.type}.`);
+        return outcome.ok ? this.ok(outcome.value) : { type: "command_result", ok: false, error: outcome.error };
+      }
+      case "mark_read":
+      case "list_bot_notes":
+      case "write_bot_notes":
+        // Not simulated: the demo host says so instead of pretending the command worked.
+        return this.unavailable("fake_host_unsupported", "unavailable", `The demo host does not serve ${frame.type}.`);
     }
+  }
+
+  private unavailable(reason: string, code: "not_found" | "unavailable", message: string): Omit<CommandResult, "reqId"> {
+    return { type: "command_result", ok: false, error: { code, reason, message, retryable: false } };
   }
 
   // ------------------------------------------------------------ log helpers

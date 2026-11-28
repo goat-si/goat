@@ -1,0 +1,34 @@
+{
+  "id": "pending:thr-worker-1:req-7",
+  "source": "pending_request",
+  "from": {
+    "threadId": "thr-worker-1"
+  },
+  "title": "Run cargo test?",
+  "context": "",
+  "options": [],
+  "recommended": null,
+  "expiresAt": null,
+  "status": "answered",
+  "answer": "accept",
+  "answeredBy": "person",
+  "answeredByLabel": "Jun",
+  "createdAt": "2026-11-28T13:00:00Z",
+  "updatedAt": "2026-11-28T13:01:00Z",
+  "humanRequired": true,
+  "routedTo": "person",
+  "escalation": {
+    "by": "thr-bot-1",
+    "at": "2026-11-28T13:00:30Z",
+    "reason": "Needs the user's approval"
+  },
+  "pending": {
+    "threadId": "thr-worker-1",
+    "requestId": "req-7",
+    "questions": [],
+    "approval": {
+      "kind": "command",
+      "prompt": "cargo test --workspace"
+    }
+  }
+}

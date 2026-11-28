@@ -8,12 +8,17 @@ import type { ThreadId } from "./ThreadId.ts";
 /**
  * `bots/<botId>.json` and the `bot_changed` payload.
  */
-export type BotProfile = { botId: BotId, name: string, purpose: string, face: BotFace, role: BotRole, 
+export type BotProfile = { botId: BotId, name: string, purpose: string, face: BotFace, role: BotRole,
 /**
  * The bot's own `bot` thread (v1 `sessionThreadId`).
  */
-sessionThreadId: ThreadId, 
+sessionThreadId: ThreadId,
 /**
  * v1 `defaultModelSelection`.
  */
-defaultModelSelection: ModelSelection, };
+defaultModelSelection: ModelSelection,
+/**
+ * v1 `BotInstructions`: at most 16384 characters, checked by serde and schema alike. v1's
+ * 16384 UTF-8 byte cap is enforced by the host's bot store, not by this contract.
+ */
+instructions?: string, };

@@ -1,0 +1,7 @@
+{
+  "type": "search_acp_registry",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "query": "a",
+  "limit": 2
+}

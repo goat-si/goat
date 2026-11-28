@@ -21,6 +21,52 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// For v1 `Schema.NullOr(T)` fields (key required, value may be `null`): with
+/// `deserialize_with` and no `default`, serde reports a missing key instead of reading `None`.
+/// Pair with `#[schemars(required)]` so the schema requires the key too.
+pub fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+/// Schema stand-in for a required nullable field: the `Option<T>` schema (`T` or `null`), but
+/// not reported as optional, so the key is listed in `required`. Use with
+/// `#[schemars(with = "crate::serde_util::Nullable<T>")]` next to [required_nullable].
+pub struct Nullable<T>(std::marker::PhantomData<T>);
+
+impl<T: schemars::JsonSchema> schemars::JsonSchema for Nullable<T> {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        format!("Nullable_{}", T::schema_name()).into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <Option<T> as schemars::JsonSchema>::json_schema(generator)
+    }
+}
+
+/// ECMAScript `\s` (WhiteSpace and LineTerminator, ECMA-262), so serde and JSON Schema `\S` agree.
+/// It differs from `char::is_whitespace`: it includes U+FEFF and excludes U+0085.
+pub(crate) fn is_ecmascript_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{9}' | '\u{a}' | '\u{b}' | '\u{c}' | '\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
+}
+
 /// Enforces [crate::limits::MAX_SAFE_WIRE_INTEGER] on a `u64` wire field in both directions, so
 /// Rust never writes or accepts a counter JavaScript cannot represent exactly. Use with
 /// `#[serde(with = "crate::serde_util::safe_u64")]`.
@@ -44,6 +90,36 @@ pub mod safe_u64 {
         let value = u64::deserialize(deserializer)?;
         if value > MAX_SAFE_WIRE_INTEGER {
             return Err(<D::Error as de::Error>::custom(message(value)));
+        }
+        Ok(value)
+    }
+}
+
+/// The signed counterpart of [safe_u64]: values stay within +/- [crate::limits::MAX_SAFE_WIRE_INTEGER].
+pub mod safe_i64 {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+
+    use crate::limits::MAX_SAFE_WIRE_INTEGER;
+
+    fn in_range(value: i64) -> bool {
+        value.unsigned_abs() <= MAX_SAFE_WIRE_INTEGER
+    }
+
+    pub fn serialize<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+        if !in_range(*value) {
+            return Err(<S::Error as ser::Error>::custom(format!(
+                "{value} is outside the safe wire integer range"
+            )));
+        }
+        serializer.serialize_i64(*value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        let value = i64::deserialize(deserializer)?;
+        if !in_range(value) {
+            return Err(<D::Error as de::Error>::custom(format!(
+                "{value} is outside the safe wire integer range"
+            )));
         }
         Ok(value)
     }
@@ -121,5 +197,217 @@ mod tests {
             ..step
         };
         assert!(serde_json::to_value(&step).is_err());
+    }
+}
+
+/// v1 `BotInstructions` character limit ([crate::limits::BOT_INSTRUCTIONS_MAX_CHARS]), checked when
+/// reading and writing, the same rule as the JSON Schema `maxLength`. v1's UTF-8 byte cap is the
+/// host bot store's ([crate::limits::BOT_INSTRUCTIONS_MAX_BYTES]).
+pub mod instructions {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+
+    use crate::limits::BOT_INSTRUCTIONS_MAX_CHARS;
+
+    fn check(value: &str) -> Result<(), String> {
+        if value.chars().count() > BOT_INSTRUCTIONS_MAX_CHARS {
+            return Err(format!(
+                "bot instructions must fit in {BOT_INSTRUCTIONS_MAX_CHARS} characters"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<String>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(text) => {
+                check(text).map_err(<S::Error as ser::Error>::custom)?;
+                serializer.serialize_some(text)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        let value = Option::<String>::deserialize(deserializer)?;
+        if let Some(text) = &value {
+            check(text).map_err(<D::Error as de::Error>::custom)?;
+        }
+        Ok(value)
+    }
+}
+
+/// v1 `SignInUrl` (`providerSetup.ts`): trimmed, non-empty, at most 16384 characters, and
+/// `http(s)://` only, because clients open it. Checked when reading and writing; the JSON Schema
+/// carries the same rule as a pattern (http(s) prefix, no trailing ECMAScript whitespace, the set
+/// JavaScript `trim` removes) and length.
+pub mod sign_in_url {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+
+    pub const MAX_CHARS: usize = 16_384;
+
+    pub fn check(value: &str) -> Result<(), String> {
+        let lower = value.get(..8).unwrap_or(value).to_ascii_lowercase();
+        let http = lower.starts_with("http://") || lower.starts_with("https://");
+        if value.is_empty()
+            || value.trim_matches(super::is_ecmascript_whitespace) != value
+            || value.chars().count() > MAX_CHARS
+            || !http
+        {
+            return Err(
+                "a sign-in URL must be a trimmed http(s) URL of at most 16384 characters".into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn serialize<S: Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+        check(value).map_err(<S::Error as ser::Error>::custom)?;
+        serializer.serialize_str(value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        check(&value).map_err(<D::Error as de::Error>::custom)?;
+        Ok(value)
+    }
+}
+
+/// [sign_in_url] for nullable fields (combine with `default`).
+pub mod sign_in_url_opt {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<String>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(url) => {
+                super::sign_in_url::check(url).map_err(<S::Error as ser::Error>::custom)?;
+                serializer.serialize_some(url)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        let value = Option::<String>::deserialize(deserializer)?;
+        if let Some(url) = &value {
+            super::sign_in_url::check(url).map_err(<D::Error as de::Error>::custom)?;
+        }
+        Ok(value)
+    }
+}
+
+/// `RequestOpened.context`: at most [crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters, checked
+/// when reading and writing; the JSON Schema carries the same `maxLength`.
+pub mod request_context {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+
+    use crate::limits::REQUEST_CONTEXT_MAX_CHARS;
+
+    fn check(value: &str) -> Result<(), String> {
+        if value.chars().count() > REQUEST_CONTEXT_MAX_CHARS {
+            return Err(format!(
+                "context must be at most {REQUEST_CONTEXT_MAX_CHARS} characters"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<String>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(text) => {
+                check(text).map_err(<S::Error as ser::Error>::custom)?;
+                serializer.serialize_some(text)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        let value = Option::<String>::deserialize(deserializer)?;
+        if let Some(text) = &value {
+            check(text).map_err(<D::Error as de::Error>::custom)?;
+        }
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod part2_tests {
+    use crate::*;
+
+    fn bot(instructions: Option<String>) -> BotProfile {
+        BotProfile {
+            bot_id: BotId::from("bot-1"),
+            name: "Bot".into(),
+            purpose: String::new(),
+            face: BotFace {
+                shape: "round".into(),
+                color: "blue".into(),
+                goat: false,
+            },
+            role: BotRole::Member,
+            session_thread_id: ThreadId::from("thr-1"),
+            default_model_selection: ModelSelection {
+                instance_id: ProviderInstanceId::from("codex"),
+                model: "gpt".into(),
+                options: None,
+            },
+            instructions,
+        }
+    }
+
+    #[test]
+    fn instructions_enforce_the_character_limit_both_ways() {
+        use crate::limits::BOT_INSTRUCTIONS_MAX_CHARS;
+        // Multibyte text at the character limit is accepted (the byte cap is the host store's).
+        let at_limit = "\u{e9}".repeat(BOT_INSTRUCTIONS_MAX_CHARS);
+        let json = serde_json::to_value(bot(Some(at_limit.clone()))).unwrap();
+        assert_eq!(
+            serde_json::from_value::<BotProfile>(json)
+                .unwrap()
+                .instructions,
+            Some(at_limit)
+        );
+        let over = "a".repeat(BOT_INSTRUCTIONS_MAX_CHARS + 1);
+        assert!(serde_json::to_value(bot(Some(over.clone()))).is_err());
+        let mut json = serde_json::to_value(bot(None)).unwrap();
+        json["instructions"] = serde_json::Value::String(over);
+        assert!(serde_json::from_value::<BotProfile>(json).is_err());
+    }
+
+    #[test]
+    fn sign_in_urls_are_http_only_both_ways() {
+        use crate::serde_util::sign_in_url::check;
+        assert!(check("https://auth.example.com/x").is_ok());
+        assert!(check("HTTP://auth.example.com/x").is_ok());
+        assert!(check("javascript:alert(1)").is_err());
+        assert!(check(" https://padded.example.com").is_err());
+        assert!(check("").is_err());
+        let state = ProviderAuthState {
+            instance_id: ProviderInstanceId::from("codex"),
+            phase: ProviderAuthPhase::Waiting,
+            flow_id: None,
+            authorization_url: Some("javascript:alert(1)".into()),
+            expires_at: None,
+            message: None,
+            methods: None,
+            interaction: None,
+            credential_owner: None,
+        };
+        assert!(serde_json::to_value(&state).is_err());
     }
 }

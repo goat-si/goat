@@ -92,6 +92,18 @@ async fn ui_and_agent_paths_through_the_real_server() {
         "main bot GOAT exists"
     );
 
+    // Provider subscriptions are refused with their subId until the providers module lands.
+    ws.send(Message::text(
+        json!({"type":"subscribe_providers","subId":"providers"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let (refusal, _) = until(&mut ws, |f| {
+        f["type"] == "error" && f["subId"] == "providers"
+    })
+    .await;
+    assert_eq!(refusal["code"], "not_available");
+
     ws.send(Message::text(json!({
         "type":"start_thread","reqId":"r1","clientRequestId":"c1","kind":"user","title":"hello",
         "modelSelection":{"instanceId":"codex","model":"m"},"runtimeMode":"full-access","cwd":"/tmp","text":"hi there"

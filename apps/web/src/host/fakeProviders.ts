@@ -4,6 +4,10 @@
 // ACP registry agents of board 1QAN-2 (live registry index, 2026-11-28). It never runs or signs in to a real provider:
 // install and sign-in flows step through v1's phases on a timer, and a demo sign-in completes only when a test or the
 // scene calls completeAuth.
+// Capabilities are not shown by the provider screens; the demo entries carry lane C's capabilities fixture
+// (crates/goat2-contracts tests, v1 shape) so they are whole ServerProviderEntry values.
+import CAPABILITIES from "../../../../crates/goat2-contracts/tests/fixtures/provider_capabilities/example.json";
+import type { ProviderCapabilities } from "@goat2/contracts-rs";
 import type {
   AcpRegistrySearchAgent, ProviderAuthState, ProviderCommandBody, ProviderCommandValue, ProviderInstallState,
   ProviderProbeResult, ServerProviderEntry, ServerProviderModel,
@@ -31,7 +35,7 @@ const agentAuth = (instanceId: string): ProviderAuthState => ({
 /** Board 1PBB-2: every local v1 driver kind (providerDriverMeta.ts) with the state the board shows. */
 export function demoProviderEntries(at: string): ServerProviderEntry[] {
   const e = (instanceId: string, driver: string, p: ProviderProbeResult, extra: Partial<ServerProviderEntry> = {}): ServerProviderEntry =>
-    ({ instanceId, driver, enabled: true, capabilities: {}, probe: p, ...extra });
+    ({ instanceId, driver, enabled: true, capabilities: CAPABILITIES as ProviderCapabilities, probe: p, ...extra });
   return [
     e("codex", "codex", probe(at, { installed: true, version: "0.167.0", cli: "present", status: "ready",
       auth: { status: "authenticated", type: "chatgpt", label: "ChatGPT Pro", email: "you@example.com", canLogout: true },
@@ -184,7 +188,7 @@ export class FakeProviders {
         const a = f.acpAgentId ? this.registry.find((x) => x.id === f.acpAgentId) : undefined;
         if (f.acpAgentId && !a && !prev) return { ok: false, error: { code: "not_found", reason: "agent_not_found", message: `${f.acpAgentId} is not in the ACP registry.`, retryable: false } };
         const base: ServerProviderEntry = prev ?? {
-          instanceId: f.instanceId, driver: f.driver, enabled: f.enabled, capabilities: {}, setup: setup(true, true),
+          instanceId: f.instanceId, driver: f.driver, enabled: f.enabled, capabilities: CAPABILITIES as ProviderCapabilities, setup: setup(true, true),
           probe: probe(this.now(), { installed: true, version: a?.version ?? null, status: "warning", auth: { status: "unauthenticated" },
             models: [model("default", `${a?.name ?? f.driver} default`, true)], message: "Not signed in" }),
           ...(f.driver === "acpRegistry" ? { authFlow: agentAuth(f.instanceId) } : {}),

@@ -40,8 +40,10 @@ the host announces a different `wsUrl`.
 ## Commands
 
 ```sh
-scripts/build-dev-app.sh            # build host (release) + web + shell, install, relaunch if it was open
-scripts/build-dev-app.sh --no-install
+scripts/build-dev-app.sh            # build origin/goat2 on mac-studio (detached ~/Developer/goat2_devbuild),
+                                    # copy back, verify signature + stamp, install, relaunch if it was open
+GOAT2_DEVBUILD_HOST=local scripts/build-dev-app.sh   # same, built on this Mac at nice 10
+scripts/build-dev-app.sh --no-install                # build this checkout only (lane testing)
 pnpm --filter @goat2/desktop test   # supervisor tests with a fake host
 pnpm --filter @goat2/desktop dev    # unpackaged: target/debug/goat2-host + apps/web/dist (GOAT2_WEB_URL for vite)
 ```

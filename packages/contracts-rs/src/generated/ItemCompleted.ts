@@ -8,11 +8,11 @@ import type { TurnItem } from "./TurnItem.ts";
  * `item.completed`: a finished item. User messages and final assistant text are copied;
  * tool calls keep name, summary and engine locator only.
  */
-export type ItemCompleted = { runId: RunId, 
+export type ItemCompleted = { runId: RunId,
 /**
  * The item; its `id` is the itemId.
  */
-item: TurnItem, engineLocator: EngineItemLocator | null, 
+item: TurnItem, engineLocator: EngineItemLocator | null,
 /**
  * Set when a body above [crate::limits::BLOB_THRESHOLD_BYTES] moved to `blobs/`; the item
  * keeps only the start of it.

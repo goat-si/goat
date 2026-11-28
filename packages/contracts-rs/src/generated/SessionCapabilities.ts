@@ -7,7 +7,7 @@ import type { FollowUpSupport } from "./FollowUpSupport.ts";
  * v1 `OrchestrationV2SessionCapabilities`. `sourceRestriction`, `executionLocation` and
  * `followUp` decode with v1's defaults when missing and are always written.
  */
-export type SessionCapabilities = { sourceRestriction: CloudSourceRestriction, executionLocation: ExecutionLocation, followUp: FollowUpSupport, 
+export type SessionCapabilities = { sourceRestriction: CloudSourceRestriction, executionLocation: ExecutionLocation, followUp: FollowUpSupport,
 /**
  * Whether this session controls the lifetime of its native process.
  */

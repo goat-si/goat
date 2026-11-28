@@ -125,6 +125,7 @@ pub fn request(id: &str, run: Option<&str>, kind: RequestKind) -> LogEvent {
         summary: format!("request {id}"),
         options: None,
         recommended: None,
+        context: None,
     })
 }
 
@@ -172,6 +173,7 @@ pub fn notified(text: &str) -> LogEvent {
         run_id: None,
         kind: NotifyKind::Result,
         text: text.into(),
+        source: None,
     })
 }
 

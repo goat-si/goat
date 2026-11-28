@@ -1,0 +1,16 @@
+{
+  "botId": "bot-goat",
+  "threadId": "thr-worker-1",
+  "requestId": "req-7",
+  "request": {
+    "requestId": "req-7",
+    "threadId": "thr-worker-1",
+    "kind": "runtime"
+  },
+  "eventId": "att-1",
+  "sequence": 12,
+  "kind": "question",
+  "generation": 3,
+  "occurredAt": "2026-11-28T13:00:00Z",
+  "botName": "GOAT"
+}

@@ -3,7 +3,7 @@ import { apply, botRows, emptyState, emptyThread, type HostState } from "./store
 import { Outbox, type OutboxStorage, type OutboxTarget } from "./outbox.ts";
 import type { ConnectionState, Transport } from "./transport.ts";
 import type { ClientFrame, CommandBody, CommandResult, HostFrame, InputMode, LogLine } from "./wire.ts";
-import type { ProviderCommandBody, ProviderCommandValue, ProvidersFrame, ServerProviderEntry } from "../providers/wire.ts";
+import type { ProviderCommandBody, ServerProviderEntry } from "../providers/wire.ts";
 
 export interface CacheSnapshot extends Pick<HostState, "cards" | "bots"> {
   /** Last lines of recently shown threads, so a cold start draws them at once. */
@@ -108,11 +108,10 @@ export class HostClient {
   }
 
   private onFrame(frame: HostFrame) {
-    if ((frame as { type: string }).type === "providers") {
-      const f = frame as unknown as ProvidersFrame;
-      if (f.subId !== this.providersSubId) return; // a stale subscription's list
-      this.lastProviders = f.providers;
-      for (const cb of this.providerWatchers) cb(f.providers);
+    if (frame.type === "providers") {
+      if (frame.subId !== this.providersSubId) return; // a stale subscription's list
+      this.lastProviders = frame.providers;
+      for (const cb of this.providerWatchers) cb(frame.providers);
       return;
     }
     if (frame.type === "command_result") {
@@ -234,12 +233,12 @@ export class HostClient {
   }
   private subscribeProviders() {
     this.providersSubId = `providers-${++this.subCounter}`;
-    this.send({ type: "subscribe_providers", subId: this.providersSubId } as unknown as ClientFrame);
+    this.send({ type: "subscribe_providers", subId: this.providersSubId });
   }
 
   /** A provider command (docs/part2/provider-wire.md); resolves with its command_result like command(). */
-  providerCommand(body: ProviderCommandBody, clientRequestId = newId()): Promise<CommandResult & { value?: ProviderCommandValue }> {
-    return this.command(body as unknown as CommandBody, clientRequestId) as Promise<CommandResult & { value?: ProviderCommandValue }>;
+  providerCommand(body: ProviderCommandBody, clientRequestId = newId()): Promise<CommandResult> {
+    return this.command(body as CommandBody, clientRequestId);
   }
 
   close() { this.transport.close(); }

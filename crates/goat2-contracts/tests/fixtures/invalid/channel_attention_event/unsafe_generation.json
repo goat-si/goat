@@ -1,0 +1,10 @@
+{
+  "botId": "bot-goat",
+  "threadId": "thr-worker-1",
+  "eventId": "att-9",
+  "sequence": 1,
+  "kind": "failed",
+  "generation": 9007199254740992,
+  "occurredAt": "2026-11-28T13:00:00Z",
+  "botName": "GOAT"
+}

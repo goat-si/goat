@@ -1,0 +1,6 @@
+{
+  "type": "prepare_acp_registry_agent",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "agentId": "a"
+}
