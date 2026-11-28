@@ -153,3 +153,10 @@ Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.t
 | apps/engine-helper/src/engines/cursor/rejections.ts | packages/provider-cursor/src/server/CursorSdk.ts:15-44 | adapted: exported the same narrow SDK unhandled-rejection classifier; registration remains for the Cursor engine to do when it loads |
 | apps/engine-helper/test/cursor.test.ts | packages/provider-cursor/src/server/CursorSdk.ts:15-44 | new: exercise the classifier and helper registry without a Cursor SDK or network |
 
+| apps/engine-helper/src/engines/cursor/options.ts | packages/provider-cursor/src/server/agentOptions.ts:15-96,105-141; sdkModel.ts:8-17,90-125 | adapted: runtime policy, MCP and explicit model selection for helper protocol |
+| apps/engine-helper/src/engines/cursor/index.ts | packages/provider-cursor/src/server/CursorAgentSdk.ts:430-518,590-785; adapter.ts:1330-1495,1684-1737; steerPrompt.ts:1-23; status.ts:255-411 | adapted: local SDK session and run, steer, cancel, prompt replay and catalog probe |
+| apps/engine-helper/src/engines/cursor/projection.ts | packages/provider-cursor/src/server/adapter.ts:240-282,729-856; turnProjection.ts:290-390; conversationSteps.ts:23-39 | adapted: finished helper items and text deltas, with command output and patches omitted |
+| apps/engine-helper/src/engines/cursor/errors.ts | packages/provider-cursor/src/server/CursorAgentSdk.ts:46-64 | adapted: classify quota errors without exposing SDK error text |
+| apps/engine-helper/test/fakes/cursor-sdk.ts; crates/goat2-engine-sdk/tests/helper_cursor.rs | packages/provider-cursor/src/server/CursorAgentSdk.test.ts; crates/goat2-engine-sdk/tests/helper_fake.rs | new: offline SDK double and Rust helper round trip |
+
+Not yet lifted: GOAT per-instance saved credentials, keychain usage/account reporting, catalog option descriptors, attachment blob resolution, resume recovery, complete tool and subagent projections, transport failure classification, usage/limits, account pools, text generation, cloud and checkpoints. Cursor approvals and structured question callbacks are not exposed by the v1 capability flags.
