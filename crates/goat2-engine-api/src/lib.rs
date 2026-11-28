@@ -208,8 +208,10 @@ pub enum EngineEvent {
     /// and replaces only one with the same key. Sent by Muse and Pi; OpenCode
     /// only for its background turns. Host support: as for [EngineEvent::SessionRequestOpened].
     ContinuationRequested { key: String, text: String },
-    /// The engine withdrew a pending continuation (v1 clears an offer when its workflow ends):
-    /// the host cancels its input while still queued; once its run has started this is ignored.
+    /// The engine withdrew a pending continuation it no longer holds: the host cancels its input
+    /// while still queued; once its run has started this is ignored. A GOAT 2 event: v1 Muse
+    /// drops a held wake when it is consumed, fails or its session closes, and v1 OpenCode keeps
+    /// a wake it already offered (`backgroundTurns.ts:215-221`); here a driver says so explicitly.
     ContinuationWithdrawn { key: String },
     /// The engine needs the person to sign in (Antigravity authorization URL, ACP authenticate,
     /// Claude "not logged in"). The host records it as `request.opened` kind `signin` on the run
