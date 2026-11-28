@@ -4,6 +4,9 @@
 //! `GOAT2_HOST_TOKEN` (UI token; when absent one is generated and written to `host.json` with
 //! mode 0600, for manual runs). `--data-dir` / `--port` are aliases for manual runs only.
 //! `GOAT2_ENGINE=fake` runs the scripted fake engine (UI work without Codex).
+//! `GOAT2_CODEX_BIN` is the Codex program the driver starts (absolute path, e.g. a fake codex
+//! app-server for parity runs); unset = `codex` on the host's PATH. The engine process
+//! inherits the host's environment except host identity and the UI token.
 
 use std::path::PathBuf;
 
@@ -20,6 +23,8 @@ pub struct HostConfig {
     /// Token from the environment; `None` = generate and write to `host.json`.
     pub ui_token: Option<String>,
     pub engine: EngineChoice,
+    /// `GOAT2_CODEX_BIN`: the Codex program; `None` = `codex` on PATH.
+    pub codex_bin: Option<PathBuf>,
     /// Exit when stdin closes (the parent died). Off for tests.
     pub exit_on_stdin_close: bool,
 }
@@ -42,6 +47,9 @@ impl HostConfig {
             Ok("codex") | Err(_) => EngineChoice::Codex,
             Ok(other) => return Err(format!("GOAT2_ENGINE: unknown engine {other}")),
         };
+        let codex_bin = std::env::var_os("GOAT2_CODEX_BIN")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -70,6 +78,7 @@ impl HostConfig {
             port: port.unwrap_or(0),
             ui_token,
             engine,
+            codex_bin,
             exit_on_stdin_close: true,
         })
     }
