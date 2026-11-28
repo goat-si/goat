@@ -1,4 +1,6 @@
 import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
+import { repositoryNotFoundDetail } from "@goat/source-control-core/server/SourceControlProvider";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 
 export class GitHubFailure extends Data.TaggedError("GitHubFailure")<{
@@ -46,3 +48,19 @@ export function fromGitHubApiError(
 }
 
 export const notFound = (cause: string) => failure(PULL_REQUEST_NOT_FOUND, new Error(cause));
+
+class GitHubRepositoryLookupError extends Schema.TaggedError<GitHubRepositoryLookupError>()(
+  "GitHubRepositoryLookupError",
+  { userFacingDetail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
+
+const isGitHubApiNotFoundError = Schema.is(GitHubRequestPolicy.GitHubApiNotFoundError);
+
+export function repositoryLookupError(repository: string, error?: GitHubFailure): GitHubFailure {
+  if (error && !isGitHubApiNotFoundError(error.cause)) return error;
+  const detail = error ? repositoryNotFoundDetail(repository) : repository;
+  return failure(
+    detail,
+    new GitHubRepositoryLookupError({ userFacingDetail: detail, cause: error?.cause }),
+  );
+}

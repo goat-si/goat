@@ -17,6 +17,7 @@ import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceC
 import * as GitCafeApi from "./GitCafeApi.ts";
 import * as GitCafeCredentials from "./GitCafeCredentials.ts";
 import * as GitCafeSourceControlProvider from "./GitCafeSourceControlProvider.ts";
+import { userFacingSourceControlDetail } from "@goat/source-control-core/server/SourceControlProvider";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -62,6 +63,36 @@ const layerFor = (
   );
 
 describe("GitCafeSourceControlProvider", () => {
+  it.effect.each([404, 403])(
+    "exposes repository lookup details only for HTTP 404 (%s)",
+    (status) => {
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(encodeJson({ detail: "raw upstream response must not be shown" }), {
+              status,
+            }),
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const provider = yield* GitCafeSourceControlProvider.make;
+        for (const repository of ["team/project", "https://git.cafe/team/project.git"]) {
+          const error = yield* provider
+            .getRepositoryCloneUrls({ cwd: "/repo", repository })
+            .pipe(Effect.flip);
+          assert.strictEqual(
+            userFacingSourceControlDetail(error.cause),
+            status === 404
+              ? "Repository team/project was not found. Check the owner and name and try again."
+              : undefined,
+          );
+        }
+      }).pipe(Effect.provide(layerFor(client)));
+    },
+  );
+
   it.effect("follows only bounded same-origin API redirects with safe methods", () =>
     Effect.gen(function* () {
       const run = (status: number, location: string, method: "GET" | "POST", loop = false) => {
