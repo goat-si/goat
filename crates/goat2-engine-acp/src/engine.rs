@@ -1308,11 +1308,12 @@ impl Shared {
         true
     }
 
+    /// The prompt's content blocks, and whether `preamble` went in front of them.
     fn prompt_blocks(
         &self,
         inputs: &[EngineInput],
         preamble: Option<String>,
-    ) -> Result<Vec<ContentBlock>, String> {
+    ) -> Result<(Vec<ContentBlock>, bool), String> {
         let init = self.init.get().cloned().unwrap_or_default();
         let resolve =
             |a: &ChatAttachment| self.resolver.as_ref().and_then(|r| r(&self.thread_id, a));
@@ -1348,11 +1349,14 @@ impl Shared {
             };
         }
         let mut blocks = Vec::new();
-        // Slash commands must stay first (v1 acpAppContext skips context for them).
+        // Slash commands must stay first: v1 acpAppContext.ts:63-64 skips the context for them and
+        // does not commit it, so the next prompt still carries it (final review finding 10).
+        let mut sent_preamble = false;
         if let Some(preamble) = preamble.filter(|p| !p.trim().is_empty())
             && !text.trim_start().starts_with('/')
         {
             blocks.push(ContentBlock::Text(TextContent::new(preamble)));
+            sent_preamble = true;
         }
         if !text.is_empty() {
             blocks.push(ContentBlock::Text(TextContent::new(text)));
@@ -1398,7 +1402,7 @@ impl Shared {
         if blocks.is_empty() {
             return Err("A turn requires text or supported attachments.".into());
         }
-        Ok(blocks)
+        Ok((blocks, sent_preamble))
     }
 
     /// Send one `session/prompt` for `turn_id`; its answer settles the turn in the background.
@@ -1955,8 +1959,8 @@ impl EngineSession for AcpSession {
                 .await;
         }
         let preamble = shared.state.lock().expect("state").preamble.clone();
-        let blocks = match shared.prompt_blocks(&inputs, preamble) {
-            Ok(blocks) => blocks,
+        let (blocks, sent_preamble) = match shared.prompt_blocks(&inputs, preamble) {
+            Ok(prompt) => prompt,
             Err(reason) => return TurnStartResult::Declined { reason },
         };
         let (turn_id, prompt_seq) = {
@@ -1989,7 +1993,9 @@ impl EngineSession for AcpSession {
                 finalize_generation: 0,
                 preserve_runtime: false,
             });
-            state.preamble = None;
+            if sent_preamble {
+                state.preamble = None;
+            }
             (turn_id, state.prompt_counter)
         };
         match shared.send_prompt(turn_id.clone(), prompt_seq, blocks) {
@@ -2012,7 +2018,7 @@ impl EngineSession for AcpSession {
             };
         }
         let blocks = match shared.prompt_blocks(&inputs, None) {
-            Ok(blocks) => blocks,
+            Ok((blocks, _)) => blocks,
             Err(reason) => return SteerResult::Declined { reason },
         };
         let prompt_seq = {
@@ -2869,6 +2875,17 @@ impl AcpEngineFactory {
                         .find(|m| m.kind.is_none() || m.kind.as_deref() == Some("agent"))
                         .cloned(),
                 };
+                // v1 AcpSessionRuntime.ts:1514-1527: when the agent lists its sign-in methods, a
+                // configured method it does not name is refused before any authenticate; only an
+                // agent without a list gets the configured id as is (final review finding 11).
+                if let Some(id) = &configured
+                    && method.is_none()
+                    && init.raw.get("authMethods").is_some_and(Value::is_array)
+                {
+                    return Err(EngineError::StartFailed(format!(
+                        "authenticate {id}: ACP agent did not advertise configured authentication method \"{id}\""
+                    )));
+                }
                 let method_id = method.as_ref().map(|m| m.id.clone()).or(configured);
                 let Some(method_id) = method_id else {
                     shared.auth_required(

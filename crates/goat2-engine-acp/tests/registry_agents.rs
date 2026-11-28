@@ -696,7 +696,7 @@ async fn generic_agent_auth_method_custom_models_and_command_code_mcp() {
         ("GOAT_ACP_AUTH_METHOD_ID", "agent-login"),
         ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
     ];
-    // A method the agent does not accept is still the one GOAT asks for.
+    // A configured method the agent's list does not name is refused (final review finding 11).
     let wrong = RegistryAgentFlavor::new("some-agent", command(&env), false)
         .with_auth_method_id(Some("other".into()));
     let error = factory(wrong)
