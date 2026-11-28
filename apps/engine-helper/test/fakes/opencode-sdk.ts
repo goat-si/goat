@@ -26,7 +26,9 @@ const nativePermissions = new Map<string, Array<{ permission: string; pattern: s
 const nativeMetadata = new Map<string, Record<string, unknown>>();
 const nativeStatuses = new Map<string, "idle" | "busy">();
 let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
-export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; captureStatus = false; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; modelLimits = undefined; providerGate = undefined; providerReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+let fakeServerPassword = "";
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; fakeServerPassword = ""; statusGate = undefined; statusReached = undefined; captureStatus = false; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; modelLimits = undefined; providerGate = undefined; providerReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function setServerPassword(value: string) { fakeServerPassword = value; }
 export function setModelLimits(limits: { input?: number; context: number }) { modelLimits = limits; }
 export function holdProvider() { const gate = Promise.withResolvers<void>(); const reached = Promise.withResolvers<void>(); providerGate = gate; providerReached = reached; return { reached: reached.promise, release: () => gate.resolve() }; }
 export function setHistory(value: typeof history) { history = value; }
@@ -69,7 +71,7 @@ export function holdHistory() {
 export function crashServer(index: number) { servers[index]?.exit?.(); }
 export async function startFakeServer() {
   const state: { exit?: () => void } = {}; servers.push(state);
-  return { url: "http://127.0.0.1:1", close() {}, onExit(callback: () => void) { state.exit = callback; } };
+  return { url: "http://127.0.0.1:1", password: fakeServerPassword, close() {}, onExit(callback: () => void) { state.exit = callback; } };
 }
 export function createOpencodeClient() {
   const queue: Array<{ event: unknown; acknowledged?: () => void }> = [];

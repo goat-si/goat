@@ -7,7 +7,7 @@ import { resolveOpenCodeConfigContent } from "./openCodeConfigContent.ts";
 
 export type Sdk = typeof import("@opencode-ai/sdk/v2") & {
   // Only the injected test SDK implements this process substitute.
-  startFakeServer?: () => Promise<{ url: string; close(): void; onExit?(callback: () => void): void }>;
+  startFakeServer?: () => Promise<{ url: string; password?: string; close(): void; onExit?(callback: () => void): void }>;
 };
 export async function sdk(): Promise<Sdk> {
   return loadSdk<Sdk>("opencode", "@opencode-ai/sdk/v2");
@@ -38,7 +38,7 @@ async function freePort(): Promise<number> {
 export async function startServer(module: Sdk, cwd: string, launch: LaunchSpec | null): Promise<Server> {
   if (fakeSdkPath("opencode") && module.startFakeServer) {
     const server = await module.startFakeServer();
-    return { url: server.url, password: "", close: async () => server.close(), onExit: (callback) => server.onExit?.(callback) };
+    return { url: server.url, password: server.password ?? "", close: async () => server.close(), onExit: (callback) => server.onExit?.(callback) };
   }
   const environment = { ...process.env, ...launch?.env };
   const password = environment.OPENCODE_SERVER_PASSWORD || randomBytes(32).toString("base64url");

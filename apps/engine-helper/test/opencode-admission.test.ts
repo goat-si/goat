@@ -1272,3 +1272,18 @@ test("1.x first-message preamble survives an initial compact turn", async () => 
     assert.match(call.parts[0]?.text ?? "", /REQUIRED-PREAMBLE/);
   } finally { await session.shutdown(); }
 });
+
+test("1.x generated server password is redacted across reasoning deltas", async () => {
+  fake.reset(); fake.setServerPassword("synthetic-server-password"); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    assert.equal((await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings)).status, "accepted"); await new Promise<void>((resolve) => setImmediate(resolve));
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant", sessionID: session.engineRef, role: "assistant", time: {} } });
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: { id: "r", sessionID: session.engineRef, messageID: "assistant", type: "reasoning", text: "synthetic-server-" } });
+    await fake.sendEvent("message.part.delta", { sessionID: session.engineRef, messageID: "assistant", partID: "r", field: "text", delta: "password" });
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+    const text = events.flatMap((event) => event.type === "content_delta" ? [event.text] : []).join("");
+    assert.equal(text, "[redacted]"); assert.ok(!JSON.stringify(events).includes("synthetic-server-password"));
+  } finally { await session.shutdown(); }
+});

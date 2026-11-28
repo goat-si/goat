@@ -89,7 +89,7 @@ export class OpenCodeSession implements EngineSession {
         if (droppedUnverifiedAllows) safeHost(host, params).log("warn", `OpenCode session ${response.data.id}: unverified allow overrides were dropped`);
         if (permissionUpdateNeeded(response.data.permission ?? [], response.data.metadata, desired)) await api.session.update({ sessionID: response.data.id, ...desired }, { throwOnError: true });
       }
-      const session = new OpenCodeSession(api, server, params, safeHost(host, params), response.data.id, abortEvents);
+      const session = new OpenCodeSession(api, server, params, safeHost(host, params, [server.password]), response.data.id, abortEvents);
       if (params.resume) session.subagentsDenied = ownsSubagentDeny(response.data.permission ?? [], response.data.metadata);
       server.onExit(() => { if (!session.closed) session.broken("OpenCode server exited"); });
       if (params.resume) await session.restoreChildren(children);
