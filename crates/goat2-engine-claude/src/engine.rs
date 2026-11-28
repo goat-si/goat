@@ -133,11 +133,16 @@ impl std::fmt::Debug for ClaudeEngineOptions {
 #[derive(Debug, Clone, Default)]
 pub struct ClaudeEngineFactory {
     pub options: ClaudeEngineOptions,
+    /// Running sign-ins, one per provider instance.
+    auth: Arc<crate::auth::AuthFlows>,
 }
 
 impl ClaudeEngineFactory {
     pub fn new(options: ClaudeEngineOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            auth: Arc::default(),
+        }
     }
 }
 
@@ -163,6 +168,58 @@ impl EngineFactory for ClaudeEngineFactory {
     ) -> Result<ProviderProbeResult, EngineError> {
         let (launch, _) = instance_launch(&self.options.launch, Some(target));
         Ok(crate::probe::probe(&launch).await)
+    }
+
+    /// v1 Claude setup: GOAT signs in through the Claude CLI; it does not install it.
+    fn setup(&self) -> goat2_contracts::ProviderSetup {
+        goat2_contracts::ProviderSetup {
+            can_authenticate: cfg!(unix),
+            can_install: false,
+            documentation_url: None,
+        }
+    }
+
+    async fn auth_methods(
+        &self,
+        _target: &ProviderTarget,
+    ) -> Result<Vec<goat2_contracts::ProviderAuthMethod>, EngineError> {
+        Ok(crate::auth::methods())
+    }
+
+    async fn auth_start(
+        &self,
+        target: &ProviderTarget,
+        method_id: Option<String>,
+        updates: tokio::sync::mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        let (launch, _) = instance_launch(&self.options.launch, Some(target));
+        self.auth.start(launch, target, method_id, updates).await
+    }
+
+    async fn auth_respond(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        self.auth.respond(target, flow_id, interaction_id, response)
+    }
+
+    async fn auth_cancel(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        self.auth.cancel(target, flow_id)
+    }
+
+    async fn auth_logout(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        let (launch, _) = instance_launch(&self.options.launch, Some(target));
+        self.auth.logout(&launch, target).await
     }
 }
 
