@@ -1555,6 +1555,17 @@ impl Store {
                     ));
                 }
             }
+            LogEvent::InputDelivered(e)
+                if e.delivered_as == DeliveredAs::Steer
+                    && e.outcome == DeliveryOutcome::Declined
+                    && !fold.queued_inputs.iter().any(|q| q.input_id == e.input_id)
+                    && !fold.steered_inputs.iter().any(|q| q.input_id == e.input_id) =>
+            {
+                return invalid(format!(
+                    "declined steer {} is neither queued nor an accepted steer",
+                    e.input_id
+                ));
+            }
             LogEvent::RunFinished(e) if fold.active_run_id.as_ref() != Some(&e.run_id) => {
                 return invalid(format!("run {} is not the active run", e.run_id));
             }
