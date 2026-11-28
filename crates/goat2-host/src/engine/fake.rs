@@ -120,6 +120,9 @@ struct Shared {
     )>,
     auth_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>>,
     auth_starts: usize,
+    /// Sign-in answers seen: (flow id, interaction id, credential field names). Values are
+    /// never kept, like a real driver.
+    auth_responses: Vec<(String, String, Vec<String>)>,
     install: Option<goat2_contracts::ProviderInstallState>,
     install_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderInstallState>>,
 }
@@ -261,6 +264,11 @@ impl FakeEngine {
 
     pub fn auth_starts(&self) -> usize {
         self.shared.lock().expect("fake").auth_starts
+    }
+
+    /// Sign-in answers seen: (flow id, interaction id, credential field names).
+    pub fn auth_responses(&self) -> Vec<(String, String, Vec<String>)> {
+        self.shared.lock().expect("fake").auth_responses.clone()
     }
 
     /// The update channel of the last install start.
@@ -487,6 +495,36 @@ impl EngineFactory for FakeEngine {
         Ok(goat2_contracts::ProviderAuthState {
             instance_id: target.instance_id.clone(),
             phase: goat2_contracts::ProviderAuthPhase::Cancelled,
+            flow_id: Some(flow_id.to_owned()),
+            authorization_url: None,
+            ..start
+        })
+    }
+
+    /// Records only the field names of a credentials answer (never the values) and answers the
+    /// flow as verifying.
+    async fn auth_respond(
+        &self,
+        target: &super::ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        let mut shared = self.shared.lock().expect("fake");
+        let Some((_, start)) = shared.auth.clone() else {
+            return Err(EngineError::Unsupported("auth_respond".into()));
+        };
+        let goat2_contracts::ProviderAuthResponse::Credentials { values } = response else {
+            return Err(EngineError::Unsupported("auth_respond".into()));
+        };
+        shared.auth_responses.push((
+            flow_id.to_owned(),
+            interaction_id.to_owned(),
+            values.into_keys().collect(),
+        ));
+        Ok(goat2_contracts::ProviderAuthState {
+            instance_id: target.instance_id.clone(),
+            phase: goat2_contracts::ProviderAuthPhase::Verifying,
             flow_id: Some(flow_id.to_owned()),
             authorization_url: None,
             ..start

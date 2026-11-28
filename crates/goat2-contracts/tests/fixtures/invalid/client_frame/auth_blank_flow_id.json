@@ -1,0 +1,15 @@
+{
+  "type": "provider_auth_respond",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "flowId": " \t ",
+  "interactionId": "interaction",
+  "response": {
+    "type": "credentials",
+    "values": {
+      "username": "person",
+      "password": "example"
+    }
+  }
+}

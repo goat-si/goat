@@ -357,6 +357,14 @@ fn built_in_factories(
                 goat2_engine_claude::engine::DRIVER.to_owned(),
                 Arc::new(claude_factory(data_dir, cfg.claude_bin.as_deref())),
             );
+            for (driver, factory) in crate::engine::acp::acp_factories(
+                data_dir,
+                cfg.grok_bin.as_deref(),
+                cfg.fx_bin.as_deref(),
+                cfg.antigravity_bin.as_deref(),
+            ) {
+                factories.insert(driver, Arc::new(factory));
+            }
         }
         EngineChoice::Fake => {
             factories.insert(
@@ -460,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn the_real_engine_registers_codex_and_claude() {
+    fn the_real_engine_registers_codex_claude_and_the_acp_drivers() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = |engine| HostConfig {
             data_dir: dir.path().to_path_buf(),
@@ -469,18 +477,34 @@ mod tests {
             engine,
             codex_bin: None,
             claude_bin: None,
+            grok_bin: None,
+            fx_bin: None,
+            antigravity_bin: None,
             exit_on_stdin_close: false,
         };
         let real = super::built_in_factories(&cfg(EngineChoice::Codex), dir.path());
         assert_eq!(
             real.keys().collect::<Vec<_>>(),
-            vec!["claudeAgent", "codex"]
+            vec!["antigravity", "claudeAgent", "codex", "fx", "grok"]
         );
         assert_eq!(
             real["claudeAgent"].capabilities(),
             goat2_engine_claude::claude_capabilities()
         );
+        use goat2_engine_acp::AcpFlavor;
+        use goat2_engine_acp::agents::{antigravity::Antigravity, fx::Fx, grok::Grok};
+        assert_eq!(real["grok"].capabilities(), Grok::default().capabilities());
+        assert_eq!(real["fx"].capabilities(), Fx::default().capabilities());
+        assert_eq!(
+            real["antigravity"].capabilities(),
+            Antigravity::default().capabilities()
+        );
         assert!(dir.path().join("claude-home").is_dir());
+        assert!(
+            crate::engine::acp::antigravity_profile(dir.path())
+                .join("antigravity-acp/settings.json")
+                .is_file()
+        );
         let fake = super::built_in_factories(&cfg(EngineChoice::Fake), dir.path());
         assert_eq!(fake.keys().collect::<Vec<_>>(), vec!["codex"]);
     }
@@ -495,6 +519,9 @@ mod tests {
             engine: EngineChoice::Fake,
             codex_bin: None,
             claude_bin: None,
+            grok_bin: None,
+            fx_bin: None,
+            antigravity_bin: None,
             exit_on_stdin_close: false,
         };
         let first = start(cfg()).await.unwrap();

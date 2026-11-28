@@ -348,6 +348,49 @@ impl Providers {
         Ok(state)
     }
 
+    /// `provider_auth_respond`: answer what the instance's running flow waits for. The
+    /// response (an API key, terminal input) goes straight to the driver and is dropped: never
+    /// logged or stored. An answer for an older flow never replaces the running one's state.
+    pub async fn auth_respond(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<ProviderAuthState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        // Only the instance's running flow takes an answer: a secret never reaches the driver
+        // for a flow that ended, was replaced, or did not survive a restart.
+        let current = self
+            .state
+            .lock()
+            .expect("providers")
+            .auth
+            .get(instance_id)
+            .cloned();
+        if !current
+            .as_ref()
+            .is_some_and(|c| c.flow_id.as_deref() == Some(flow_id) && auth_running(&c.phase))
+        {
+            return Err(ProviderRefusal::NotFound(format!(
+                "No running sign-in flow {flow_id} for provider instance {instance_id}."
+            )));
+        }
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
+        let state = clean_auth(
+            instance_id,
+            bounded(factory.auth_respond(&target, flow_id, interaction_id, response)).await?,
+        );
+        // Stored only while that flow still runs: a terminal update recorded meanwhile wins.
+        self.record_auth_if(host, instance_id, state.clone(), |current| {
+            current.is_some_and(|c| c.flow_id.as_deref() == Some(flow_id) && auth_running(&c.phase))
+        })?;
+        Ok(state)
+    }
+
     pub async fn auth_logout(
         &self,
         host: &Host,
@@ -720,10 +763,13 @@ async fn watch_auth(
             continue;
         }
         let succeeded = state.phase == ProviderAuthPhase::Succeeded;
-        // Stored only while this is still the instance's current flow (one lock).
+        // Stored only while this is still the instance's current flow (one lock). Once the flow
+        // has a terminal state (e.g. the Cancelled that auth_cancel recorded), a running phase
+        // the driver queued before it never brings the flow back.
+        let running = auth_running(&state.phase);
         let stored = providers
             .record_auth_if(&host, &instance_id, state, |c| {
-                c.is_some_and(|a| a.flow_id == flow_id)
+                c.is_some_and(|a| a.flow_id == flow_id && !(running && auth_terminal(&a.phase)))
             })
             .unwrap_or(false);
         if stored && succeeded {
@@ -742,8 +788,13 @@ async fn watch_install(
     while let Some(state) = rx.recv().await {
         let providers = &host.inner.providers;
         let succeeded = state.phase == ProviderInstallPhase::Succeeded;
+        // Same rule as sign-in: a terminal install state is never replaced by a running phase
+        // queued before it.
+        let running = install_running(&state.phase);
         let stored = match providers.record_install_if(&host, &driver, state, |c| {
-            c.is_some_and(|i| i.operation_id == operation_id)
+            c.is_some_and(|i| {
+                i.operation_id == operation_id && !(running && install_terminal(&i.phase))
+            })
         }) {
             Ok(stored) => stored,
             Err(_) => {
@@ -770,6 +821,22 @@ fn install_running(phase: &ProviderInstallPhase) -> bool {
         ProviderInstallPhase::Downloading
             | ProviderInstallPhase::Extracting
             | ProviderInstallPhase::Verifying
+    )
+}
+
+fn auth_terminal(phase: &ProviderAuthPhase) -> bool {
+    matches!(
+        phase,
+        ProviderAuthPhase::Succeeded | ProviderAuthPhase::Failed | ProviderAuthPhase::Cancelled
+    )
+}
+
+fn install_terminal(phase: &ProviderInstallPhase) -> bool {
+    matches!(
+        phase,
+        ProviderInstallPhase::Succeeded
+            | ProviderInstallPhase::Failed
+            | ProviderInstallPhase::Cancelled
     )
 }
 

@@ -388,6 +388,25 @@ pub trait EngineFactory: Send + Sync + 'static {
         let _ = (target, method_id, updates);
         Err(EngineError::Unsupported("auth_start".into()))
     }
+    /// Answer what a running sign-in flow waits for (v1 `provider.auth.respond`): the
+    /// `ProviderAuthInteraction` with id `interaction_id` on flow `flow_id`, e.g. an API key
+    /// for `Credentials`. Stream rule as for [Self::auth_start]: the returned value is the state
+    /// after the answer; later phases go on the flow's `updates` from its start. A kind the
+    /// driver does not use is refused with `Unsupported`.
+    ///
+    /// Credential values and terminal data are secrets: the host passes them straight through
+    /// and drops them; a driver never logs them, stores them outside the provider's own
+    /// credential store, or echoes them in a state, event or error.
+    async fn auth_respond(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let _ = (target, flow_id, interaction_id, response);
+        Err(EngineError::Unsupported("auth_respond".into()))
+    }
     async fn auth_cancel(
         &self,
         target: &ProviderTarget,

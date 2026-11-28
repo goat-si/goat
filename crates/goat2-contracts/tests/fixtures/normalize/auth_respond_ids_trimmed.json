@@ -1,0 +1,33 @@
+{
+  "root": "client_frame",
+  "input": {
+    "type": "provider_auth_respond",
+    "reqId": "r",
+    "clientRequestId": "c",
+    "instanceId": "codex",
+    "flowId": " flow\t",
+    "interactionId": "﻿interaction　",
+    "response": {
+      "type": "credentials",
+      "values": {
+        " username ": "person",
+        " password ": "example"
+      }
+    }
+  },
+  "output": {
+    "type": "provider_auth_respond",
+    "reqId": "r",
+    "clientRequestId": "c",
+    "instanceId": "codex",
+    "flowId": "flow",
+    "interactionId": "interaction",
+    "response": {
+      "type": "credentials",
+      "values": {
+        "username": "person",
+        "password": "example"
+      }
+    }
+  }
+}

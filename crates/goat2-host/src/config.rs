@@ -10,6 +10,13 @@
 //! inherits the host's environment except host identity and the UI token.
 //! `GOAT2_CLAUDE_BIN` is the Claude Code program the Claude driver starts (absolute path);
 //! unset = `claude` on the host's PATH.
+//! `GOAT2_GROK_BIN` and `GOAT2_FX_BIN` are the Grok and fx programs the ACP driver starts
+//! (absolute paths); unset = `grok` / `fx` on the host's PATH.
+//! `GOAT2_ANTIGRAVITY_BIN` is the Antigravity ACP executable (the `agy` CLI, or a runtime with its
+//! `localharness_external` beside it); unset = the ACP runtime, then `agy`, on the host's PATH.
+//! Antigravity signs in through GOAT 2's own profile under the data dir, never `~/.gemini`.
+//! `GOAT2_ACP_MCP_BRIDGE` is GOAT's stdio MCP bridge for ACP agents; unset =
+//! `goat2-acp-mcp-bridge` beside the `goat2-host` executable (read by the ACP driver).
 
 use std::path::PathBuf;
 
@@ -30,6 +37,12 @@ pub struct HostConfig {
     pub codex_bin: Option<PathBuf>,
     /// `GOAT2_CLAUDE_BIN`: the Claude Code program; `None` = `claude` on PATH.
     pub claude_bin: Option<PathBuf>,
+    /// `GOAT2_GROK_BIN`: the Grok program; `None` = `grok` on PATH.
+    pub grok_bin: Option<PathBuf>,
+    /// `GOAT2_FX_BIN`: the fx program; `None` = `fx` on PATH.
+    pub fx_bin: Option<PathBuf>,
+    /// `GOAT2_ANTIGRAVITY_BIN`: the Antigravity ACP executable; `None` = resolved on PATH.
+    pub antigravity_bin: Option<PathBuf>,
     /// Exit when stdin closes (the parent died). Off for tests.
     pub exit_on_stdin_close: bool,
 }
@@ -52,12 +65,16 @@ impl HostConfig {
             Ok("codex") | Err(_) => EngineChoice::Codex,
             Ok(other) => return Err(format!("GOAT2_ENGINE: unknown engine {other}")),
         };
-        let codex_bin = std::env::var_os("GOAT2_CODEX_BIN")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
-        let claude_bin = std::env::var_os("GOAT2_CLAUDE_BIN")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
+        let program = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        let codex_bin = program("GOAT2_CODEX_BIN");
+        let claude_bin = program("GOAT2_CLAUDE_BIN");
+        let grok_bin = program("GOAT2_GROK_BIN");
+        let fx_bin = program("GOAT2_FX_BIN");
+        let antigravity_bin = program("GOAT2_ANTIGRAVITY_BIN");
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -91,6 +108,9 @@ impl HostConfig {
             engine,
             codex_bin,
             claude_bin,
+            grok_bin,
+            fx_bin,
+            antigravity_bin,
             exit_on_stdin_close: true,
         })
     }
