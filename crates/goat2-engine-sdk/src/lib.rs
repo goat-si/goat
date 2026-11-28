@@ -15,3 +15,4 @@ pub mod pi;
 pub mod process;
 
 pub use helper::{HelperEngine, HelperFactory, HelperLaunch};
+pub use pi::{PiFactory, PiProfile};

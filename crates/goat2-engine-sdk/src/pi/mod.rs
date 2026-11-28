@@ -1,5 +1,12 @@
 //! Pieces of the Pi RPC driver.
 
+mod events;
+mod extension;
+mod probe;
+mod session;
+
+pub use session::{PiFactory, PiProfile};
+
 /// Validate and normalize Pi launch arguments before passing them to the CLI.
 ///
 /// Port of v1 `provider-pi/src/server/mcpInjection.ts:49-205`. Unlike v1's

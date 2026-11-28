@@ -221,9 +221,14 @@ Not lifted: usage and limits, account pools, text generation, cloud and checkpoi
 ## P2-S pi
 
 Owner decision: Pi and OmO use the Rust JSONL RPC transport directly; OmO is a
-profile of the same runtime, not a Node helper driver. The driver is not yet
-implemented by this entry.
+profile of the same runtime, not a Node helper driver.
 
 | GOAT 2 path | GOAT v1 source at `916b5ccc1b2` | Treatment |
 |---|---|---|
 | `crates/goat2-engine-sdk/src/pi/mod.rs` | `packages/provider-pi/src/server/mcpInjection.ts:49-205` | Launch argument validation ported to Rust; GOAT 2 receives tokenized arguments. |
+| `crates/goat2-engine-sdk/src/pi/pi-goat-mcp-extension.ts` | `packages/provider-pi/src/server/mcpExtensionSource.ts:76-885`, `profile.ts`, agent surface and runtime instruction imports | Evaluated v1 extension template with interpolated v1 constants. |
+| `crates/goat2-engine-sdk/src/pi/extension.rs` | `packages/provider-pi/src/server/mcpInjection.ts:269-292` | Atomic extension materialization ported to Rust. |
+| `crates/goat2-engine-sdk/src/pi/session.rs` | `packages/provider-pi/src/server/rpc.ts:293-334`, `mcpInjection.ts:294-398`, `adapter.ts:2360-2460,2550-2621,2935-2974,3070-3088`, `profile.ts` | RPC, launch, session and selection adapted to Rust engine API. |
+| `crates/goat2-engine-sdk/src/pi/events.rs` | `packages/provider-pi/src/server/adapter.ts:1709-2052`, `extensionDialog.ts`, `piContentText.ts`, `piToolOutput.ts`, `subagentOutput.ts` | Event projection adapted to GOAT 2 engine API. |
+| `crates/goat2-engine-sdk/src/pi/probe.rs` | `packages/provider-pi/src/server/status.ts:118-158,193-215,295-315,472-510` | Version and RPC model probe ported to Rust. |
+| `crates/goat2-engine-sdk/src/bin/fake_pi.rs`, `crates/goat2-engine-sdk/tests/pi_fake.rs` | Pi RPC protocol and adapter events | New deterministic JSONL fake and Rust integration tests. |
