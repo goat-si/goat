@@ -3105,6 +3105,55 @@ async fn a_failed_settings_save_changes_nothing() {
     assert!(eventually_provider(&t, |_| true).await.enabled, "still on");
 }
 
+#[tokio::test]
+async fn a_driver_sign_in_url_that_is_not_valid_is_dropped() {
+    let t = setup(manual()).await;
+    let mut start = auth_state("codex", "waiting", None);
+    start.authorization_url = Some(" https://auth.example.invalid/padded\n".into());
+    t.fake.set_provider_setup(Some((Vec::new(), start)), None);
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("bad-url-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_authenticate)).await;
+    let started = t.host.command(auth_start("bad-url-1")).await.unwrap();
+    let state = started.auth_state.unwrap();
+    assert_eq!(state.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    assert_eq!(
+        state.authorization_url, None,
+        "the bad URL is dropped, the phase stays"
+    );
+    let codex = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    serde_json::to_value(&codex).expect("the entry still serializes");
+}
+
+#[tokio::test]
+async fn cancelling_an_older_flow_keeps_the_running_one() {
+    let t = setup(manual()).await;
+    t.fake.set_provider_setup(
+        Some((
+            Vec::new(),
+            auth_state("codex", "waiting", Some("https://auth.example.invalid/x")),
+        )),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("old-flow-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_authenticate)).await;
+    t.host.command(auth_start("old-flow-1")).await.unwrap();
+    t.host
+        .command(ClientFrame::ProviderAuthCancel {
+            req_id: "r".into(),
+            client_request_id: "old-flow-2".into(),
+            instance_id: "codex".into(),
+            flow_id: "flow-0".into(),
+        })
+        .await
+        .unwrap();
+    let codex = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    let flow = codex.auth_flow.unwrap();
+    assert_eq!(flow.flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()

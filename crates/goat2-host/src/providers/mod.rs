@@ -212,8 +212,12 @@ impl Providers {
                     status_only(ServerProviderState::Disabled, "Turned off in settings.")
                 };
                 // Sign-in methods for an instance with no flow yet (v1 lists them idle).
+                // Bounded like the probe: a hanging driver never stalls the whole list.
                 let methods = if i.enabled && factory.setup().can_authenticate {
-                    factory.auth_methods(&target_of(i)).await.ok()
+                    tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target_of(i)))
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
                 } else {
                     None
                 };
@@ -265,10 +269,10 @@ impl Providers {
             return Ok(running);
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let state = factory
-            .auth_start(&target_of(&instance), method_id, tx)
-            .await
-            .map_err(engine_refusal)?;
+        let state = clean_auth(
+            instance_id,
+            bounded(factory.auth_start(&target_of(&instance), method_id, tx)).await?,
+        );
         self.record_auth(host, instance_id, state.clone())?;
         let watching = host.clone();
         let id = instance_id.to_owned();
@@ -285,11 +289,14 @@ impl Providers {
         flow_id: &str,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
-        let state = factory
-            .auth_cancel(&target_of(&instance), flow_id)
-            .await
-            .map_err(engine_refusal)?;
-        self.record_auth(host, instance_id, state.clone())?;
+        let state = clean_auth(
+            instance_id,
+            bounded(factory.auth_cancel(&target_of(&instance), flow_id)).await?,
+        );
+        // Cancelling an older flow never hides the one that runs now.
+        self.record_auth_if(host, instance_id, state.clone(), |current| {
+            current.is_none_or(|c| c.flow_id.as_deref() == Some(flow_id))
+        })?;
         Ok(state)
     }
 
@@ -299,10 +306,10 @@ impl Providers {
         instance_id: &str,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
-        let state = factory
-            .auth_logout(&target_of(&instance))
-            .await
-            .map_err(engine_refusal)?;
+        let state = clean_auth(
+            instance_id,
+            bounded(factory.auth_logout(&target_of(&instance))).await?,
+        );
         self.record_auth(host, instance_id, state.clone())?;
         // Re-probed in a task: this answers a command and must not wait on a probe.
         let probing = host.clone();
@@ -333,10 +340,7 @@ impl Providers {
             return Ok(running);
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let state = factory
-            .install_start(None, tx)
-            .await
-            .map_err(engine_refusal)?;
+        let state = bounded(factory.install_start(None, tx)).await?;
         self.record_install(host, &instance.driver, state.clone())?;
         let watching = host.clone();
         let driver = instance.driver.clone();
@@ -354,10 +358,7 @@ impl Providers {
         operation_id: &str,
     ) -> Result<ProviderInstallState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
-        let state = factory
-            .install_cancel(operation_id)
-            .await
-            .map_err(engine_refusal)?;
+        let state = bounded(factory.install_cancel(operation_id)).await?;
         self.record_install(host, &instance.driver, state.clone())?;
         Ok(state)
     }
@@ -386,18 +387,35 @@ impl Providers {
         instance_id: &str,
         state: ProviderAuthState,
     ) -> Result<(), ProviderRefusal> {
+        self.record_auth_if(host, instance_id, state, |_| true)
+            .map(|_| ())
+    }
+
+    /// [Self::record_auth] when `keep` accepts the current state, checked and stored under one
+    /// lock. Returns whether it was stored. A sign-in URL that is not a valid http(s) URL is
+    /// dropped from the state (the phase stays): it would not serialize and would stop the list.
+    fn record_auth_if(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        mut state: ProviderAuthState,
+        keep: impl FnOnce(Option<&ProviderAuthState>) -> bool,
+    ) -> Result<bool, ProviderRefusal> {
         if state.instance_id.as_str() != instance_id {
             return Err(ProviderRefusal::Internal(
                 "the driver answered for another provider instance".into(),
             ));
         }
-        self.state
-            .lock()
-            .expect("providers")
-            .auth
-            .insert(instance_id.to_owned(), state);
+        state = clean_auth(instance_id, state);
+        {
+            let mut s = self.state.lock().expect("providers");
+            if !keep(s.auth.get(instance_id)) {
+                return Ok(false);
+            }
+            s.auth.insert(instance_id.to_owned(), state);
+        }
         self.publish(host);
-        Ok(())
+        Ok(true)
     }
 
     fn record_install(
@@ -406,18 +424,32 @@ impl Providers {
         driver: &str,
         state: ProviderInstallState,
     ) -> Result<(), ProviderRefusal> {
+        self.record_install_if(host, driver, state, |_| true)
+            .map(|_| ())
+    }
+
+    /// [Self::record_install] when `keep` accepts the current state, under one lock.
+    fn record_install_if(
+        &self,
+        host: &Host,
+        driver: &str,
+        state: ProviderInstallState,
+        keep: impl FnOnce(Option<&ProviderInstallState>) -> bool,
+    ) -> Result<bool, ProviderRefusal> {
         if state.driver != driver {
             return Err(ProviderRefusal::Internal(
                 "the driver answered for another provider kind".into(),
             ));
         }
-        self.state
-            .lock()
-            .expect("providers")
-            .installs
-            .insert(driver.to_owned(), state);
+        {
+            let mut s = self.state.lock().expect("providers");
+            if !keep(s.installs.get(driver)) {
+                return Ok(false);
+            }
+            s.installs.insert(driver.to_owned(), state);
+        }
         self.publish(host);
-        Ok(())
+        Ok(true)
     }
 
     /// Add or change an instance (v1 settings `providerInstances` upsert), save, publish.
@@ -471,11 +503,13 @@ impl Providers {
     /// Rebuild the list and push it when it changed. Built and sent under the state lock, so
     /// an older list never replaces a newer one. Nothing is published before the startup probes.
     pub fn publish(&self, host: &Host) {
-        let links = host.signin_links();
+        // Order: providers state, then sign-in links, then store reads (no path takes them the
+        // other way round), so the links match the state the list is built from.
         let state = self.state.lock().expect("providers");
         if !state.ready {
             return;
         }
+        let links = host.signin_links();
         let entries = self.entries(host, &state, &links);
         self.list.send_if_modified(|current| {
             if current.as_ref() == Some(&entries) {
@@ -541,7 +575,19 @@ impl Providers {
 
 async fn probe(factory: &dyn EngineFactory) -> ProviderProbeResult {
     match tokio::time::timeout(PROBE_DEADLINE, factory.probe()).await {
-        Ok(Ok(probe)) => probe,
+        Ok(Ok(mut probe)) => {
+            // A sign-in action with an unusable URL would stop the whole list: dropped.
+            if probe
+                .auth
+                .action
+                .as_ref()
+                .is_some_and(|a| !valid_sign_in_url(&a.url))
+            {
+                tracing::warn!("a probe sign-in URL that is not a valid http(s) URL was dropped");
+                probe.auth.action = None;
+            }
+            probe
+        }
         Ok(Err(EngineError::Unsupported(_))) => status_only(
             ServerProviderState::Warning,
             "This driver cannot report its status yet.",
@@ -603,18 +649,14 @@ async fn watch_auth(
             tracing::warn!(instance = %instance_id, "sign-in update for another instance dropped");
             continue;
         }
-        let current = {
-            let s = providers.state.lock().expect("providers");
-            s.auth
-                .get(&instance_id)
-                .is_some_and(|a| a.flow_id == flow_id)
-        };
-        if !current {
-            continue;
-        }
         let succeeded = state.phase == ProviderAuthPhase::Succeeded;
-        let _ = providers.record_auth(&host, &instance_id, state);
-        if succeeded {
+        // Stored only while this is still the instance's current flow (one lock).
+        let stored = providers
+            .record_auth_if(&host, &instance_id, state, |c| {
+                c.is_some_and(|a| a.flow_id == flow_id)
+            })
+            .unwrap_or(false);
+        if stored && succeeded {
             let _ = providers.refresh(&host, Some(&instance_id)).await;
         }
     }
@@ -629,21 +671,17 @@ async fn watch_install(
 ) {
     while let Some(state) = rx.recv().await {
         let providers = &host.inner.providers;
-        let current = {
-            let s = providers.state.lock().expect("providers");
-            s.installs
-                .get(&driver)
-                .is_some_and(|i| i.operation_id == operation_id)
-        };
-        if !current {
-            continue;
-        }
         let succeeded = state.phase == ProviderInstallPhase::Succeeded;
-        if providers.record_install(&host, &driver, state).is_err() {
-            tracing::warn!(%driver, "install update for another provider kind dropped");
-            continue;
-        }
-        if succeeded {
+        let stored = match providers.record_install_if(&host, &driver, state, |c| {
+            c.is_some_and(|i| i.operation_id == operation_id)
+        }) {
+            Ok(stored) => stored,
+            Err(_) => {
+                tracing::warn!(%driver, "install update for another provider kind dropped");
+                continue;
+            }
+        };
+        if stored && succeeded {
             let _ = providers.refresh(&host, None).await;
         }
     }
@@ -697,4 +735,38 @@ fn engine_refusal(err: EngineError) -> ProviderRefusal {
         )),
         other => ProviderRefusal::Internal(other.to_string()),
     }
+}
+
+/// Upper bound on one driver sign-in or install call made while a command waits on it.
+const DRIVER_CALL_DEADLINE: Duration = Duration::from_secs(30);
+
+/// A driver call a command waits on, bounded so a hanging driver cannot hold the command lock.
+async fn bounded<T>(
+    call: impl std::future::Future<Output = Result<T, EngineError>>,
+) -> Result<T, ProviderRefusal> {
+    match tokio::time::timeout(DRIVER_CALL_DEADLINE, call).await {
+        Ok(result) => result.map_err(engine_refusal),
+        Err(_) => Err(ProviderRefusal::Internal(
+            "the provider did not answer in time".into(),
+        )),
+    }
+}
+
+/// The contract's sign-in URL rule (trimmed http(s)), as checked before serializing.
+fn valid_sign_in_url(url: &str) -> bool {
+    goat2_contracts::serde_util::sign_in_url::check(url).is_ok()
+}
+
+/// A driver's sign-in state with an unusable URL dropped (the phase stays): such a URL would
+/// not serialize and would stop the whole providers list and the command reply.
+fn clean_auth(instance_id: &str, mut state: ProviderAuthState) -> ProviderAuthState {
+    if state
+        .authorization_url
+        .as_deref()
+        .is_some_and(|u| !valid_sign_in_url(u))
+    {
+        tracing::warn!(instance = %instance_id, "a sign-in URL that is not a valid http(s) URL was dropped");
+        state.authorization_url = None;
+    }
+    state
 }

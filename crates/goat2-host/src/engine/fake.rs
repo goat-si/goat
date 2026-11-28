@@ -393,6 +393,24 @@ impl EngineFactory for FakeEngine {
         Ok(start)
     }
 
+    async fn auth_cancel(
+        &self,
+        target: &super::ProviderTarget,
+        flow_id: &str,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        let shared = self.shared.lock().expect("fake");
+        let Some((_, start)) = shared.auth.clone() else {
+            return Err(EngineError::Unsupported("auth_cancel".into()));
+        };
+        Ok(goat2_contracts::ProviderAuthState {
+            instance_id: target.instance_id.clone(),
+            phase: goat2_contracts::ProviderAuthPhase::Cancelled,
+            flow_id: Some(flow_id.to_owned()),
+            authorization_url: None,
+            ..start
+        })
+    }
+
     async fn install_start(
         &self,
         _launch: Option<&super::LaunchSpec>,
