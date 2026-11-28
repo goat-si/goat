@@ -44,13 +44,13 @@ describe("hostProviderPort + fake host", () => {
     const { port, fake } = setup();
     await tick(5);
     const found = await port.call("server.searchAcpRegistry", { query: "ki" }) as { agents: Array<{ id: string }> };
-    expect(found.agents.map((a) => a.id)).toEqual(["kimi-code", "kilo", "kiro-cli"]);
-    const prepared = await port.call("server.prepareAcpRegistryAgent", { agentId: "kiro-cli" });
-    expect(prepared).toEqual({ agentId: "kiro-cli", version: "3.6.2", distribution: "binary", prepared: true });
-    await port.call("goat2.setProviderInstance", { instanceId: "acp-kiro-cli", driver: "acpRegistry", acpAgentId: "kiro-cli", enabled: true, displayName: "Kiro CLI" });
-    expect(fake.received.at(-1)).toMatchObject({ type: "set_provider_instance", instanceId: "acp-kiro-cli", acpAgentId: "kiro-cli", enabled: true });
+    expect(found.agents.map((a) => a.id)).toEqual(["kimi-code", "kilo", "kiro"]);
+    const prepared = await port.call("server.prepareAcpRegistryAgent", { agentId: "kiro" });
+    expect(prepared).toEqual({ agentId: "kiro", version: "3.6.2", distribution: "binary", prepared: true });
+    await port.call("goat2.setProviderInstance", { instanceId: "acp-kiro", driver: "acpRegistry", acpAgentId: "kiro", enabled: true, displayName: "Kiro CLI" });
+    expect(fake.received.at(-1)).toMatchObject({ type: "set_provider_instance", instanceId: "acp-kiro", acpAgentId: "kiro", enabled: true });
     const r = await port.call("server.refreshProviders", {}) as { providers: ServerProviderEntry[] };
-    expect(r.providers.find((e) => e.instanceId === "acp-kiro-cli")).toMatchObject({ driver: "acpRegistry", acpAgentId: "kiro-cli", probe: { version: "3.6.2" } });
+    expect(r.providers.find((e) => e.instanceId === "acp-kiro")).toMatchObject({ driver: "acpRegistry", acpAgentId: "kiro", probe: { version: "3.6.2" } });
   });
 
   it("sign-in: start returns the AuthRequired URL, the watch stream follows the flow to success", async () => {

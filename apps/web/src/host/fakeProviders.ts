@@ -21,6 +21,13 @@ const probe = (at: string, p: Partial<ProviderProbeResult> & Pick<ProviderProbeR
 
 const setup = (canAuthenticate: boolean, canInstall: boolean) => ({ canAuthenticate, canInstall });
 
+/** What a registry agent advertises after initialize (v1 ProviderAuthMethod); v1 shows "Discovering sign-in methods…"
+ * until an auth state lists methods (ProviderAuthenticationSection.tsx:68-73), so a host sends them idle. */
+const agentAuth = (instanceId: string): ProviderAuthState => ({
+  instanceId, phase: "idle", flowId: null, authorizationUrl: null, expiresAt: null, message: null,
+  methods: [{ id: "agent-login", name: "Sign in with the agent", description: null, type: "agent" }],
+});
+
 /** Board 1PBB-2: every local v1 driver kind (providerDriverMeta.ts) with the state the board shows. */
 export function demoProviderEntries(at: string): ServerProviderEntry[] {
   const e = (instanceId: string, driver: string, p: ProviderProbeResult, extra: Partial<ServerProviderEntry> = {}): ServerProviderEntry =>
@@ -50,10 +57,10 @@ export function demoProviderEntries(at: string): ServerProviderEntry[] {
     e("omo", "omo", probe(at, { installed: true, version: "0.42.0", cli: "present", status: "error", auth: { status: "unknown" },
       message: "Runtime target missing. Reinstall to repair." }), { setup: setup(false, true) }),
     e("acp-kimi-code", "acpRegistry", probe(at, { installed: true, version: "2.8.1", status: "ready", auth: { status: "authenticated" },
-      models: [model("default", "Kimi default", true)] }), { displayName: "Kimi Code", acpAgentId: "kimi-code", setup: setup(true, true) }),
+      models: [model("default", "Kimi default", true)] }), { displayName: "Kimi Code", acpAgentId: "kimi-code", setup: setup(true, true), authFlow: agentAuth("acp-kimi-code") }),
     e("acp-kilo", "acpRegistry", probe(at, { installed: true, version: "7.8.31", status: "warning", auth: { status: "authenticated" },
       models: [model("default", "Kilo default", true)], message: "Updating to 7.8.32" }),
-      { displayName: "Kilo", acpAgentId: "kilo", setup: setup(true, true),
+      { displayName: "Kilo", acpAgentId: "kilo", setup: setup(true, true), authFlow: agentAuth("acp-kilo"),
         install: { driver: "acpRegistry", operationId: "install-kilo", phase: "downloading", downloadedBytes: 31_000_000, totalBytes: 50_000_000, version: "7.8.32", installedVersion: "7.8.31", canRemove: false, message: null } }),
   ];
 }
@@ -62,11 +69,11 @@ const agent = (id: string, name: string, version: string, description: string, d
   ({ id, name, version, description, authors: [], license: null, website: null, repository: null,
     icon: `https://cdn.agentclientprotocol.com/registry/v1/latest/${id}.svg`, distribution, integrity: "registry" });
 
-/** Board 1QAN-2 rows (live ACP registry index, 2026-11-28). */
+/** Board 1QAN-2 rows; ids, versions and distributions as in the live index (cdn.agentclientprotocol.com/registry/v1/latest/registry.json, 2026-11-29). */
 export const DEMO_REGISTRY: AcpRegistrySearchAgent[] = [
-  agent("kimi-code", "Kimi Code", "2.8.1", "Moonshot AI's next-gen coding agent", "binary"),
-  agent("kilo", "Kilo", "7.8.32", "The open source coding agent", "npx"),
-  agent("kiro-cli", "Kiro CLI", "3.6.2", "The Kiro coding agent", "binary"),
+  agent("kimi-code", "Kimi Code", "2.8.1", "Moonshot AI's next-gen coding agent", "npx"),
+  agent("kilo", "Kilo", "7.8.32", "The open source coding agent", "binary"),
+  agent("kiro", "Kiro CLI", "3.6.2", "The Kiro coding agent", "binary"),
   agent("qwen-code", "Qwen Code", "0.28.7", "Alibaba's Qwen coding assistant", "npx"),
 ];
 
@@ -180,6 +187,7 @@ export class FakeProviders {
           instanceId: f.instanceId, driver: f.driver, enabled: f.enabled, capabilities: {}, setup: setup(true, true),
           probe: probe(this.now(), { installed: true, version: a?.version ?? null, status: "warning", auth: { status: "unauthenticated" },
             models: [model("default", `${a?.name ?? f.driver} default`, true)], message: "Not signed in" }),
+          ...(f.driver === "acpRegistry" ? { authFlow: agentAuth(f.instanceId) } : {}),
         };
         this.replace({ ...base, driver: f.driver, enabled: f.enabled, ...(f.displayName ? { displayName: f.displayName } : {}), ...(f.acpAgentId ? { acpAgentId: f.acpAgentId } : {}) });
         return { ok: true, value: {} };
