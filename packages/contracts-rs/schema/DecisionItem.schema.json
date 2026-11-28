@@ -1,0 +1,370 @@
+{
+  "$defs": {
+    "DecisionEscalation": {
+      "description": "v1 `DecisionItem.escalation`: set once the parent agent handed the item to the person.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "by",
+        "at",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "DecisionFrom": {
+      "description": "v1 `DecisionItem.from` (local fields).",
+      "properties": {
+        "parentThreadId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The local thread that launched or delegated the asking thread."
+        },
+        "parentThreadTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadTitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DecisionOption": {
+      "description": "One choice of a `decision` request.",
+      "properties": {
+        "consequence": {
+          "description": "v1 `DecisionOption.consequence` (required).",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "consequence"
+      ],
+      "type": "object"
+    },
+    "DecisionPending": {
+      "description": "v1 `DecisionItem.pending`: the engine request a `pending_request` item projects.",
+      "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionPendingApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/UserInputQuestion"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": [
+        "threadId",
+        "requestId",
+        "questions"
+      ],
+      "type": "object"
+    },
+    "DecisionPendingApproval": {
+      "description": "v1 `DecisionItem.pending.approval`.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProviderRequestKind"
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "DecisionRoute": {
+      "description": "v1 `DecisionItem.routedTo`: who is asked first while the item is open.",
+      "enum": [
+        "parent",
+        "person"
+      ],
+      "type": "string"
+    },
+    "DecisionSource": {
+      "description": "v1 `DecisionItem.source`: a durable decision, or an engine request projected into the inbox.",
+      "enum": [
+        "decision",
+        "pending_request"
+      ],
+      "type": "string"
+    },
+    "DecisionStatus": {
+      "description": "v1 `DecisionStatus`.",
+      "enum": [
+        "open",
+        "answered",
+        "expired",
+        "withdrawn"
+      ],
+      "type": "string"
+    },
+    "ProviderRequestKind": {
+      "description": "v1 `ProviderRequestKind`.",
+      "enum": [
+        "command",
+        "file-read",
+        "file-change",
+        "mcp-elicitation",
+        "permission"
+      ],
+      "type": "string"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    },
+    "UserInputOption": {
+      "description": "v1 `OrchestrationV2UserInputQuestion` option.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "UserInputQuestion": {
+      "description": "v1 `OrchestrationV2UserInputQuestion`.",
+      "properties": {
+        "allowCustomAnswer": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "initialAnswer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multiSelect": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "header",
+        "question",
+        "options"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "v1 `DecisionItem`: one inbox row.",
+  "properties": {
+    "answer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answeredBy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answeredByLabel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "context": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "escalation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionEscalation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "expiresAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "from": {
+      "$ref": "#/$defs/DecisionFrom"
+    },
+    "humanRequired": {
+      "type": "boolean"
+    },
+    "id": {
+      "type": "string"
+    },
+    "options": {
+      "items": {
+        "$ref": "#/$defs/DecisionOption"
+      },
+      "type": "array"
+    },
+    "pending": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionPending"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recommended": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "routedTo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionRoute"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/DecisionSource"
+    },
+    "status": {
+      "$ref": "#/$defs/DecisionStatus"
+    },
+    "title": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "source",
+    "from",
+    "title",
+    "context",
+    "options",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "humanRequired"
+  ],
+  "title": "DecisionItem",
+  "type": "object"
+}

@@ -1,0 +1,55 @@
+{
+  "$defs": {
+    "DecisionApprovalAnswer": {
+      "description": "v1 `DecisionAnswerInput.decision` for a projected approval.",
+      "enum": [
+        "accept",
+        "decline"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "v1 `DecisionAnswerInput` (MCP `decision.answer`): `optionId` for a durable decision,\n`answers` or `decision` for a projected request; `reason` is required.",
+  "properties": {
+    "answers": {
+      "additionalProperties": true,
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "decision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionApprovalAnswer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "optionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "v1 `TrimmedNonEmptyString.check(isMaxLength(2000))`: trimmed of ECMAScript whitespace\n(JavaScript `trim`), then 1 to 2000 UTF-16 code units (JavaScript `length`). Serde trims and\nreturns the trimmed reason. The schema describes that trimmed form: its `maxLength` counts\ncode points (the closest bound JSON Schema can express, looser only outside the BMP) and it\ndoes not trim, so padded input near the limit passes only serde.",
+      "maxLength": 2000,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "reason"
+  ],
+  "title": "DecisionAnswerInput",
+  "type": "object"
+}

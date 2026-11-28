@@ -1,0 +1,436 @@
+{
+  "$defs": {
+    "AcpRegistryUrlAuthAction": {
+      "description": "v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the\nperson to open, answered by its elicitation id.\n\nv1's length checks on these strings are not carried: the registry driver bounds what it reads,\nand serde and the JSON Schema accept the same values.",
+      "properties": {
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elicitationId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitationId",
+        "url",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ModelBadge": {
+      "description": "v1 model `badge`.",
+      "enum": [
+        "new"
+      ],
+      "type": "string"
+    },
+    "ModelCapabilities": {
+      "description": "v1 `ModelCapabilities`.",
+      "properties": {
+        "optionDescriptors": {
+          "items": {
+            "$ref": "#/$defs/ProviderOptionDescriptor"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ProviderOptionChoice": {
+      "description": "v1 `ProviderOptionChoice`.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "isDefault": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ProviderOptionDescriptor": {
+      "description": "v1 `ProviderOptionDescriptor` (`select` or `boolean`), e.g. reasoning effort.",
+      "oneOf": [
+        {
+          "properties": {
+            "currentValue": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/ProviderOptionChoice"
+              },
+              "type": "array"
+            },
+            "promptInjectedValues": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProviderOptionRole"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "select",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label",
+            "options"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "currentValue": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProviderOptionRole": {
+      "description": "v1 select option `role`.",
+      "enum": [
+        "reasoning"
+      ],
+      "type": "string"
+    },
+    "ServerProviderAuth": {
+      "description": "v1 `ServerProviderAuth`.",
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpRegistryUrlAuthAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Pending ACP registry sign-in (v1 `action`)."
+        },
+        "canLogout": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "description": "Origin of the custom endpoint the instance sends its requests to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profileId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ServerProviderAuthStatus"
+        },
+        "subscriptionSharing": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ServerProviderAuthStatus": {
+      "description": "v1 `ServerProviderAuthStatus`.",
+      "enum": [
+        "authenticated",
+        "unauthenticated",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ServerProviderCli": {
+      "description": "v1 `ServerProviderCli`: whether the probe found the provider's CLI.",
+      "enum": [
+        "present",
+        "missing",
+        "none"
+      ],
+      "type": "string"
+    },
+    "ServerProviderModel": {
+      "description": "v1 `ServerProviderModel`: one model the provider offers.",
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "badge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBadge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isCustom": {
+          "type": "boolean"
+        },
+        "isDefault": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "isLegacy": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "shortName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        },
+        "subProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supportsTextGeneration": {
+          "description": "False when sessions can use the model but application text generation cannot.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "slug",
+        "name",
+        "isCustom"
+      ],
+      "type": "object"
+    },
+    "ServerProviderState": {
+      "description": "v1 `ServerProviderState`.",
+      "enum": [
+        "ready",
+        "warning",
+        "error",
+        "disabled"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What `EngineFactory::probe()` returns: the v1 `ServerProvider` fields a probe can know\n(install, version, auth, models). The host adds instance identity and settings.",
+  "properties": {
+    "auth": {
+      "$ref": "#/$defs/ServerProviderAuth"
+    },
+    "binaryPath": {
+      "description": "Resolved executable path (GOAT 2; v1 kept it in provider settings).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checkedAt": {
+      "description": "RFC 3339 UTC timestamp of this probe.",
+      "type": "string"
+    },
+    "cli": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerProviderCli"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "installed": {
+      "type": "boolean"
+    },
+    "installedVersion": {
+      "description": "Version reported by the installed CLI when it differs from `version` (v1).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "models": {
+      "items": {
+        "$ref": "#/$defs/ServerProviderModel"
+      },
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/ServerProviderState"
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "installed",
+    "status",
+    "auth",
+    "models",
+    "checkedAt"
+  ],
+  "title": "ProviderProbeResult",
+  "type": "object"
+}

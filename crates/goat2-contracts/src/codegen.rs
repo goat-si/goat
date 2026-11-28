@@ -28,16 +28,22 @@ pub const OWNED_DIRS: [&str; 2] = [TS_DIR, SCHEMA_DIR];
 pub type Files = BTreeMap<String, String>;
 
 /// The root types. Each gets a JSON Schema; TypeScript covers them and everything they use.
-pub const ROOTS: [&str; 12] = [
+pub const ROOTS: [&str; 18] = [
     "BotProfile",
     "CardFile",
+    "ChannelAttentionEvent",
     "ClientFrame",
+    "DecisionAnswerInput",
+    "DecisionEscalateInput",
+    "DecisionItem",
+    "DecisionRequestInput",
     "Fold",
     "HostFrame",
     "LogEvent",
     "LogHeader",
     "LogLine",
     "ProviderCapabilities",
+    "ProviderProbeResult",
     "ThreadCard",
     "TurnItem",
     "TurnItemBody",
@@ -108,6 +114,12 @@ pub fn render_typescript() -> Result<Files, String> {
     let result = (|| {
         export::<BotProfile>(&cfg)?;
         export::<CardFile>(&cfg)?;
+        export::<ChannelAttentionEvent>(&cfg)?;
+        export::<DecisionAnswerInput>(&cfg)?;
+        export::<DecisionEscalateInput>(&cfg)?;
+        export::<DecisionItem>(&cfg)?;
+        export::<DecisionRequestInput>(&cfg)?;
+        export::<ProviderProbeResult>(&cfg)?;
         export::<ClientFrame>(&cfg)?;
         export::<Fold>(&cfg)?;
         export::<HostFrame>(&cfg)?;
@@ -183,12 +195,23 @@ pub fn render_limits() -> String {
     out
 }
 
-/// Add `maximum: 2^53-1` to every `uint64` so JSON Schema enforces the safe-integer bound.
+/// Bound every `uint64` to `maximum: 2^53-1` and every `int64` to `+/-(2^53-1)`, matching serde_util.
 fn safe_integer(schema: &mut Schema) {
-    if let Some(obj) = schema.as_object_mut()
-        && obj.get("format").and_then(|f| f.as_str()) == Some("uint64")
-    {
-        obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+    match obj.get("format").and_then(|f| f.as_str()) {
+        Some("uint64") => {
+            obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+        }
+        Some("int64") => {
+            obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+            obj.insert(
+                "minimum".into(),
+                (-(limits::MAX_SAFE_WIRE_INTEGER as i64)).into(),
+            );
+        }
+        _ => {}
     }
 }
 
@@ -225,6 +248,12 @@ pub fn render_json_schemas() -> Files {
     let mut files = Files::new();
     schema_file::<BotProfile>(&mut files, "BotProfile");
     schema_file::<CardFile>(&mut files, "CardFile");
+    schema_file::<ChannelAttentionEvent>(&mut files, "ChannelAttentionEvent");
+    schema_file::<DecisionAnswerInput>(&mut files, "DecisionAnswerInput");
+    schema_file::<DecisionEscalateInput>(&mut files, "DecisionEscalateInput");
+    schema_file::<DecisionItem>(&mut files, "DecisionItem");
+    schema_file::<DecisionRequestInput>(&mut files, "DecisionRequestInput");
+    schema_file::<ProviderProbeResult>(&mut files, "ProviderProbeResult");
     schema_file::<ClientFrame>(&mut files, "ClientFrame");
     schema_file::<Fold>(&mut files, "Fold");
     schema_file::<HostFrame>(&mut files, "HostFrame");
@@ -270,6 +299,12 @@ pub fn load_fixtures() -> Result<Vec<Fixture>, String> {
         "thread_card",
         "card_file",
         "bot_profile",
+        "channel_attention_event",
+        "decision_answer_input",
+        "decision_escalate_input",
+        "decision_item",
+        "decision_request_input",
+        "provider_probe_result",
     ] {
         read_tree(&base, &base.join(root), &mut files)?;
     }
