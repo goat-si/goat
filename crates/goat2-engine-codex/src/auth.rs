@@ -568,8 +568,8 @@ impl AuthFlows {
         ))
     }
 
-    /// v1 `providerAuthFlow.cancel`: the flow ends (its Codex with it, which ends Codex's login) and
-    /// the cancelled state is the answer; its stream closes without another state.
+    /// v1 `providerAuthFlow.cancel`: the flow ends (its Codex with it, which ends Codex's login);
+    /// the cancelled state is the answer and also the stream's last state before it closes.
     pub async fn cancel(
         &self,
         options: &CodexEngineOptions,
