@@ -179,6 +179,10 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn permission_disposition(&self, policy: &RuntimePolicy, request: &Value) -> Disposition {
         policy::permission_disposition(policy, request.get("toolCall").unwrap_or(&Value::Null))
     }
+    /// v1 `adapterFlavor.ts:266-268`: choices permitted when answering a request.
+    fn answerable_permission_options(&self, options: Vec<Value>) -> Vec<Value> {
+        options
+    }
     /// v1 `approvalOptions`: the choices shown for a permission request.
     fn approval_options(&self, request: &Value) -> Vec<ApprovalOption> {
         default_approval_options(request)

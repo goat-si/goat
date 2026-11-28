@@ -325,6 +325,12 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         .unwrap_or(0);
     let mut options =
         vec![json!({"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"})];
+    if flag("GOAT_ACP_DEVIN_PLAN_BYPASS") {
+        options.insert(
+            0,
+            json!({"optionId": "plan_bypass", "name": "Bypass plan", "kind": "allow_once"}),
+        );
+    }
     if !flag("GOAT_ACP_OMIT_ALLOW_ALWAYS") {
         options.push(
             json!({"optionId": "allow-always", "name": "Allow always", "kind": "allow_always"}),

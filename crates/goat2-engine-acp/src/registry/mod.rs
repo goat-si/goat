@@ -6,11 +6,13 @@ pub mod agents;
 pub mod index;
 pub mod resolve;
 
-use goat2_contracts::{EngineDriver, ProviderCapabilities};
+use goat2_contracts::{EngineDriver, ModelSelection, ProviderCapabilities};
 use goat2_engine_api::{EngineError, SessionSpec};
+use serde_json::Value;
 
 use crate::capabilities::acp_base_capabilities;
-use crate::flavor::{AcpFlavor, LaunchCommand};
+use crate::flavor::{AcpFlavor, LaunchCommand, ModelWrite, default_model_write};
+use crate::wire::SessionSetup;
 
 /// A command resolved by the registry owner; this type does not install or discover it.
 #[derive(Debug, Clone)]
@@ -22,6 +24,21 @@ pub struct RegistryAgentFlavor {
 }
 
 impl RegistryAgentFlavor {
+    // v1 adapter.ts:232-237: local Devin accepts .exe, but not .cmd.
+    fn is_devin(&self) -> bool {
+        if !self.local {
+            return self.agent_id == "devin";
+        }
+        let name = self.command.program.to_string_lossy();
+        matches!(
+            name.rsplit(['/', '\\'])
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str(),
+            "devin" | "devin.exe"
+        )
+    }
     // v1 adapter.ts:213-215,234-238: local agents have no registry ID for matching.
     fn is_copilot(&self) -> bool {
         if !self.local {
@@ -48,6 +65,33 @@ impl AcpFlavor for RegistryAgentFlavor {
     }
     fn launch(&self, _spec: &SessionSpec) -> Result<LaunchCommand, EngineError> {
         Ok(self.command.clone())
+    }
+    fn normalize_update(&self, params: Value) -> Value {
+        if self.is_devin() {
+            agents::normalize_devin_session_update(params)
+        } else {
+            params
+        }
+    }
+    fn answerable_permission_options(&self, options: Vec<Value>) -> Vec<Value> {
+        if self.is_devin() {
+            agents::devin_answerable_permission_options(&options)
+        } else {
+            options
+        }
+    }
+    fn model_write(&self, selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
+        // v1 adapter.ts:359-361,6002: Copilot's reported default may not be its active model.
+        if !self.is_copilot() || matches!(selection.model.trim(), "" | "default") {
+            return default_model_write(selection, setup);
+        }
+        let mut setup = setup.clone();
+        for option in &mut setup.config_options {
+            if let Some(object) = option.as_object_mut() {
+                object.remove("currentValue");
+            }
+        }
+        default_model_write(selection, &setup)
     }
     fn capabilities(&self) -> ProviderCapabilities {
         let mut caps = acp_base_capabilities();
@@ -116,6 +160,19 @@ pub fn package_command_candidates(agent_id: &str, package_name: &str) -> Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_and_registry_agent_matching_matches_v1() {
+        let flavor = |agent: &str, path: &str, local: bool| RegistryAgentFlavor {
+            agent_id: agent.into(),
+            command: LaunchCommand::new(path, Vec::<String>::new()),
+            local,
+        };
+        assert!(flavor("devin", "other", false).is_devin());
+        assert!(flavor("", r"C:\\bin\\DEVIN.EXE", true).is_devin());
+        assert!(!flavor("devin", "devin.cmd", true).is_devin());
+        assert!(flavor("", "/bin/COPILOT.cmd", true).is_copilot());
+        assert!(!flavor("github-copilot-cli", "other", true).is_copilot());
+    }
     #[test]
     fn platforms_and_fallback() {
         for os in ["darwin", "linux", "win32"] {

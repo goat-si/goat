@@ -290,6 +290,72 @@ async fn permission_is_asked_and_answered() {
 }
 
 #[tokio::test]
+async fn devin_never_auto_selects_plan_bypass() {
+    use goat2_engine_acp::registry::RegistryAgentFlavor;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let command = LaunchCommand::new(
+        env!("CARGO_BIN_EXE_goat2-acp-mock-agent"),
+        Vec::<String>::new(),
+    )
+    .env("GOAT_ACP_PERMISSION_REQUEST_COUNT", "1")
+    .env("GOAT_ACP_DEVIN_PLAN_BYPASS", "1")
+    .env("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap());
+    let flavor = RegistryAgentFlavor {
+        agent_id: "devin".into(),
+        command,
+        local: false,
+    };
+    let mut handle = AcpEngineFactory::new(Arc::new(flavor))
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+        .unwrap();
+    handle
+        .session
+        .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+        .await;
+    let (events, outcome) = until_finished(&mut handle).await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert!(answer_text(&events).contains("allow-once"));
+    assert!(!answer_text(&events).contains("plan_bypass"));
+    handle.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn copilot_resends_the_reported_current_model() {
+    use goat2_engine_acp::registry::RegistryAgentFlavor;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("copilot.jsonl");
+    let command = LaunchCommand::new(
+        env!("CARGO_BIN_EXE_goat2-acp-mock-agent"),
+        Vec::<String>::new(),
+    )
+    .env("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap());
+    let flavor = RegistryAgentFlavor {
+        agent_id: "github-copilot-cli".into(),
+        command,
+        local: false,
+    };
+    let mut handle = AcpEngineFactory::new(Arc::new(flavor))
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+        .unwrap();
+    handle
+        .session
+        .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+        .await;
+    let (_, outcome) = until_finished(&mut handle).await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    let requests = read_log(&log);
+    assert!(
+        logged(&requests, "session/set_config_option")
+            .iter()
+            .any(|request| request["params"]["value"] == "mock-default")
+    );
+    handle.session.shutdown().await;
+}
+
+#[tokio::test]
 async fn auto_mode_approves_without_asking() {
     let dir = tempfile::tempdir().unwrap();
     let flavor = MockFlavor::new(&[("GOAT_ACP_PERMISSION_REQUEST_COUNT", "2")]);
