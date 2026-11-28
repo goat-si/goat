@@ -4506,6 +4506,31 @@ async fn a_fenced_thread_drops_its_unfinished_streams() {
     .await;
 }
 
+#[tokio::test]
+async fn an_engine_sign_in_request_rechecks_its_provider_at_once() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    let id = start_user_thread(&t, "rejected", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    // The engine finds the saved credentials rejected; the next probe would say so.
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    let rejected = |t: &T| goat2_host::engine::EngineEvent::AuthRequired {
+        turn_id: t.fake.active_turn(&id),
+        key: None,
+        url: None,
+        message: "Codex rejected this provider's credentials.".into(),
+    };
+    t.fake.emit(&id, rejected(&t));
+    // Shown without a manual refresh.
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    // A repeat right after probes no more (an engine may repeat AuthRequired).
+    let probes = t.fake.probes();
+    t.fake.emit(&id, rejected(&t));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(t.fake.probes(), probes);
+}
+
 fn open_requests(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     t.host.store().fold(id).unwrap().open_requests
 }
@@ -5102,4 +5127,85 @@ async fn a_finished_sign_in_or_install_never_shows_running_again() {
         codex.install.unwrap().phase,
         goat2_contracts::ProviderInstallPhase::Failed
     );
+}
+
+#[tokio::test]
+async fn a_sign_in_answer_for_another_flow_is_refused_and_an_instant_success_reprobes() {
+    let t = setup(manual()).await;
+    let method: goat2_contracts::ProviderAuthMethod = serde_json::from_value(serde_json::json!({
+        "id": "apiKey", "name": "Use an API key", "description": null, "type": "agent"
+    }))
+    .unwrap();
+    t.fake.set_provider_setup(
+        Some((vec![method], auth_state("codex", "waiting", None))),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("af-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    t.host.command(auth_start("af-1")).await.unwrap();
+    // The driver answers naming another flow: refused, and the running flow is kept.
+    t.fake.set_auth_respond_answer(
+        Some("flow-x"),
+        goat2_contracts::ProviderAuthPhase::Verifying,
+    );
+    let refused = t
+        .host
+        .command(auth_respond_frame("af-2", "flow-1", "sk-first"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "internal");
+    let codex = eventually_provider(&t, |_| true).await;
+    let flow = codex.auth_flow.unwrap();
+    assert_eq!(flow.flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    // The driver checks the key on submit and answers Succeeded: the provider is re-probed.
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    t.fake.set_auth_respond_answer(
+        Some("flow-1"),
+        goat2_contracts::ProviderAuthPhase::Succeeded,
+    );
+    let answered = t
+        .host
+        .command(auth_respond_frame("af-3", "flow-1", "sk-second"))
+        .await
+        .unwrap();
+    assert_eq!(
+        answered.auth_state.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Succeeded
+    );
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+}
+
+#[tokio::test]
+async fn inputs_behind_a_continuation_with_no_answer_still_run() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "stall", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.unknown_continuations(true);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ContinuationRequested {
+            key: "c1".into(),
+            text: "background work finished".into(),
+        },
+    );
+    eventually("continuation queued", || {
+        t.host.store().fold(&id).unwrap().queued_inputs.len() == 1
+    })
+    .await;
+    send(&t, &id, "stall-next", "after it", InputMode::Followup).await;
+    let turns = |t: &T| {
+        t.fake
+            .calls()
+            .into_iter()
+            .filter(|c| matches!(c, FakeCall::Turn { .. }))
+            .count()
+    };
+    assert!(t.fake.finish_turn(&id, "done"));
+    eventually("continuation offered", || {
+        !continuation_starts(&t).is_empty()
+    })
+    .await;
+    eventually("the follow-up behind it runs", || turns(&t) == 2).await;
 }

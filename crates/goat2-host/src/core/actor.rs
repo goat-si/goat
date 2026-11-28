@@ -178,6 +178,8 @@ struct Actor {
     held: bool,
     not_before: Option<Instant>,
     idle_gen: u64,
+    /// When an engine's AuthRequired last re-probed this thread's provider instance.
+    auth_reprobed_at: Option<Instant>,
     /// `signin` requests the engine raised outside any turn, closed when the session ends.
     session_signins: Vec<RequestId>,
     signin_keys: Vec<(RequestId, String)>,
@@ -228,6 +230,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         held: false,
         not_before: None,
         idle_gen: 0,
+        auth_reprobed_at: None,
         session_signins: Vec::new(),
         signin_keys: Vec::new(),
         undeclined_signin_keys: Vec::new(),
@@ -642,6 +645,28 @@ impl Actor {
 
     fn is_fenced(&self) -> bool {
         self.fenced.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Re-probe this thread's provider instance in a task, at most once per
+    /// [AUTH_REPROBE_EVERY]: a probe can start the provider's CLI, and an engine may repeat
+    /// AuthRequired.
+    fn reprobe_provider(&mut self) {
+        if self
+            .auth_reprobed_at
+            .is_some_and(|at| at.elapsed() < AUTH_REPROBE_EVERY)
+        {
+            return;
+        }
+        let Some(card) = self.host.inner.store.card(&self.id) else {
+            return;
+        };
+        self.auth_reprobed_at = Some(Instant::now());
+        let instance = card.engine.provider_instance_id.to_string();
+        let host = self.host.clone();
+        let task = tokio::spawn(async move {
+            let _ = host.inner.providers.refresh(&host, Some(&instance)).await;
+        });
+        self.host.track(&task);
     }
 
     /// Session-level sign-ins left open by an engine session that no longer exists (a host
@@ -1225,6 +1250,8 @@ impl Actor {
                 // engine's key is spent). Its resend request is dropped at once.
                 if let Some(run_id) = dropped_continuation {
                     self.drop_resend(&run_id, "an engine continuation is never resent");
+                    // The resend no longer blocks the queue: inputs behind it go on.
+                    self.maybe_start();
                 }
             }
         }
@@ -1665,6 +1692,9 @@ impl Actor {
             tracing::debug!(thread = %self.id, "sign-in for a key already answered: ignored");
             return;
         }
+        // The engine says this provider's credentials do not work (e.g. Codex rejected a saved
+        // key): its provider row is checked again now, not at the next manual refresh.
+        self.reprobe_provider();
         let run_id = match (&turn_id, &self.phase) {
             (Some(turn), Phase::Running(run)) if run.turn_id == *turn => {
                 Some(Some(run.run_id.clone()))
@@ -2396,6 +2426,8 @@ impl Actor {
 /// a path, bare codes), so none of it goes to `goat.jsonl`. The message and link stay in memory
 /// only ([crate::core::SigninLink]).
 const SIGNIN_SUMMARY: &str = "Sign in to continue";
+/// Least time between two provider re-probes an engine's AuthRequired triggers on one thread.
+const AUTH_REPROBE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 /// Item id prefix of a runless engine request (`SessionRequestOpened`): marks it across a
 /// restart, when the session that raised it is gone.
 pub(crate) const SESSION_REQUEST_ITEM_PREFIX: &str = "engine-session:";

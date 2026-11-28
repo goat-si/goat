@@ -378,7 +378,9 @@ pub trait EngineFactory: Send + Sync + 'static {
         let _ = target;
         Err(EngineError::Unsupported("auth_methods".into()))
     }
-    /// Start a sign-in. Every state returned or sent carries `target.instance_id`.
+    /// Start a sign-in. Every state returned or sent carries `target.instance_id`. Each start
+    /// returns a new `flow_id`: the host tells flows apart by it (an older flow's late update
+    /// never touches the new one), and `auth_respond` answers must carry the same id.
     async fn auth_start(
         &self,
         target: &ProviderTarget,
@@ -419,7 +421,8 @@ pub trait EngineFactory: Send + Sync + 'static {
         let _ = target;
         Err(EngineError::Unsupported("auth_logout".into()))
     }
-    /// Install or update the provider (per driver: `ProviderInstallState.driver` is this
+    /// Install or update the provider. Each start returns a new `operation_id`, which the host
+    /// uses to tell operations apart (per driver: `ProviderInstallState.driver` is this
     /// factory's kind).
     async fn install_start(
         &self,
