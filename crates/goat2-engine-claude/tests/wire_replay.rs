@@ -904,3 +904,97 @@ async fn a_steer_read_before_steer_returns_reports_before_the_turn_ends() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// Review round 6 finding 1: Claude's stdout closes while its stderr stays open, and a
+/// runtime-mode reopen replaces the process during the stderr wait; the old reader must not
+/// settle the new session.
+#[tokio::test]
+async fn a_stale_eof_does_not_settle_the_reopened_session() {
+    let run = Run::new("wire/stale_eof_across_reopen.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    turn(&handle, "one", MODEL, RuntimeMode::ApprovalRequired).await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    turn(&handle, "two", MODEL, RuntimeMode::FullAccess).await;
+    let events = until_finished(&mut handle).await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::Exited { .. })),
+        "the old process's exit settled the reopened session: {events:?}"
+    );
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["two"]
+    );
+    handle.session.shutdown().await;
+}
+
+/// Review round 6 finding 2: on a CLI without `command_lifecycle`, a steer whose write is still
+/// blocked when the turn ends, and then fails, is neither reported nor answered Accepted.
+#[tokio::test]
+async fn a_steer_whose_write_never_lands_is_not_accepted() {
+    let run = Run::new("wire/steer_write_blocked_turn_ends.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    // system:init arrives first, so the driver knows this CLI sends no lifecycle frames.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    // Larger than a pipe buffer: the write blocks while the CLI is not reading.
+    let big = "x".repeat(512 * 1024);
+    let EngineHandle {
+        session, events, ..
+    } = &mut handle;
+    let steer = session.steer(&turn_id, input_as("steer-big", &big));
+    let collect = async {
+        let mut seen = Vec::new();
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+                .await
+                .expect("event within 10 s")
+                .expect("events open");
+            let exited = matches!(event, EngineEvent::Exited { .. });
+            seen.push(event);
+            if exited {
+                return seen;
+            }
+        }
+    };
+    let (steered, seen) = tokio::join!(steer, collect);
+    assert!(
+        !matches!(steered, SteerResult::Accepted),
+        "a steer that never reached Claude was accepted"
+    );
+    assert!(
+        steer_updates(&seen).is_empty(),
+        "an unwritten steer was reported: {:?}",
+        steer_updates(&seen)
+    );
+    handle.session.shutdown().await;
+}
+
+/// Review round 6 finding 3: a lifecycle CLI queued the steer and finished the turn without
+/// starting or echoing it; the steer was not read, so it is Cancelled (the host requeues it).
+#[tokio::test]
+async fn a_queued_steer_left_unstarted_by_a_successful_turn_is_cancelled() {
+    let run = Run::new("wire/steer_queued_success_without_start.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let updates = steer_updates(&events);
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert!(
+        matches!(updates[0].2, SteerStatus::Cancelled { .. }),
+        "{updates:?}"
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}

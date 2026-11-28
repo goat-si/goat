@@ -413,6 +413,16 @@ impl Fake {
                     let ms = entry["ms"].as_u64().unwrap_or(0);
                     std::thread::sleep(Duration::from_millis(ms));
                 }
+                "close_stdout" => {
+                    // The process stays alive with stdin and stderr open.
+                    let _ = std::io::stdout().lock().flush();
+                    #[cfg(unix)]
+                    // SAFETY: closes this process's own stdout; nothing writes to it afterwards.
+                    unsafe {
+                        libc::close(1);
+                    }
+                    self.log(json!({"kind": "stdout_closed"}));
+                }
                 "expect_wire" => {
                     let Some(actual) = self.next_frame() else {
                         self.fail(format!("stdin closed while expecting {label}"));
