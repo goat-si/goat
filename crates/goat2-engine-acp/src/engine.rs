@@ -46,8 +46,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
 use crate::flavor::{
-    AcpFlavor, AgentEnv, AuthPolicy, ExtAnswer, ExtRequest, FlavorEvent, ModelWrite,
-    NativeElicitationForm, PromptError, ResumeMethod, StdoutLine,
+    AcpFlavor, AgentEnv, AuthFailure, AuthPolicy, ConfigWrite, ExtAnswer, ExtRequest, FlavorEvent,
+    ModeContext, ModeWrite, ModelWrite, NativeElicitationForm, PromptAttachment, PromptError,
+    ResumeMethod, StderrLine, StdoutLine,
 };
 use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
@@ -209,7 +210,8 @@ struct State {
     /// Text that goes in front of the next prompt (preamble, instructions without a system channel).
     preamble: Option<String>,
     runtime_mode: Option<goat2_contracts::RuntimeMode>,
-    model: Option<String>,
+    /// The selection last applied; any change (model or options) is written again.
+    model_selection: Option<goat2_contracts::ModelSelection>,
     /// The latest `available_commands_update` list (probes read it; v1 probe.ts:470-476).
     available_commands: Option<Vec<Value>>,
     /// Agent-native subagents (see [crate::subagents]).
@@ -229,8 +231,11 @@ struct Shared {
     init: OnceLock<InitializeInfo>,
     conn: OnceLock<Conn>,
     child: tokio::sync::Mutex<Option<ChildProcess>>,
-    /// The agent's process group, set once it is spawned.
+    /// The agent's process group, set once it is spawned (the stderr hook must already point
+    /// at this state).
     pgid: OnceLock<i32>,
+    /// Why the flavor ended the connection ([StdoutLine::Fail]); reported with handshake errors.
+    transport_failure: Mutex<Option<String>>,
     exited: AtomicBool,
     timeouts: AcpTimeouts,
     resolver: Option<AttachmentResolver>,
@@ -566,7 +571,7 @@ impl Shared {
         }
     }
 
-    fn on_request(&self, method: &str, params: Value, responder: ValueResponder) {
+    fn on_request(self: &Arc<Self>, method: &str, params: Value, responder: ValueResponder) {
         if let ("mcp/connect" | "mcp/message" | "mcp/disconnect", Some(bridge)) =
             (method, self.mcp_over_acp.get().cloned())
         {
@@ -594,6 +599,27 @@ impl Shared {
             "elicitation/create" => self.on_elicitation(params, responder, false),
             "session/elicitation" | "_session/elicitation" => {
                 self.on_elicitation(params, responder, true)
+            }
+            // v1 adapter.ts:5081-5087: the flavor's client file reader, with the thread's folder.
+            "fs/read_text_file" => {
+                let cwd = self.policy.lock().expect("policy").cwd.clone();
+                match self.flavor.read_text_file(&params, cwd.as_deref()) {
+                    None => {
+                        let _ = responder
+                            .respond_with_error(agent_client_protocol::Error::method_not_found());
+                    }
+                    Some(read) => {
+                        let _ = match read.response {
+                            Ok(value) => responder.respond(value),
+                            Err((code, message)) => responder.respond_with_error(
+                                agent_client_protocol::Error::new(code, message),
+                            ),
+                        };
+                        for event in read.events {
+                            self.on_flavor_event(event);
+                        }
+                    }
+                }
             }
             _ => match self.flavor.ext_request_action(method, &params) {
                 ExtRequest::Respond(result) => {
@@ -634,6 +660,27 @@ impl Shared {
         let mut answerable_params = params.clone();
         if let Some(object) = answerable_params.as_object_mut() {
             object.insert("options".into(), Value::Array(options.clone()));
+        }
+        // v1 adapter.ts:5128-5147: a question asked through the permission method.
+        match self.flavor.permission_request_action(&answerable_params) {
+            None => {}
+            Some(ExtRequest::AskUser {
+                native_id,
+                summary,
+                questions,
+                answer,
+            }) => {
+                self.on_ext_question(native_id, summary, questions, answer, responder);
+                return;
+            }
+            Some(ExtRequest::Respond(value)) => {
+                let _ = responder.respond(value);
+                return;
+            }
+            Some(ExtRequest::Unhandled | ExtRequest::CapturePlan { .. }) => {
+                let _ = responder.respond(cancelled());
+                return;
+            }
         }
         let policy = self.policy.lock().expect("policy").clone();
         let disposition = self.flavor.permission_disposition(&policy, &params);
@@ -1091,7 +1138,27 @@ impl Shared {
         if !text.is_empty() {
             blocks.push(ContentBlock::Text(TextContent::new(text)));
         }
-        if self.flavor.supports_image_prompts(&init) {
+        let resolved: Vec<(&ChatAttachment, Option<PathBuf>)> =
+            attachments.iter().map(|a| (*a, resolve(a))).collect();
+        let prompt_attachments: Vec<PromptAttachment<'_>> = resolved
+            .iter()
+            .map(|(attachment, path)| PromptAttachment {
+                attachment,
+                path: path.as_deref(),
+            })
+            .collect();
+        let config_options = self.state.lock().expect("state").config_options.clone();
+        if let Some(result) =
+            self.flavor
+                .prompt_attachment_blocks(&init, &config_options, &prompt_attachments)
+        {
+            for value in result? {
+                blocks.push(
+                    serde_json::from_value::<ContentBlock>(value)
+                        .map_err(|e| format!("Invalid attachment content: {e}"))?,
+                );
+            }
+        } else if self.flavor.supports_image_prompts(&init) {
             for attachment in attachments.iter().filter(|a| {
                 a.kind == ChatAttachmentType::Image
                     && ["image/gif", "image/jpeg", "image/png", "image/webp"]
@@ -1123,6 +1190,7 @@ impl Shared {
         blocks: Vec<ContentBlock>,
     ) -> Result<(), String> {
         let conn = self.conn().map_err(|e| e.to_string())?.clone();
+        self.flavor.prompt_sent(&self.session_id());
         let mut request = PromptRequest::new(self.session_id(), blocks);
         if let Some(meta) = meta_of(self.flavor.prompt_meta(&prompt_id_of(&turn_id, prompt_seq))) {
             request = request.meta(meta);
@@ -1176,33 +1244,49 @@ impl Shared {
     }
 
     async fn apply_settings(&self, settings: &TurnSettings) -> Result<(), String> {
-        let (mode_changed, model_changed) = {
+        let (mode_changed, first_mode_write, model_changed) = {
             let state = self.state.lock().expect("state");
             (
                 state.runtime_mode != Some(settings.runtime_mode),
-                state.model.as_deref() != Some(settings.model_selection.model.as_str()),
+                state.runtime_mode.is_none(),
+                state.model_selection.as_ref() != Some(&settings.model_selection),
             )
         };
         if mode_changed {
             self.policy.lock().expect("policy").runtime_mode = settings.runtime_mode;
-            let modes = self.state.lock().expect("state").modes.clone();
-            if let Some(mode_id) = self
-                .flavor
-                .session_mode_for(settings.runtime_mode, modes.as_ref())
-                && modes
-                    .as_ref()
-                    .is_some_and(|m| m.has(&mode_id) && m.current_mode_id != mode_id)
-            {
-                let request = SetSessionModeRequest::new(self.session_id(), mode_id.clone());
-                self.request(
-                    "session/set_mode",
-                    json_or_null(&request),
-                    self.timeouts.request,
-                )
-                .await
-                .map_err(|e| format!("session/set_mode {mode_id}: {e}"))?;
-                if let Some(modes) = self.state.lock().expect("state").modes.as_mut() {
-                    modes.current_mode_id = mode_id;
+            let (modes, config_options) = {
+                let state = self.state.lock().expect("state");
+                (state.modes.clone(), state.config_options.clone())
+            };
+            let context = ModeContext {
+                modes: modes.as_ref(),
+                config_options: &config_options,
+                first_write: first_mode_write,
+            };
+            match self.flavor.mode_write(settings.runtime_mode, &context) {
+                ModeWrite::Keep => {}
+                ModeWrite::Unavailable(message) => return Err(message),
+                ModeWrite::SetMode(mode_id) => {
+                    let request = SetSessionModeRequest::new(self.session_id(), mode_id.clone());
+                    self.request(
+                        "session/set_mode",
+                        json_or_null(&request),
+                        self.timeouts.request,
+                    )
+                    .await
+                    .map_err(|e| format!("session/set_mode {mode_id}: {e}"))?;
+                    if let Some(modes) = self.state.lock().expect("state").modes.as_mut() {
+                        modes.current_mode_id = mode_id;
+                    }
+                }
+                ModeWrite::Config(write) => {
+                    self.write_config(&write).await?;
+                    if let (Some(modes), Some(mode_id)) = (
+                        self.state.lock().expect("state").modes.as_mut(),
+                        write.value.as_str(),
+                    ) {
+                        modes.current_mode_id = mode_id.to_owned();
+                    }
                 }
             }
             self.state.lock().expect("state").runtime_mode = Some(settings.runtime_mode);
@@ -1242,10 +1326,120 @@ impl Shared {
                         .await
                         .map_err(|e| format!("session/set_model {model_id}: {e}"))?;
                 }
+                ModelWrite::ConfigOptions(writes) => {
+                    for write in &writes {
+                        self.write_config(write).await?;
+                    }
+                }
             }
-            self.state.lock().expect("state").model = Some(settings.model_selection.model.clone());
+            self.state.lock().expect("state").model_selection =
+                Some(settings.model_selection.clone());
         }
         Ok(())
+    }
+
+    /// v1 runtime `setConfigOption` (AcpSessionRuntime.ts:1023-1075, 1363-1420) and the
+    /// `configureSession` option loop's skips (adapter.ts:6076-6113).
+    async fn write_config(&self, write: &ConfigWrite) -> Result<(), String> {
+        let shown = match &write.value {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let options = self.state.lock().expect("state").config_options.clone();
+        let option = options
+            .iter()
+            .find(|o| crate::wire::config_option_id(o) == Some(write.config_id.as_str()));
+        match option {
+            None if write.optional => return Ok(()),
+            None => {}
+            Some(option) => {
+                let kind = option.get("type").and_then(Value::as_str);
+                if kind == Some("boolean") && !write.value.is_boolean() {
+                    if write.optional {
+                        return Ok(());
+                    }
+                    return Err(format!(
+                        "Invalid value \"{shown}\" for session config option \"{}\": expected boolean",
+                        write.config_id
+                    ));
+                }
+                if kind != Some("boolean") {
+                    let Some(value) = write.value.as_str() else {
+                        if write.optional {
+                            return Ok(());
+                        }
+                        return Err(format!(
+                            "Invalid value {shown} for session config option \"{}\": expected string",
+                            write.config_id
+                        ));
+                    };
+                    let allowed: Vec<String> = crate::wire::select_values(option)
+                        .into_iter()
+                        .map(|(value, _)| value)
+                        .collect();
+                    if kind == Some("select") && !allowed.iter().any(|a| a == value) {
+                        if write.optional {
+                            return Ok(());
+                        }
+                        if !write.allow_unlisted {
+                            return Err(format!(
+                                "Invalid value \"{value}\" for session config option \"{}\": expected one of {}",
+                                write.config_id,
+                                allowed.join(", ")
+                            ));
+                        }
+                    }
+                }
+                if !write.resend_current && option.get("currentValue") == Some(&write.value) {
+                    return Ok(());
+                }
+            }
+        }
+        let mut request = json!({
+            "sessionId": self.session_id(),
+            "configId": write.config_id,
+            "value": write.value,
+        });
+        if write.value.is_boolean() {
+            request["type"] = json!("boolean");
+        }
+        match self
+            .request("session/set_config_option", request, self.timeouts.request)
+            .await
+        {
+            Ok(response) => {
+                if let Some(options) = response.get("configOptions").and_then(Value::as_array) {
+                    self.state.lock().expect("state").config_options = options.clone();
+                }
+                Ok(())
+            }
+            Err(error)
+                if write.optional
+                    && error.code == agent_client_protocol::ErrorCode::INVALID_PARAMS =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "session/set_config_option {}={shown}: {error}",
+                write.config_id
+            )),
+        }
+    }
+
+    /// v1 an `onStderr` transport error: the open turn fails with `message` and the process ends,
+    /// so the next turn starts a fresh one.
+    fn fail_process(self: &Arc<Self>, message: String) {
+        let current = self
+            .state
+            .lock()
+            .expect("state")
+            .turn
+            .as_ref()
+            .map(|t| (t.turn_id.clone(), t.prompt_seq));
+        if let Some((turn_id, seq)) = current {
+            self.settle(&turn_id, seq, Err(message.clone()));
+        }
+        self.terminate(message);
     }
 
     fn terminate(self: &Arc<Self>, reason: String) {
@@ -1899,6 +2093,7 @@ impl AcpEngineFactory {
             conn: OnceLock::new(),
             child: tokio::sync::Mutex::new(None),
             pgid: OnceLock::new(),
+            transport_failure: Mutex::new(None),
             exited: AtomicBool::new(false),
             timeouts: self.timeouts.clone(),
             resolver: self.resolver.clone(),
@@ -1913,26 +2108,30 @@ impl AcpEngineFactory {
             let weak = Arc::downgrade(&shared);
             let flavor = Arc::clone(&flavor);
             Arc::new(move |line: &str| {
-                if let Some(url) = flavor.stderr_auth_url(line)
-                    && let Some(shared) = weak.upgrade()
-                {
-                    shared.auth_required(Some(url), None);
+                let event = flavor.stderr_line(line);
+                if event == StderrLine::Ignore {
+                    return;
+                }
+                if let Some(shared) = weak.upgrade() {
+                    match event {
+                        StderrLine::Ignore => {}
+                        StderrLine::AuthUrl(url) => shared.auth_required(Some(url), None),
+                        StderrLine::Fail(message) => shared.fail_process(message),
+                    }
                 }
             }) as crate::process::StderrHook
         };
         let mut child = ChildProcess::spawn_with_stderr(&launch, Some(stderr_hook))
             .map_err(|e| EngineError::Unavailable(format!("{}: {e}", launch.program.display())))?;
-        let pgid = i32::try_from(child.pid()).ok();
+        if let Ok(pgid) = i32::try_from(child.pid()) {
+            let _ = shared.pgid.set(pgid);
+        }
         let stdin = child
             .take_stdin()
             .ok_or_else(|| EngineError::StartFailed("no stdin".into()))?;
         let stdout = child
             .take_stdout()
             .ok_or_else(|| EngineError::StartFailed("no stdout".into()))?;
-        // The same Arc stays live: the stderr hook's weak pointer must keep reaching it.
-        if let Some(pgid) = pgid {
-            let _ = shared.pgid.set(pgid);
-        }
         *shared.child.lock().await = Some(child);
 
         // Transport: newline-delimited JSON with the flavor looking at every stdout line first.
@@ -1973,6 +2172,13 @@ impl AcpEngineFactory {
                                 if let Some(shared) = weak.upgrade() {
                                     shared.auth_required(Some(url), None);
                                 }
+                            }
+                            StdoutLine::Fail(message) => {
+                                if let Some(shared) = weak.upgrade() {
+                                    *shared.transport_failure.lock().expect("failure") =
+                                        Some(message.clone());
+                                }
+                                return Some((Err(std::io::Error::other(message)), reader));
                             }
                         }
                     }
@@ -2076,13 +2282,19 @@ impl AcpEngineFactory {
     ) -> Result<EngineRef, EngineError> {
         let flavor = &self.flavor;
         let stderr = || async {
-            shared
+            let tail = shared
                 .child
                 .lock()
                 .await
                 .as_ref()
                 .map(|c| c.stderr_tail())
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // The flavor's reason for ending the connection goes last, so it is never cut off.
+            match shared.transport_failure.lock().expect("failure").clone() {
+                Some(failure) if tail.is_empty() => failure,
+                Some(failure) => format!("{tail}\n{failure}"),
+                None => tail,
+            }
         };
         // initialize (v1 AcpSessionRuntime.ts:995-1009, :1427-1442).
         let caps = flavor.client_capabilities();
@@ -2130,6 +2342,9 @@ impl AcpEngineFactory {
         };
         let init = InitializeInfo::from_value(&init_value);
         let _ = shared.init.set(init.clone());
+        if let Some(message) = flavor.initialize_refusal(&init) {
+            return Err(EngineError::StartFailed(message));
+        }
 
         // A probe never signs in, eagerly or on demand (v1 probe.ts:418-432; review 1 finding 3).
         if let (false, AuthPolicy::Eager { method_id }) = (self.probe, flavor.auth_policy()) {
@@ -2142,11 +2357,22 @@ impl AcpEngineFactory {
                 )
                 .await
             {
-                shared.auth_required(
-                    None,
-                    Some(format!("Sign-in with {method_id} failed: {error}")),
-                );
-                return Err(EngineError::StartFailed(format!("authenticate: {error}")));
+                match flavor.auth_failure(i32::from(error.code), &error.message) {
+                    AuthFailure::Default => {
+                        shared.auth_required(
+                            None,
+                            Some(format!("Sign-in with {method_id} failed: {error}")),
+                        );
+                        return Err(EngineError::StartFailed(format!("authenticate: {error}")));
+                    }
+                    AuthFailure::SignIn(message) => {
+                        shared.auth_required(None, Some(message.clone()));
+                        return Err(EngineError::StartFailed(message));
+                    }
+                    AuthFailure::Plain => {
+                        return Err(handshake_error("authenticate", error, &stderr().await));
+                    }
+                }
             }
         }
 
@@ -2271,9 +2497,10 @@ impl AcpEngineFactory {
             }
             Err(error) if is_auth_required(&error) => {
                 // v1 authenticateAfterRequired (AcpSessionRuntime.ts:1505-1555).
+                // v1 uses the configured `authMethodId` whether or not it authenticated eagerly.
                 let configured = match flavor.auth_policy() {
                     AuthPolicy::OnRequired { method_id } => method_id,
-                    AuthPolicy::Eager { .. } => None,
+                    AuthPolicy::Eager { method_id } => Some(method_id),
                 };
                 let method = match &configured {
                     Some(id) => init.auth_methods.iter().find(|m| &m.id == id).cloned(),
@@ -2312,6 +2539,12 @@ impl AcpEngineFactory {
                     )
                     .await
                 {
+                    if let AuthFailure::SignIn(message) =
+                        flavor.auth_failure(i32::from(auth_error.code), &auth_error.message)
+                    {
+                        shared.auth_required(None, Some(message.clone()));
+                        return Err(EngineError::StartFailed(message));
+                    }
                     shared.auth_required(
                         None,
                         Some(format!("Sign in to {}: {auth_error}", flavor.driver())),
@@ -2320,9 +2553,21 @@ impl AcpEngineFactory {
                         "authenticate {method_id}: {auth_error}"
                     )));
                 }
-                setup_once().await.map_err(|e| {
-                    EngineError::StartFailed(format!("session setup after sign-in: {e}"))
-                })?
+                match setup_once().await {
+                    Ok(setup) => setup,
+                    Err(e) => {
+                        // v1 `requiresSignIn` (adapter.ts:8419): still unsigned after sign-in.
+                        if let AuthFailure::SignIn(message) =
+                            flavor.auth_failure(i32::from(e.code), &e.message)
+                        {
+                            shared.auth_required(None, Some(message.clone()));
+                            return Err(EngineError::StartFailed(message));
+                        }
+                        return Err(EngineError::StartFailed(format!(
+                            "session setup after sign-in: {e}"
+                        )));
+                    }
+                }
             }
             Err(error) => {
                 let tail = stderr().await;

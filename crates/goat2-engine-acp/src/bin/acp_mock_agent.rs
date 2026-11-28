@@ -78,6 +78,7 @@
 //!   (`GOAT_ACP_MOCK_CLI_MODELS`; `GOAT_ACP_MOCK_CLI_MODELS_2` from the second call, counted in
 //!   `GOAT_ACP_MOCK_CLI_LOG_PATH`) and `status --json` (`GOAT_ACP_MOCK_CLI_STATUS`); any other
 //!   arguments run the ACP agent. `GOAT_ACP_MOCK_CLI_LOG_PATH` records one line per CLI call.
+//! - Antigravity and fx profiles: see `mock_flavors/antigravity_fx.rs`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -87,6 +88,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+#[path = "mock_flavors/antigravity_fx.rs"]
+mod antigravity_fx;
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -191,6 +195,9 @@ fn log_inbound(message: &Value) {
 }
 
 fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
+    if antigravity_fx::handle_request(&agent, &id, &method, &params) {
+        return;
+    }
     match method.as_str() {
         "initialize" => {
             let mut caps = json!({
@@ -367,6 +374,13 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         .insert(session.clone(), cancel_tx);
     let was_cancelled = |rx: &std::sync::mpsc::Receiver<()>| rx.try_recv().is_ok();
 
+    if antigravity_fx::prompt(&agent, &session) {
+        // Left open on purpose (a wedged harness); cancel still answers it.
+        if cancel_rx.recv().is_ok() {
+            agent.respond(&id, json!({"stopReason": "cancelled"}));
+        }
+        return;
+    }
     if flag("GOAT_ACP_CRASH_PROMPT") {
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "about to crash"}}));
         std::thread::sleep(Duration::from_millis(50));

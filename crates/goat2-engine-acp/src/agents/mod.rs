@@ -1,6 +1,13 @@
 //! Vendor ACP flavors.
 pub mod antigravity;
+pub mod antigravity_auth;
+pub mod antigravity_files;
+pub mod antigravity_goat_tools;
+pub mod antigravity_prompt;
+pub mod antigravity_protocol;
+pub mod antigravity_subagent;
 pub mod fx;
+pub mod fx_skills;
 pub mod grok;
 pub mod xai_requests;
 
@@ -25,7 +32,7 @@ mod tests {
                 && g.tools.supports_mcp_tools
                 && g.checkpointing.provider_can_read_conversation_snapshot
         );
-        let f = Fx.capabilities();
+        let f = Fx::default().capabilities();
         assert!(
             f.sessions.supports_model_switch_in_session
                 && f.threads.can_read_thread_snapshot
@@ -73,13 +80,17 @@ mod tests {
             extra_roots: vec![],
         };
         assert_eq!(g.permission_disposition(&p, &json!({})), Disposition::Ask);
-        assert_eq!(Fx.permission_disposition(&p, &json!({})), Disposition::Ask);
+        assert_eq!(
+            Fx::default().permission_disposition(&p, &json!({})),
+            Disposition::Ask
+        );
         let modes = ModeState {
             current_mode_id: "ask".into(),
             available: vec![("code".into(), "Code".into())],
         };
         assert_eq!(
-            Fx.session_mode_for(RuntimeMode::Auto, Some(&modes))
+            Fx::default()
+                .session_mode_for(RuntimeMode::Auto, Some(&modes))
                 .as_deref(),
             Some("code")
         );
@@ -146,7 +157,7 @@ mod tests {
             g.launch(&spec).unwrap().args,
             ["agent", "--always-approve", "stdio"]
         );
-        assert_eq!(Fx.launch(&spec).unwrap().args, ["acp"]);
+        assert_eq!(Fx::default().launch(&spec).unwrap().args, ["acp"]);
         let choices=g.approval_options(&json!({"options":[{"kind":"allow_always","optionId":"persistent"},{"kind":"allow_once","optionId":"once"}]}));
         assert!(
             !choices
