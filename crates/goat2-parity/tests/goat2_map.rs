@@ -82,7 +82,7 @@ fn maps_aliases_and_correlates_child_wakes() {
         matches!(&m.map("parent",&child_started).unwrap()[..], [TraceEvent::ChildStarted{child,..}] if child=="kid")
     );
     let report = event(
-        serde_json::json!({"type":"child.reported","childThreadId":"raw-child","childRunId":null,"status":"done","summary":"ok","childCursor":{"epoch":"e","seq":1}}),
+        serde_json::json!({"type":"child.reported","childThreadId":"raw-child","childRunId":null,"status":"completed","summary":"ok","childCursor":{"epoch":"e","seq":1}}),
     );
     assert!(
         matches!(&m.map("parent",&report).unwrap()[..], [TraceEvent::ChildReported{child,..}] if child=="kid")
@@ -144,7 +144,7 @@ fn child_input_aliases_follow_report_order_even_if_admitted_in_reverse() {
     let mut m = AliasMap::default();
     m.register_child("child", "kid");
     let report = event(
-        serde_json::json!({"type":"child.reported","childThreadId":"child","childRunId":null,"status":"done","summary":"ok","childCursor":{"epoch":"e","seq":1}}),
+        serde_json::json!({"type":"child.reported","childThreadId":"child","childRunId":null,"status":"completed","summary":"ok","childCursor":{"epoch":"e","seq":1}}),
     );
     m.map("parent", &report).unwrap();
     m.map("parent", &report).unwrap();
@@ -227,7 +227,7 @@ frozen_mapping!(
 frozen_mapping!(
     map_child_reported,
     "child.reported",
-    serde_json::json!([{"kind":"child.reported","thread":"t","child":"kid","status":"done"}])
+    serde_json::json!([{"kind":"child.reported","thread":"t","child":"kid","status":"completed"}])
 );
 frozen_mapping!(map_user_notified, "user.notified", serde_json::json!([]));
 frozen_mapping!(map_checkpoint, "checkpoint", serde_json::json!([]));
@@ -261,5 +261,18 @@ fn checkpoint_with_inflight_steer_does_not_emit_queue_changed() {
             .map("t", &LogEvent::Checkpoint(checkpoint))
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn map_input_delivered_refused_fails_closed() {
+    let mut m = prepared_aliases();
+    let mut value = serde_json::to_value(frozen_event("input.delivered")).unwrap();
+    value["outcome"] = serde_json::json!("refused");
+    let event: LogEvent = serde_json::from_value(value).unwrap();
+    let actual = m.map("t", &event).unwrap();
+    assert!(
+        matches!(actual.as_slice(), [TraceEvent::InputRefused { code, .. }] if code == "delivery_refused"),
+        "{actual:?}"
     );
 }

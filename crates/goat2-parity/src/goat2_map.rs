@@ -75,6 +75,13 @@ fn map_log_event(thread: &str, event: &LogEvent) -> Result<Vec<TraceEvent>, Mapp
                     run: e.run_id.to_string(),
                     input: e.input_id.to_string(),
                 });
+            } else if e.outcome == DeliveryOutcome::Refused {
+                // Fails closed: the engine refused the delivery and nothing was sent.
+                out.push(TraceEvent::InputRefused {
+                    thread,
+                    input: e.input_id.to_string(),
+                    code: "delivery_refused".into(),
+                });
             }
         }
         LogEvent::RunStarted(e) => out.push(TraceEvent::RunStarted {
@@ -86,7 +93,7 @@ fn map_log_event(thread: &str, event: &LogEvent) -> Result<Vec<TraceEvent>, Mapp
             thread,
             run: e.run_id.to_string(),
             status: match e.outcome {
-                RunOutcome::Done => RunEnd::Done,
+                RunOutcome::Completed => RunEnd::Done,
                 RunOutcome::Failed => RunEnd::Failed,
                 RunOutcome::Interrupted => RunEnd::Interrupted,
                 RunOutcome::Unknown => RunEnd::Unknown,
