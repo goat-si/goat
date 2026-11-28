@@ -118,7 +118,17 @@ impl HttpRelay {
                 .await
         });
         let mut entries = Vec::new();
+        let mut total = 0usize;
         while let Some(payload) = receiver.recv().await {
+            // Bounded like [Self::send_collect]: stop reading once the payloads pass the cap.
+            total += payload.to_string().len();
+            if total > MAX_RESPONSE_BYTES {
+                task.abort();
+                return Err(BridgeError::new(
+                    ErrorKind::Protocol,
+                    format!("GOAT MCP endpoint response exceeds {MAX_RESPONSE_BYTES} bytes."),
+                ));
+            }
             if payload.get("id").is_some()
                 && payload.get("method").and_then(Value::as_str).is_some()
             {
@@ -143,17 +153,50 @@ impl HttpRelay {
         line: &str,
         mut emit: F,
     ) -> Result<(), BridgeError> {
-        self.send_raw_with(line, |value| -> Ready<()> {
+        self.send_raw_with(line, |value| -> Ready<Result<(), BridgeError>> {
             emit(value);
-            ready(())
+            ready(Ok(()))
         })
         .await
+    }
+
+    /// Send a JSON-RPC message and collect the response payloads, failing once they pass
+    /// `max_bytes` in total (serialized), so a stream of many small SSE events cannot grow
+    /// memory without bound. v1 `mcpOverAcpBridge.ts:150` collected the whole stream; GOAT 2 bounds
+    /// it (final review 5 finding 1).
+    pub async fn send_collect(
+        &self,
+        line: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<Value>, BridgeError> {
+        let mut payloads = Vec::new();
+        let mut total = 0usize;
+        self.send_raw_with(line, |payload| {
+            total += payload.to_string().len();
+            let over = total > max_bytes;
+            if !over {
+                match payload {
+                    Value::Array(entries) => payloads.extend(entries),
+                    other => payloads.push(other),
+                }
+            }
+            ready(if over {
+                Err(BridgeError::new(
+                    ErrorKind::Protocol,
+                    format!("GOAT MCP endpoint response exceeds {max_bytes} bytes."),
+                ))
+            } else {
+                Ok(())
+            })
+        })
+        .await?;
+        Ok(payloads)
     }
     /// [Self::send_raw] waiting on `emit` for each payload, so a slow consumer slows the read.
     pub async fn send_raw_with<F, Fut>(&self, line: &str, mut emit: F) -> Result<(), BridgeError>
     where
         F: FnMut(Value) -> Fut,
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = Result<(), BridgeError>>,
     {
         let req = self
             .headers(self.client.post(&self.endpoint))
@@ -233,7 +276,7 @@ impl HttpRelay {
                                 BridgeError::new(ErrorKind::Transport, e.to_string())
                             })?;
                             self.observe(&value);
-                            emit(value).await;
+                            emit(value).await?;
                         }
                     } else if let Some(value) = line.strip_prefix("data:") {
                         data.push(value.trim_start().to_owned());
@@ -254,7 +297,7 @@ impl HttpRelay {
             let value = serde_json::from_slice(&bytes)
                 .map_err(|e| BridgeError::new(ErrorKind::Transport, e.to_string()))?;
             self.observe(&value);
-            emit(value).await;
+            emit(value).await?;
         }
         Ok(())
     }
@@ -556,6 +599,7 @@ async fn dispatch(
                     for entry in entries {
                         let _ = output.send(entry).await;
                     }
+                    Ok(())
                 }
             })
             .await;

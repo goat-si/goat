@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 /// v1 mcpOverAcpBridge.ts:11-12.
 const MAX_CONNECTIONS: usize = 16;
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Total size of one response the relay collects (the bridge's JSON body cap).
+pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Connection {
@@ -112,18 +114,11 @@ impl McpOverAcp {
         } else {
             Some(connection.negotiation.lock().await)
         };
-        let mut payloads = Vec::new();
-        connection
+        // Bounded: an endpoint cannot grow host memory with many small SSE events (final review 5
+        // finding 1; v1 mcpOverAcpBridge.ts:150 collected the whole stream).
+        let payloads = connection
             .relay
-            .send_raw(&body, |payload| {
-                for entry in payload
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_else(|| vec![payload.clone()])
-                {
-                    payloads.push(entry);
-                }
-            })
+            .send_collect(&body, MAX_RESPONSE_BYTES)
             .await
             .map_err(|e| e.to_string())?;
         if payloads.iter().any(protocol_version) {
@@ -334,5 +329,66 @@ mod tests {
             "dispose took {elapsed:?}"
         );
         assert!(bridge.connections.lock().unwrap().is_empty());
+    }
+
+    /// An MCP endpoint whose answer is an SSE stream of small events that never ends.
+    fn endpoint_with_endless_sse() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let line = line.trim_end().to_owned();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                std::thread::spawn(move || {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+                    );
+                    let event = format!(
+                        "data: {}\n\n",
+                        json!({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"pad": "x".repeat(1000)}})
+                    );
+                    // Until the client hangs up.
+                    while stream.write_all(event.as_bytes()).is_ok() {}
+                });
+            }
+        });
+        url
+    }
+
+    /// Final review 5 finding 1: many small SSE events cannot grow host memory without bound; the
+    /// call fails once the collected response passes the cap.
+    #[tokio::test]
+    async fn an_endless_sse_answer_fails_at_the_size_cap() {
+        let bridge = McpOverAcp::new(endpoint_with_endless_sse(), "Bearer t");
+        let connected = bridge
+            .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
+            .unwrap();
+        let id = connected["connectionId"].as_str().unwrap().to_owned();
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            bridge.message(&json!({"connectionId": id, "method": "tools/list"})),
+        )
+        .await
+        .expect("the call ends instead of collecting forever");
+        let error = result.expect_err("an oversized answer fails");
+        assert!(error.contains("exceeds"), "{error}");
     }
 }

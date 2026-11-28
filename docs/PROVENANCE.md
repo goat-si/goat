@@ -278,3 +278,4 @@ Source goat v1 `916b5ccc1b2`: `packages/contracts/src/{providerSetup,acpRegistry
 
 Per-slice detail and known gaps: crates/goat2-engine-acp/provenance/*.md, crates/goat2-acp-mcp-bridge/provenance/bridge.md.
 | crates/goat2-engine-acp/src/stderr.rs | packages/provider-acp/src/server/stderr.ts (ACP_STDERR_TAIL_MAX_CHARS, appendAcpStderrTail, sanitizeAcpStderrExcerpt); bounded reading per apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts:419-441 | ported-to-Rust |
+| crates/goat2-acp-mcp-bridge/src/lib.rs (send_collect, bounded HttpRelay::send), crates/goat2-engine-acp/src/mcp_over_acp.rs (MAX_RESPONSE_BYTES) | packages/provider-acp/src/server/mcpOverAcpBridge.ts:150 (collected the whole stream; GOAT 2 bounds it) | adapted |
