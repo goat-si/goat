@@ -21,7 +21,7 @@ flowchart LR
 |---|---|---|---|
 | Electron main | user | until quit | no thread work; no IPC data path for threads |
 | renderer | main | per window | talks to the host directly over WebSocket |
-| `goat2-host` | main | until app quit | quitting the app ends the work; own process group; exits when stdin closes; writes `host.json` (pid, port, generation); on start: kills a leftover host group from `host.json` (never attaches), settles runs, regenerates index epoch |
+| `goat2-host` | main | until app quit | quitting the app ends the work; own process group; exits when stdin closes; writes `host.json` (pid, port, generation) and bumps `<dataDir>/generation` on every start; on start: kills a leftover host group from `host.json` (never attaches), settles runs, regenerates index epoch |
 | `codex app-server` | host | per thread; stopped after 10 min idle | own process group, `nice -n 10` for agent commands, memory limit per group: lane B gives `group_rss_bytes()` + `kill_group()`, host (lane E) samples every 10 s, 8 GiB default, warns at 80 %, over → kill that group only, run `failed` (`memory_limit`), never resent |
 
 | Build | App | Bundle id | Data dir | Host port |
