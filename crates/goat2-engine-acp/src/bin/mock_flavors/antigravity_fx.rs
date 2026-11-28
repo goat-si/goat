@@ -13,6 +13,7 @@
 //! - `GOAT_ACP_ANTIGRAVITY_APPEND=1` (GOAT 2): advertise `_meta.antigravity.systemPrompt.append`.
 //! - `GOAT_ACP_ANTIGRAVITY_AUTH_ERROR=no-browser` (GOAT 2): `authenticate` fails as the 1.5 CLI
 //!   does without a display.
+//! - `GOAT_ACP_ANTIGRAVITY_SESSION_AUTH=always` (GOAT 2): `session/new` keeps answering -32000.
 //! - `GOAT_ACP_ANTIGRAVITY_HARNESS_FAILURE=pending`: print the harness failure on stderr during
 //!   the prompt and never answer it.
 //! - `GOAT_ACP_ANTIGRAVITY_INTERACTION=1` (GOAT 2): ask an `interaction_` permission question,
@@ -167,6 +168,10 @@ pub fn handle_request(agent: &Arc<Agent>, id: &Value, method: &str, params: &Val
                 }
             }
             "session/new" => {
+                if env("GOAT_ACP_ANTIGRAVITY_SESSION_AUTH").as_deref() == Some("always") {
+                    agent.error(id, -32000, "Authentication required");
+                    return true;
+                }
                 agent.respond(id, json!({"sessionId": "mock-session-1", "configOptions": antigravity_config_options()}));
             }
             "session/resume" | "session/load" => {

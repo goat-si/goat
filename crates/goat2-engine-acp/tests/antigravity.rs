@@ -945,3 +945,193 @@ async fn attachments_follow_antigravitys_rules() {
     assert!(prompt[0]["text"].as_str().unwrap().contains("a.gif"));
     run.handle.session.shutdown().await;
 }
+
+/// v1 AcpSessionRuntime.ts:1510-1555 + antigravityAuthSupport.ts:174-181: a session that still
+/// needs sign-in re-authenticates with the configured method, then asks the person to sign in.
+#[tokio::test]
+async fn session_auth_required_retries_the_configured_method_then_asks_to_sign_in() {
+    let flavor = Antigravity {
+        auth: AntigravityAuthConfig {
+            auth_method: AntigravityAuthMethod::GeminiApiKey,
+            api_key: "k".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let error = start_with(
+        Arc::new(flavor),
+        RuntimeMode::ApprovalRequired,
+        &low(),
+        &[
+            ("GOAT_ACP_ANTIGRAVITY", "1"),
+            ("GOAT_ACP_ANTIGRAVITY_SESSION_AUTH", "always"),
+        ],
+        None,
+        None,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+        error,
+        goat2_engine_api::EngineError::StartFailed(ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE.into())
+    );
+}
+
+/// v1 antigravitySteersWithPrompt (AntigravityAcpSupport.ts:102-110): `agy acp` 1.5 takes a
+/// mid-turn prompt as a steer; the 1.4 harness queues it, so GOAT interrupts and restarts.
+#[tokio::test]
+async fn steering_by_prompt_from_1_5() {
+    for (version, steers) in [("1.5.0", true), ("1.4.5", false)] {
+        let mut run = start(
+            &[
+                ("GOAT_ACP_AGENT_VERSION", version),
+                ("GOAT_ACP_STEERS_WITH_PROMPT", "1"),
+                ("GOAT_ACP_HANG_PROMPT_FOREVER", "1"),
+            ],
+            RuntimeMode::FullAccess,
+        )
+        .await;
+        run.handle
+            .session
+            .start_turn(
+                input("start"),
+                &TurnSettings {
+                    model_selection: low(),
+                    runtime_mode: RuntimeMode::FullAccess,
+                },
+            )
+            .await;
+        let turn_id = loop {
+            if let EngineEvent::TextDelta { turn_id, .. } = run.handle.events.recv().await.unwrap()
+            {
+                break turn_id;
+            }
+        };
+        let steered = run.handle.session.steer(&turn_id, input("also this")).await;
+        assert_eq!(
+            matches!(steered, goat2_engine_api::SteerResult::Accepted),
+            steers,
+            "{version}: {steered:?}"
+        );
+        if steers {
+            let (events, outcome) = tokio::time::timeout(Duration::from_secs(10), async {
+                let mut events = Vec::new();
+                loop {
+                    let event = run.handle.events.recv().await.unwrap();
+                    if let EngineEvent::TurnFinished { outcome, .. } = &event {
+                        let outcome = outcome.clone();
+                        break (events, outcome);
+                    }
+                    events.push(event);
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(outcome, TurnOutcome::Done);
+            assert!(answer_text(&events).contains("steered: also this"));
+        }
+        run.handle.session.shutdown().await;
+    }
+}
+
+/// v1 `preferResumeSession` (AntigravityAdapterV2.ts:255-256): loading history replays tool
+/// calls, so a saved session is resumed.
+#[tokio::test]
+async fn saved_session_is_resumed_not_loaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("w");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let log = dir.path().join("log.jsonl");
+    let mut spec = spec(
+        &cwd,
+        &log,
+        RuntimeMode::ApprovalRequired,
+        &low(),
+        &[("GOAT_ACP_ANTIGRAVITY", "1")],
+        None,
+    );
+    spec.resume = Some(goat2_contracts::EngineRef {
+        driver: goat2_contracts::EngineDriver::Antigravity,
+        id: "saved-1".into(),
+    });
+    let handle = AcpEngineFactory::new(Arc::new(Antigravity::default()))
+        .with_mcp_bridge(goat2_engine_acp::McpBridgeCommand::new(
+            TEST_BRIDGE,
+            Vec::<String>::new(),
+        ))
+        .start(spec)
+        .await
+        .unwrap();
+    assert_eq!(handle.engine_ref.id, "saved-1");
+    let log = read_log(&log);
+    assert_eq!(logged(&log, "session/resume")[0]["sessionId"], "saved-1");
+    assert!(logged(&log, "session/load").is_empty());
+    handle.session.shutdown().await;
+}
+
+/// v1 antigravitySessionMeta (AntigravityAcpSupport.ts:79-90, 132-145): 1.4.2 through 1.4.5 get
+/// `run_workflow` disabled so they leave the workspace's skills alone.
+#[tokio::test]
+async fn run_workflow_disabled_on_1_4_2_to_1_4_5() {
+    for (version, disabled) in [("agy_acp_server_1.4.3", true), ("1.5.1", false)] {
+        let run = start(
+            &[("GOAT_ACP_AGENT_VERSION", version)],
+            RuntimeMode::ApprovalRequired,
+        )
+        .await;
+        let meta = logged(&read_log(&run.log), "session/new")[0]["_meta"].clone();
+        assert_eq!(
+            meta.pointer("/antigravity/disabledTools") == Some(&json!(["run_workflow"])),
+            disabled,
+            "{version}: {meta}"
+        );
+        run.handle.session.shutdown().await;
+    }
+}
+
+/// v1 extractAntigravityElicitationForm (AntigravityProtocol.ts:218-239): `ask_question` puts
+/// each question in its field's title; the message is only a count.
+#[tokio::test]
+async fn ask_question_form_shows_each_question() {
+    let schema = r#"{"type":"object","properties":{"color":{"type":"string","title":"Which color?","enum":["red","blue"]}},"required":["color"]}"#;
+    let mut run = start(
+        &[
+            ("GOAT_ACP_EMIT_ELICITATION", "1"),
+            ("GOAT_ACP_ELICITATION_SCHEMA", schema),
+        ],
+        RuntimeMode::FullAccess,
+    )
+    .await;
+    let (events, outcome) = turn(
+        &mut run,
+        input("go"),
+        RuntimeMode::FullAccess,
+        &low(),
+        |event| match event {
+            EngineEvent::RequestOpened { key, item, .. } => {
+                let Some(TurnItemBody::UserInputRequest { questions, .. }) =
+                    item.as_ref().map(|i| i.body.clone())
+                else {
+                    panic!("question item");
+                };
+                assert_eq!(questions[0].header, "Question 1");
+                assert_eq!(questions[0].question, "Which color?");
+                answered(
+                    key,
+                    RequestOutcome::Answered,
+                    Some(json!({"color": "blue"})),
+                )
+            }
+            _ => None,
+        },
+    )
+    .await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert!(
+        answer_text(&events).contains(r#""content":{"color":"blue"}"#),
+        "{}",
+        answer_text(&events)
+    );
+    run.handle.session.shutdown().await;
+}
