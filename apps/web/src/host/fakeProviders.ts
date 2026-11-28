@@ -5,8 +5,9 @@
 // install and sign-in flows step through v1's phases on a timer, and a demo sign-in completes only when a test or the
 // scene calls completeAuth.
 // Capabilities are not shown by the provider screens; the demo entries carry lane C's capabilities fixture
-// (crates/goat2-contracts tests, v1 shape) so they are whole ServerProviderEntry values.
-import CAPABILITIES from "../../../../crates/goat2-contracts/tests/fixtures/provider_capabilities/example.json";
+// (packages/contracts-rs/test/fixtures.gen.ts, kept in sync by lane C's drift test) so they are whole
+// ServerProviderEntry values. Real capabilities always come from the host, per driver.
+import { provider_capabilities__example as CAPABILITIES } from "../../../../packages/contracts-rs/test/fixtures.gen.ts";
 import type { ProviderCapabilities } from "@goat2/contracts-rs";
 import type {
   AcpRegistrySearchAgent, ProviderAuthState, ProviderCommandBody, ProviderCommandValue, ProviderInstallState,
