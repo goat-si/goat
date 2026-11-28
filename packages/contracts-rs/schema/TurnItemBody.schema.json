@@ -1,0 +1,1095 @@
+{
+  "$defs": {
+    "Actor": {
+      "description": "v1 `OrchestrationV2Actor`.",
+      "enum": [
+        "user",
+        "agent",
+        "system"
+      ],
+      "type": "string"
+    },
+    "ApprovalDecision": {
+      "description": "v1 `ProviderApprovalDecision`.",
+      "enum": [
+        "accept",
+        "acceptForSession",
+        "acceptAlways",
+        "decline",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "ApprovalOption": {
+      "description": "v1 `ProviderApprovalOption`.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "label": {
+          "type": "string"
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "label"
+      ],
+      "type": "object"
+    },
+    "AssistantDelivery": {
+      "description": "v1 assistant `delivery: \"async\"`: sent mid-turn, apart from the turn's answer.",
+      "enum": [
+        "async"
+      ],
+      "type": "string"
+    },
+    "AssistantMessagePhase": {
+      "description": "v1 `AssistantMessagePhase`.",
+      "enum": [
+        "commentary",
+        "partial_answer",
+        "final_answer"
+      ],
+      "type": "string"
+    },
+    "BlobRef": {
+      "description": "Where a large body or attachment lives inside the thread folder.",
+      "properties": {
+        "path": {
+          "description": "Path relative to the thread folder, e.g. `blobs/<itemId>.txt`.",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "description": "Full size in bytes.",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "ChatAttachment": {
+      "description": "v1 `ChatImageAttachment` / `ChatFileAttachment`, plus where the bytes live.",
+      "properties": {
+        "blob": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlobRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/ChatAttachmentType"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "mimeType",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "ChatAttachmentType": {
+      "description": "v1 `ChatAttachment` kinds Part 1 accepts.",
+      "enum": [
+        "image",
+        "file"
+      ],
+      "type": "string"
+    },
+    "CommandAction": {
+      "description": "v1 `OrchestrationV2CommandAction`: what a read-only shell command does.",
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "search",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CreationSource": {
+      "description": "v1 `OrchestrationV2CreationSource`.",
+      "enum": [
+        "web",
+        "mobile",
+        "mcp",
+        "provider",
+        "server"
+      ],
+      "type": "string"
+    },
+    "FileChangeDetail": {
+      "description": "v1 `OrchestrationV2FileChangeDetail`.",
+      "properties": {
+        "fileType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "path"
+      ],
+      "type": "object"
+    },
+    "MessageId": {
+      "description": "A chat message id carried by user and assistant TurnItems.",
+      "type": "string"
+    },
+    "NoticeSeverity": {
+      "description": "v1 `OrchestrationV2NoticeSeverity`.",
+      "enum": [
+        "info",
+        "warning"
+      ],
+      "type": "string"
+    },
+    "PlanId": {
+      "description": "A plan id carried by plan and todo TurnItems.",
+      "type": "string"
+    },
+    "PlanStep": {
+      "description": "v1 `OrchestrationV2PlanStep`.",
+      "properties": {
+        "durationAnchorAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanStepStatus"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status"
+      ],
+      "type": "object"
+    },
+    "PlanStepStatus": {
+      "description": "v1 `OrchestrationV2PlanStep` status.",
+      "enum": [
+        "pending",
+        "running",
+        "completed"
+      ],
+      "type": "string"
+    },
+    "ProviderFailure": {
+      "description": "v1 `OrchestrationV2ProviderFailure`. Producers redact credentials before construction.",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/ProviderFailureClass"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "resetAt": {
+          "description": "v1 `optional(NullOr(IsoDateTime))`: absent, `null` and a value are distinct.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "class",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ProviderFailureClass": {
+      "description": "v1 `OrchestrationV2ProviderFailureClass`.",
+      "enum": [
+        "usage_limit",
+        "provider_error",
+        "transport_error",
+        "permission_error",
+        "validation_error",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ProviderRequestKind": {
+      "description": "v1 `ProviderRequestKind`.",
+      "enum": [
+        "command",
+        "file-read",
+        "file-change",
+        "mcp-elicitation",
+        "permission"
+      ],
+      "type": "string"
+    },
+    "ProviderRetry": {
+      "description": "v1 `OrchestrationV2ProviderRetry`.",
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxAttempts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retryDelayMs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt"
+      ],
+      "type": "object"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "SubagentOrigin": {
+      "description": "v1 subagent `origin`.",
+      "enum": [
+        "provider_native",
+        "app_owned"
+      ],
+      "type": "string"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    },
+    "UserInputOption": {
+      "description": "v1 `OrchestrationV2UserInputQuestion` option.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "UserInputQuestion": {
+      "description": "v1 `OrchestrationV2UserInputQuestion`.",
+      "properties": {
+        "allowCustomAnswer": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "initialAnswer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multiSelect": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "header",
+        "question",
+        "options"
+      ],
+      "type": "object"
+    },
+    "UserMessageInputIntent": {
+      "description": "v1 `OrchestrationV2UserMessageInputIntent`.",
+      "enum": [
+        "turn_start",
+        "queued_turn",
+        "steer",
+        "promoted_queued_to_steer"
+      ],
+      "type": "string"
+    },
+    "WebSearchResult": {
+      "description": "v1 `OrchestrationV2WebSearchResult`.",
+      "properties": {
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The `type`-tagged part of a [TurnItem].",
+  "oneOf": [
+    {
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/ChatAttachment"
+          },
+          "type": "array"
+        },
+        "createdBy": {
+          "$ref": "#/$defs/Actor"
+        },
+        "creationSource": {
+          "$ref": "#/$defs/CreationSource"
+        },
+        "inputIntent": {
+          "$ref": "#/$defs/UserMessageInputIntent"
+        },
+        "messageId": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "senderThreadId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "user_message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "createdBy",
+        "creationSource",
+        "messageId",
+        "inputIntent",
+        "text",
+        "attachments"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/ChatAttachment"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssistantDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messageId": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssistantMessagePhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "assistant_message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "messageId",
+        "text",
+        "streaming"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "streaming": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "reasoning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text",
+        "streaming"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "markdown": {
+          "type": "string"
+        },
+        "planId": {
+          "$ref": "#/$defs/PlanId"
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "type": {
+          "const": "proposed_plan",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "planId",
+        "markdown",
+        "streaming"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "explanation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "planId": {
+          "$ref": "#/$defs/PlanId"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/PlanStep"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "todo_list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "planId",
+        "steps"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/UserInputQuestion"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "type": {
+          "const": "user_input_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "questions"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ApprovalOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "requestKind": {
+          "$ref": "#/$defs/ProviderRequestKind"
+        },
+        "type": {
+          "const": "approval_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "requestKind"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "additions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/FileChangeDetail"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "deletions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "diffStr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "patch": {
+          "description": "This edit alone as a git-style patch. Omitted from the log; read it from the engine.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patchOmitted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "file_change",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "fileName"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "commandActions": {
+          "items": {
+            "$ref": "#/$defs/CommandAction"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "exitCode": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input": {
+          "type": "string"
+        },
+        "output": {
+          "description": "Omitted from the log (`outputOmitted: true`); read it from the engine.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputIndicatesFailure": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "outputOmitted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "command_execution",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "input"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "patterns": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/WebSearchResult"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "web_search",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "MCP and dynamic tool calls.",
+      "properties": {
+        "input": true,
+        "output": {
+          "description": "Absent when there is no output; an explicit `null` output is kept as `null`."
+        },
+        "outputOmitted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "toolName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toolSummary": {
+          "description": "A muted one-line outcome for the row; display only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "dynamic_tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "input"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "afterTokenCount": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "beforeTokenCount": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "driver": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "compaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeSeverity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "const": "system_notice",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "failure": {
+          "$ref": "#/$defs/ProviderFailure"
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRetry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "const": "error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "failure"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "An engine-native subagent (Codex collab agent). GOAT worker threads use `child.*` events.",
+      "properties": {
+        "childThreadId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/SubagentOrigin"
+        },
+        "progress": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "providerInstanceId": {
+          "type": "string"
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagentId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subagent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subagentId",
+        "origin",
+        "driver",
+        "providerInstanceId",
+        "prompt"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "TurnItemBody"
+}

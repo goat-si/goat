@@ -1,0 +1,595 @@
+{
+  "$defs": {
+    "ApprovalCapabilities": {
+      "description": "v1 `OrchestrationV2ApprovalCapabilities`.",
+      "properties": {
+        "approvalCallbacksAreLiveOnly": {
+          "type": "boolean"
+        },
+        "approvalsCanOriginateFromSubagents": {
+          "type": "boolean"
+        },
+        "approvalsHaveNativeRequestIds": {
+          "type": "boolean"
+        },
+        "supportsApplyPatchApproval": {
+          "type": "boolean"
+        },
+        "supportsCommandApproval": {
+          "type": "boolean"
+        },
+        "supportsFileChangeApproval": {
+          "type": "boolean"
+        },
+        "supportsFileReadApproval": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supportsCommandApproval",
+        "supportsFileReadApproval",
+        "supportsFileChangeApproval",
+        "supportsApplyPatchApproval",
+        "approvalsHaveNativeRequestIds",
+        "approvalCallbacksAreLiveOnly",
+        "approvalsCanOriginateFromSubagents"
+      ],
+      "type": "object"
+    },
+    "CheckpointCapabilities": {
+      "description": "v1 `OrchestrationV2CheckpointCapabilities`.",
+      "properties": {
+        "appCanCheckpointFilesystem": {
+          "type": "boolean"
+        },
+        "providerCanReadConversationSnapshot": {
+          "type": "boolean"
+        },
+        "providerCanRollbackConversation": {
+          "type": "boolean"
+        },
+        "providerRollbackReturnsSnapshot": {
+          "type": "boolean"
+        },
+        "supportsNestedCheckpointScopes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "appCanCheckpointFilesystem",
+        "supportsNestedCheckpointScopes",
+        "providerCanRollbackConversation",
+        "providerRollbackReturnsSnapshot",
+        "providerCanReadConversationSnapshot"
+      ],
+      "type": "object"
+    },
+    "CloudSourceRestriction": {
+      "description": "v1 `OrchestrationV2CloudSourceRestriction`.",
+      "enum": [
+        "published-ref",
+        "clean-pushed-sha",
+        "project-folder"
+      ],
+      "type": "string"
+    },
+    "ContextCapabilities": {
+      "description": "v1 `OrchestrationV2ContextCapabilities`.",
+      "properties": {
+        "acceptsDeveloperContext": {
+          "type": "boolean"
+        },
+        "acceptsSyntheticUserContext": {
+          "type": "boolean"
+        },
+        "acceptsSystemContext": {
+          "type": "boolean"
+        },
+        "canConsumeHandoffSummaries": {
+          "type": "boolean"
+        },
+        "canGenerateSummaries": {
+          "type": "boolean"
+        },
+        "maxRecommendedHandoffChars": {
+          "description": "v1 `NullOr(PositiveInt)`: zero is rejected.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "supportsDeltaHandoff": {
+          "type": "boolean"
+        },
+        "supportsFullThreadHandoff": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "acceptsSystemContext",
+        "acceptsDeveloperContext",
+        "acceptsSyntheticUserContext",
+        "canGenerateSummaries",
+        "canConsumeHandoffSummaries",
+        "supportsDeltaHandoff",
+        "supportsFullThreadHandoff"
+      ],
+      "type": "object"
+    },
+    "ExecutionLocation": {
+      "description": "v1 session `executionLocation`.",
+      "enum": [
+        "local",
+        "cloud"
+      ],
+      "type": "string"
+    },
+    "FollowUpSupport": {
+      "description": "v1 session `followUp`.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supported": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supported"
+      ],
+      "type": "object"
+    },
+    "IdentityCapabilities": {
+      "description": "v1 `OrchestrationV2IdentityCapabilities`.",
+      "properties": {
+        "nativeItemIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        },
+        "nativeRequestIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        },
+        "nativeThreadIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        },
+        "nativeTurnIds": {
+          "$ref": "#/$defs/NativeRefStrength"
+        }
+      },
+      "required": [
+        "nativeThreadIds",
+        "nativeTurnIds",
+        "nativeItemIds",
+        "nativeRequestIds"
+      ],
+      "type": "object"
+    },
+    "MemoryCapabilities": {
+      "description": "v1 `MemoryProviderCapabilities`.",
+      "properties": {
+        "generateMemorySummary": {
+          "type": "boolean"
+        },
+        "mcp": {
+          "type": "boolean"
+        },
+        "resolveMemoryConflict": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshot",
+        "mcp",
+        "resolveMemoryConflict",
+        "generateMemorySummary"
+      ],
+      "type": "object"
+    },
+    "NativeRefStrength": {
+      "description": "v1 `OrchestrationV2NativeRefStrength`.",
+      "enum": [
+        "strong",
+        "weak",
+        "none"
+      ],
+      "type": "string"
+    },
+    "PlanningCapabilities": {
+      "description": "v1 `OrchestrationV2PlanningCapabilities`.",
+      "properties": {
+        "emitsPlanUpdated": {
+          "type": "boolean"
+        },
+        "emitsProposedPlan": {
+          "type": "boolean"
+        },
+        "emitsTodoList": {
+          "type": "boolean"
+        },
+        "planDeltasHaveItemIds": {
+          "type": "boolean"
+        },
+        "supportsStructuredQuestions": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "emitsPlanUpdated",
+        "emitsTodoList",
+        "emitsProposedPlan",
+        "supportsStructuredQuestions",
+        "planDeltasHaveItemIds"
+      ],
+      "type": "object"
+    },
+    "RuntimePolicyCapabilities": {
+      "description": "v1 `OrchestrationV2RuntimePolicyCapabilities`.",
+      "properties": {
+        "enforcement": {
+          "$ref": "#/$defs/RuntimePolicyEnforcement"
+        }
+      },
+      "required": [
+        "enforcement"
+      ],
+      "type": "object"
+    },
+    "RuntimePolicyEnforcement": {
+      "description": "v1 runtime policy `enforcement`.",
+      "enum": [
+        "native",
+        "client-boundary"
+      ],
+      "type": "string"
+    },
+    "SessionCapabilities": {
+      "description": "v1 `OrchestrationV2SessionCapabilities`. `sourceRestriction`, `executionLocation` and\n`followUp` decode with v1's defaults when missing and are always written.",
+      "properties": {
+        "executionLocation": {
+          "$ref": "#/$defs/ExecutionLocation",
+          "default": "local"
+        },
+        "followUp": {
+          "$ref": "#/$defs/FollowUpSupport",
+          "default": {
+            "supported": true
+          }
+        },
+        "ownsProcess": {
+          "description": "Whether this session controls the lifetime of its native process.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pendingRequestsSurviveRestart": {
+          "type": "boolean"
+        },
+        "sourceRestriction": {
+          "$ref": "#/$defs/CloudSourceRestriction",
+          "default": "published-ref"
+        },
+        "supportsModelSwitchInSession": {
+          "type": "boolean"
+        },
+        "supportsMultipleProviderThreadsPerSession": {
+          "type": "boolean"
+        },
+        "supportsProviderSwitchingViaHandoff": {
+          "type": "boolean"
+        },
+        "supportsRuntimeModeSwitchInSession": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supportsMultipleProviderThreadsPerSession",
+        "supportsModelSwitchInSession",
+        "supportsProviderSwitchingViaHandoff",
+        "supportsRuntimeModeSwitchInSession",
+        "pendingRequestsSurviveRestart"
+      ],
+      "type": "object"
+    },
+    "StreamingCapabilities": {
+      "description": "v1 `OrchestrationV2StreamingCapabilities`.",
+      "properties": {
+        "emitsMessageCompleted": {
+          "type": "boolean"
+        },
+        "streamsAssistantText": {
+          "type": "boolean"
+        },
+        "streamsPlanText": {
+          "type": "boolean"
+        },
+        "streamsReasoning": {
+          "type": "boolean"
+        },
+        "streamsToolOutput": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "streamsAssistantText",
+        "streamsReasoning",
+        "streamsToolOutput",
+        "streamsPlanText",
+        "emitsMessageCompleted"
+      ],
+      "type": "object"
+    },
+    "SubagentCapabilities": {
+      "description": "v1 `OrchestrationV2SubagentCapabilities`.",
+      "properties": {
+        "canCloseSubagents": {
+          "type": "boolean"
+        },
+        "canForkSubagentThread": {
+          "type": "boolean"
+        },
+        "canWaitForSubagents": {
+          "type": "boolean"
+        },
+        "emitsSubagentLifecycle": {
+          "type": "boolean"
+        },
+        "exposesSubagentThreadIds": {
+          "type": "boolean"
+        },
+        "supportsSubagents": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supportsSubagents",
+        "exposesSubagentThreadIds",
+        "emitsSubagentLifecycle",
+        "canWaitForSubagents",
+        "canCloseSubagents",
+        "canForkSubagentThread"
+      ],
+      "type": "object"
+    },
+    "TerminalStatusQuality": {
+      "description": "v1 turn `terminalStatusQuality`.",
+      "enum": [
+        "strong",
+        "weak",
+        "none"
+      ],
+      "type": "string"
+    },
+    "ThreadCapabilities": {
+      "description": "v1 `OrchestrationV2ThreadCapabilities`.",
+      "properties": {
+        "canCreateEmptyThread": {
+          "type": "boolean"
+        },
+        "canForkFromSubagentThread": {
+          "type": "boolean"
+        },
+        "canForkFromTurn": {
+          "type": "boolean"
+        },
+        "canForkThread": {
+          "type": "boolean"
+        },
+        "canForkWhileSourceRunning": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "canReadThreadSnapshot": {
+          "type": "boolean"
+        },
+        "canRollbackThread": {
+          "type": "boolean"
+        },
+        "exposesNativeThreadId": {
+          "type": "boolean"
+        },
+        "forkHonorsTargetCwd": {
+          "description": "Native fork starts the new provider thread in the target thread's cwd.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "canCreateEmptyThread",
+        "canReadThreadSnapshot",
+        "canRollbackThread",
+        "canForkThread",
+        "canForkFromTurn",
+        "canForkFromSubagentThread",
+        "exposesNativeThreadId"
+      ],
+      "type": "object"
+    },
+    "ToolCapabilities": {
+      "description": "v1 `OrchestrationV2ToolCapabilities`.",
+      "properties": {
+        "emitsToolCompleted": {
+          "type": "boolean"
+        },
+        "emitsToolOutput": {
+          "type": "boolean"
+        },
+        "emitsToolStarted": {
+          "type": "boolean"
+        },
+        "exposesToolItemIds": {
+          "type": "boolean"
+        },
+        "supportsDynamicToolCallbacks": {
+          "type": "boolean"
+        },
+        "supportsMcpTools": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exposesToolItemIds",
+        "emitsToolStarted",
+        "emitsToolCompleted",
+        "emitsToolOutput",
+        "supportsMcpTools",
+        "supportsDynamicToolCallbacks"
+      ],
+      "type": "object"
+    },
+    "TurnCapabilities": {
+      "description": "v1 `OrchestrationV2TurnCapabilities`.",
+      "properties": {
+        "activeSteeringAcceptsAttachments": {
+          "description": "Some take text only, so a steer with attachments restarts the turn instead.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "activeSteeringDuringCompaction": {
+          "description": "Only where a steer leaves a running automatic compaction intact.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "activeSteeringInterruptsTools": {
+          "description": "Some native steering mechanisms cancel pending tools before consuming the message.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "emitsTurnCompleted": {
+          "type": "boolean"
+        },
+        "emitsTurnStarted": {
+          "type": "boolean"
+        },
+        "exposesNativeTurnId": {
+          "type": "boolean"
+        },
+        "supportsActiveSteering": {
+          "type": "boolean"
+        },
+        "supportsInterrupt": {
+          "type": "boolean"
+        },
+        "supportsNativeGoals": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsNativeResume": {
+          "description": "Continues an interrupted turn without a new message.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supportsQueuedMessages": {
+          "type": "boolean"
+        },
+        "supportsSteeringByInterruptRestart": {
+          "type": "boolean"
+        },
+        "terminalStatusQuality": {
+          "$ref": "#/$defs/TerminalStatusQuality"
+        }
+      },
+      "required": [
+        "exposesNativeTurnId",
+        "emitsTurnStarted",
+        "emitsTurnCompleted",
+        "supportsInterrupt",
+        "supportsActiveSteering",
+        "supportsSteeringByInterruptRestart",
+        "supportsQueuedMessages",
+        "terminalStatusQuality"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "All capability groups for one engine driver.",
+  "properties": {
+    "approvals": {
+      "$ref": "#/$defs/ApprovalCapabilities"
+    },
+    "checkpointing": {
+      "$ref": "#/$defs/CheckpointCapabilities"
+    },
+    "context": {
+      "$ref": "#/$defs/ContextCapabilities"
+    },
+    "identity": {
+      "$ref": "#/$defs/IdentityCapabilities"
+    },
+    "memory": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MemoryCapabilities"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "planning": {
+      "$ref": "#/$defs/PlanningCapabilities"
+    },
+    "runtimePolicy": {
+      "$ref": "#/$defs/RuntimePolicyCapabilities",
+      "default": {
+        "enforcement": "client-boundary"
+      },
+      "description": "v1 decodes a missing value as `{enforcement: \"client-boundary\"}`."
+    },
+    "sessions": {
+      "$ref": "#/$defs/SessionCapabilities"
+    },
+    "streaming": {
+      "$ref": "#/$defs/StreamingCapabilities"
+    },
+    "subagents": {
+      "$ref": "#/$defs/SubagentCapabilities"
+    },
+    "threads": {
+      "$ref": "#/$defs/ThreadCapabilities"
+    },
+    "tools": {
+      "$ref": "#/$defs/ToolCapabilities"
+    },
+    "turns": {
+      "$ref": "#/$defs/TurnCapabilities"
+    }
+  },
+  "required": [
+    "sessions",
+    "threads",
+    "turns",
+    "streaming",
+    "tools",
+    "approvals",
+    "planning",
+    "subagents",
+    "context",
+    "checkpointing",
+    "identity"
+  ],
+  "title": "ProviderCapabilities",
+  "type": "object"
+}

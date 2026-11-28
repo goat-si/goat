@@ -9,15 +9,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::card::ThreadCard;
-use crate::ids::{Epoch, ItemId, ThreadId};
-use crate::log::LogLine;
+use crate::bot::{BotFace, BotProfile, EngineChoice};
+use crate::card::{FollowUpMode, ThreadCard, ThreadKind};
+use crate::ids::{BotId, Epoch, InputId, ItemId, RequestId, RunId, ThreadId};
+use crate::log::{InputMode, LogLine, RequestOutcome};
+use crate::turn_item::ChatAttachment;
 
 /// Position in one thread's `goat.jsonl`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadCursor {
     pub epoch: Epoch,
+    /// At most [crate::limits::MAX_SAFE_WIRE_INTEGER].
     pub seq: u64,
 }
 
@@ -44,7 +47,9 @@ pub enum ResetReason {
     TooFarBehind,
 }
 
-/// Frames a client sends.
+/// Frames a client sends: subscriptions, then commands. Every command carries `reqId` (matched by
+/// `command_result`) and `clientRequestId` (idempotency: the host applies one id once and replays
+/// its result).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(
     tag = "type",
@@ -81,6 +86,252 @@ pub enum ClientFrame {
     Pong {
         at: String,
     },
+    /// Put an input in a thread's mailbox. `mode` is the sender's request; `interrupt` only from
+    /// the explicit "stop and send" button.
+    SendInput {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        text: String,
+        mode: InputMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        attachments: Option<Vec<ChatAttachment>>,
+    },
+    /// Create a thread, optionally with its first input.
+    StartThread {
+        req_id: String,
+        client_request_id: String,
+        kind: ThreadKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        bot_id: Option<BotId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        parent: Option<ThreadId>,
+        engine: EngineChoice,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        mode: Option<StartMode>,
+    },
+    /// Stop the thread's current run (the explicit Stop button).
+    StopThread {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+    },
+    /// Release a queue held after a stop.
+    ResumeQueue {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+    },
+    /// Answer an open request. For kind `resend` the outcome is `resend` or `dropped`.
+    ResolveRequest {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        request_id: RequestId,
+        outcome: RequestOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        answers: Option<serde_json::Map<String, serde_json::Value>>,
+        /// Kind `decision`: the chosen option id (with outcome `decided`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        option_id: Option<String>,
+    },
+    ArchiveThread {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        archived: bool,
+    },
+    RenameThread {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        title: String,
+    },
+    /// Change engine settings or follow-up mode; written as `thread.changed`, applies from the
+    /// next run.
+    ChangeThread {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        runtime_mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        follow_up_mode: Option<FollowUpMode>,
+    },
+    /// Replace the text of a queued input (`input.changed {text}`).
+    EditQueued {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        input_id: InputId,
+        text: String,
+    },
+    /// Remove a queued input (`input.changed {cancelled: true}`).
+    CancelQueued {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        input_id: InputId,
+    },
+    /// Set the queue order; `inputIds` lists every queued input in the new order.
+    ReorderQueued {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        input_ids: Vec<InputId>,
+    },
+    /// Steer a queued input into the running turn (`input.changed {mode: steer}`).
+    PromoteToSteer {
+        req_id: String,
+        client_request_id: String,
+        thread_id: ThreadId,
+        input_id: InputId,
+    },
+    /// Create a member bot and its `bot` thread.
+    CreateBot {
+        req_id: String,
+        client_request_id: String,
+        name: String,
+        purpose: String,
+        face: BotFace,
+        engine: EngineChoice,
+    },
+}
+
+impl ClientFrame {
+    /// The command's `clientRequestId`, the idempotency key. `None` for subscription frames.
+    pub fn client_request_id(&self) -> Option<&str> {
+        match self {
+            Self::SendInput {
+                client_request_id, ..
+            }
+            | Self::StartThread {
+                client_request_id, ..
+            }
+            | Self::StopThread {
+                client_request_id, ..
+            }
+            | Self::ResumeQueue {
+                client_request_id, ..
+            }
+            | Self::ResolveRequest {
+                client_request_id, ..
+            }
+            | Self::ArchiveThread {
+                client_request_id, ..
+            }
+            | Self::RenameThread {
+                client_request_id, ..
+            }
+            | Self::ChangeThread {
+                client_request_id, ..
+            }
+            | Self::EditQueued {
+                client_request_id, ..
+            }
+            | Self::CancelQueued {
+                client_request_id, ..
+            }
+            | Self::ReorderQueued {
+                client_request_id, ..
+            }
+            | Self::PromoteToSteer {
+                client_request_id, ..
+            }
+            | Self::CreateBot {
+                client_request_id, ..
+            } => Some(client_request_id),
+            _ => None,
+        }
+    }
+}
+
+/// `start_thread.mode`: whether the starter waits for the thread's result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StartMode {
+    Async,
+    Wait,
+}
+
+/// `command_result.value`: ids the command created or touched.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandValue {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bot_id: Option<BotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input_id: Option<InputId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<RunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_id: Option<RequestId>,
+    /// True when this `clientRequestId` was already applied and the earlier result is returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub deduped: Option<bool>,
+}
+
+/// Why a command failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandErrorCode {
+    InvalidRequest,
+    ThreadMissing,
+    RequestMissing,
+    BotMissing,
+    /// The input is no longer queued (delivered, cancelled or unknown), or `reorder_queued` did
+    /// not list exactly the queued inputs.
+    NotQueued,
+    /// Not allowed for this thread kind or state (e.g. archived, worker starting a child).
+    NotAllowed,
+    /// A steer refused at admission; nothing was sent (fails closed).
+    SteerRefused,
+    /// A cap is full (children per bot, depth).
+    LimitReached,
+    PayloadTooLarge,
+    /// The same `clientRequestId` was used with different arguments.
+    Conflict,
+    Internal,
+}
+
+/// `command_result.error`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandError {
+    pub code: CommandErrorCode,
+    pub message: String,
+    pub retryable: bool,
 }
 
 /// Frames the host sends.
@@ -163,4 +414,45 @@ pub enum HostFrame {
     Ping {
         at: String,
     },
+    /// The one reply to every command frame: `ok` with `value`, or not `ok` with `error`.
+    CommandResult {
+        req_id: String,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        value: Option<CommandValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<CommandError>,
+    },
+    /// A bot was created or changed (on the `subscribe_cards` stream).
+    BotChanged {
+        sub_id: String,
+        bot: Box<BotProfile>,
+    },
+    /// A bot was removed (on the `subscribe_cards` stream).
+    BotRemoved {
+        sub_id: String,
+        bot_id: BotId,
+    },
+}
+
+impl HostFrame {
+    pub fn command_ok(req_id: impl Into<String>, value: CommandValue) -> Self {
+        Self::CommandResult {
+            req_id: req_id.into(),
+            ok: true,
+            value: Some(value),
+            error: None,
+        }
+    }
+
+    pub fn command_err(req_id: impl Into<String>, error: CommandError) -> Self {
+        Self::CommandResult {
+            req_id: req_id.into(),
+            ok: false,
+            value: None,
+            error: Some(error),
+        }
+    }
 }

@@ -8,16 +8,19 @@
 //! Behaviour reference: goat-si/goat dev `packages/contracts/src/orchestrationV2.ts` and
 //! `providerCapabilityParts.ts` (see `PROVENANCE.md` in this crate).
 
+pub mod bot;
 pub mod capabilities;
 pub mod card;
 pub mod codegen;
 pub mod ids;
 pub mod limits;
 pub mod log;
+pub mod serde_util;
 pub mod subscribe;
 pub mod text;
 pub mod turn_item;
 
+pub use bot::*;
 pub use capabilities::*;
 pub use card::*;
 pub use ids::*;

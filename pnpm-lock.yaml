@@ -287,6 +287,12 @@ importers:
         specifier: 'catalog:'
         version: 5.9.3
 
+  packages/contracts-rs:
+    devDependencies:
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+
   packages/provider-icons:
     devDependencies:
       '@types/react':

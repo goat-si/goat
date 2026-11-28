@@ -1,0 +1,278 @@
+{
+  "$defs": {
+    "DecisionOption": {
+      "description": "One choice of a `decision` request.",
+      "properties": {
+        "consequence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "FoldCounters": {
+      "description": "Running totals kept by the fold. Each at most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+      "properties": {
+        "inputs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "inputs",
+        "runs",
+        "items"
+      ],
+      "type": "object"
+    },
+    "HeldInputs": {
+      "description": "Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the\nfront of `queuedInputIds`; `dropped` discards them.",
+      "properties": {
+        "inputIds": {
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId",
+          "description": "`resend:<runId>`."
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "requestId",
+        "runId",
+        "inputIds"
+      ],
+      "type": "object"
+    },
+    "InputId": {
+      "description": "An input accepted into a thread's mailbox.",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "A finished item inside a run (TurnItem id).",
+      "type": "string"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "RequestKind": {
+      "description": "What kind of human step a request needs.",
+      "oneOf": [
+        {
+          "enum": [
+            "approval",
+            "question",
+            "signin"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "resend",
+          "description": "A run settled as `unknown` waits for a person to choose resend or drop.",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "A choice among options (v1 `goat_decision_request`). Silence never approves.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestOpened": {
+      "description": "`request.opened`: a person is needed.",
+      "properties": {
+        "itemId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The approval/question item, when the request came from the engine."
+        },
+        "kind": {
+          "$ref": "#/$defs/RequestKind"
+        },
+        "options": {
+          "description": "Kind `decision`: the choices offered (v1 `goat_decision_request`).",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "recommended": {
+          "description": "Kind `decision`: the recommended option id. Silence never approves it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "description": "At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "RunId": {
+      "description": "A run: one batch of inputs sent to the engine until the answer ends.",
+      "type": "string"
+    },
+    "RunOutcome": {
+      "description": "How a run ended.",
+      "oneOf": [
+        {
+          "enum": [
+            "done",
+            "failed",
+            "interrupted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Sent but not known to have reached the engine. Never re-sent automatically.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.",
+  "properties": {
+    "activeRunId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The run between `run.started` and `run.finished`, if any."
+    },
+    "activeRunInputIds": {
+      "description": "Inputs carried by the active run's `run.started`.",
+      "items": {
+        "$ref": "#/$defs/InputId"
+      },
+      "type": "array"
+    },
+    "activeRunReachedEngine": {
+      "description": "True once `run.accepted`, an `item.completed` or `request.opened` for the active run, or\n`input.delivered {as: turn, outcome: accepted}` for one of its inputs is folded (steer\ndeliveries do not count). Restart settlement: true -> `interrupted`, false -> `unknown`.",
+      "type": "boolean"
+    },
+    "counters": {
+      "$ref": "#/$defs/FoldCounters"
+    },
+    "heldInputs": {
+      "description": "Inputs whose delivery is ambiguous, held by a resend request (one hold per run).",
+      "items": {
+        "$ref": "#/$defs/HeldInputs"
+      },
+      "type": "array"
+    },
+    "lastRunOutcome": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunOutcome"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Outcome of the last finished run, for the `failed` status after later events."
+    },
+    "openRequests": {
+      "description": "Requests still open (including `resend`), so the inbox renders without earlier lines.",
+      "items": {
+        "$ref": "#/$defs/RequestOpened"
+      },
+      "type": "array"
+    },
+    "queuedInputIds": {
+      "description": "Inputs accepted but not yet delivered, in order.",
+      "items": {
+        "$ref": "#/$defs/InputId"
+      },
+      "type": "array"
+    },
+    "runningChildIds": {
+      "description": "Children started and not yet reported; `card.children.running` is its length.",
+      "items": {
+        "$ref": "#/$defs/ThreadId"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "activeRunInputIds",
+    "activeRunReachedEngine",
+    "queuedInputIds",
+    "heldInputs",
+    "openRequests",
+    "runningChildIds",
+    "counters"
+  ],
+  "title": "Fold",
+  "type": "object"
+}

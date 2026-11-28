@@ -1,0 +1,3311 @@
+{
+  "$defs": {
+    "Actor": {
+      "description": "v1 `OrchestrationV2Actor`.",
+      "enum": [
+        "user",
+        "agent",
+        "system"
+      ],
+      "type": "string"
+    },
+    "ApprovalDecision": {
+      "description": "v1 `ProviderApprovalDecision`.",
+      "enum": [
+        "accept",
+        "acceptForSession",
+        "acceptAlways",
+        "decline",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "ApprovalOption": {
+      "description": "v1 `ProviderApprovalOption`.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "label": {
+          "type": "string"
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "label"
+      ],
+      "type": "object"
+    },
+    "AssistantDelivery": {
+      "description": "v1 assistant `delivery: \"async\"`: sent mid-turn, apart from the turn's answer.",
+      "enum": [
+        "async"
+      ],
+      "type": "string"
+    },
+    "AssistantMessagePhase": {
+      "description": "v1 `AssistantMessagePhase`.",
+      "enum": [
+        "commentary",
+        "partial_answer",
+        "final_answer"
+      ],
+      "type": "string"
+    },
+    "BlobRef": {
+      "description": "Where a large body or attachment lives inside the thread folder.",
+      "properties": {
+        "path": {
+          "description": "Path relative to the thread folder, e.g. `blobs/<itemId>.txt`.",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "description": "Full size in bytes.",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "BotFace": {
+      "description": "A bot's face, drawn by `packages/bot-face`.",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "goat": {
+          "description": "The GOAT mark instead of a generated face.",
+          "type": "boolean"
+        },
+        "shape": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape",
+        "color",
+        "goat"
+      ],
+      "type": "object"
+    },
+    "BotId": {
+      "description": "A bot. Each bot owns one `bot` thread.",
+      "type": "string"
+    },
+    "BotProfile": {
+      "description": "`bots/<botId>.json` and the `bot_changed` payload.",
+      "properties": {
+        "botId": {
+          "$ref": "#/$defs/BotId"
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineChoice"
+        },
+        "face": {
+          "$ref": "#/$defs/BotFace"
+        },
+        "name": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/BotRole"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId",
+          "description": "The bot's own `bot` thread."
+        }
+      },
+      "required": [
+        "botId",
+        "name",
+        "purpose",
+        "face",
+        "role",
+        "threadId",
+        "engine"
+      ],
+      "type": "object"
+    },
+    "BotRole": {
+      "description": "`main` is the GOAT bot; every other bot is a `member`.",
+      "enum": [
+        "main",
+        "member"
+      ],
+      "type": "string"
+    },
+    "CardCursor": {
+      "description": "Position in the card index.",
+      "properties": {
+        "cardSeq": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epoch": {
+          "$ref": "#/$defs/Epoch"
+        }
+      },
+      "required": [
+        "epoch",
+        "cardSeq"
+      ],
+      "type": "object"
+    },
+    "ChatAttachment": {
+      "description": "v1 `ChatImageAttachment` / `ChatFileAttachment`, plus where the bytes live.",
+      "properties": {
+        "blob": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlobRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/ChatAttachmentType"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "mimeType",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "ChatAttachmentType": {
+      "description": "v1 `ChatAttachment` kinds Part 1 accepts.",
+      "enum": [
+        "image",
+        "file"
+      ],
+      "type": "string"
+    },
+    "Checkpoint": {
+      "description": "`checkpoint`: card and fold as of this line, written at the end of every run.\nReplay after a reset starts from the latest checkpoint.",
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/ThreadCard",
+          "description": "The card with `appliedSeq` equal to this line's seq."
+        },
+        "fold": {
+          "$ref": "#/$defs/Fold"
+        }
+      },
+      "required": [
+        "card",
+        "fold"
+      ],
+      "type": "object"
+    },
+    "ChildCounts": {
+      "description": "Child counts for a parent card.",
+      "properties": {
+        "running": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "running",
+        "total"
+      ],
+      "type": "object"
+    },
+    "ChildReported": {
+      "description": "`child.reported` (parent log): written before the parent's model is called.",
+      "properties": {
+        "childCursor": {
+          "$ref": "#/$defs/ThreadCursor",
+          "description": "Where the result sits in the child's log."
+        },
+        "childRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "childThreadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "status": {
+          "$ref": "#/$defs/ChildResultStatus"
+        },
+        "summary": {
+          "description": "The child's final answer as is, at most [crate::limits::CHILD_SUMMARY_MAX_BYTES] bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "childThreadId",
+        "status",
+        "summary",
+        "childCursor"
+      ],
+      "type": "object"
+    },
+    "ChildResultStatus": {
+      "description": "Result status carried to the parent.",
+      "oneOf": [
+        {
+          "enum": [
+            "done",
+            "failed",
+            "interrupted",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "interrupted_by_restart",
+          "description": "The host restarted while the child ran.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChildStarted": {
+      "description": "`child.started` (parent log).",
+      "properties": {
+        "byItemId": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The parent's tool-call item that started the child."
+        },
+        "childThreadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "childThreadId",
+        "task",
+        "byItemId"
+      ],
+      "type": "object"
+    },
+    "CommandAction": {
+      "description": "v1 `OrchestrationV2CommandAction`: what a read-only shell command does.",
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "search",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CommandError": {
+      "description": "`command_result.error`.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/CommandErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "CommandErrorCode": {
+      "description": "Why a command failed.",
+      "oneOf": [
+        {
+          "enum": [
+            "invalid_request",
+            "thread_missing",
+            "request_missing",
+            "bot_missing",
+            "payload_too_large",
+            "internal"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "not_queued",
+          "description": "The input is no longer queued (delivered, cancelled or unknown), or `reorder_queued` did\nnot list exactly the queued inputs.",
+          "type": "string"
+        },
+        {
+          "const": "not_allowed",
+          "description": "Not allowed for this thread kind or state (e.g. archived, worker starting a child).",
+          "type": "string"
+        },
+        {
+          "const": "steer_refused",
+          "description": "A steer refused at admission; nothing was sent (fails closed).",
+          "type": "string"
+        },
+        {
+          "const": "limit_reached",
+          "description": "A cap is full (children per bot, depth).",
+          "type": "string"
+        },
+        {
+          "const": "conflict",
+          "description": "The same `clientRequestId` was used with different arguments.",
+          "type": "string"
+        }
+      ]
+    },
+    "CommandValue": {
+      "description": "`command_result.value`: ids the command created or touched.",
+      "properties": {
+        "botId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deduped": {
+          "description": "True when this `clientRequestId` was already applied and the earlier result is returned.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "inputId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CreationSource": {
+      "description": "v1 `OrchestrationV2CreationSource`.",
+      "enum": [
+        "web",
+        "mobile",
+        "mcp",
+        "provider",
+        "server"
+      ],
+      "type": "string"
+    },
+    "DecisionOption": {
+      "description": "One choice of a `decision` request.",
+      "properties": {
+        "consequence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "DeliveredAs": {
+      "description": "How an input was handed to the engine.",
+      "oneOf": [
+        {
+          "const": "steer",
+          "description": "Into the running turn (Codex `turn/steer`).",
+          "type": "string"
+        },
+        {
+          "const": "turn",
+          "description": "As a new turn (Codex `turn/start`).",
+          "type": "string"
+        }
+      ]
+    },
+    "DeliveryOutcome": {
+      "description": "What the engine answered for a delivery.",
+      "oneOf": [
+        {
+          "enum": [
+            "accepted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "A declined steer stays queued and is later delivered as a turn with the same inputId.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "No answer (transport failure, restart).",
+          "type": "string"
+        }
+      ]
+    },
+    "EngineChoice": {
+      "description": "Engine choice without a working folder (bots, new threads).",
+      "properties": {
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtimeMode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "model",
+        "runtimeMode"
+      ],
+      "type": "object"
+    },
+    "EngineConfig": {
+      "description": "Engine settings for a thread.",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtimeMode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "model",
+        "runtimeMode",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "EngineDriver": {
+      "description": "Engine drivers. Part 1 ships Codex only.",
+      "enum": [
+        "codex"
+      ],
+      "type": "string"
+    },
+    "EngineItemLocator": {
+      "description": "Engine location of an item: `(turnId, itemId)` inside the engine's own record.",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId",
+        "itemId"
+      ],
+      "type": "object"
+    },
+    "EngineRef": {
+      "description": "Last seen engine session pointer (Codex threadId). Not the thread's identity.",
+      "properties": {
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "id"
+      ],
+      "type": "object"
+    },
+    "EngineTurnRef": {
+      "description": "The engine's own id for an accepted turn (Codex `turn/start` response `turnId`).",
+      "properties": {
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "id"
+      ],
+      "type": "object"
+    },
+    "Epoch": {
+      "description": "Generation of a `goat.jsonl` file or of the card index. A UUID string.",
+      "type": "string"
+    },
+    "FileChangeDetail": {
+      "description": "v1 `OrchestrationV2FileChangeDetail`.",
+      "properties": {
+        "fileType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Fold": {
+      "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.",
+      "properties": {
+        "activeRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run between `run.started` and `run.finished`, if any."
+        },
+        "activeRunInputIds": {
+          "description": "Inputs carried by the active run's `run.started`.",
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "activeRunReachedEngine": {
+          "description": "True once `run.accepted`, an `item.completed` or `request.opened` for the active run, or\n`input.delivered {as: turn, outcome: accepted}` for one of its inputs is folded (steer\ndeliveries do not count). Restart settlement: true -> `interrupted`, false -> `unknown`.",
+          "type": "boolean"
+        },
+        "counters": {
+          "$ref": "#/$defs/FoldCounters"
+        },
+        "heldInputs": {
+          "description": "Inputs whose delivery is ambiguous, held by a resend request (one hold per run).",
+          "items": {
+            "$ref": "#/$defs/HeldInputs"
+          },
+          "type": "array"
+        },
+        "lastRunOutcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Outcome of the last finished run, for the `failed` status after later events."
+        },
+        "openRequests": {
+          "description": "Requests still open (including `resend`), so the inbox renders without earlier lines.",
+          "items": {
+            "$ref": "#/$defs/RequestOpened"
+          },
+          "type": "array"
+        },
+        "queuedInputIds": {
+          "description": "Inputs accepted but not yet delivered, in order.",
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "runningChildIds": {
+          "description": "Children started and not yet reported; `card.children.running` is its length.",
+          "items": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "activeRunInputIds",
+        "activeRunReachedEngine",
+        "queuedInputIds",
+        "heldInputs",
+        "openRequests",
+        "runningChildIds",
+        "counters"
+      ],
+      "type": "object"
+    },
+    "FoldCounters": {
+      "description": "Running totals kept by the fold. Each at most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+      "properties": {
+        "inputs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "inputs",
+        "runs",
+        "items"
+      ],
+      "type": "object"
+    },
+    "FollowUpMode": {
+      "description": "How a message sent while a run is active is handled by default.",
+      "oneOf": [
+        {
+          "const": "steer",
+          "description": "Mix into the current run at the next tool/model boundary (human and worker threads).",
+          "type": "string"
+        },
+        {
+          "const": "followup",
+          "description": "Start a new run after the current one, one by one (bot threads).",
+          "type": "string"
+        },
+        {
+          "const": "collect",
+          "description": "Merge inputs that arrive within [crate::limits::COLLECT_WINDOW_MS] into the next run.",
+          "type": "string"
+        }
+      ]
+    },
+    "HeldInputs": {
+      "description": "Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the\nfront of `queuedInputIds`; `dropped` discards them.",
+      "properties": {
+        "inputIds": {
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId",
+          "description": "`resend:<runId>`."
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "requestId",
+        "runId",
+        "inputIds"
+      ],
+      "type": "object"
+    },
+    "InputAccepted": {
+      "description": "`input.accepted`: an input entered the thread's mailbox.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/ChatAttachment"
+          },
+          "type": "array"
+        },
+        "clientRequestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/InputSource"
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "mode": {
+          "$ref": "#/$defs/InputMode",
+          "description": "The mode the sender asked for. What reached the engine is in `input.delivered`."
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputId",
+        "from",
+        "mode",
+        "text"
+      ],
+      "type": "object"
+    },
+    "InputChanged": {
+      "description": "`input.changed`: a person edited an input that is still queued (`edit_queued`,\n`cancel_queued`, `reorder_queued`, `promote_to_steer`). Only the changed fields are present.",
+      "properties": {
+        "cancelled": {
+          "description": "`cancel_queued`: the input leaves the queue and is never delivered.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`promote_to_steer` writes `mode: steer`."
+        },
+        "position": {
+          "description": "`reorder_queued`: 0-based index in the queue after the change.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "inputId"
+      ],
+      "type": "object"
+    },
+    "InputDelivered": {
+      "description": "`input.delivered`: the engine answered a steer or a turn start carrying this input.",
+      "properties": {
+        "as": {
+          "$ref": "#/$defs/DeliveredAs"
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "outcome": {
+          "$ref": "#/$defs/DeliveryOutcome"
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "inputId",
+        "runId",
+        "as",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "InputId": {
+      "description": "An input accepted into a thread's mailbox.",
+      "type": "string"
+    },
+    "InputMode": {
+      "description": "How an input is admitted while a run may be active.",
+      "oneOf": [
+        {
+          "enum": [
+            "steer",
+            "followup",
+            "collect"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "interrupt",
+          "description": "Only from the explicit \"stop and send\" button.",
+          "type": "string"
+        }
+      ]
+    },
+    "InputSource": {
+      "description": "Who put an input in the mailbox.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A child's result, after the parent's `child.reported` line.",
+          "properties": {
+            "kind": {
+              "const": "child",
+              "type": "string"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            }
+          },
+          "required": [
+            "kind",
+            "threadId"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "system",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ItemCompleted": {
+      "description": "`item.completed`: a finished item. User messages and final assistant text are copied;\ntool calls keep name, summary and engine locator only.",
+      "properties": {
+        "blob": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlobRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set when a body above [crate::limits::BLOB_THRESHOLD_BYTES] moved to `blobs/`; the item\nkeeps only the start of it."
+        },
+        "engineLocator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineItemLocator"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item": {
+          "$ref": "#/$defs/TurnItem",
+          "description": "The item; its `id` is the itemId."
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "runId",
+        "item"
+      ],
+      "type": "object"
+    },
+    "ItemId": {
+      "description": "A finished item inside a run (TurnItem id).",
+      "type": "string"
+    },
+    "LogLine": {
+      "description": "One event line.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ThreadCreated",
+          "properties": {
+            "type": {
+              "const": "thread.created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ThreadChanged",
+          "properties": {
+            "type": {
+              "const": "thread.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/InputAccepted",
+          "properties": {
+            "type": {
+              "const": "input.accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/InputChanged",
+          "properties": {
+            "type": {
+              "const": "input.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/InputDelivered",
+          "properties": {
+            "type": {
+              "const": "input.delivered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunStarted",
+          "properties": {
+            "type": {
+              "const": "run.started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunAccepted",
+          "properties": {
+            "type": {
+              "const": "run.accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ItemCompleted",
+          "properties": {
+            "type": {
+              "const": "item.completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RequestOpened",
+          "properties": {
+            "type": {
+              "const": "request.opened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RequestResolved",
+          "properties": {
+            "type": {
+              "const": "request.resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunFinished",
+          "properties": {
+            "type": {
+              "const": "run.finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ChildStarted",
+          "properties": {
+            "type": {
+              "const": "child.started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ChildReported",
+          "properties": {
+            "type": {
+              "const": "child.reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/UserNotified",
+          "properties": {
+            "type": {
+              "const": "user.notified",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Checkpoint",
+          "properties": {
+            "type": {
+              "const": "checkpoint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "at": {
+          "description": "RFC 3339 UTC timestamp.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Per-thread sequence, starting at 1, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "v": {
+          "description": "Line format version, [LOG_FORMAT_VERSION] when written by this build.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "seq",
+        "at"
+      ],
+      "type": "object"
+    },
+    "MessageId": {
+      "description": "A chat message id carried by user and assistant TurnItems.",
+      "type": "string"
+    },
+    "NativeItemRef": {
+      "description": "v1 `OrchestrationV2ProviderRef`: where the engine keeps this item.",
+      "properties": {
+        "driver": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nativeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ordinal": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "strength": {
+          "$ref": "#/$defs/NativeRefStrength"
+        }
+      },
+      "required": [
+        "driver",
+        "strength"
+      ],
+      "type": "object"
+    },
+    "NativeRefStrength": {
+      "description": "v1 `OrchestrationV2NativeRefStrength`.",
+      "enum": [
+        "strong",
+        "weak",
+        "none"
+      ],
+      "type": "string"
+    },
+    "NeedsYou": {
+      "description": "The open human request summarised on the card.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RequestKind"
+        },
+        "summary": {
+          "description": "At most [NEEDS_YOU_SUMMARY_MAX_CHARS] characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "NoticeSeverity": {
+      "description": "v1 `OrchestrationV2NoticeSeverity`.",
+      "enum": [
+        "info",
+        "warning"
+      ],
+      "type": "string"
+    },
+    "NotifyKind": {
+      "description": "`user.notified` kind (MCP `send_to_user`).",
+      "enum": [
+        "ack",
+        "result"
+      ],
+      "type": "string"
+    },
+    "ParentRef": {
+      "description": "Parent link, written on the child (`parent: {threadId, byItemId}`).",
+      "properties": {
+        "byItemId": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The parent's tool-call item that started this child."
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": [
+        "threadId",
+        "byItemId"
+      ],
+      "type": "object"
+    },
+    "PlanId": {
+      "description": "A plan id carried by plan and todo TurnItems.",
+      "type": "string"
+    },
+    "PlanStep": {
+      "description": "v1 `OrchestrationV2PlanStep`.",
+      "properties": {
+        "durationAnchorAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanStepStatus"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status"
+      ],
+      "type": "object"
+    },
+    "PlanStepStatus": {
+      "description": "v1 `OrchestrationV2PlanStep` status.",
+      "enum": [
+        "pending",
+        "running",
+        "completed"
+      ],
+      "type": "string"
+    },
+    "ProjectId": {
+      "description": "A project the thread belongs to (card index column).",
+      "type": "string"
+    },
+    "ProviderFailure": {
+      "description": "v1 `OrchestrationV2ProviderFailure`. Producers redact credentials before construction.",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/ProviderFailureClass"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "resetAt": {
+          "description": "v1 `optional(NullOr(IsoDateTime))`: absent, `null` and a value are distinct.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "class",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ProviderFailureClass": {
+      "description": "v1 `OrchestrationV2ProviderFailureClass`.",
+      "enum": [
+        "usage_limit",
+        "provider_error",
+        "transport_error",
+        "permission_error",
+        "validation_error",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ProviderRequestKind": {
+      "description": "v1 `ProviderRequestKind`.",
+      "enum": [
+        "command",
+        "file-read",
+        "file-change",
+        "mcp-elicitation",
+        "permission"
+      ],
+      "type": "string"
+    },
+    "ProviderRetry": {
+      "description": "v1 `OrchestrationV2ProviderRetry`.",
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxAttempts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retryDelayMs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt"
+      ],
+      "type": "object"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "RequestKind": {
+      "description": "What kind of human step a request needs.",
+      "oneOf": [
+        {
+          "enum": [
+            "approval",
+            "question",
+            "signin"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "resend",
+          "description": "A run settled as `unknown` waits for a person to choose resend or drop.",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "A choice among options (v1 `goat_decision_request`). Silence never approves.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestOpened": {
+      "description": "`request.opened`: a person is needed.",
+      "properties": {
+        "itemId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The approval/question item, when the request came from the engine."
+        },
+        "kind": {
+          "$ref": "#/$defs/RequestKind"
+        },
+        "options": {
+          "description": "Kind `decision`: the choices offered (v1 `goat_decision_request`).",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "recommended": {
+          "description": "Kind `decision`: the recommended option id. Silence never approves it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "description": "At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "RequestOutcome": {
+      "description": "How a request ended.",
+      "oneOf": [
+        {
+          "enum": [
+            "approved",
+            "approved_for_session",
+            "declined",
+            "answered",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "decided",
+          "description": "`decision` request: the person picked `optionId`.",
+          "type": "string"
+        },
+        {
+          "const": "resend",
+          "description": "`resend` request: send the unknown run again.",
+          "type": "string"
+        },
+        {
+          "const": "dropped",
+          "description": "`resend` request: drop the unknown run.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestResolved": {
+      "description": "`request.resolved`: the person's answer.",
+      "properties": {
+        "answers": {
+          "additionalProperties": true,
+          "description": "Structured answers by question id, for question requests.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "optionId": {
+          "description": "`decision` request: the chosen option id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/RequestOutcome"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "text": {
+          "description": "Free-text answer or note.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "requestId",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "ResetReason": {
+      "description": "Why the host discards the client's state and replays from a checkpoint.",
+      "oneOf": [
+        {
+          "const": "epoch_changed",
+          "description": "The log or index was rebuilt under a new epoch.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_cursor",
+          "description": "The cursor points past the end or is malformed.",
+          "type": "string"
+        },
+        {
+          "const": "thread_missing",
+          "description": "The thread folder no longer exists.",
+          "type": "string"
+        },
+        {
+          "const": "too_far_behind",
+          "description": "More than [crate::limits::REPLAY_MAX_EVENTS] events or\n[crate::limits::REPLAY_MAX_BYTES] behind; the host sends the latest checkpoint instead.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunAccepted": {
+      "description": "`run.accepted`: the engine acknowledged the turn. On restart, a run with `run.accepted` or\nany item/request settles as `interrupted`; a run with only `run.started` settles as\n`unknown` and is never re-sent automatically.",
+      "properties": {
+        "engineTurnRef": {
+          "$ref": "#/$defs/EngineTurnRef"
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "runId",
+        "engineTurnRef"
+      ],
+      "type": "object"
+    },
+    "RunFinished": {
+      "description": "`run.finished`.",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/RunOutcome"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "runId",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "RunId": {
+      "description": "A run: one batch of inputs sent to the engine until the answer ends.",
+      "type": "string"
+    },
+    "RunOutcome": {
+      "description": "How a run ended.",
+      "oneOf": [
+        {
+          "enum": [
+            "done",
+            "failed",
+            "interrupted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Sent but not known to have reached the engine. Never re-sent automatically.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunStarted": {
+      "description": "`run.started`: written to disk before anything is sent to the engine (send boundary).",
+      "properties": {
+        "engineRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "description": "Host generation; outputs from older generations are dropped.",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inputIds": {
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "runId",
+        "inputIds",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "SubagentOrigin": {
+      "description": "v1 subagent `origin`.",
+      "enum": [
+        "provider_native",
+        "app_owned"
+      ],
+      "type": "string"
+    },
+    "ThreadCard": {
+      "description": "One row per thread. Every text field is bounded.",
+      "properties": {
+        "appliedSeq": {
+          "description": "Last `goat.jsonl` seq folded into this card, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "archived": {
+          "description": "Set by `thread.changed {archived}`. Archived cards stay in the index.",
+          "type": "boolean"
+        },
+        "botId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cardSeq": {
+          "description": "Card index global sequence, the `subscribeCards` cursor, at most\n[crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "children": {
+          "$ref": "#/$defs/ChildCounts"
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineConfig"
+        },
+        "engineRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "epoch": {
+          "$ref": "#/$defs/Epoch",
+          "description": "Generation of this thread's `goat.jsonl`."
+        },
+        "followUpMode": {
+          "$ref": "#/$defs/FollowUpMode"
+        },
+        "id": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ThreadKind"
+        },
+        "lastExcerpt": {
+          "description": "Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters.",
+          "type": "string"
+        },
+        "needsYou": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NeedsYou"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Card index column for lookups by project."
+        },
+        "status": {
+          "$ref": "#/$defs/ThreadStatus"
+        },
+        "title": {
+          "description": "At most [CARD_TITLE_MAX_CHARS] characters.",
+          "type": "string"
+        },
+        "updatedAt": {
+          "description": "RFC 3339 UTC timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "engine",
+        "status",
+        "lastExcerpt",
+        "children",
+        "followUpMode",
+        "updatedAt",
+        "epoch",
+        "appliedSeq",
+        "cardSeq"
+      ],
+      "type": "object"
+    },
+    "ThreadChanged": {
+      "description": "`thread.changed`: only the fields that changed are present.",
+      "properties": {
+        "archived": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "followUpMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FollowUpMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtimeMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ThreadCreated": {
+      "description": "`thread.created`: kind, title, parent, engine settings.",
+      "properties": {
+        "botId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineConfig"
+        },
+        "followUpMode": {
+          "$ref": "#/$defs/FollowUpMode"
+        },
+        "kind": {
+          "$ref": "#/$defs/ThreadKind"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "title",
+        "engine",
+        "followUpMode"
+      ],
+      "type": "object"
+    },
+    "ThreadCursor": {
+      "description": "Position in one thread's `goat.jsonl`.",
+      "properties": {
+        "epoch": {
+          "$ref": "#/$defs/Epoch"
+        },
+        "seq": {
+          "description": "At most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "epoch",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    },
+    "ThreadKind": {
+      "description": "Who created the thread.",
+      "oneOf": [
+        {
+          "const": "bot",
+          "description": "One per bot, forever.",
+          "type": "string"
+        },
+        {
+          "const": "worker",
+          "description": "Started by a parent thread through MCP `thread.start`.",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "Started by a person.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThreadStatus": {
+      "description": "Card status shown in lists and the inbox.",
+      "enum": [
+        "idle",
+        "queued",
+        "running",
+        "needs_you",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "TurnItem": {
+      "description": "A finished item, as `item.completed` stores it and the chat renderer draws it.",
+      "oneOf": [
+        {
+          "properties": {
+            "attachments": {
+              "items": {
+                "$ref": "#/$defs/ChatAttachment"
+              },
+              "type": "array"
+            },
+            "createdBy": {
+              "$ref": "#/$defs/Actor"
+            },
+            "creationSource": {
+              "$ref": "#/$defs/CreationSource"
+            },
+            "inputIntent": {
+              "$ref": "#/$defs/UserMessageInputIntent"
+            },
+            "messageId": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "senderThreadId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "user_message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "createdBy",
+            "creationSource",
+            "messageId",
+            "inputIntent",
+            "text",
+            "attachments"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "attachments": {
+              "items": {
+                "$ref": "#/$defs/ChatAttachment"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "delivery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistantDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "messageId": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistantMessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "assistant_message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "text",
+            "streaming"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "streaming": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reasoning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "streaming"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "planId": {
+              "$ref": "#/$defs/PlanId"
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "proposed_plan",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "planId",
+            "markdown",
+            "streaming"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "explanation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "planId": {
+              "$ref": "#/$defs/PlanId"
+            },
+            "steps": {
+              "items": {
+                "$ref": "#/$defs/PlanStep"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "todo_list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "planId",
+            "steps"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "questions": {
+              "items": {
+                "$ref": "#/$defs/UserInputQuestion"
+              },
+              "type": "array"
+            },
+            "requestId": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "type": {
+              "const": "user_input_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "questions"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "options": {
+              "items": {
+                "$ref": "#/$defs/ApprovalOption"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "requestId": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "requestKind": {
+              "$ref": "#/$defs/ProviderRequestKind"
+            },
+            "type": {
+              "const": "approval_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "requestKind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "additions": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "changes": {
+              "items": {
+                "$ref": "#/$defs/FileChangeDetail"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "deletions": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "diffStr": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fileName": {
+              "type": "string"
+            },
+            "patch": {
+              "description": "This edit alone as a git-style patch. Omitted from the log; read it from the engine.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "patchOmitted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "file_change",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fileName"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "commandActions": {
+              "items": {
+                "$ref": "#/$defs/CommandAction"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "exitCode": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "description": "Omitted from the log (`outputOmitted: true`); read it from the engine.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outputIndicatesFailure": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "outputOmitted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "command_execution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "patterns": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "results": {
+              "items": {
+                "$ref": "#/$defs/WebSearchResult"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "web_search",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "MCP and dynamic tool calls.",
+          "properties": {
+            "input": true,
+            "output": {
+              "description": "Absent when there is no output; an explicit `null` output is kept as `null`."
+            },
+            "outputOmitted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "toolName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "toolSummary": {
+              "description": "A muted one-line outcome for the row; display only.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "dynamic_tool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "afterTokenCount": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "beforeTokenCount": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "driver": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "compaction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "severity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NoticeSeverity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "system_notice",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "failure": {
+              "$ref": "#/$defs/ProviderFailure"
+            },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProviderRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "failure"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An engine-native subagent (Codex collab agent). GOAT worker threads use `child.*` events.",
+          "properties": {
+            "childThreadId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "driver": {
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/SubagentOrigin"
+            },
+            "progress": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "providerInstanceId": {
+              "type": "string"
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subagentId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subagentId",
+            "origin",
+            "driver",
+            "providerInstanceId",
+            "prompt"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ItemId"
+        },
+        "nativeItemRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeItemRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ordinal": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parentItemId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/TurnItemStatus"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "ordinal",
+        "status",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "TurnItemStatus": {
+      "description": "v1 `OrchestrationV2TurnItemStatus`.",
+      "enum": [
+        "idle",
+        "pending",
+        "running",
+        "waiting",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "UserInputOption": {
+      "description": "v1 `OrchestrationV2UserInputQuestion` option.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "UserInputQuestion": {
+      "description": "v1 `OrchestrationV2UserInputQuestion`.",
+      "properties": {
+        "allowCustomAnswer": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "initialAnswer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multiSelect": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "header",
+        "question",
+        "options"
+      ],
+      "type": "object"
+    },
+    "UserMessageInputIntent": {
+      "description": "v1 `OrchestrationV2UserMessageInputIntent`.",
+      "enum": [
+        "turn_start",
+        "queued_turn",
+        "steer",
+        "promoted_queued_to_steer"
+      ],
+      "type": "string"
+    },
+    "UserNotified": {
+      "description": "`user.notified`.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/NotifyKind"
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "WebSearchResult": {
+      "description": "v1 `OrchestrationV2WebSearchResult`.",
+      "properties": {
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Frames the host sends.",
+  "oneOf": [
+    {
+      "description": "Drop every card held for this subscription; fresh cards follow.",
+      "properties": {
+        "epoch": {
+          "$ref": "#/$defs/Epoch"
+        },
+        "reason": {
+          "$ref": "#/$defs/ResetReason"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "cards_reset",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "reason",
+        "epoch"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A changed (or, after a reset, current) card. `card.cardSeq` is the new cursor.",
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/ThreadCard"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "card_changed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "card"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A deleted thread.",
+      "properties": {
+        "cardSeq": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "card_removed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId",
+        "cardSeq"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/CardCursor"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "cards_caught_up",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "cursor"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Drop everything held for this thread; replay from the latest checkpoint follows.",
+      "properties": {
+        "epoch": {
+          "$ref": "#/$defs/Epoch"
+        },
+        "reason": {
+          "$ref": "#/$defs/ResetReason"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "thread_reset",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId",
+        "reason",
+        "epoch"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "One finished log line.",
+      "properties": {
+        "line": {
+          "$ref": "#/$defs/LogLine"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "thread_event",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId",
+        "line"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Replay done; live events follow.",
+      "properties": {
+        "cursor": {
+          "$ref": "#/$defs/ThreadCursor"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "thread_caught_up",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId",
+        "cursor"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Append-only streaming text for an unfinished item. Not stored. `offset` counts UTF-16\ncode units (JavaScript `string.length`) of text already sent for this item; on\nreconnect the host first sends the whole text so far with offset 0. One append never\nsplits a UTF-16 surrogate pair.",
+      "properties": {
+        "itemId": {
+          "$ref": "#/$defs/ItemId"
+        },
+        "offset": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "text_append",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId",
+        "itemId",
+        "offset",
+        "text"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Answer to [ClientFrame::ReadPage], oldest line first.",
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/LogLine"
+          },
+          "type": "array"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "page",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "threadId",
+        "lines",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Sent every [crate::limits::PING_INTERVAL_SECS] seconds.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "const": "ping",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "at"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The one reply to every command frame: `ok` with `value`, or not `ok` with `error`.",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "command_result",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "ok"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A bot was created or changed (on the `subscribe_cards` stream).",
+      "properties": {
+        "bot": {
+          "$ref": "#/$defs/BotProfile"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "bot_changed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "bot"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A bot was removed (on the `subscribe_cards` stream).",
+      "properties": {
+        "botId": {
+          "$ref": "#/$defs/BotId"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "bot_removed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "botId"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "HostFrame"
+}
