@@ -1907,3 +1907,47 @@ async fn thinking_streams_as_reasoning_deltas_on_the_reasoning_item() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// A provider instance's home is Claude's CLAUDE_CONFIG_DIR (v1 makeClaudeEnvironment: a set home
+/// beats an inherited one), and the sign-in message does not name it (home paths are never stored).
+#[tokio::test]
+async fn an_instance_home_is_the_claude_config_dir_and_stays_out_of_messages() {
+    let run = Run::new("wire/auth_failure_2_1_332.ndjson");
+    let home = run.dir.join("provider-homes-claudeAgent-work");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut spec = run.spec("haiku", RuntimeMode::ApprovalRequired, None);
+    let instance = spec.instance.as_mut().unwrap();
+    instance.home = Some(home.clone());
+    instance
+        .launch
+        .as_mut()
+        .unwrap()
+        .env
+        .insert("CLAUDE_CONFIG_DIR".into(), "/inherited/claude".into());
+    let mut handle = goat2_engine_api::EngineFactory::start(&run.factory(), spec)
+        .await
+        .expect("start");
+    handle
+        .session
+        .start_turn(
+            input("Say hi in three words."),
+            &settings("haiku", RuntimeMode::ApprovalRequired),
+        )
+        .await;
+    let events = until_finished(&mut handle).await;
+    let TurnOutcome::Failed { reason } = finished(&events) else {
+        panic!("not failed")
+    };
+    assert!(reason.contains("claude auth login"), "{reason}");
+    let home_text = home.display().to_string();
+    for event in &events {
+        let printed = format!("{event:?}");
+        assert!(!printed.contains(&home_text), "home path in {printed}");
+    }
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+    assert_eq!(
+        run.starts()[0]["env"]["CLAUDE_CONFIG_DIR"],
+        serde_json::json!(home_text)
+    );
+}

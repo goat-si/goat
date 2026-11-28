@@ -4,6 +4,7 @@ import type { ItemId } from "./ItemId.ts";
 import type { RequestId } from "./RequestId.ts";
 import type { RequestKind } from "./RequestKind.ts";
 import type { RunId } from "./RunId.ts";
+import type { TurnItem } from "./TurnItem.ts";
 
 /**
  * `request.opened`: a person is needed.
@@ -29,4 +30,11 @@ options?: Array<DecisionOption>,
 /**
  * Kind `decision`: the recommended option id. Silence never approves it.
  */
-recommended?: string, };
+recommended?: string,
+/**
+ * The waiting approval/question item itself, for a request with no run (`runId` null,
+ * from `EngineEvent::SessionRequestOpened`): it cannot be an `item.completed` line, which
+ * needs a run, so the request carries its own card, including a question's choices. A request
+ * inside a run references its item through `itemId` instead and leaves this unset.
+ */
+item?: TurnItem, };

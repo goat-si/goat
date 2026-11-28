@@ -297,3 +297,60 @@ fn required_nullable_keys_must_be_present() {
     missing.as_object_mut().unwrap().remove("date");
     assert!(serde_json::from_value::<ChannelBotNote>(missing).is_err());
 }
+
+#[test]
+fn provider_auth_response_debug_redacts_secrets() {
+    let secret = "sentinel-secret-325";
+    for response in [
+        serde_json::json!({"type":"credentials", "values":{"password":secret}}),
+        serde_json::json!({"type":"terminal", "data":secret}),
+    ] {
+        let frame: ClientFrame = serde_json::from_value(serde_json::json!({
+            "type":"provider_auth_respond", "reqId":"r", "clientRequestId":"c",
+            "instanceId":"codex", "flowId":"flow", "interactionId":"i", "response":response
+        }))
+        .unwrap();
+        assert!(!format!("{frame:?}").contains(secret));
+        assert!(!format!("{frame:#?}").contains(secret));
+    }
+}
+
+/// v1 trims credential field names (SetupOperationId) before use; two names that trim to the same
+/// field are refused by serde (a JSON Schema cannot express this, so it is not an invalid fixture).
+#[test]
+fn credential_names_that_trim_to_one_field_are_refused() {
+    let frame = |values: Value| {
+        serde_json::json!({"type":"provider_auth_respond", "reqId":"r", "clientRequestId":"c",
+            "instanceId":"codex", "flowId":"flow", "interactionId":"i",
+            "response":{"type":"credentials", "values":values}})
+    };
+    let err = decode(
+        "client_frame",
+        frame(serde_json::json!({"apiKey":"a", " apiKey\t":"b"})),
+    )
+    .unwrap_err();
+    assert!(err.contains("duplicate credential field name"), "{err}");
+    let ok = decode(
+        "client_frame",
+        frame(serde_json::json!({" apiKey ":"a", "org":"b"})),
+    )
+    .unwrap();
+    assert_eq!(
+        ok["response"]["values"],
+        serde_json::json!({"apiKey":"a", "org":"b"})
+    );
+}
+
+#[test]
+fn auth_response_lengths_count_utf16() {
+    let mut frame = serde_json::json!({"type":"provider_auth_respond", "reqId":"r", "clientRequestId":"c", "instanceId":"codex", "flowId":"flow", "interactionId":"i", "response":{"type":"terminal", "data":""}});
+    for (count, valid) in [(2048, true), (2049, false)] {
+        frame["response"]["data"] = "😀".repeat(count).into();
+        assert_eq!(decode("client_frame", frame.clone()).is_ok(), valid);
+    }
+    frame["response"] =
+        serde_json::json!({"type":"credentials", "values":{"key":"😀".repeat(8192)}});
+    assert!(decode("client_frame", frame.clone()).is_ok());
+    frame["response"]["values"]["key"] = "😀".repeat(8193).into();
+    assert!(decode("client_frame", frame).is_err());
+}
