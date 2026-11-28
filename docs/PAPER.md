@@ -126,6 +126,25 @@ loads one recent page and older pages on scroll up; the thread list loads when t
 opens and a thread's body loads when it opens; sent messages show at once, results arrive later.
 Boards: "봇 홈 — 봇 고정 (드래그해서 핀)", "모바일 iOS — 봇 고정 (꾹 눌러 위로)", "모바일 iOS — 콜드 스타트 (lazy load)".
 
+Mobile multiplexer (2026-11-28, from Ovis `devswha/ovis` DESIGN.md, Shell and Tab strip
+sections): up to 768pt wide a split shows one pane at a time, full size and borderless, like a
+zoomed pane; no cards, no inner frames. Header is one glass line (Ovis `--header-h` 52): back,
+the pane title with a chevron (tap opens the pane sheet: every pane with kind, machine, state and
+New pane), a lens button (chat <-> terminal, outlined 44), and More. Swipe left/right moves
+between panes; a small dot row above the composer shows position. Chat lens keeps the floating
+composer only (the Muse tab card hides inside a thread). Terminal lens swaps the composer for the
+48pt key bar (esc tab ctrl arrows / | ~). From 769pt the split draws again: panes side by side,
+a 1px rule inside an 8pt drag band, each pane with a 30pt bar; focus = 2px blue top edge; the
+composer sits under the focused pane only.
+Foldables: iPhone Duo outer 466x678pt (5.4", 1398x2034px @3x) is one pane with controls on the
+side, per Apple's HIG "Designing for iPhone Duo" (tab bars and toolbars move to the side, by the
+corner camera); inner 890x626pt (2670x1878px) is two panes side by side with the side controls
+kept; when half folded the hinge is the pane boundary (ReservedRegion), never through a pane.
+Galaxy Z Fold8 cover ~475x751dp is the phone layout; inner ~933x704dp (4:3) uses a navigation
+rail and 1+2 panes (chat left, two terminals stacked right). dp values assume the 420dpi bucket.
+State, drafts and the open pane survive fold/unfold; layout only reflows. Boards on the
+"스레드 모드" page: M1 to M7.
+
 Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
 no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
 
