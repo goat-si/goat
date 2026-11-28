@@ -497,7 +497,11 @@ export function resolveMarkdownFileLinkTarget(
       : pathWithPosition;
   }
   if (!baseDir) return null;
-  return resolvePathLinkTarget(pathWithPosition, baseDir);
+  const relativePath =
+    /^\.\/(?!\/)/.test(pathWithPosition) && !pathWithPosition.includes("\\")
+      ? pathWithPosition.slice(2)
+      : pathWithPosition;
+  return resolvePathLinkTarget(relativePath, baseDir);
 }
 
 export function isWindowsDrivePathHref(href: string): boolean {
