@@ -37,6 +37,7 @@ import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "../ThreadLaunchService.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "../ThreadTitleRegenerationService.ts";
+import { refuseFullShellSnapshot } from "./boundedShellSnapshot.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -262,32 +263,29 @@ export function makeHarness(options: HarnessOptions = {}) {
         layerDatabase,
         layerRegistry,
         layerExternalServices,
-        prepared === undefined &&
-          options.launchEvents === undefined &&
-          options.dispatch === undefined
-          ? layerThreadManagement
-          : Layer.effect(
-              ThreadManagement.ThreadManagementService,
-              Effect.gen(function* () {
-                const service = yield* ThreadManagement.ThreadManagementService;
-                return ThreadManagement.ThreadManagementService.of({
-                  ...service,
-                  streamStoredEventsFrom:
-                    options.launchEvents?.(service.streamStoredEventsFrom) ??
-                    service.streamStoredEventsFrom,
-                  dispatch: (command) =>
-                    (
-                      options.dispatch?.(command, service.dispatch) ?? service.dispatch(command)
-                    ).pipe(
-                      Effect.tap(() =>
-                        prepared !== undefined && command.type === "prepared-run.release"
-                          ? Deferred.succeed(prepared, undefined)
-                          : Effect.void,
-                      ),
+        Layer.effect(
+          ThreadManagement.ThreadManagementService,
+          Effect.gen(function* () {
+            const service = yield* ThreadManagement.ThreadManagementService;
+            // Launches look up only the threads sharing a worktree.
+            return ThreadManagement.ThreadManagementService.of(
+              refuseFullShellSnapshot({
+                ...service,
+                streamStoredEventsFrom:
+                  options.launchEvents?.(service.streamStoredEventsFrom) ??
+                  service.streamStoredEventsFrom,
+                dispatch: (command) =>
+                  (options.dispatch?.(command, service.dispatch) ?? service.dispatch(command)).pipe(
+                    Effect.tap(() =>
+                      prepared !== undefined && command.type === "prepared-run.release"
+                        ? Deferred.succeed(prepared, undefined)
+                        : Effect.void,
                     ),
-                });
+                  ),
               }),
-            ).pipe(Layer.provide(layerThreadManagement)),
+            );
+          }),
+        ).pipe(Layer.provide(layerThreadManagement)),
         layerReceipts,
         IdAllocator.layer,
         options.getLaunchSettings === undefined

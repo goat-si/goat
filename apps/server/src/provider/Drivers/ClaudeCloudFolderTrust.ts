@@ -79,7 +79,7 @@ export const makeClaudeCloudFolderTrust = Effect.fn("ClaudeCloudFolderTrust.make
           .filter((row) => row.deletedAt === null)
           .map((row) => row.projectId),
       );
-      const shell = yield* input.projection.getShellSnapshot();
+      const shell = yield* input.projection.getShellSnapshot({ worktreePath: folder });
       return [...shell.threads, ...shell.archivedThreads].some(
         (thread) =>
           thread.worktreePath !== null &&

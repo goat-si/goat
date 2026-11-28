@@ -13,6 +13,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import { refuseFullShellSnapshot } from "../../orchestration-v2/testkit/boundedShellSnapshot.ts";
 import {
   MainCheckoutUnknownError,
   makeClaudeCloudFolderTrust,
@@ -84,16 +85,19 @@ const harness = (
           { projectId: deleted, deletedAt: "2026-10-01T00:00:00.000Z" },
         ] as never),
     } as never);
-    const projection = Projection.ProjectionStoreV2.of({
-      getShellSnapshot: () =>
-        Effect.succeed({
-          threads: [
-            { projectId: live, worktreePath: WORKTREE },
-            { projectId: deleted, worktreePath: "/fixture/worktrees/gone" },
-          ],
-          archivedThreads: [],
-        } as never),
-    } as never);
+    const shells = [
+      { projectId: live, worktreePath: WORKTREE },
+      { projectId: deleted, worktreePath: "/fixture/worktrees/gone" },
+    ];
+    const projection = refuseFullShellSnapshot(
+      Projection.ProjectionStoreV2.of({
+        getShellSnapshot: (options?: Projection.ShellSnapshotOptions) =>
+          Effect.succeed({
+            threads: shells.filter((shell) => shell.worktreePath === options?.worktreePath),
+            archivedThreads: [],
+          } as never),
+      } as never),
+    );
     const cli = ClaudeCloudCli.ClaudeCloudCli.of({
       // Like Claude: choosing Yes writes the folder's trust into its own config.
       acceptTrust: (_login: ClaudeCloudLogin, cwd: string) =>

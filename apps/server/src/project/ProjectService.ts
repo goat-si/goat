@@ -536,7 +536,7 @@ export const make = Effect.gen(function* () {
   ) {
     const { projectId } = input;
     const snapshot = yield* threadProjections
-      .getShellSnapshot()
+      .getShellSnapshot({ projectId })
       .pipe(
         Effect.mapError(
           (cause) => new ProjectOperationError({ operation: "list-threads", projectId, cause }),
