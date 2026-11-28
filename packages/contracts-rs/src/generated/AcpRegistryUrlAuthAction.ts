@@ -3,5 +3,8 @@
 /**
  * v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the
  * person to open, answered by its elicitation id.
+ *
+ * v1's length checks on these strings are not carried: the registry driver bounds what it reads,
+ * and serde and the JSON Schema accept the same values.
  */
 export type AcpRegistryUrlAuthAction = { elicitationId: string, url: string, message: string, createdAt?: string, expiresAt?: string, };
