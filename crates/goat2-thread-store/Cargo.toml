@@ -8,3 +8,16 @@ license.workspace = true
 publish = false
 
 [dependencies]
+goat2-contracts = { path = "../goat2-contracts" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"] }
+time = { version = "0.3", features = ["formatting"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
