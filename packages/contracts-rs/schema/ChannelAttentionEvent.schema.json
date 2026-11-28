@@ -15,6 +15,34 @@
       ],
       "type": "string"
     },
+    "ChannelAttentionRequest": {
+      "description": "v1 `ChannelAttentionRequest` (`ChannelTaskApprovalRef` fields + kind): which request on which thread\nneeds the person. v1 `host` / `environmentId` are not carried (Part 2 is local).",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ChannelAttentionRequestKind"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ChannelAttentionRequestKind": {
+      "description": "v1 `ChannelAttentionRequest.kind`: an engine request, or a durable approval handoff.",
+      "enum": [
+        "runtime",
+        "handoff"
+      ],
+      "type": "string"
+    },
     "RequestId": {
       "description": "A human-in-the-loop request (approval, question, sign-in).",
       "type": "string"
@@ -37,8 +65,10 @@
       "type": "string"
     },
     "generation": {
-      "format": "uint32",
-      "minimum": 0,
+      "description": "v1 `Schema.Int`, within the safe wire integer range.",
+      "format": "int64",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
       "type": "integer"
     },
     "kind": {
@@ -47,6 +77,16 @@
     "occurredAt": {
       "description": "RFC 3339 UTC timestamp.",
       "type": "string"
+    },
+    "request": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChannelAttentionRequest"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "requestId": {
       "anyOf": [
