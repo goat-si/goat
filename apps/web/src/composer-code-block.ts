@@ -166,7 +166,7 @@ export function indentCodeBlock(
     const transaction = state.tr;
     let position = block.from + lineStart;
     originalLines.forEach((line, index) => {
-      const delta = nextLines[index]!.length - line.length;
+      const delta = (nextLines[index]?.length ?? line.length) - line.length;
       const start = transaction.mapping.map(position);
       if (delta > 0) transaction.insertText(CODE_BLOCK_INDENT, start);
       if (delta < 0) transaction.delete(start, start - delta);
