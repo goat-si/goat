@@ -89,6 +89,15 @@ export function resumePermissionRules(mode: RuntimeMode, native: PermissionRules
   return { permission: [...base, ...kept], metadata: { ...metadata, ...(previous.length ? { goatPreviousPermissionBases: previous.slice(-16) } : {}), goatPermissionBase: base, goatSubagentDeny: ownsDeny } };
 }
 
+// permissionRules.ts:574-594: avoid rewriting a session when its effective policy is unchanged.
+export function permissionUpdateNeeded(native: PermissionRuleset, metadata: Record<string, unknown> | undefined, desired: { permission: PermissionRuleset; metadata: Record<string, unknown> }): boolean {
+  if (native.length !== desired.permission.length || !startsWith(native, desired.permission)) return true;
+  const actualBase = recordedBase(metadata); const desiredBase = recordedBase(desired.metadata);
+  if (!actualBase || !desiredBase || actualBase.length !== desiredBase.length || !startsWith(actualBase, desiredBase)) return true;
+  if ((metadata?.goatSubagentDeny === true) !== (desired.metadata.goatSubagentDeny === true)) return true;
+  return JSON.stringify(metadata?.goatPreviousPermissionBases ?? []) !== JSON.stringify(desired.metadata.goatPreviousPermissionBases ?? []);
+}
+
 // openCodePermissions.ts:7-16
 export function questionId(index: number, question: QuestionRequest["questions"][number]): string {
   const header = question.header.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");

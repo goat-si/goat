@@ -10,7 +10,7 @@ let abortGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let abortReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let abortTarget: string | undefined;
 let abortFailure: string | undefined;
-let history: Array<{ info: { id: string; role: "user" | "assistant" } }> = [];
+let history: Array<{ info: { id: string; role: "user" | "assistant" }; parts?: Array<{ id: string; sessionID: string; messageID: string; type: "text"; text: string }> }> = [];
 let health = { healthy: true, version: "1.15.13" };
 const servers: Array<{ exit?: () => void }> = [];
 const children = new Map<string, string[]>();
@@ -74,10 +74,10 @@ export function createOpencodeClient() {
     session: {
       async create(args: unknown) { calls.push({ method: "create", args }); return data({ id: "session-fake" }); },
       async get(args: { sessionID: string }) { calls.push({ method: "get", args }); return data({ id: args.sessionID, permission: nativePermissions.get(args.sessionID) ?? [], metadata: nativeMetadata.get(args.sessionID) }); },
-      async messages() { calls.push({ method: "messages", args: {} }); return data(history); },
+      async messages() { calls.push({ method: "messages", args: {} }); return data(history.map((entry) => ({ ...entry, parts: entry.parts ?? [] }))); },
       async children(args: { sessionID: string }) { calls.push({ method: "children", args }); return data((children.get(args.sessionID) ?? []).map((id) => ({ id, permission: nativePermissions.get(id) ?? [], metadata: nativeMetadata.get(id) }))); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
-      async status() { statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); },
+      async status() { calls.push({ method: "status", args: {} }); statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); },
       async promptAsync(args: { sessionID: string; messageID: string; model?: { providerID: string; modelID: string }; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
         calls.push({ method: "prompt", args }); promptReached?.resolve(); if (promptGate) await promptGate.promise;
         if (options?.signal?.aborted) throw new Error("fake prompt aborted");

@@ -4,7 +4,7 @@ import type { EngineHost, EngineSession } from "../../engine.ts";
 import { assistantMessage, item, reasoning, errorItem } from "../../items.ts";
 import { HelperError, type EngineInput, type InitializeParams, type RequestAnswer, type TurnSettings, type TurnOutcome } from "../../protocol.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
-import { childPermissionRules, ownsSubagentDeny, parentPermissionBases, permissionRules, questionId, resumePermissionRules } from "./permissions.ts";
+import { childPermissionRules, ownsSubagentDeny, parentPermissionBases, permissionRules, permissionUpdateNeeded, questionId, resumePermissionRules } from "./permissions.ts";
 import { projectTool } from "./project.ts";
 import { safeHost } from "./redact.ts";
 import { client, startServer, verifyServerVersion, type Sdk, type Server } from "./runtime.ts";
@@ -81,7 +81,10 @@ export class OpenCodeSession implements EngineSession {
         : await api.session.create({ permission: initialPermission, metadata: { goatPermissionBase: initialPermission, goatSubagentDeny: false } }, { throwOnError: true });
       if (!response.data?.id) throw new Error("session missing");
       if (params.resume) await OpenCodeSession.requireIdle(api, [response.data.id, ...children.map((child) => child.id)]);
-      if (params.resume) await api.session.update({ sessionID: response.data.id, ...resumePermissionRules(params.runtimeMode, response.data.permission ?? [], response.data.metadata) }, { throwOnError: true });
+      if (params.resume) {
+        const desired = resumePermissionRules(params.runtimeMode, response.data.permission ?? [], response.data.metadata);
+        if (permissionUpdateNeeded(response.data.permission ?? [], response.data.metadata, desired)) await api.session.update({ sessionID: response.data.id, ...desired }, { throwOnError: true });
+      }
       const session = new OpenCodeSession(api, server, params, safeHost(host, params), response.data.id, abortEvents);
       if (params.resume) session.subagentsDenied = ownsSubagentDeny(response.data.permission ?? [], response.data.metadata);
       server.onExit(() => { if (!session.closed) session.broken("OpenCode server exited"); });
@@ -117,7 +120,8 @@ export class OpenCodeSession implements EngineSession {
     const signal = AbortSignal.timeout(10_000);
     for (const child of children) {
       this.childSessions.add(child.id); this.childPolicies.add(child.id);
-      await this.api.session.update({ sessionID: child.id, permission: childPermissionRules(this.config.runtimeMode, child.permission, child.parentBases, this.subagentsDenied, child.metadata), metadata: { ...child.metadata, goatPermissionBase: permissionRules(this.config.runtimeMode), goatSubagentDeny: this.subagentsDenied } }, { throwOnError: true, signal });
+      const desired = { permission: childPermissionRules(this.config.runtimeMode, child.permission, child.parentBases, this.subagentsDenied, child.metadata), metadata: { ...child.metadata, goatPermissionBase: permissionRules(this.config.runtimeMode), goatSubagentDeny: this.subagentsDenied } };
+      if (permissionUpdateNeeded(child.permission, child.metadata, desired)) await this.api.session.update({ sessionID: child.id, ...desired }, { throwOnError: true, signal });
     }
   }
   private broken(reason: string) {
@@ -140,11 +144,10 @@ export class OpenCodeSession implements EngineSession {
   }
   private finish(turn: Turn, outcome: TurnOutcome) {
     if (this.active !== turn) return;
-    if (outcome.type === "done" && turn.earlyDeltas.size) outcome = { type: "failed", reason: "OpenCode message part could not be determined" };
-    if (outcome.type === "done" && this.hasUnknownRoles(turn)) {
+    if (outcome.type !== "failed" && (turn.earlyDeltas.size > 0 || this.hasUnknownRoles(turn))) {
       if (!turn.reconciling) {
         turn.reconciling = true;
-        void this.reconcileRoles(turn);
+        void this.reconcileRoles(turn, outcome);
       }
       return;
     }
@@ -161,17 +164,27 @@ export class OpenCodeSession implements EngineSession {
   private hasUnknownRoles(turn: Turn) {
     return [...turn.parts.values()].some((part) => (part.type === "text" || part.type === "reasoning") && !turn.roles.has(part.messageID));
   }
-  private async reconcileRoles(turn: Turn) {
+  private async reconcileRoles(turn: Turn, outcome: TurnOutcome) {
     try {
       const history = await this.api.session.messages({ sessionID: this.engineRef }, { throwOnError: true, signal: AbortSignal.timeout(10_000) });
       if (this.active !== turn) return;
       for (const entry of history.data ?? []) {
-        if ([...turn.parts.values()].some((part) => part.messageID === entry.info.id)) turn.roles.set(entry.info.id, entry.info.role);
+        if ([...turn.parts.values()].some((part) => part.messageID === entry.info.id) || [...turn.earlyDeltas.values()].some((delta) => delta.messageId === entry.info.id)) turn.roles.set(entry.info.id, entry.info.role);
+        for (const part of entry.parts) {
+          const early = turn.earlyDeltas.get(part.id);
+          if (!early) continue;
+          if (part.messageID !== early.messageId || part.sessionID !== this.engineRef || (part.type !== "text" && part.type !== "reasoning")) throw new Error("inconsistent history");
+          turn.parts.set(part.id, part); turn.earlyDeltaBytes -= Buffer.byteLength(early.text); turn.earlyDeltas.delete(part.id);
+        }
       }
       for (const part of turn.parts.values()) if (part.type === "text") this.emitText(turn, part);
-      if (this.hasUnknownRoles(turn)) throw new Error("unresolved role");
+      if (turn.earlyDeltas.size || this.hasUnknownRoles(turn)) throw new Error("unresolved message");
       turn.reconciling = false;
-      this.finish(turn, { type: "done" });
+      if (turn.interrupted) {
+        if (!turn.stopPending && turn.stopIdle) this.finish(turn, { type: "interrupted" });
+        return;
+      }
+      this.finish(turn, outcome);
     } catch {
       if (this.active !== turn) return;
       turn.reconciling = false;
@@ -179,6 +192,7 @@ export class OpenCodeSession implements EngineSession {
     }
   }
   private finishPart(turn: Turn, part: Part) {
+    if (turn.earlyDeltas.has(part.id)) return;
     if ((part.type === "text" || part.type === "reasoning") && turn.roles.get(part.messageID) !== "assistant") return;
     const base = this.base(part.id, turn);
     if (part.type === "text" && !part.ignored && !part.synthetic) this.completed(turn, part.id, assistantMessage(base, part.text, part.messageID));
@@ -186,7 +200,7 @@ export class OpenCodeSession implements EngineSession {
     else if (part.type === "tool" && part.tool.toLowerCase() !== "question" && ![...this.detachedChildren.values()].some((child) => child.id === part.id) && (part.state.status === "completed" || part.state.status === "error")) this.completed(turn, part.id, projectTool(part, turn.id, this.host, turn.settings.modelSelection.instanceId));
   }
   private emitText(turn: Turn, part: Extract<Part, { type: "text" }>) {
-    if (turn.roles.get(part.messageID) !== "assistant" || part.ignored || part.synthetic) return;
+    if (turn.earlyDeltas.has(part.id) || turn.roles.get(part.messageID) !== "assistant" || part.ignored || part.synthetic) return;
     const before = turn.sentText.get(part.id) ?? "";
     if (part.text.startsWith(before) && part.text.length > before.length) {
       this.host.emit({ type: "text_delta", turnId: turn.id, itemId: part.id, text: part.text.slice(before.length) });
@@ -269,9 +283,6 @@ export class OpenCodeSession implements EngineSession {
         const early = turn.earlyDeltas.get(part.id);
         if (early) {
           if (early.messageId !== part.messageID || (part.type !== "text" && part.type !== "reasoning")) { this.broken("OpenCode event stream contained an inconsistent message part"); return; }
-          if (!part.text.includes(early.text)) part = { ...part, text: part.text + early.text };
-          turn.earlyDeltaBytes -= Buffer.byteLength(early.text);
-          turn.earlyDeltas.delete(part.id);
         }
         turn.parts.set(part.id, part);
         if (part.type === "text") this.emitText(turn, part);
@@ -305,11 +316,11 @@ export class OpenCodeSession implements EngineSession {
         return;
       }
       case "session.status":
-        if (event.properties.status.type === "idle") { if (turn.interrupted) { if (turn.stopPending) turn.stopIdle = true; else this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
+        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
         else await this.admission(turn, "observed");
         return;
       case "session.idle":
-        if (turn.interrupted) { if (turn.stopPending) turn.stopIdle = true; else this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
+        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
       case "session.compacted": turn.overflow = false; return;
       case "session.error": {
@@ -461,5 +472,5 @@ export class OpenCodeSession implements EngineSession {
     } catch (error) { if (error instanceof HelperError) throw error; throw new HelperError("transport", "OpenCode request response failed"); }
     if (this.requests.delete(key)) this.host.emit({ type: "request_closed", key });
   }
-  async shutdown() { this.closed = true; if (this.active) { const turn = this.active; turn.controller.abort(); if (turn.admitted) this.finish(turn, { type: "interrupted" }); else this.active = undefined; } this.abortEvents.abort(); await this.server.close(); }
+  async shutdown() { this.closed = true; if (this.active) { const turn = this.active; turn.controller.abort(); if (turn.admitted) this.finish(turn, turn.earlyDeltas.size || this.hasUnknownRoles(turn) ? { type: "failed", reason: "OpenCode message could not be reconciled during shutdown" } : { type: "interrupted" }); else this.active = undefined; } this.abortEvents.abort(); await this.server.close(); }
 }
