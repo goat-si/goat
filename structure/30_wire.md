@@ -44,7 +44,9 @@ active run at call time. 11 paths: `surface.describe`, `surface.call`, `thread.s
 | Claude (Part 2) | `claude` CLI stream-json control protocol (spec in `docs/parity/`) | D → later |
 | ACP (Part 2) | Zed `agent-client-protocol` crate | later |
 
-Steer/turn result from a driver: `Accepted | Declined | RefusedUnowned | Unknown` → `input.delivered`.
+Steer/turn result from a driver: `Accepted | Declined | RefusedUnowned | Unknown` → `input.delivered` outcome `accepted | declined | refused | unknown` (`refused` fails closed: the input leaves the queue).
+
+Cards stream after a deletion: a reconnecting `subscribe_cards` whose cursor predates any card deletion gets `cards_reset` (no tombstones in Part 1).
 
 ## UI outbox (send-first)
 Renderer keeps an outbox keyed by `clientRequestId` (persisted): shows at once, sent once when the socket is up.
