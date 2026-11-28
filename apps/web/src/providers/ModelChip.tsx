@@ -127,7 +127,7 @@ export function ModelPicker({ entries, selection, width, onPick, onClose }: {
   };
   return (
     <div role="dialog" aria-label="Choose a model" style={{ backgroundColor: "#FFFFFF", borderRadius: 14, boxShadow: "#ECECEC 0px 0px 0px 1px, #0000001A 0px 12px 32px", display: "flex", overflow: "clip", width }}>
-      <div role="tablist" aria-orientation="vertical" style={{ alignItems: "center", borderRight: `1px solid ${LINE}`, display: "flex", flexDirection: "column", flexShrink: 0, gap: 4, paddingBlock: 8, width: 48 }}>
+      <div role="group" aria-label="Providers" style={{ alignItems: "center", borderRight: `1px solid ${LINE}`, display: "flex", flexDirection: "column", flexShrink: 0, gap: 4, paddingBlock: 8, width: 48 }}>
         <RailButton label="Favorites" active={tab === "favorites"} onClick={() => setTab("favorites")}>
           <Star filled />
         </RailButton>
@@ -153,16 +153,16 @@ export function ModelPicker({ entries, selection, width, onPick, onClose }: {
         <div style={{ paddingBottom: 2, paddingInline: 10, paddingTop: 6 }}>
           <div style={{ ...text(11, FAINT, 600), letterSpacing: "0.02em", textTransform: "uppercase" }}>{header}</div>
         </div>
-        <div role="listbox" aria-label="Models" style={{ display: "flex", flexDirection: "column", maxHeight: 256, overflow: "auto" }}>
+        <div role="list" aria-label="Models" style={{ display: "flex", flexDirection: "column", maxHeight: 256, overflow: "auto" }}>
           {rows.map(({ entry, model }) => {
             const selected = entry.instanceId === selection.instanceId && model.slug === selection.model;
             const fav = favorites.includes(favoriteKey(entry.instanceId, model.slug));
             const need = providerState(entry).need;
             const blocked = need === "sign-in" || need === "install" || need === "repair";
             return (
-              <div key={`${entry.instanceId}/${model.slug}`} role="option" aria-selected={selected} aria-disabled={blocked}
+              <div key={`${entry.instanceId}/${model.slug}`} role="listitem"
                 style={{ alignItems: "center", borderRadius: 8, display: "flex", flexShrink: 0, gap: 10, height: 32, paddingInline: 10, ...(selected ? { backgroundColor: "#F3F3F3" } : {}), opacity: blocked ? 0.5 : 1 }}>
-                <button type="button" disabled={blocked} onClick={() => pick(entry, model)} title={blocked ? `${title(entry)} needs you first: open Providers.` : undefined}
+                <button type="button" aria-pressed={selected} disabled={blocked} onClick={() => pick(entry, model)} title={blocked ? `${title(entry)} needs you first: open Providers.` : undefined}
                   style={{ all: "unset", flex: "1 1 0%", minWidth: 0, cursor: blocked ? "default" : "pointer", ...text(13, INK, selected ? 500 : undefined), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {model.name}{q || tab === "favorites" ? <span style={{ color: FAINT }}> · {title(entry)}</span> : null}
                 </button>
@@ -177,12 +177,12 @@ export function ModelPicker({ entries, selection, width, onPick, onClose }: {
           {rows.length === 0 ? <div style={{ ...text(12, FAINT), padding: "8px 10px" }}>{tab === "favorites" && !q ? "Star a model to keep it here." : q ? "No model matches." : "This provider has not reported its models yet."}</div> : null}
         </div>
         {reasoning ? (
-          <div role="radiogroup" aria-label={reasoning.label} style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: 8, marginTop: 6, paddingBottom: 6, paddingInline: 10, paddingTop: 10 }}>
+          <div role="group" aria-label={reasoning.label} style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: 8, marginTop: 6, paddingBottom: 6, paddingInline: 10, paddingTop: 10 }}>
             <div style={{ ...text(12, MUTED), flex: "1 1 0%" }}>Reasoning</div>
             {reasoning.options.map((o) => {
               const on = o.id === effortId;
               return (
-                <button key={o.id} type="button" role="radio" aria-checked={on}
+                <button key={o.id} type="button" aria-pressed={on}
                   onClick={() => onPick({ ...selection, options: [...(selection.options ?? []).filter((x) => x.id !== REASONING), { id: REASONING, value: o.id }] })}
                   style={{ all: "unset", boxSizing: "border-box", alignItems: "center", borderRadius: 6, display: "flex", height: 24, paddingInline: 9, cursor: "pointer",
                     ...(on ? { backgroundColor: INK } : { boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }) }}>
@@ -215,7 +215,7 @@ function Star({ filled }: { filled: boolean }) {
 
 function RailButton({ children, label, active, dim, onClick }: { children: ReactNode; label: string; active: boolean; dim?: boolean; onClick: () => void }) {
   return (
-    <button type="button" role="tab" aria-selected={active} aria-label={label} title={label} onClick={onClick}
+    <button type="button" aria-pressed={active} aria-label={label} title={label} onClick={onClick}
       style={{ all: "unset", alignItems: "center", borderRadius: 8, display: "flex", flexShrink: 0, height: 32, justifyContent: "center", width: 32, cursor: "pointer",
         ...(active ? { backgroundColor: "#EDEDED" } : {}), ...(dim ? { opacity: 0.4 } : {}) }}>{children}</button>
   );

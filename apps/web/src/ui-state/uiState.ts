@@ -20,6 +20,8 @@ export interface UiState {
   settingsSearch?: Record<string, string>;
   /** Providers switched off from their detail page; they stay in the Providers list (providers/view.ts isAdded). */
   providersKeptOff?: string[];
+  /** Providers removed from the list here (switched off; the wire has no delete) until added again. */
+  providersHidden?: string[];
 }
 
 export const DEFAULT_UI: UiState = {

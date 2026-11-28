@@ -90,7 +90,7 @@ test("catalog: Add an installed provider, Install and add a missing one, install
     expect.objectContaining({ instanceId: "acp-qwen-code", driver: "acpRegistry", acpAgentId: "qwen-code", enabled: true }),
   ]);
   await sidebar(page).getByRole("button", { name: "Add a provider" }).click();
-  await main(page).getByRole("radio", { name: "Cloud" }).click();
+  await main(page).getByRole("button", { name: "Cloud", exact: true }).click();
   await expect(item("devinCloud").getByRole("button", { name: "Add" })).toBeDisabled();
 });
 
@@ -103,6 +103,26 @@ test("another account and repair: each is one provider command", async ({ page }
   await expect(main(page)).toContainText("OmO can’t start: runtime target missing.");
   await main(page).getByRole("button", { name: "Reinstall" }).click();
   expect(await sent(page, "provider_install_start")).toEqual([expect.objectContaining({ instanceId: "omo" })]);
+});
+
+test("Remove from list: a registry agent is switched off and leaves the list; adding it again brings it back", async ({ page }) => {
+  await page.goto("/?fake=1PBB-2");
+  await row(page, "acp-kimi-code").click();
+  await main(page).getByRole("button", { name: "More" }).click();
+  await main(page).getByRole("menuitem", { name: "Remove from list" }).click();
+  await expect(row(page, "acp-kimi-code")).toHaveCount(0);
+  expect(await sent(page, "set_provider_instance")).toEqual([expect.objectContaining({ instanceId: "acp-kimi-code", enabled: false })]);
+  await sidebar(page).getByRole("button", { name: "Add a provider" }).click();
+  await main(page).locator('[data-catalog-item="acp:kimi-code"]').getByRole("button", { name: "Install and add" }).click();
+  await expect(row(page, "acp-kimi-code")).toBeVisible();
+});
+
+test("keyboard: provider controls show a focus ring", async ({ page }) => {
+  await page.goto("/?fake=1PBB-2");
+  await row(page, "codex").focus();
+  await page.keyboard.press("Tab");
+  const outline = await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle);
+  expect(outline).toBe("solid");
 });
 
 test("first run: lists what is on this Mac; Add all adds them", async ({ page }) => {
@@ -125,12 +145,12 @@ test("composer picker: picking a model and a reasoning level changes the bot thr
   await expect(page.getByRole("button", { name: "Reviewer model: gpt-6.1-terra" })).toBeVisible();
   expect(await sent(page, "change_thread")).toEqual([expect.objectContaining({ threadId: "t-reviewer", modelSelection: { instanceId: "codex", model: "gpt-6.1-terra" } })]);
   await page.getByRole("button", { name: "Reviewer model: gpt-6.1-terra" }).click();
-  await picker.getByRole("radio", { name: "Medium" }).click();
+  await picker.getByRole("button", { name: "Medium", exact: true }).click();
   await expect.poll(async () => (await sent(page, "change_thread")).at(-1)).toEqual(expect.objectContaining({
     modelSelection: { instanceId: "codex", model: "gpt-6.1-terra", options: [{ id: "reasoningEffort", value: "medium" }] } }));
   await picker.getByRole("button", { name: "Add GPT-6 Luna to favorites" }).click();
-  await picker.getByRole("tab", { name: "Favorites" }).click();
-  await expect(picker.getByRole("option")).toHaveCount(1);
+  await picker.getByRole("button", { name: "Favorites", exact: true }).click();
+  await expect(picker.getByRole("listitem")).toHaveCount(1);
   await picker.getByRole("button", { name: "Open Providers" }).click();
   await expect(main(page).getByRole("heading")).toHaveText("Claude");
 });

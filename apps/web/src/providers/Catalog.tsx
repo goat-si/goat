@@ -9,7 +9,7 @@ import { openUrl } from "./ProviderDetail.tsx";
 
 const FILTERS: Array<[CatalogFilter, string]> = [["all", "All"], ["ready", "Ready on this Mac"], ["cloud", "Cloud"]];
 
-export function Catalog({ entries, keptOff, onAdded }: { entries: ServerProviderEntry[]; keptOff: string[]; onAdded: (instanceId: string) => void }) {
+export function Catalog({ entries, keptOff, hidden, onAdded }: { entries: ServerProviderEntry[]; keptOff: string[]; hidden: string[]; onAdded: (instanceId: string) => void }) {
   const call = useProviderCall();
   const act = useAction();
   const [query, setQuery] = useState("");
@@ -26,7 +26,7 @@ export function Catalog({ entries, keptOff, onAdded }: { entries: ServerProvider
     }, query ? 250 : 0);
     return () => { live = false; clearTimeout(timer); };
   }, [call, query]);
-  const items = useMemo(() => catalog(entries, keptOff, registry, filter, query), [entries, keptOff, registry, filter, query]);
+  const items = useMemo(() => catalog(entries, keptOff, registry, filter, query, hidden), [entries, keptOff, registry, filter, query, hidden]);
   const mac = items.filter((i) => i.section === "mac");
   const more = items.filter((i) => i.section === "more");
   const firstAction = items.find((i) => i.action.kind === "enable" || i.action.kind === "install" || i.action.kind === "registry")?.key;
@@ -60,9 +60,9 @@ export function Catalog({ entries, keptOff, onAdded }: { entries: ServerProvider
         <input aria-label="Search providers and agents" placeholder="Search providers and agents" value={query} onChange={(e) => setQuery(e.target.value)}
           style={{ all: "unset", flex: 1, ...text(13) }} />
       </label>
-      <div role="radiogroup" aria-label="Show" style={{ display: "flex", gap: 8, marginTop: 12 }}>
+      <div role="group" aria-label="Show" style={{ display: "flex", gap: 8, marginTop: 12 }}>
         {FILTERS.map(([id, label]) => (
-          <button key={id} type="button" role="radio" aria-checked={filter === id} onClick={() => setFilter(id)}
+          <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}
             style={{ all: "unset", boxSizing: "border-box", alignItems: "center", borderRadius: 99, display: "flex", height: 28, paddingInline: 12, cursor: "pointer",
               ...(filter === id ? { backgroundColor: INK } : { boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }) }}>
             <span style={text(12, filter === id ? "#FFFFFF" : INK, 500)}>{label}</span>

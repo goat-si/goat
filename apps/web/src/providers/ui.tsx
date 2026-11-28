@@ -3,6 +3,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { ProviderGlyph } from "@goat2/provider-icons";
 import { DOT_COLOR, type Dot } from "./view.ts";
+import "./focus.css";
 
 export const FONT = '"SF Pro", system-ui, sans-serif';
 export const INK = "#0D0D0D", MUTED = "#5D5D5D", FAINT = "#8F8F8F", LINE = "#F0F0F0";

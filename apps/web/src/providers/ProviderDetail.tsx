@@ -15,6 +15,8 @@ export interface DetailProps {
   now: number;
   /** Turned off from here: stays in the list (ui-state); turned on or removed: leaves that list. */
   onKeptOff: (instanceId: string, kept: boolean) => void;
+  /** Removed from the list: switched off and hidden here until it is added again (the wire has no delete). */
+  onRemoved: (instanceId: string) => void;
   onSelect: (instanceId: string) => void;
 }
 
@@ -26,7 +28,7 @@ const wireInstance = (e: ServerProviderEntry, patch: Partial<{ enabled: boolean;
   };
 };
 
-export function ProviderDetail({ entry: e, now, onKeptOff, onSelect }: DetailProps) {
+export function ProviderDetail({ entry: e, now, onKeptOff, onRemoved, onSelect }: DetailProps) {
   const call = useProviderCall();
   const entries = useProviderEntries() ?? [];
   const act = useAction();
@@ -43,7 +45,7 @@ export function ProviderDetail({ entry: e, now, onKeptOff, onSelect }: DetailPro
   const remove = () => act.run("remove", async () => {
     setMenu(false);
     if (e.enabled) await call("goat2.setProviderInstance", wireInstance(e, { enabled: false }));
-    onKeptOff(e.instanceId, false);
+    onRemoved(e.instanceId);
   });
   const refresh = () => act.run("refresh", async () => { setMenu(false); await call("server.refreshProviders", { instanceId: e.instanceId }); });
   const addAccount = () => act.run("account", async () => {

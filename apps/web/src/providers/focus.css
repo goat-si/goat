@@ -1,0 +1,7 @@
+/* Keyboard focus on the provider surfaces' controls (they reset their own styles with all: unset). Blue is the
+   boards' "needs you" colour; the ring shows only for keyboard focus. */
+:is([data-providers-main], [data-providers-sidebar], [data-model-chip], [data-bot-settings]) :is(button, input, [role="switch"]):focus-visible {
+  outline: 2px solid #2F6FED !important;
+  outline-offset: 2px !important;
+}
+

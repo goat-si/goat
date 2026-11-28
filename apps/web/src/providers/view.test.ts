@@ -16,6 +16,9 @@ describe("added providers", () => {
     expect(addedProviders(demo(), ["grok"]).map((e) => e.instanceId)).toContain("grok");
     const kimiOff = demo().map((e) => (e.instanceId === "acp-kimi-code" ? { ...e, enabled: false } : e));
     expect(addedProviders(kimiOff, []).map((e) => e.instanceId)).toContain("acp-kimi-code"); // a registry agent stays configured
+    expect(addedProviders(kimiOff, [], ["acp-kimi-code"]).map((e) => e.instanceId)).not.toContain("acp-kimi-code"); // removed here
+    expect(addedProviders(demo(), [], ["acp-kimi-code"]).map((e) => e.instanceId)).toContain("acp-kimi-code"); // switched on elsewhere: back
+    expect(catalog(kimiOff, [], DEMO_REGISTRY, "all", "", ["acp-kimi-code"]).find((i) => i.key === "acp:kimi-code")).toMatchObject({ action: { kind: "registry" } });
   });
 });
 
@@ -32,6 +35,8 @@ describe("state", () => {
     expect(providerState({ ...byId(list, "codex"), probe: { ...byId(list, "codex").probe, status: "warning", auth: { status: "unknown" } } }))
       .toMatchObject({ dot: "grey", word: "Status unknown", need: "unknown" });
     expect(rowLine(byId(list, "codex"))).toBe("Ready · ChatGPT Pro");
+    expect(providerState({ ...byId(list, "codex"), probe: { ...byId(list, "codex").probe, status: "warning", message: "Checking status…" } }))
+      .toMatchObject({ dot: "grey", word: "Checking…" });
   });
 });
 

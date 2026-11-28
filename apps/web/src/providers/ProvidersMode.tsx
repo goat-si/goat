@@ -18,22 +18,28 @@ export function ProvidersMode({ ui, setUi, top, rail }: { ui: UiState; setUi: Se
   const entries = useProviderEntries();
   const now = useHostContext().now().getTime();
   const keptOff = ui.providersKeptOff ?? [];
-  const added = entries ? addedProviders(entries, keptOff) : [];
+  const hidden = ui.providersHidden ?? [];
+  const added = entries ? addedProviders(entries, keptOff, hidden) : [];
   const view = ui.settingsSearch?.view === "add" ? "add" : "detail";
   const wanted = ui.settingsSearch?.instanceId;
   const selected = added.find((e) => e.instanceId === wanted) ?? added[0] ?? null;
   const select = (instanceId: string) => setUi({ settingsSearch: { instanceId } });
   const openCatalog = () => setUi({ settingsSearch: { view: "add" } });
+  // Switched off here: stays listed. Switched on or added again: no longer hidden.
   const setKeptOff = (instanceId: string, kept: boolean) => setUi((s) => {
     const list = (s.providersKeptOff ?? []).filter((id) => id !== instanceId);
-    return { providersKeptOff: kept ? [...list, instanceId] : list };
+    return { providersKeptOff: kept ? [...list, instanceId] : list, providersHidden: (s.providersHidden ?? []).filter((id) => id !== instanceId) };
   });
+  const hide = (instanceId: string) => setUi((s) => ({
+    providersKeptOff: (s.providersKeptOff ?? []).filter((id) => id !== instanceId),
+    providersHidden: [...(s.providersHidden ?? []).filter((id) => id !== instanceId), instanceId],
+  }));
 
   let main: ReactNode;
   if (!entries) main = <Centered>Loading providers…</Centered>;
-  else if (view === "add") main = <Catalog entries={entries} keptOff={keptOff} onAdded={(id) => { setKeptOff(id, false); select(id); }} />;
-  else if (!selected) main = <FirstRun entries={entries} keptOff={keptOff} onAdded={(id) => select(id)} onBrowse={openCatalog} />;
-  else main = <ProviderDetail entry={selected} now={now} onKeptOff={setKeptOff} onSelect={select} />;
+  else if (view === "add") main = <Catalog entries={entries} keptOff={keptOff} hidden={hidden} onAdded={(id) => { setKeptOff(id, false); select(id); }} />;
+  else if (!selected) main = <FirstRun entries={entries} keptOff={keptOff} hidden={hidden} onAdded={(id) => { setKeptOff(id, false); select(id); }} onBrowse={openCatalog} />;
+  else main = <ProviderDetail entry={selected} now={now} onKeptOff={setKeptOff} onRemoved={hide} onSelect={select} />;
 
   const sidebar = ui.sidebarOpen ? (
     <ProvidersSidebar entries={added} checkedAt={entries ? latestCheck(entries.map((e) => e.probe.checkedAt)) : null} now={now}

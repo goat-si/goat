@@ -4,10 +4,10 @@ import { useAction, useProviderCall } from "./context.tsx";
 import { detected, detectedLine, titleParts, iconOf } from "./view.ts";
 import { Button, ErrorLine, INK, Logo, MUTED, text } from "./ui.tsx";
 
-export function FirstRun({ entries, keptOff, onAdded, onBrowse }: { entries: ServerProviderEntry[]; keptOff: string[]; onAdded: (instanceId: string) => void; onBrowse: () => void }) {
+export function FirstRun({ entries, keptOff, hidden, onAdded, onBrowse }: { entries: ServerProviderEntry[]; keptOff: string[]; hidden: string[]; onAdded: (instanceId: string) => void; onBrowse: () => void }) {
   const call = useProviderCall();
   const act = useAction();
-  const found = detected(entries, keptOff);
+  const found = detected(entries, keptOff, hidden);
   const add = (list: ServerProviderEntry[]) => act.run(list.length > 1 ? "all" : list[0]!.instanceId, async () => {
     for (const e of list) await call("goat2.setProviderInstance", { instanceId: e.instanceId, driver: e.driver, enabled: true });
     onAdded(list[0]!.instanceId);

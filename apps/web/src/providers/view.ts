@@ -32,6 +32,8 @@ export function providerState(e: ServerProviderEntry): ProviderState {
   if (p.auth.status === "unauthenticated" || p.auth.action) return { dot: "blue", word: "Needs sign-in", need: "sign-in", busy: null };
   if (p.status === "ready") return { dot: "green", word: "Ready", need: "none", busy: null };
   if (p.status === "disabled") return { dot: "grey", word: "Unavailable", need: "unknown", busy: null };
+  // The host keeps a turned-on provider listed while its probe runs (lane E: "Checking status…").
+  if (p.status === "warning" && /^Checking/.test(p.message ?? "")) return { dot: "grey", word: "Checking…", need: "unknown", busy: null };
   return { dot: "grey", word: "Status unknown", need: "unknown", busy: null };
 }
 
@@ -78,8 +80,10 @@ export function maskEmail(email: string): string {
  * Added = the person uses it: switched on, or configured (named, a registry agent), or switched off from its detail
  * page (kept in ui-state so it stays listed). Everything else lives in the catalog (principle 7).
  */
-export function isAdded(e: ServerProviderEntry, keptOff: ReadonlyArray<string>): boolean {
+export function isAdded(e: ServerProviderEntry, keptOff: ReadonlyArray<string>, hidden: ReadonlyArray<string> = []): boolean {
   if (isUnserved(e)) return false;
+  // Removed from the list here (no delete command on the wire): switched off and hidden until it is added again.
+  if (!e.enabled && hidden.includes(e.instanceId)) return false;
   return e.enabled || e.acpAgentId !== undefined || e.displayName !== undefined || keptOff.includes(e.instanceId);
 }
 
@@ -89,9 +93,9 @@ const KIND_ORDER = ["codex", "claudeAgent", "cursor", "opencode", "antigravity",
 /** The mark of an entry: the driver's, or a registry agent's icon from the registry CDN (v1 acpRegistry.ts icon URL). */
 export const iconOf = (e: ServerProviderEntry): { driver: string } | { url: string } =>
   e.acpAgentId ? { url: `https://cdn.agentclientprotocol.com/registry/v1/latest/${e.acpAgentId}.svg` } : { driver: e.driver };
-export function addedProviders(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>): ServerProviderEntry[] {
+export function addedProviders(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>, hidden: ReadonlyArray<string> = []): ServerProviderEntry[] {
   const rank = (e: ServerProviderEntry) => { const i = KIND_ORDER.indexOf(e.driver); return i < 0 ? KIND_ORDER.length : i; };
-  return entries.map((e, i) => ({ e, i })).filter(({ e }) => isAdded(e, keptOff))
+  return entries.map((e, i) => ({ e, i })).filter(({ e }) => isAdded(e, keptOff, hidden))
     .sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i).map(({ e }) => e);
 }
 
@@ -117,8 +121,8 @@ export interface CatalogItem {
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>,
-  registry: ReadonlyArray<AcpRegistrySearchAgent>, filter: CatalogFilter, query: string): CatalogItem[] {
-  const added = addedProviders(entries, keptOff);
+  registry: ReadonlyArray<AcpRegistrySearchAgent>, filter: CatalogFilter, query: string, hidden: ReadonlyArray<string> = []): CatalogItem[] {
+  const added = addedProviders(entries, keptOff, hidden);
   const items: CatalogItem[] = [];
   const kinds = new Set<string>();
   for (const e of entries) {
@@ -159,7 +163,7 @@ export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: Re
       section: "more", icon: { url: p.iconUrl }, action: { kind: "copy", text: p.installHint, docsUrl: p.docsUrl }, cloud: false, installed: false });
   }
   for (const a of registry) {
-    const have = entries.some((e) => e.acpAgentId === a.id && isAdded(e, keptOff));
+    const have = entries.some((e) => e.acpAgentId === a.id && isAdded(e, keptOff, hidden));
     items.push({ key: `acp:${a.id}`, name: a.name, blurb: a.description, badge: have ? "Added" : "1-click install",
       section: have ? "mac" : "more", icon: a.icon ? { url: a.icon } : { driver: "acpRegistry" },
       action: have ? { kind: "none", reason: "" } : { kind: "registry", agentId: a.id, name: a.name }, cloud: false, installed: have });
@@ -176,8 +180,8 @@ export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: Re
 }
 
 /** First run (board 2LEV-2): providers found on this Mac that are not added yet. */
-export function detected(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>): ServerProviderEntry[] {
-  return entries.filter((e) => e.driver !== "acpRegistry" && !CLOUD[e.driver] && !isAdded(e, keptOff) && !isUnserved(e)
+export function detected(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>, hidden: ReadonlyArray<string> = []): ServerProviderEntry[] {
+  return entries.filter((e) => e.driver !== "acpRegistry" && !CLOUD[e.driver] && !isAdded(e, keptOff, hidden) && !isUnserved(e)
     && e.probe.installed && e.probe.cli !== "missing" && e.instanceId === e.driver);
 }
 
