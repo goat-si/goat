@@ -164,6 +164,23 @@ test("a text delta arriving before its part survives until the assistant role is
   } finally { gate.release(); await session.shutdown(); }
 });
 
+test("an early delta already present inside a later snapshot is not duplicated", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); const gate = fake.holdPrompt();
+  try {
+    const starting = session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings); await gate.reached;
+    await fake.sendEvent("message.part.delta", { sessionID: session.engineRef, messageID: "assistant-early", partID: "part-early", field: "text", delta: " world" });
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, time: 1, part: { id: "part-early", sessionID: session.engineRef, messageID: "assistant-early", type: "text", text: "Hello world!" } });
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant-early", sessionID: session.engineRef, role: "assistant", time: { created: 1 }, parentID: "input", providerID: "test", modelID: "model", mode: "build", agent: "build", path: { cwd: "/tmp", root: "/tmp" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } });
+    gate.release(); const turn = await starting; assert.equal(turn.status, "accepted");
+    if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await session.interrupt(turn.turnId); await finished.promise;
+    assert.equal(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.text : "").join(""), "Hello world!");
+    assert.ok(events.some((event) => event.type === "item_completed" && event.item.type === "assistant_message" && event.item.text === "Hello world!"));
+  } finally { gate.release(); await session.shutdown(); }
+});
+
 test("a different running server generation is rejected before session creation", async () => {
   fake.reset(); fake.setHealth({ healthy: true, version: "2.0.28" });
   const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
@@ -253,6 +270,24 @@ test("resumed sessions restore policies for existing native children", async () 
     assert.ok(!child.permission.some((rule) => rule.permission === "bash" && rule.action === "allow"));
     assert.ok(child.permission.some((rule) => rule.pattern === "/child-private/*" && rule.action === "deny"));
   } finally { await session.shutdown(); }
+});
+
+test("resume refuses unowned root or descendant work before changing policies or MCP", async () => {
+  for (const busy of ["session-fake", "child-1"]) {
+    fake.reset(); fake.setChildren("session-fake", ["child-1"]); fake.setNativeStatus(busy, "busy");
+    const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+    await assert.rejects(opencodeEngine.start({ ...params, resume: "session-fake", mcp: { url: "http://127.0.0.1:1/mcp", bearerToken: "synthetic" } }, host), /unowned/i);
+    assert.ok(!fake.calls.some((call) => call.method === "update" || call.method === "mcp.add"));
+  }
+});
+
+test("MCP status must confirm the GOAT server is connected", async () => {
+  for (const status of ["failed", "disabled", "needs_auth", "missing"] as const) {
+    fake.reset(); fake.setMcpStatus(status);
+    const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+    await assert.rejects(opencodeEngine.start({ ...params, mcp: { url: "http://127.0.0.1:1/mcp", bearerToken: "synthetic" } }, host), /MCP/i);
+    assert.ok(!fake.calls.some((call) => call.method === "prompt"));
+  }
 });
 
 test("resume removes recorded inherited child policy from an earlier parent mode", async () => {

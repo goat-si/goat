@@ -11,6 +11,7 @@ import { client, startServer, verifyServerVersion, type Sdk, type Server } from 
 import { promptParts } from "./attachments.ts";
 
 type Client = ReturnType<typeof client>;
+type ChildSnapshot = { id: string; permission: PermissionRuleset; metadata: Record<string, unknown> | undefined; parentBases: PermissionRuleset[] };
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
 type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
@@ -66,36 +67,57 @@ export class OpenCodeSession implements EngineSession {
       const api = client(module, server, params.cwd);
       await verifyServerVersion(api);
       const events = await api.event.subscribe(undefined, { signal: abortEvents.signal });
-      if (params.mcp) await api.mcp.add({ name: "goat", config: goatRemoteMcpConfig(params.mcp.url, `Bearer ${params.mcp.bearerToken}`) }, { throwOnError: true });
+      const resumed = params.resume ? await api.session.get({ sessionID: params.resume }, { throwOnError: true }) : undefined;
+      if (params.resume && !resumed?.data?.id) throw new Error("session missing");
+      const children = resumed?.data ? await OpenCodeSession.scanChildren(api, resumed.data.id, parentPermissionBases(resumed.data.permission ?? [], resumed.data.metadata)) : [];
+      if (resumed?.data) await OpenCodeSession.requireIdle(api, [resumed.data.id, ...children.map((child) => child.id)]);
+      if (params.mcp) {
+        const added = await api.mcp.add({ name: "goat", config: goatRemoteMcpConfig(params.mcp.url, `Bearer ${params.mcp.bearerToken}`) }, { throwOnError: true });
+        if (added.data?.goat?.status !== "connected") throw new HelperError("start_failed", "OpenCode GOAT MCP server is not connected");
+      }
       const initialPermission = permissionRules(params.runtimeMode);
       const response = params.resume
-        ? await api.session.get({ sessionID: params.resume }, { throwOnError: true })
+        ? resumed!
         : await api.session.create({ permission: initialPermission, metadata: { goatPermissionBase: initialPermission, goatSubagentDeny: false } }, { throwOnError: true });
       if (!response.data?.id) throw new Error("session missing");
+      if (params.resume) await OpenCodeSession.requireIdle(api, [response.data.id, ...children.map((child) => child.id)]);
       if (params.resume) await api.session.update({ sessionID: response.data.id, ...resumePermissionRules(params.runtimeMode, response.data.permission ?? [], response.data.metadata) }, { throwOnError: true });
       const session = new OpenCodeSession(api, server, params, safeHost(host, params), response.data.id, abortEvents);
       if (params.resume) session.subagentsDenied = ownsSubagentDeny(response.data.permission ?? [], response.data.metadata);
       server.onExit(() => { if (!session.closed) session.broken("OpenCode server exited"); });
-      if (params.resume) await session.restoreChildren(parentPermissionBases(response.data.permission ?? [], response.data.metadata));
+      if (params.resume) await session.restoreChildren(children);
       void session.consume(events.stream);
       return session;
     } catch (error) { abortEvents.abort(); await server.close(); if (error instanceof HelperError) throw error; throw new HelperError("start_failed", "OpenCode session initialization failed"); }
   }
-  private async restoreChildren(rootBases: PermissionRuleset[]) {
-    const seen = new Set([this.engineRef]); const pending = [{ id: this.engineRef, bases: rootBases }];
+  private static async scanChildren(api: Client, rootId: string, rootBases: PermissionRuleset[]): Promise<ChildSnapshot[]> {
+    const seen = new Set([rootId]); const pending = [{ id: rootId, bases: rootBases }]; const found: ChildSnapshot[] = [];
     const signal = AbortSignal.timeout(10_000);
     while (pending.length) {
       const parent = pending.shift()!;
-      const response = await this.api.session.children({ sessionID: parent.id }, { throwOnError: true, signal });
+      const response = await api.session.children({ sessionID: parent.id }, { throwOnError: true, signal });
       if (!response.data) throw new Error("missing children");
       for (const child of response.data) {
         if (seen.has(child.id)) continue;
         if (seen.size >= 1024) throw new Error("too many children");
-        seen.add(child.id); this.childSessions.add(child.id); this.childPolicies.add(child.id);
+        seen.add(child.id);
         const native = child.permission ?? [];
-        await this.api.session.update({ sessionID: child.id, permission: childPermissionRules(this.config.runtimeMode, native, parent.bases, this.subagentsDenied, child.metadata), metadata: { ...child.metadata, goatPermissionBase: permissionRules(this.config.runtimeMode), goatSubagentDeny: this.subagentsDenied } }, { throwOnError: true, signal });
+        found.push({ id: child.id, permission: native, metadata: child.metadata, parentBases: parent.bases });
         pending.push({ id: child.id, bases: parentPermissionBases(native, child.metadata) });
       }
+    }
+    return found;
+  }
+  private static async requireIdle(api: Client, ids: string[]) {
+    const status = await api.session.status({}, { throwOnError: true, signal: AbortSignal.timeout(10_000) });
+    if (!status.data) throw new HelperError("start_failed", "OpenCode session ownership could not be verified");
+    if (ids.some((id) => status.data?.[id] && status.data[id]?.type !== "idle")) throw new HelperError("start_failed", "OpenCode session has unowned active work");
+  }
+  private async restoreChildren(children: ChildSnapshot[]) {
+    const signal = AbortSignal.timeout(10_000);
+    for (const child of children) {
+      this.childSessions.add(child.id); this.childPolicies.add(child.id);
+      await this.api.session.update({ sessionID: child.id, permission: childPermissionRules(this.config.runtimeMode, child.permission, child.parentBases, this.subagentsDenied, child.metadata), metadata: { ...child.metadata, goatPermissionBase: permissionRules(this.config.runtimeMode), goatSubagentDeny: this.subagentsDenied } }, { throwOnError: true, signal });
     }
   }
   private broken(reason: string) {
@@ -247,7 +269,7 @@ export class OpenCodeSession implements EngineSession {
         const early = turn.earlyDeltas.get(part.id);
         if (early) {
           if (early.messageId !== part.messageID || (part.type !== "text" && part.type !== "reasoning")) { this.broken("OpenCode event stream contained an inconsistent message part"); return; }
-          if (!part.text.endsWith(early.text)) part = { ...part, text: part.text + early.text };
+          if (!part.text.includes(early.text)) part = { ...part, text: part.text + early.text };
           turn.earlyDeltaBytes -= Buffer.byteLength(early.text);
           turn.earlyDeltas.delete(part.id);
         }

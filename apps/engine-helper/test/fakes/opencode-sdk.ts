@@ -16,12 +16,16 @@ const servers: Array<{ exit?: () => void }> = [];
 const children = new Map<string, string[]>();
 const nativePermissions = new Map<string, Array<{ permission: string; pattern: string; action: "allow" | "ask" | "deny" }>>();
 const nativeMetadata = new Map<string, Record<string, unknown>>();
-export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+const nativeStatuses = new Map<string, "idle" | "busy">();
+let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
 export function setHistory(value: typeof history) { history = value; }
 export function setHealth(value: typeof health) { health = value; }
 export function setChildren(parent: string, ids: string[]) { children.set(parent, ids); }
 export function setNativePermission(id: string, rules: Array<{ permission: string; pattern: string; action: "allow" | "ask" | "deny" }>) { nativePermissions.set(id, rules); }
 export function setNativeMetadata(id: string, metadata: Record<string, unknown>) { nativeMetadata.set(id, metadata); }
+export function setNativeStatus(id: string, status: "idle" | "busy") { nativeStatuses.set(id, status); }
+export function setMcpStatus(status: typeof mcpStatus) { mcpStatus = status; }
 export function failAbort(sessionID: string) { abortFailure = sessionID; }
 export function holdAbort(sessionID: string) {
   abortTarget = sessionID; abortGate = Promise.withResolvers<void>(); abortReached = Promise.withResolvers<void>();
@@ -73,7 +77,7 @@ export function createOpencodeClient() {
       async messages() { calls.push({ method: "messages", args: {} }); return data(history); },
       async children(args: { sessionID: string }) { calls.push({ method: "children", args }); return data((children.get(args.sessionID) ?? []).map((id) => ({ id, permission: nativePermissions.get(id) ?? [], metadata: nativeMetadata.get(id) }))); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
-      async status() { statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" } }); },
+      async status() { statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); },
       async promptAsync(args: { sessionID: string; messageID: string; model?: { providerID: string; modelID: string }; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
         calls.push({ method: "prompt", args }); promptReached?.resolve(); if (promptGate) await promptGate.promise;
         if (options?.signal?.aborted) throw new Error("fake prompt aborted");
@@ -93,7 +97,7 @@ export function createOpencodeClient() {
       },
       async abort(args: { sessionID: string }) { calls.push({ method: "abort", args }); if (args.sessionID === abortTarget) { abortReached?.resolve(); if (abortGate) await abortGate.promise; } if (args.sessionID === abortFailure) throw new Error("fake abort failure"); active = false; setImmediate(() => push("session.idle", args)); return data(true); },
     },
-    mcp: { async add(args: unknown) { calls.push({ method: "mcp.add", args }); return data({}); } },
+    mcp: { async add(args: unknown) { calls.push({ method: "mcp.add", args }); return data(mcpStatus === "missing" ? {} : { goat: mcpStatus === "failed" ? { status: mcpStatus, error: "synthetic failure" } : { status: mcpStatus } }); } },
     permission: { async reply(args: { requestID: string }) { calls.push({ method: "permission.reply", args }); emitFinish("session-fake", "answer"); return data(true); } },
     question: { async reply(args: unknown) { calls.push({ method: "question.reply", args }); emitFinish("session-fake", "question-answer"); return data(true); }, async reject(args: unknown) { calls.push({ method: "question.reject", args }); return data(true); } },
     provider: { async list() { return data({ all: [{ id: "test", name: "Test", models: { model: { id: "model", name: "Test model" } } }], connected: ["test"], default: { test: "model" } }); } },
