@@ -251,7 +251,11 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
         if (step.path === "task.create" && result.structuredContent?.childRunId) callRuns.set(result.structuredContent.childRunId, step.call);
       }
       yield* bindChildren;
-      toolResults.push({ watermark: yield* watermark, event: { kind: "tool.result", thread: step.caller, call: step.call, path: step.path, status: ok ? "ok" : "error", ...(code === undefined ? {} : { code }) } });
+      const mark = yield* watermark;
+      // A refused send never reaches the target's mailbox: the input is refused at admission there.
+      const target = typeof step.args?.threadId === "string" && step.args.threadId.startsWith("$thread:") ? step.args.threadId.slice(8) : undefined;
+      if (!ok && step.path === "thread.send" && target !== undefined) toolResults.push({ watermark: mark, event: { kind: "input.refused", thread: target, input: step.call, code } });
+      toolResults.push({ watermark: mark, event: { kind: "tool.result", thread: step.caller, call: step.call, path: step.path, status: ok ? "ok" : "error", ...(code === undefined ? {} : { code }) } });
     });
 
     if (process.env.GOAT2_PARITY_PROLOGUE === "1") {

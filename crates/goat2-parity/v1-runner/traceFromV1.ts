@@ -1,4 +1,4 @@
-export function traceFromV1(scenario: any, stored: readonly any[], augmented: any, state: any, threadId: string, messageInputs: ReadonlyMap<string, string>, replayObserved: ReadonlyArray<{readonly cursor: number; readonly label: string | undefined; readonly frame: any}>, restartBoundary: number | undefined, failure?: string) {
+export function traceFromV1(scenario: any, stored: readonly any[], augmented: any, state: any, threadId: string, messageInputs: ReadonlyMap<string, string>, replayObserved: ReadonlyArray<{readonly cursor: number; readonly label: string | undefined; readonly frame: any}>, restartBoundary: number | undefined, refusals: ReadonlyArray<{watermark: number; event: any}>, failure?: string) {
   const events: any[] = [];
   const sendByInput = new Map(scenario.steps.filter((step: any) => step.do === "send").map((step: any) => [step.input, step]));
   const thread = scenario.steps.find((step: any) => step.thread)?.thread;
@@ -122,6 +122,11 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
     emit({kind: "steer.applied", thread, run, input: steer.input});
   }
   if (steerResponses.some((r, i) => r.ok && !steerResolved.has(i))) throw new Error("successful turn/steer response could not be correlated to an input and run");
+  // Refusals come from the last step: nothing stored after them may be ordered before them.
+  for (const refusal of refusals) {
+    if (stored.some((s: any) => s.sequence > refusal.watermark && s.event.threadId === threadId)) throw new Error("stored events after a refusal");
+    emit(refusal.event);
+  }
   const reason = state.failure ? String(state.failure) : failure;
   const outboundChecked = augmented.entries.slice(0, state.cursor).filter((entry: any) => entry.type === "expect_outbound" && entry.parityOriginal === true).length;
   return {v: 1, target: "v1", scenario: scenario.name, outcome: reason ? {outcome: "error", reason} : {outcome: "ok"}, events, streams: {codex: {consumedAll: state.cursor === augmented.entries.length, outboundChecked, outboundMismatches: reason ? [reason] : []}}, incomplete: false};

@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as CodexReplay from "effect-codex-app-server/replay";
-import { ProviderDriverKind } from "@goat/contracts";
+import { CommandId, MessageId, ProviderDriverKind } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import { readProviderReplayTranscript, materializeReplayTranscriptWorkspace } from "@goat/provider-testing/replayTranscript";
@@ -59,7 +59,11 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const runtimePolicy = (owners[0] as any).runtimePolicyOverride ?? {};
   const threadAliases = new Set(scenario.steps.map((s: any) => s.thread).filter(Boolean));
   if (threadAliases.size !== 1) throw new Error(`single-thread runner got threads ${[...threadAliases]}`);
-  const sends = scenario.steps.filter((s: any) => s.do === "send");
+  // A steer send as the last step, right after an idle wait, targets a run that already finished:
+  // the runner dispatches it after the other steps and records v1's admission refusal.
+  const lastStep = scenario.steps.at(-1);
+  const refused = lastStep?.do === "send" && lastStep.mode === "steer" && scenario.steps.at(-2)?.do === "await" && scenario.steps.at(-2)?.until === "idle" ? lastStep : undefined;
+  const sends = scenario.steps.filter((s: any) => s.do === "send" && s !== refused);
   const editSteps = scenario.steps.filter((s: any) => s.do === "queue_edit" || s.do === "queue_cancel" || s.do === "queue_promote");
   if (editSteps.length > 1 || (editSteps.length === 1 && (sends.length !== 2 || editSteps[0].input !== sends[1].input || editSteps[0].thread !== sends[1].thread))) throw new Error("unsupported queue edit target");
   // Only start/queue sends create runs (fixture DSL runIndex); a steer joins an existing run.
@@ -83,6 +87,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const awaitsAfterSend = new Map<number, any[]>();
   // Sends followed by an idle wait, and the send after whose idle wait the host restarts.
   const idleAfterSend = new Set<number>();
+  let idleAfterInterrupt = false;
   let restartAfterSend: number | undefined;
   // A restart directly after a run-status wait is a crash with that run still live.
   let crashAfterSend: number | undefined;
@@ -90,6 +95,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   let sendCount = 0;
   let previous: string | undefined;
   for (const [i, s] of scenario.steps.entries()) {
+    if (s === refused) continue;
     if (s.do === "send" && s.mode === "start") { fixtureSteps.push({type: "message", text: s.text}); sendCount += 1; }
     else if (s.do === "send" && s.mode === "queue") { fixtureSteps.push({type: "queue_message", text: s.text}); sendCount += 1; }
     else if (s.do === "send" && s.mode === "steer" && s.run !== undefined) { fixtureSteps.push({type: "steer", text: s.text, targetRunIndex: runOrdinal(s.run)}); sendCount += 1; }
@@ -99,8 +105,12 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
       // The fixture DSL's steer step itself awaits this run being steerable before dispatching.
       continue;
     } else if (s.do === "await" && s.until === "idle") {
-      if (previous !== "send") throw new Error(`await ${s.id} after a ${previous ?? "start of scenario"} step is unsupported`);
-      idleAfterSend.add(sendCount - 1);
+      if (previous === "interrupt") {
+        // The DSL's interrupt step ends with its own await_thread_idle (fixtures/shared.ts:833-834);
+        // valid only as the last fixture step, checked after materialization.
+        idleAfterInterrupt = true;
+      } else if (previous !== "send") throw new Error(`await ${s.id} after a ${previous ?? "start of scenario"} step is unsupported`);
+      else idleAfterSend.add(sendCount - 1);
       previous = "await_idle";
       continue;
     } else if (s.do === "restart_host") {
@@ -180,6 +190,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     return idle;
   };
   for (const n of idleAfterSend) idleIndexAfterSend(n);
+  if (idleAfterInterrupt && (fixtureSteps.at(-1)?.type !== "interrupt" || steps.at(-1)?.type !== "await_thread_idle")) throw new Error("idle wait after an interrupt is only supported when the interrupt is the last fixture step");
   // Same split as v1's splitAfterFirstIdle (OrchestratorReplayRecovery.integration.test.ts:167-181).
   let phases: any[][];
   if (crashAfterSend !== undefined) {
@@ -249,11 +260,27 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
       Stream.takeUntil((stored: any) => stored.sequence >= last), Stream.runCollect))];
   });
   let exit: Exit.Exit<any, any> = Exit.void;
+  const refusals: Array<{watermark: number; event: any}> = [];
+  // A steer at a run that is no longer active fails at admission (interrupted: Orchestrator.ts:4230-4236;
+  // a completed target is instead kept as a new turn, goat/DispatchModeAdjustment.ts:14-39).
+  // The code is the innermost tagged error (the one raised where the command was refused).
+  const dispatchRefused = Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const messageId = MessageId.make("message:parity:" + refused.input);
+    messageInputs.set(messageId, refused.input);
+    const result = yield* Effect.exit(orchestrator.dispatch({type: "message.dispatch", commandId: CommandId.make("command:parity:" + refused.id), threadId, messageId, text: refused.text, attachments: [], modelSelection: CODEX_MODEL_SELECTION, dispatchMode: {type: "steer_active", targetRunId: ids.derive.run({threadId, ordinal: runOrdinal(refused.run)})}, createdBy: "user", creationSource: "web"} as any));
+    const watermark = yield* orchestrator.getThreadEventSequence(threadId);
+    if (Exit.isSuccess(result)) return;
+    let error: any = Cause.squash(result.cause);
+    let tag: string | undefined = error?._tag;
+    while (error?.cause !== undefined && typeof error.cause === "object") { error = error.cause; if (error?._tag) tag = error._tag; }
+    refusals.push({watermark, event: {kind: "input.refused", thread: refused.thread, input: refused.input, code: tag ?? "untagged_error"}});
+  });
   for (const [index, phase] of phases.entries()) {
     const first = index === 0;
     const commands = phases.length === 1 ? materialized.commands : commandsOf(phase);
     const options = crashAfterSend === undefined
-      ? (first ? databaseOptions : {...databaseOptions, recoverOnStartup: true})
+      ? (first ? {...databaseOptions, ...(refused && phases.length === 1 ? {afterSteps: dispatchRefused} : {})} : {...databaseOptions, recoverOnStartup: true})
       : first
         ? {...databaseOptions, afterSteps: crashSnapshot}
         : {databaseLayer: SqlitePersistence.layerFromPath(snapshotPath!).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))), recoverOnStartup: true, continueThreadsAfterServerUpdate: false, afterSteps: readRecovered};
@@ -266,7 +293,8 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     if (first && phases.length > 1 && crashAfterSend === undefined) restartBoundary = Math.max(...[...stored.keys()]);
   }
   const state = yield* Ref.get(driver.state);
-  const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? [...stored.values()] : [], driver.transcript, state, threadId, messageInputs, replayObserved, restartBoundary, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
+  if (refused && phases.length !== 1) throw new Error("a refused steer combined with a restart is unsupported");
+  const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? [...stored.values()] : [], driver.transcript, state, threadId, messageInputs, replayObserved, restartBoundary, refusals, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
   const tmp = `${out}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(trace, null, 2) + "\n");
   renameSync(tmp, out);
