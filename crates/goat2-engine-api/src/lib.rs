@@ -189,7 +189,9 @@ pub enum EngineEvent {
         locator: Option<EngineItemLocator>,
     },
     /// The engine needs a person (approval, question, sign-in). `key` is the driver's own
-    /// handle used to answer it.
+    /// handle used to answer it. It belongs to the running turn named by `turn_id`: the host
+    /// declines (`answer_request(key, Decline)`) one that names another turn or arrives while
+    /// no turn runs. Work outside a turn uses [EngineEvent::SessionRequestOpened].
     RequestOpened {
         turn_id: String,
         key: String,
@@ -214,8 +216,11 @@ pub enum EngineEvent {
     /// (`RequestClosed`), or the session ends. Keys follow the sign-in rules: one request per
     /// key, each key answered at most once per session. Sent by Muse and Pi; OpenCode only for
     /// its background turns; never by Codex, Claude or Cursor.
-    /// Host support is lane E's work item (after the providers module and E-WF); until then
-    /// the host logs and ignores it, so drivers keep failing visibly instead of emitting it.
+    /// The host files the waiting `item` inline in `request.opened.item` (there is no run for
+    /// an `item.completed`); a card past the store's line limit is left out and the summary
+    /// alone is filed. An open runless request keeps its session from the idle stop. A key the
+    /// host has settled is ignored when repeated; a request the host could not record is
+    /// declined at once.
     SessionRequestOpened {
         key: String,
         item_id: Option<ItemId>,
@@ -232,7 +237,8 @@ pub enum EngineEvent {
     /// A later `ContinuationRequested` for the thread replaces a pending one (the earlier input
     /// is cancelled while still queued). That is GOAT 2's rule: v1's queue keeps distinct offers
     /// and replaces only one with the same key. Sent by Muse and Pi; OpenCode
-    /// only for its background turns. Host support: as for [EngineEvent::SessionRequestOpened].
+    /// only for its background turns. A continuation still queued when its session ends (or the
+    /// host restarts) is dropped, never sent as a fresh prompt.
     ContinuationRequested { key: String, text: String },
     /// The engine withdrew a pending continuation it no longer holds: the host cancels its input
     /// while still queued; once its run has started this is ignored. A GOAT 2 event: v1 Muse
@@ -381,6 +387,25 @@ pub trait EngineFactory: Send + Sync + 'static {
     ) -> Result<ProviderAuthState, EngineError> {
         let _ = (target, method_id, updates);
         Err(EngineError::Unsupported("auth_start".into()))
+    }
+    /// Answer what a running sign-in flow waits for (v1 `provider.auth.respond`): the
+    /// `ProviderAuthInteraction` with id `interaction_id` on flow `flow_id`, e.g. an API key
+    /// for `Credentials`. Stream rule as for [Self::auth_start]: the returned value is the state
+    /// after the answer; later phases go on the flow's `updates` from its start. A kind the
+    /// driver does not use is refused with `Unsupported`.
+    ///
+    /// Credential values and terminal data are secrets: the host passes them straight through
+    /// and drops them; a driver never logs them, stores them outside the provider's own
+    /// credential store, or echoes them in a state, event or error.
+    async fn auth_respond(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let _ = (target, flow_id, interaction_id, response);
+        Err(EngineError::Unsupported("auth_respond".into()))
     }
     async fn auth_cancel(
         &self,

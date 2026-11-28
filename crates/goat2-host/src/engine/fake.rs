@@ -74,6 +74,12 @@ pub enum FakeCall {
         key: String,
         outcome: goat2_contracts::RequestOutcome,
     },
+    Continuation {
+        thread_id: ThreadId,
+        key: String,
+        turn_id: Option<String>,
+        input_ids: Vec<String>,
+    },
     Shutdown {
         thread_id: ThreadId,
     },
@@ -85,6 +91,12 @@ struct Shared {
     calls: Vec<FakeCall>,
     turn_results: HashMap<ThreadId, VecDeque<TurnStartResult>>,
     steer_results: HashMap<ThreadId, VecDeque<SteerResult>>,
+    /// When set, start_continuation answers Declined (the engine no longer holds the key).
+    decline_continuations: bool,
+    /// When set, start_continuation answers Unknown (no answer from the engine).
+    unknown_continuations: bool,
+    /// How long start_continuation takes before it answers.
+    continuation_delay: Duration,
     senders: HashMap<ThreadId, mpsc::UnboundedSender<EngineEvent>>,
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
@@ -108,6 +120,9 @@ struct Shared {
     )>,
     auth_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>>,
     auth_starts: usize,
+    /// Sign-in answers seen: (flow id, interaction id, credential field names). Values are
+    /// never kept, like a real driver.
+    auth_responses: Vec<(String, String, Vec<String>)>,
     install: Option<goat2_contracts::ProviderInstallState>,
     install_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderInstallState>>,
 }
@@ -190,6 +205,21 @@ impl FakeEngine {
         self.shared.lock().expect("fake").probe_delay = delay;
     }
 
+    /// Make start_continuation answer Declined (the engine no longer holds the key).
+    pub fn decline_continuations(&self, decline: bool) {
+        self.shared.lock().expect("fake").decline_continuations = decline;
+    }
+
+    /// Make start_continuation answer Unknown (no answer from the engine).
+    pub fn unknown_continuations(&self, unknown: bool) {
+        self.shared.lock().expect("fake").unknown_continuations = unknown;
+    }
+
+    /// Make start_continuation take `delay` before it answers.
+    pub fn set_continuation_delay(&self, delay: Duration) {
+        self.shared.lock().expect("fake").continuation_delay = delay;
+    }
+
     /// How many probes ran so far.
     pub fn probes(&self) -> usize {
         self.shared.lock().expect("fake").probes
@@ -234,6 +264,11 @@ impl FakeEngine {
 
     pub fn auth_starts(&self) -> usize {
         self.shared.lock().expect("fake").auth_starts
+    }
+
+    /// Sign-in answers seen: (flow id, interaction id, credential field names).
+    pub fn auth_responses(&self) -> Vec<(String, String, Vec<String>)> {
+        self.shared.lock().expect("fake").auth_responses.clone()
     }
 
     /// The update channel of the last install start.
@@ -466,6 +501,36 @@ impl EngineFactory for FakeEngine {
         })
     }
 
+    /// Records only the field names of a credentials answer (never the values) and answers the
+    /// flow as verifying.
+    async fn auth_respond(
+        &self,
+        target: &super::ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        let mut shared = self.shared.lock().expect("fake");
+        let Some((_, start)) = shared.auth.clone() else {
+            return Err(EngineError::Unsupported("auth_respond".into()));
+        };
+        let goat2_contracts::ProviderAuthResponse::Credentials { values } = response else {
+            return Err(EngineError::Unsupported("auth_respond".into()));
+        };
+        shared.auth_responses.push((
+            flow_id.to_owned(),
+            interaction_id.to_owned(),
+            values.into_keys().collect(),
+        ));
+        Ok(goat2_contracts::ProviderAuthState {
+            instance_id: target.instance_id.clone(),
+            phase: goat2_contracts::ProviderAuthPhase::Verifying,
+            flow_id: Some(flow_id.to_owned()),
+            authorization_url: None,
+            ..start
+        })
+    }
+
     async fn install_start(
         &self,
         _launch: Option<&super::LaunchSpec>,
@@ -588,6 +653,48 @@ impl EngineSession for FakeSession {
                 });
             });
         }
+        result
+    }
+
+    async fn start_continuation(
+        &self,
+        key: &str,
+        inputs: Vec<EngineInput>,
+        _settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let delay = self.engine.shared.lock().expect("fake").continuation_delay;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        let mut shared = self.engine.shared.lock().expect("fake");
+        let result = if shared.decline_continuations {
+            TurnStartResult::Declined {
+                reason: "continuation no longer available".into(),
+            }
+        } else if shared.unknown_continuations {
+            TurnStartResult::Unknown {
+                reason: "no answer".into(),
+            }
+        } else {
+            TurnStartResult::Accepted {
+                turn_id: new_id("turn"),
+            }
+        };
+        let turn_id = match &result {
+            TurnStartResult::Accepted { turn_id } => {
+                shared
+                    .active_turn
+                    .insert(self.thread_id.clone(), turn_id.clone());
+                Some(turn_id.clone())
+            }
+            _ => None,
+        };
+        shared.calls.push(FakeCall::Continuation {
+            thread_id: self.thread_id.clone(),
+            key: key.to_owned(),
+            turn_id,
+            input_ids: ids(&inputs),
+        });
         result
     }
 
