@@ -22,6 +22,7 @@ export class OpenCode2Projection {
   private lastUsage: ContextUsage | undefined;
   private compactionId: string | undefined;
   private compactionCount = 0;
+  private finalizedCompactions = 0;
   private readonly host: EngineHost;
   private readonly turnId: string;
   constructor(host: EngineHost, turnId: string) { this.host = host; this.turnId = turnId; }
@@ -37,6 +38,7 @@ export class OpenCode2Projection {
   }
   private completeText(id: string, state: TextState) {
     if (state.completed) return;
+    if (!state.text.length) { state.completed = true; return; }
     this.emitText(id, state); state.completed = true;
     this.host.emit({ type: "item_completed", turnId: this.turnId, item: state.kind === "text" ? assistantMessage(this.base(id), state.text, state.message) : reasoning(this.base(id), state.text), locator: { turnId: this.turnId, itemId: id } });
   }
@@ -44,10 +46,22 @@ export class OpenCode2Projection {
     const id = `${message}:${kind}:${ordinal}`;
     let state = this.texts.get(id);
     if (!state) { state = { kind, message, text: "", sent: "", completed: false }; this.texts.set(id, state); }
-    if (state.completed) return;
+    if (state.completed) { if (completed && text !== state.text) throw new Error("OpenCode recovered text conflicts with completed output"); return; }
     if (text.startsWith(state.text)) state.text = text;
     else if (completed) throw new Error("OpenCode recovered text conflicts with streamed output");
     this.emitText(id, state); if (completed) this.completeText(id, state);
+  }
+  private finishCompaction(status: "completed" | "failed" | "interrupted", summary?: string) {
+    const id = this.compactionId; if (!id) return;
+    this.compactionId = undefined; this.finalizedCompactions++;
+    if (status === "completed") this.lastUsage = undefined;
+    const title = status === "completed" ? "Context compacted" : status === "failed" ? "Compaction failed" : "Compaction interrupted";
+    this.host.emit({ type: "item_completed", turnId: this.turnId, item: item({ ...this.base(id), title, status }, "compaction", { driver: "opencode", ...(summary ? { summary } : {}) }), locator: { turnId: this.turnId, itemId: id } });
+  }
+  recoverCompaction(ordinal: number, status: "running" | "completed" | "failed", summary?: string) {
+    if (ordinal < this.finalizedCompactions) return;
+    this.compactionId ??= `${this.turnId}:compaction:${this.compactionCount++}`;
+    if (status !== "running") this.finishCompaction(status, summary);
   }
   handle(event: V2Event): boolean {
     if (!["session.text.started", "session.text.delta", "session.text.ended", "session.reasoning.started", "session.reasoning.delta", "session.reasoning.ended", "session.step.ended", "session.step.failed", "session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(event.type)) return false;
@@ -73,12 +87,9 @@ export class OpenCode2Projection {
         return true;
       }
       case "session.compaction.started":
-        this.compactionId = `${this.turnId}:compaction:${this.compactionCount++}`; this.lastUsage = undefined; return true;
+        this.compactionId = `${this.turnId}:compaction:${this.compactionCount++}`; return true;
       case "session.compaction.ended": case "session.compaction.failed": {
-        const id = this.compactionId ?? `${this.turnId}:compaction:${this.compactionCount++}`; this.compactionId = undefined;
-        this.lastUsage = undefined;
-        const summary = event.type === "session.compaction.ended" ? event.data.text : "OpenCode compaction failed";
-        this.host.emit({ type: "item_completed", turnId: this.turnId, item: item({ ...this.base(id), title: "Context compacted", status: event.type === "session.compaction.ended" ? "completed" : "failed" }, "compaction", { driver: "opencode", summary }), locator: { turnId: this.turnId, itemId: id } });
+        this.finishCompaction(event.type === "session.compaction.ended" ? "completed" : "failed", event.type === "session.compaction.ended" ? event.data.text : undefined);
         return true;
       }
       default: return false;
@@ -86,10 +97,7 @@ export class OpenCode2Projection {
   }
   finish(maxTokens?: number, outcome: "done" | "failed" | "interrupted" = "done") {
     for (const [id, state] of this.texts) this.completeText(id, state);
-    if (this.compactionId) {
-      const id = this.compactionId; this.compactionId = undefined;
-      this.host.emit({ type: "item_completed", turnId: this.turnId, item: item({ ...this.base(id), title: "Context compacted", status: outcome === "failed" ? "failed" : "interrupted" }, "compaction", { driver: "opencode" }), locator: { turnId: this.turnId, itemId: id } });
-    }
+    this.finishCompaction(outcome === "failed" ? "failed" : "interrupted");
     if (this.lastUsage) this.host.emit({ type: "token_usage", turnId: this.turnId, usage: { ...this.lastUsage, ...(typeof maxTokens === "number" && Number.isSafeInteger(maxTokens) && maxTokens > 0 ? { maxTokens } : {}) } });
   }
 }

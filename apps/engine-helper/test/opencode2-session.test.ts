@@ -543,3 +543,94 @@ test("generated runtime credentials are redacted across streamed chunks", async 
     assert.ok(!JSON.stringify(events).includes("synthetic-runtime-password"));
   } finally { await session.shutdown(); }
 });
+
+test("a first compact turn does not consume the first-message preamble", async () => {
+  const fake = scriptedRuntime(); const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, instructions: { firstMessagePreamble: "REQUIRED-PREAMBLE" } }, hostFor([]));
+  try {
+    assert.equal((await session.startTurn(input("i", "/compact"), settings)).status, "accepted"); await tick();
+    fake.emit("session.execution.succeeded", { sessionID: session.engineRef }); await tick();
+    assert.equal((await session.startTurn(input("j", "hello"), settings)).status, "accepted");
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { text: string };
+    assert.match(prompt.text, /REQUIRED-PREAMBLE/);
+  } finally { await session.shutdown(); }
+});
+
+test("interrupt waits for active child interruption before settling the parent", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); await tick(); fake.setActive({ child: { type: "running" } });
+    const gate = fake.holdInterrupt();
+    try {
+      const stopping = session.interrupt(turn.turnId); await gate.reached;
+      fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      gate.release(); await stopping; await tick();
+      const interrupted = fake.calls.filter((call) => call.method === "session.interrupt").map((call) => (call.input as { sessionID: string }).sessionID);
+      assert.ok(interrupted.includes("child") && interrupted.includes(session.engineRef));
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 1);
+    } finally { gate.release(); }
+  } finally { await session.shutdown(); }
+});
+
+test("an unconfirmed child interruption fails the session instead of claiming success", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures));
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); await tick(); fake.setActive({ child: { type: "running" } }); fake.failInterrupt("child");
+    await assert.rejects(session.interrupt(turn.turnId), /interrupt failed/);
+    assert.deepEqual(failures, ["OpenCode 2 could not stop native child work"]);
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
+  } finally { await session.shutdown(); }
+});
+
+test("reconnect recovers a newly created child from running tool history", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setActive({ [session.engineRef]: { type: "running" }, child: { type: "running" } });
+    fake.setHistory([{ id: "m", type: "assistant", time: { created: 2 }, content: [{ type: "tool", id: "task", name: "subagent", state: { status: "running", input: { prompt: "inspect" }, metadata: { sessionID: "child" } }, time: { created: 2 } }] }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    fake.setRequests([{ id: "child-permission", sessionID: "child", action: "shell", resources: ["*"] }]);
+    fake.setForms("child", [{ id: "child-form", sessionID: "child", title: "Q", fields: [{ key: "answer", type: "string" }] }]);
+    fake.breakStream(); await tick(); await tick(); await tick();
+    const opened = events.flatMap((event) => event.type === "request_opened" ? [event.key] : []);
+    assert.ok(opened.includes("child-permission") && opened.includes("child-form"));
+    assert.ok(events.some((event) => event.type === "subagent_update" && event.subagentId === "task" && event.status === "running")); assert.deepEqual(failures, []);
+  } finally { await session.shutdown(); }
+});
+
+test("reconnect restores completed compaction and invalidates earlier usage", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { ...hostFor(events), emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); } };
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, params, host, async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.emit("session.step.ended", { sessionID: session.engineRef, assistantMessageID: "m", tokens: { input: 7, output: 8, reasoning: 2, cache: { read: 3, write: 4 } } }); await tick();
+    fake.setHistory([{ id: "idle", type: "idle", outcome: "succeeded", time: { created: 4 } }, { id: "compact", type: "compaction", status: "completed", summary: "Summary", recent: "", reason: "auto", time: { created: 3 } }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    fake.breakStream(); await finished.promise;
+    assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1);
+    assert.equal(events.filter((event) => event.type === "token_usage").length, 0);
+  } finally { await session.shutdown(); }
+});
+
+test("interrupt includes a child discovered while the root stop is in flight", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    const gate = fake.holdInterrupt();
+    try {
+      const stopping = session.interrupt(turn.turnId); await gate.reached;
+      await assert.rejects(session.interrupt(turn.turnId), /already pending/);
+      fake.emit("session.created", { sessionID: "late-child", parentID: session.engineRef });
+      fake.setActive({ "late-child": { type: "running" } });
+      fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      gate.release(); await stopping; await tick();
+      const interrupted = fake.calls.filter((call) => call.method === "session.interrupt").map((call) => (call.input as { sessionID: string }).sessionID);
+      assert.ok(interrupted.includes(session.engineRef) && interrupted.includes("late-child"));
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 1);
+    } finally { gate.release(); }
+  } finally { await session.shutdown(); }
+});

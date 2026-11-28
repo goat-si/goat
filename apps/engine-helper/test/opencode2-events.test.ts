@@ -44,6 +44,20 @@ test("an unfinished compaction receives a terminal failure item", () => {
   assert.ok(completed?.type === "item_completed" && completed.item.type === "compaction" && completed.item.status === "failed");
 });
 
+test("empty native text does not invent a completed message", () => {
+  const events: EngineEvent[] = []; const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.handle({ id: "a", type: "session.text.started", data: { sessionID: "session", assistantMessageID: "m", ordinal: 0 } } as unknown as V2Event);
+  projection.finish(); assert.equal(events.length, 0);
+});
+
+test("recovery rejects a snapshot that conflicts with an already completed message", () => {
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.handle({ id: "a", type: "session.text.ended", data: { sessionID: "session", assistantMessageID: "m", ordinal: 0, text: "before" } } as unknown as V2Event);
+  assert.throws(() => projection.recoverText("m", "text", 0, "different", true), /conflicts/);
+});
+
 test("reasoning content redacts a token split across native deltas", () => {
   const events: EngineEvent[] = [];
   const raw = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

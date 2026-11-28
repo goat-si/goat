@@ -76,12 +76,13 @@ export const opencodeEngine: EngineModule = {
     }
   },
   async probe(params, host) {
+    const startedAt = Date.now();
     try {
       const selected = await generation(params.cwd, params.launch);
       if (selected.generation === "v2") {
         const fake = ({ ...process.env, ...params.launch?.env }).GOAT2_ENGINE_HELPER_SDK_OPENCODE2;
         let clock = 0;
-        return await probeOpenCode2(params, host, { select: async () => selected, ...(fake?.trim() ? { now: () => clock, sleep: async (milliseconds: number) => { clock += milliseconds; } } : {}) });
+        return await probeOpenCode2(params, host, { select: async () => selected, startedAt: fake?.trim() ? 0 : startedAt, ...(fake?.trim() ? { now: () => clock, sleep: async (milliseconds: number) => { clock += milliseconds; } } : {}) });
       }
       return await opencode1Engine.probe!(params, host);
     } catch {

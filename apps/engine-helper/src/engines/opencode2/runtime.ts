@@ -201,12 +201,19 @@ export async function startOpenCode2Runtime(options: {
       });
       const thisAttempt: Attempt = { accepted: Promise.withResolvers<void>(), requests: 0 };
       attempt = thisAttempt;
-      const iterator = client.event.subscribe({ signal: local.signal })[Symbol.asyncIterator]();
+      let silenceTimer: ReturnType<typeof setTimeout> | undefined; let subscribed = false;
+      const activity = () => {
+        if (!subscribed || local.signal.aborted) return;
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => local.abort(), 45_000); silenceTimer.unref();
+      };
+      const iterator = client.event.subscribe({ signal: local.signal, onActivity: activity })[Symbol.asyncIterator]();
       let ended = false;
       let streamError: Error | undefined;
       const finish = async (message?: string, recoverable = true) => {
         if (ended) return;
         ended = true;
+        if (silenceTimer) clearTimeout(silenceTimer);
         if (message && !closed && !processFailure) streamError = new Error(message);
         await iterator.return?.();
         if (attempt === thisAttempt) attempt = undefined;
@@ -235,6 +242,7 @@ export async function startOpenCode2Runtime(options: {
       try {
         await Promise.race([thisAttempt.accepted.promise, first.then((item) => { if (item.done) throw new Error("OpenCode 2 event stream ended unexpectedly"); return new Promise<never>(() => {}); }), cancelled]);
         if (ended || local.signal.aborted) throw processFailure ?? streamError ?? new Error("OpenCode 2 event subscription cancelled or timed out");
+        subscribed = true; activity();
       } catch (error) {
         local.abort();
         await finish();

@@ -15,6 +15,7 @@ export interface OpenCode2ProbeDependencies {
   startRuntime?: (options: { cwd: string; launch: ProbeParams["launch"] }) => Promise<ProbeRuntime>;
   now?: () => number;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  startedAt?: number;
 }
 const sleep = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   const timer = setTimeout(() => { signal.removeEventListener("abort", cancel); resolve(); }, milliseconds);
@@ -103,7 +104,8 @@ function projectModels(catalog: CatalogModel[], names: Map<string, string>): Ser
 export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost, "now">, dependencies: OpenCode2ProbeDependencies = {}): Promise<ProbeResult> {
   let installed = false;
   let version: string | null = null;
-  const now = dependencies.now ?? Date.now; const budgetDeadline = now() + 25_000;
+  const now = dependencies.now ?? Date.now; const budgetDeadline = (dependencies.startedAt ?? now()) + 25_000;
+  const pending = (): ProbeResult => ({ installed, version, status: "warning", auth: { status: "unknown" }, models: [], checkedAt: host.now(), capabilities: capabilitiesForOpenCode2(version!), message: "OpenCode is still starting its plugins; models will appear on the next check." });
   try {
     let selected: ProbedOpenCode;
     try { selected = await (dependencies.select ?? selectBinary)(params); }
@@ -112,7 +114,18 @@ export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost,
     version = selected.version;
     if (selected.generation !== "v2") throw new Error("Not OpenCode 2");
     const cwd = params.cwd ?? process.cwd();
-    const runtime = await (dependencies.startRuntime ?? startOpenCode2Runtime)({ cwd, launch: params.launch });
+    const remaining = budgetDeadline - now(); if (remaining <= 0) return pending();
+    const startup = new AbortController();
+    let runtime: ProbeRuntime;
+    try {
+      runtime = await bounded(remaining, startup.signal, (signal) => {
+        const pendingStart = dependencies.startRuntime
+          ? dependencies.startRuntime({ cwd, launch: params.launch })
+          : startOpenCode2Runtime({ cwd, launch: params.launch, signal, startupTimeoutMs: Math.min(15_000, remaining) });
+        void pendingStart.then((late) => { if (signal.aborted) void late.close().catch(() => {}); }, () => {});
+        return pendingStart;
+      });
+    } catch (error) { if (error instanceof Error && error.message === "Inventory read timed out") return pending(); throw error; }
     try {
       const actual = classifyOpenCodeCliVersion(runtime.version);
       if (!actual || actual.generation !== "v2" || actual.version !== runtime.version) throw new Error("Invalid running version");
@@ -131,7 +144,6 @@ export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost,
       };
       // GOAT 2's host and helper cap probes at 30s. Return a useful warning before that cap.
       const controller = new AbortController();
-      const pending = (): ProbeResult => ({ installed, version, status: "warning", auth: { status: "unknown" }, models: [], checkedAt: host.now(), capabilities: capabilitiesForOpenCode2(version!), message: "OpenCode is still starting its plugins; models will appear on the next check." });
       let first: Awaited<ReturnType<typeof read>>;
       for (;;) {
         const remaining = budgetDeadline - now(); if (remaining <= 0) return pending();
@@ -159,7 +171,7 @@ export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost,
       const inventory = projectModels(models, names);
       const ready = inventory.length > 0;
       return { installed, version, status: ready ? "ready" : "warning", auth: { status: ready ? "authenticated" : "unknown" }, models: inventory, checkedAt: host.now(), capabilities: capabilitiesForOpenCode2(version), message: ready ? `OpenCode ${version} lists ${inventory.length} model${inventory.length === 1 ? "" : "s"}.` : "OpenCode 2 is running, but it did not list any models yet." };
-    } finally { await runtime.close(); }
+    } finally { await bounded(3_000, startup.signal, () => runtime.close()); }
   } catch {
     return { installed, version, cli: installed ? "present" : "missing", status: "error", auth: { status: "unknown" }, models: [], checkedAt: host.now(), message: "OpenCode could not be probed" };
   }

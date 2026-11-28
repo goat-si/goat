@@ -238,3 +238,29 @@ test("reconnection acceptance deadline leaves the process owned and available", 
   assert.equal(state.closeCount, 0);
   await runtime.close();
 });
+
+test("a silent OpenCode 2 stream times out and can be reconnected", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] }); reset();
+  const pending = start(); await state.requested.promise; state.release.resolve(); const runtime = await pending;
+  try {
+    const iterator = runtime.events[Symbol.asyncIterator](); let settled = false;
+    const next = iterator.next().then(() => { settled = true; }, () => { settled = true; });
+    t.mock.timers.tick(45_000); await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, true); await next;
+    holdNextSubscription(); const reopened = runtime.reconnect(); await state.requested.promise; state.release.resolve();
+    const stream = await reopened; assert.ok(stream[Symbol.asyncIterator]);
+  } finally { await runtime.close(); }
+});
+
+test("SSE keepalive bytes renew the OpenCode 2 silence deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] }); reset();
+  const pending = start(); await state.requested.promise; state.release.resolve(); const runtime = await pending;
+  try {
+    const iterator = runtime.events[Symbol.asyncIterator](); let settled = false;
+    const next = iterator.next().then(() => { settled = true; }, () => { settled = true; });
+    t.mock.timers.tick(30_000); state.stream!.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(30_000); await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(settled, false);
+    t.mock.timers.tick(15_000); await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(settled, true); await next;
+  } finally { await runtime.close(); }
+});

@@ -204,3 +204,24 @@ test("the probe budget includes version and server startup time", async () => {
   const result = await probeOpenCode2(params, host, f.deps);
   assert.equal(result.status, "warning"); assert.deepEqual(result.models, []); assert.equal(clock, 25_000);
 });
+
+test("generation selection time is charged to the shared probe budget", async () => {
+  const f = fake(); let clock = 0, reads = 0;
+  f.deps.startedAt = -6_000; f.deps.now = () => clock; f.deps.sleep = async (ms) => { clock += ms; };
+  f.deps.startRuntime = async () => ({ version: "2.2.5", client: {
+    model: { async list() { reads++; throw Object.assign(new Error("not ready"), { name: "ServiceUnavailableError", service: "plugin" }); } },
+    provider: { async list() { return { data: [] }; } },
+  }, close: async () => {} }) as unknown as Awaited<ReturnType<NonNullable<OpenCode2ProbeDependencies["startRuntime"]>>>;
+  const result = await probeOpenCode2(params, host, f.deps);
+  assert.equal(result.status, "warning"); assert.equal(clock, 19_000); assert.equal(reads, 19);
+});
+
+test("a probe startup that outlives its budget is closed if it arrives late", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] }); const f = fake(); let closed = 0;
+  f.deps.select = async () => ({ generation: "v2", version: "2.2.5" });
+  const started = Promise.withResolvers<void>(); const gate = Promise.withResolvers<void>();
+  f.deps.startRuntime = async () => { started.resolve(); await gate.promise; return { version: "2.2.5", client: {}, close: async () => { closed++; } } as unknown as Awaited<ReturnType<NonNullable<OpenCode2ProbeDependencies["startRuntime"]>>>; };
+  const probing = probeOpenCode2(params, host, f.deps); await started.promise; t.mock.timers.tick(25_000);
+  const result = await probing; assert.equal(result.status, "warning"); assert.equal(result.installed, true); assert.equal(result.capabilities?.turns.supportsNativeGoals, true);
+  gate.resolve(); await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(closed, 1);
+});

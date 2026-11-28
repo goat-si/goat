@@ -163,7 +163,9 @@ export class OpenCode2Session implements EngineSession {
       const steer = turn.steers.get(message.id); if (steer && !steer.outcome) { steer.outcome = "completed"; this.emitSteer(turn, message.id); }
     }
     const idle = history.find((message) => message.type === "idle");
+    let compactionOrdinal = 0;
     for (const message of history.toReversed()) {
+      if (message.type === "compaction") { turn.projection.recoverCompaction(compactionOrdinal++, message.status, "summary" in message ? message.summary : undefined); continue; }
       if (message.type !== "assistant" || this.active !== turn) continue;
       const ordinals = { text: 0, reasoning: 0 };
       for (const [index, part] of message.content.entries()) {
@@ -172,9 +174,15 @@ export class OpenCode2Session implements EngineSession {
           turn.projection.recoverText(message.id, part.type, ordinals[part.type]++, part.text, !open); continue;
         }
         if (part.type !== "tool" || turn.completedTools.has(part.id)) continue;
-        const tool = turn.tools.get(part.id) ?? { name: part.name, messageId: message.id, input: {}, startedAt: this.host.now() };
+        const existing = turn.tools.get(part.id);
+        const tool = existing ?? { name: part.name, messageId: message.id, input: {}, startedAt: this.host.now() };
         if ("input" in part.state && typeof part.state.input === "object" && part.state.input !== null) tool.input = part.state.input;
-        if (part.state.status !== "completed" && part.state.status !== "error") { turn.tools.set(part.id, tool); continue; }
+        if (part.name === "subagent" && "metadata" in part.state && part.state.metadata && typeof part.state.metadata.sessionID === "string") { tool.childId = part.state.metadata.sessionID; this.children.add(tool.childId); }
+        if (part.state.status !== "completed" && part.state.status !== "error") {
+          turn.tools.set(part.id, tool);
+          if (!existing && part.name === "subagent") this.host.emit({ type: "subagent_update", turnId: turn.id, subagentId: part.id, status: "running", title: typeof tool.input.description === "string" ? tool.input.description : null, progress: null });
+          continue;
+        }
         const common = { id: `recovery:${part.id}`, created: 0, durable: { aggregateID: this.engineRef, seq: 0, version: 2 }, data: { sessionID: this.engineRef, assistantMessageID: message.id, id: part.id, executed: part.executed ?? true, metadata: part.state.metadata } };
         const recovered = (part.state.status === "completed" ? { ...common, type: "session.tool.success", data: { ...common.data, content: part.state.content.map((entry) => entry.type === "file" && entry.name === null ? { ...entry, name: undefined } : entry) } } : { ...common, type: "session.tool.failed", data: { ...common.data, error: part.state.error } }) as unknown as Extract<V2Event, { type: "session.tool.success" | "session.tool.failed" }>;
         turn.tools.set(part.id, tool); await this.route(recovered, true);
@@ -394,7 +402,7 @@ export class OpenCode2Session implements EngineSession {
         catch (error) { if (this.active === turn) this.active = undefined; if (!rejected(error)) this.uncertain = true; return rejected(error) ? { status: "declined" as const, reason: "OpenCode 2 declined the prompt" } : { status: "unknown" as const, reason: "OpenCode 2 prompt admission is unknown" }; }
         finally { submission.abort(); }
         if (this.closed || this.active !== turn) return { status: "unknown" as const, reason: "OpenCode 2 session ended during admission" };
-        turn.admitted = true; this.first = false;
+        turn.admitted = true; if (!compact) this.first = false;
         setImmediate(() => { void (async () => { while (this.active === turn && turn.queue.length) { const event = turn.queue.shift()!; turn.queueBytes -= Buffer.byteLength(JSON.stringify(event)); await this.route(event, true); } if (this.active === turn) turn.draining = false; })().catch(() => this.broken("OpenCode 2 event processing failed")); });
         return { status: "accepted" as const, turnId: id };
       } catch (error) { if (this.closed) return { status: "declined" as const, reason: "OpenCode 2 session is closed" }; if (error instanceof HelperError) return { status: "declined" as const, reason: error.message }; return { status: "declined" as const, reason: "OpenCode 2 turn could not be prepared" }; }
@@ -426,12 +434,38 @@ export class OpenCode2Session implements EngineSession {
   }
   async interrupt(turnId: string) {
     const turn = this.active; if (!turn || turn.id !== turnId) return;
+    if (turn.stopping) throw new HelperError("bad_request", "OpenCode 2 interrupt is already pending");
     turn.stopping = true;
+    let stoppingChild = false;
     try {
+      const checked = new Set<string>();
+      const stopChildren = async () => {
+        if (!this.children.size) return;
+        stoppingChild = true;
+        for (let pass = 0; pass < 3; pass++) {
+          const active = await bounded(5_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.active({ signal }));
+          const children = [...this.children].filter((id) => id in active && !checked.has(id));
+          if (!children.length) { stoppingChild = false; return; }
+          for (const sessionID of children) {
+            const result = await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.interrupt({ sessionID }, { signal }));
+            if (!result.interrupted) {
+              const current = await bounded(5_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.active({ signal }));
+              if (sessionID in current) throw new Error("child still running");
+            }
+            checked.add(sessionID);
+          }
+        }
+        const remaining = await bounded(5_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.active({ signal }));
+        if ([...this.children].some((id) => id in remaining && !checked.has(id))) throw new Error("new child work could not be stopped");
+        stoppingChild = false;
+      };
+      await stopChildren();
       const result = await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.interrupt({ sessionID: this.engineRef }, { signal }));
       if (!result.interrupted) throw new HelperError("transport", "OpenCode 2 interrupt was not confirmed");
+      await stopChildren();
       turn.interrupted = true;
     } catch (error) {
+      if (stoppingChild && !this.closed) this.broken("OpenCode 2 could not stop native child work");
       if (error instanceof HelperError) throw error;
       throw new HelperError("transport", "OpenCode 2 interrupt failed");
     } finally {
