@@ -50,7 +50,8 @@ set loaded from the index.
 3. Not in a run: card.json and the index row are written now (write-through). In a run: they are
    batched until `flush` or the run ends. Before a row is stored with `dirty=0` the log is synced up to
    the card's `appliedSeq`. Any failure keeps `dirty=1`.
-4. `run.finished` is followed by an automatic `checkpoint {card, fold}` line in the same write.
+4. `run.finished` is followed by an automatic `checkpoint {card, fold}` line in the same write (from
+   the merge of the full contract `Fold`; see Fold).
 5. Create: row {dirty=1, creating=1} (FULL) -> mkdir -> goat.jsonl header + thread.created (sync) ->
    dir sync -> card.json -> row {dirty=0, creating=0}. Delete: row dirty=1 -> rename folder to
    `threads/.trash-<id>-<hex>` -> dir sync -> row removed -> remove_dir_all.
@@ -110,10 +111,11 @@ following symlinks.
 `Fold` has the shape in `structure/20_data.md`: activeRunId, activeRunInputIds,
 activeRunReachedEngine, queuedInputIds, heldInputs, openRequests, runningChildIds, lastRunOutcome,
 counters. Until lane C merges the added fields, `src/contract.rs` defines that exact shape as
-`StoreFold` (used in card.json) and re-exports everything else from `goat2-contracts`. Checkpoint
-lines carry the current contract `Fold`, converted from `StoreFold`; until the merge they lack
-activeRunInputIds, activeRunReachedEngine, heldInputs, runningChildIds and lastRunOutcome. The store
-never restores its own state from a checkpoint. Rules: input.accepted -> queue; input.delivered
+`StoreFold` (used in card.json) and re-exports everything else from `goat2-contracts`. Until then the
+store writes no checkpoint lines (a lossy line would stay in the log forever); reads that need a
+snapshot get the current {card, fold} from memory instead. The store never restores its own state
+from a checkpoint. `input.changed` (15th SSOT event) is treated as unknown until the contract has it.
+Rules: input.accepted -> queue; input.delivered
 accepted -> leaves the queue; declined -> stays queued and leaves activeRunInputIds; unknown -> held
 under `resend:<runId>`. run.finished: run inputs still queued are delivered if the run reached the
 engine, held if the outcome is unknown, else stay queued. An unknown outcome opens request
