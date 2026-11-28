@@ -10,7 +10,7 @@ use goat2_contracts::{
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, McpEndpoint, RequestAnswer,
-    SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
+    SessionSpec, SteerResult, SteerStatus, TurnOutcome, TurnSettings, TurnStartResult,
 };
 use goat2_engine_sdk::{HelperFactory, HelperLaunch};
 
@@ -264,6 +264,72 @@ async fn set_config_applies_or_reports_unsupported() {
     match handle.session.set_config(&settings()).await {
         Err(EngineError::Unsupported(message)) => assert!(message.contains("cannot change")),
         other => panic!("expected Unsupported, got {other:?}"),
+    }
+    handle.session.shutdown().await;
+}
+
+/// A steer the engine read into a finished turn is reported Completed; a steer still unread when
+/// the turn is interrupted is reported Cancelled. Both carry the steer's input ids.
+#[tokio::test]
+async fn steer_settlement_is_reported_with_input_ids() {
+    let steer_updates = |events: &[EngineEvent]| -> Vec<(Vec<InputId>, SteerStatus)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                EngineEvent::SteerUpdated {
+                    input_ids, status, ..
+                } => Some((input_ids.clone(), status.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // "ask" waits for an answer, so the steer lands before the turn can finish.
+    let mut handle = start("thread-steer-read").await;
+    let turn = accepted(handle.session.start_turn(input("ask"), &settings()).await);
+    let key = loop {
+        if let EngineEvent::RequestOpened { key, .. } = next(&mut handle).await {
+            break key;
+        }
+    };
+    assert_eq!(
+        handle.session.steer(&turn, input("also this")).await,
+        SteerResult::Accepted
+    );
+    handle
+        .session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Answered,
+                text: Some("blue".into()),
+                answers: None,
+            },
+        )
+        .await
+        .expect("answer delivered");
+    let events = until_finished(&mut handle).await;
+    assert_eq!(
+        steer_updates(&events),
+        vec![(vec![InputId::from("in-also this")], SteerStatus::Completed)]
+    );
+    handle.session.shutdown().await;
+
+    // "hang" ends only by interrupt, so the steer is never read.
+    let mut handle = start("thread-steer-cancelled").await;
+    let turn = accepted(handle.session.start_turn(input("hang"), &settings()).await);
+    assert_eq!(
+        handle.session.steer(&turn, input("too late")).await,
+        SteerResult::Accepted
+    );
+    handle.session.interrupt(&turn).await.expect("interrupt");
+    let events = until_finished(&mut handle).await;
+    match steer_updates(&events).as_slice() {
+        [(ids, SteerStatus::Cancelled { reason })] => {
+            assert_eq!(ids, &vec![InputId::from("in-too late")]);
+            assert!(reason.contains("interrupted"), "{reason}");
+        }
+        other => panic!("expected one cancelled steer update, got {other:?}"),
     }
     handle.session.shutdown().await;
 }

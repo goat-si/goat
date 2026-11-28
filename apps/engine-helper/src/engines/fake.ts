@@ -5,7 +5,8 @@
 //   "approve" opens an approval; the outcome is echoed
 //   "fail"    the turn fails
 //   anything else echoes "echo: <text>" in two deltas
-// A steer during a turn is accepted and appended to the final message.
+// A steer during a turn is accepted and appended to the final message. When the turn ends, its
+// steers are reported with steer_updated: completed if the turn finished, cancelled otherwise.
 // session.set_config is supported unless launch.env GOAT2_FAKE_NO_SET_CONFIG=1; after it, echoes
 // end with " [model: <model>, mode: <runtimeMode>]".
 import type { EngineHost, EngineModule, EngineSession } from "../engine.ts";
@@ -25,6 +26,7 @@ const DRIVER = "fake";
 interface ActiveTurn {
   readonly turnId: string;
   readonly steered: string[];
+  readonly steeredIds: string[];
   interrupted: boolean;
   wake: (() => void) | undefined;
 }
@@ -57,7 +59,13 @@ class FakeSession implements EngineSession {
       return { status: "declined", reason: "a turn is already running" };
     }
     this.#turns += 1;
-    const turn: ActiveTurn = { turnId: `turn-${this.#turns}`, steered: [], interrupted: false, wake: undefined };
+    const turn: ActiveTurn = {
+      turnId: `turn-${this.#turns}`,
+      steered: [],
+      steeredIds: [],
+      interrupted: false,
+      wake: undefined,
+    };
     this.#active = turn;
     const files = inputs.flatMap((input) => input.attachments.map((attachment) => attachment.path ?? "missing"));
     const text = inputs.map((input) => input.text).join("\n") + (files.length === 0 ? "" : ` [files: ${files.join(", ")}]`);
@@ -73,6 +81,7 @@ class FakeSession implements EngineSession {
       return { status: "declined", reason: "no running turn with that id" };
     }
     turn.steered.push(...inputs.map((input) => input.text));
+    turn.steeredIds.push(...inputs.map((input) => input.inputId));
     return { status: "accepted" };
   }
 
@@ -104,6 +113,17 @@ class FakeSession implements EngineSession {
     const messageId = `${turn.turnId}:message`;
     const finish = (outcome: { type: "done" } | { type: "failed"; reason: string } | { type: "interrupted" }) => {
       this.#active = undefined;
+      if (turn.steeredIds.length > 0) {
+        host.emit({
+          type: "steer_updated",
+          turnId: turn.turnId,
+          inputIds: [...turn.steeredIds],
+          status:
+            outcome.type === "done"
+              ? { type: "completed" }
+              : { type: "cancelled", reason: `the turn ended (${outcome.type}) before the steer was read` },
+        });
+      }
       host.emit({ type: "turn_finished", turnId: turn.turnId, outcome });
     };
     const waitForInterrupt = () =>

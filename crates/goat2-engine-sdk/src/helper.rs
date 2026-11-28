@@ -10,12 +10,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use goat2_contracts::{
-    ChatAttachment, EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderCapabilities,
-    ProviderProbeResult, RequestKind, ThreadId, TurnItem,
+    ChatAttachment, EngineDriver, EngineItemLocator, EngineRef, InputId, ItemId,
+    ProviderCapabilities, ProviderProbeResult, RequestKind, ThreadId, TurnItem,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
+    RequestAnswer, SessionSpec, SteerResult, SteerStatus, TurnOutcome, TurnSettings,
+    TurnStartResult,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -714,6 +715,36 @@ impl Translator {
                 EngineEvent::TurnFinished {
                     turn_id: text("turnId")?,
                     outcome,
+                }
+            }
+            "steer_updated" => {
+                let input_ids = event
+                    .get("inputIds")
+                    .and_then(Value::as_array)
+                    .ok_or("missing inputIds")?
+                    .iter()
+                    .map(|id| {
+                        id.as_str()
+                            .map(InputId::from)
+                            .ok_or("inputIds holds a non-string")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let status = event.get("status").ok_or("missing status")?;
+                let status = match status.get("type").and_then(Value::as_str) {
+                    Some("completed") => SteerStatus::Completed,
+                    Some("cancelled") => SteerStatus::Cancelled {
+                        reason: status
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the engine cancelled the steer")
+                            .to_string(),
+                    },
+                    other => return Err(format!("unknown steer status {other:?}")),
+                };
+                EngineEvent::SteerUpdated {
+                    turn_id: text("turnId")?,
+                    input_ids,
+                    status,
                 }
             }
             "exited" => EngineEvent::Exited {

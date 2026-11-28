@@ -133,6 +133,12 @@ export type EngineEvent =
       readonly progress: string | null;
     }
   | { readonly type: "turn_finished"; readonly turnId: string; readonly outcome: TurnOutcome }
+  | {
+      readonly type: "steer_updated";
+      readonly turnId: string;
+      readonly inputIds: ReadonlyArray<string>;
+      readonly status: { readonly type: "completed" } | { readonly type: "cancelled"; readonly reason: string };
+    }
   | { readonly type: "exited"; readonly reason: string };
 
 export type ErrorCode = "bad_request" | "unavailable" | "start_failed" | "unsupported" | "transport";

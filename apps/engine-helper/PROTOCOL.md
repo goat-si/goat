@@ -58,6 +58,7 @@ reason}. Same meaning as goat2-engine-api (structure/30_wire.md).
 | auth_required | turnId or null, url or null, message (sign-in needed; host opens a signin request) |
 | subagent_update | turnId or null, subagentId, status (TurnItemStatus), title or null, progress or null (not stored) |
 | turn_finished | turnId, outcome: {type: "done"} / {type: "failed", reason} / {type: "interrupted"} |
+| steer_updated | turnId, inputIds (the steer's inputIds), status: {type: "completed"} (the engine read it into the turn) / {type: "cancelled", reason} (accepted but never ran) (not stored) |
 | exited | reason (the engine is gone; the helper exits right after) |
 
 item is a goat2-contracts TurnItem without threadId, runId, ordinal and providerThreadId; the Rust
