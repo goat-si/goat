@@ -17,7 +17,7 @@ use crate::{
         ModelWrite, PromptContext, SubagentEndNotice, SubagentUpdate,
     },
     items::ToolState,
-    policy::{Disposition, RuntimePolicy},
+    policy::{Disposition, PermissionChoice, RuntimePolicy, select_permission_option_id},
     wire::{InitializeInfo, SessionSetup},
 };
 use futures::future::BoxFuture;
@@ -264,6 +264,25 @@ impl AcpFlavor for Grok {
     }
     fn approval_options(&self, r: &Value) -> Vec<ApprovalOption> {
         grok_approval_options(r)
+    }
+    /// v1 `GROK_ALLOW_EDITS_SESSION_OPTION_ID` (acpSupport.ts:196-211): only `allow-edits-session`
+    /// is session-scoped, and other `allow_always` options persist project grants, so "for this
+    /// session" answers exactly that option, wherever Grok lists it (final review finding 1).
+    /// Without it the narrower allow-once answers, as v1's fallback does.
+    fn permission_option_id(&self, options: &[Value], choice: PermissionChoice) -> Option<String> {
+        match choice {
+            PermissionChoice::AcceptForSession => options
+                .iter()
+                .find(|o| {
+                    o.get("kind").and_then(Value::as_str) == Some("allow_always")
+                        && o.get("optionId").and_then(Value::as_str).map(str::trim)
+                            == Some(GROK_ALLOW_EDITS_SESSION_OPTION_ID)
+                })
+                .and_then(|o| o.get("optionId").and_then(Value::as_str))
+                .map(str::to_owned)
+                .or_else(|| select_permission_option_id(options, PermissionChoice::Accept)),
+            other => select_permission_option_id(options, other),
+        }
     }
     fn model_write(&self, selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
         grok_model::grok_model_write(

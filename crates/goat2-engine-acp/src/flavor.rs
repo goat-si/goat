@@ -566,6 +566,17 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn approval_options(&self, request: &Value) -> Vec<ApprovalOption> {
         default_approval_options(request)
     }
+    /// The option that answers `choice` among the request's answerable `options` (v1
+    /// `selectPermissionOptionId`, permissionOptions.ts:4-15). A flavor whose session choice is
+    /// one specific option overrides this, so a person's "for this session" never selects a
+    /// broader grant the agent listed first.
+    fn permission_option_id(
+        &self,
+        options: &[Value],
+        choice: policy::PermissionChoice,
+    ) -> Option<String> {
+        policy::select_permission_option_id(options, choice)
+    }
     /// v1 `sessionModeForPolicy`: the ACP session mode for a runtime mode.
     fn session_mode_for(&self, _mode: RuntimeMode, _modes: Option<&ModeState>) -> Option<String> {
         None

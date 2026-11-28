@@ -62,7 +62,6 @@ use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
 use crate::policy::{
     Disposition, PermissionChoice, RuntimePolicy, mcp_tool_approval_elicitation_disposition,
-    select_auto_approved_option, select_permission_option_id,
 };
 use crate::process::{ChildProcess, Launch};
 use crate::subagents::{SubagentTracker, ToolRoute, TurnRef};
@@ -799,14 +798,24 @@ impl Shared {
         let tool_call = params.get("toolCall").cloned().unwrap_or(Value::Null);
         match disposition {
             Disposition::Allow => {
-                if let Some(option_id) = select_auto_approved_option(&options) {
+                // v1 `selectAutoApprovedPermissionOption`: allow-once first, then the flavor's
+                // session choice (never a broader grant listed before it, final review finding 1).
+                if let Some(option_id) = self
+                    .flavor
+                    .permission_option_id(&options, PermissionChoice::Accept)
+                    .or_else(|| {
+                        self.flavor
+                            .permission_option_id(&options, PermissionChoice::AcceptForSession)
+                    })
+                {
                     let _ = responder.respond(selected(&option_id));
                     return;
                 }
             }
             Disposition::Deny => {
                 let _ = responder.respond(
-                    select_permission_option_id(&options, PermissionChoice::Decline)
+                    self.flavor
+                        .permission_option_id(&options, PermissionChoice::Decline)
                         .map(|id| selected(&id))
                         .unwrap_or_else(cancelled),
                 );
@@ -2168,7 +2177,7 @@ impl EngineSession for AcpSession {
                     _ => None,
                 };
                 let response = choice
-                    .and_then(|c| select_permission_option_id(&options, c))
+                    .and_then(|c| self.shared.flavor.permission_option_id(&options, c))
                     .map(|id| selected(&id))
                     .unwrap_or_else(cancelled);
                 responder
