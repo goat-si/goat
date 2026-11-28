@@ -689,3 +689,360 @@ async fn a_silent_codex_times_out() {
         Some("Timed out while checking Codex app-server provider status.")
     );
 }
+
+/// A fresh empty folder (canonical, so symlink targets compare on macOS).
+#[cfg(unix)]
+fn fresh_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("goat2-probe-home-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.canonicalize().unwrap()
+}
+
+/// The fake codex behind a wrapper that records the CODEX_HOME and arguments it was started with.
+#[cfg(unix)]
+fn recording_codex(name: &str, record: &std::path::Path) -> std::path::PathBuf {
+    script(
+        name,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\" > '{}'\nprintf '%s\\n' \"$@\" >> '{}'\nexec '{}' \"$@\"\n",
+            record.display(),
+            record.display(),
+            env!("CARGO_BIN_EXE_goat2-fake-codex")
+        ),
+    )
+}
+
+/// v1 CodexHomeLayout: a second instance probes in its own auth overlay over the shared home,
+/// with CODEX_HOME set to it and the bundled-marketplace override before its own arguments.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_probe_runs_codex_in_its_own_overlay_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("overlay");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("config.toml"), "").unwrap();
+    std::fs::write(shared.join("auth.json"), "{}").unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let record = root.join("record");
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let f = factory(api_key_catalog(page));
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex("overlay", &record)),
+            args: vec!["--instance-arg".into()],
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(shared.clone()),
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    let lines: Vec<String> = std::fs::read_to_string(&record)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines[0], instance.display().to_string(), "CODEX_HOME");
+    let marketplace = format!(
+        "marketplaces.openai-bundled.source={}",
+        serde_json::to_string(
+            instance
+                .join(".tmp/bundled-marketplaces/openai-bundled")
+                .to_str()
+                .unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        lines[1..],
+        [
+            "app-server",
+            "-c",
+            "thread_unload_delay_secs=0",
+            "-c",
+            marketplace.as_str(),
+            "--instance-arg"
+        ]
+    );
+    assert_eq!(
+        std::fs::read_link(instance.join("config.toml")).unwrap(),
+        shared.join("config.toml")
+    );
+    assert!(
+        !instance.join("auth.json").exists(),
+        "the account file stays private"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The default instance (no private home) runs exactly as the factory's probe: the driver sets
+/// no CODEX_HOME of its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_default_instance_probe_keeps_the_shared_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::ProviderTarget;
+    let root = fresh_dir("default");
+    let record = root.join("record");
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let mut f = factory(api_key_catalog(page));
+    f.options.program = recording_codex("default", &record);
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex"),
+        launch: None,
+        home: None,
+        shared_home: None,
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    let first = std::fs::read_to_string(&record).unwrap();
+    let inherited = std::env::var("CODEX_HOME").unwrap_or_default();
+    assert_eq!(first.lines().next().unwrap_or(""), inherited);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// v1: a home that cannot be laid out stops the instance ("Failed to materialize the Codex
+/// shadow home."); the message names no path.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_home_that_cannot_be_laid_out_fails_without_naming_it() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::ProviderTarget;
+    let root = fresh_dir("conflict");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("config.toml"), "").unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    std::fs::write(instance.join("config.toml"), "mine").unwrap();
+    let f = factory(Vec::new());
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: None,
+        home: Some(instance.clone()),
+        shared_home: Some(shared),
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    let message = p.message.unwrap();
+    assert!(
+        message.starts_with("Failed to materialize the Codex shadow home:"),
+        "{message}"
+    );
+    assert!(message.contains("config.toml"), "{message}");
+    assert!(!message.contains(root.to_str().unwrap()), "{message}");
+    assert_eq!(
+        std::fs::read_to_string(instance.join("config.toml")).unwrap(),
+        "mine"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r1: an overlay instance is never told to run `codex login` in another home (that would
+/// sign in another account), and Codex's error text naming the private home is redacted.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_probe_redacts_its_home_and_asks_to_sign_in_this_instance() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("redact");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let target = |record: &std::path::Path, name: &str| ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex(name, record)),
+            args: Vec::new(),
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(root.join("shared")),
+    };
+    // No login: the instance's own sign-in, no path, no `codex login` hint.
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": null, "requiresOpenaiAuth": true}}),
+    ));
+    let p = factory(e)
+        .probe_instance(&target(&root.join("r1"), "redact1"))
+        .await
+        .unwrap();
+    assert_eq!(p.auth.status, ServerProviderAuthStatus::Unauthenticated);
+    assert_eq!(
+        p.message.as_deref(),
+        Some(
+            "Codex CLI is not authenticated for this provider instance. Sign in to this instance and try again."
+        )
+    );
+    // An RPC error naming the private home.
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(json!({"id": 2, "error": {"code": -32603,
+        "message": format!("cannot read {}/auth.json", instance.display())}})));
+    let p = factory(e)
+        .probe_instance(&target(&root.join("r2"), "redact2"))
+        .await
+        .unwrap();
+    let message = p.message.unwrap();
+    assert!(message.contains("<instance home>/auth.json"), "{message}");
+    assert!(!message.contains(instance.to_str().unwrap()), "{message}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r1: the shared home comes from the factory's settings; an instance's own CODEX_HOME
+/// cannot move it (v1 resolves the shared home from settings, CodexHomeLayout.ts:49).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_environment_cannot_move_the_shared_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("shared-env");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("config.toml"), "").unwrap();
+    std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let record = root.join("record");
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let mut f = factory(api_key_catalog(page));
+    f.options
+        .env_set
+        .push(("CODEX_HOME".into(), shared.clone().into_os_string()));
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex("shared-env", &record)),
+            args: Vec::new(),
+            env: [(
+                "CODEX_HOME".to_string(),
+                root.join("elsewhere").display().to_string(),
+            )]
+            .into(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: None,
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(
+        std::fs::read_link(instance.join("config.toml")).unwrap(),
+        shared.join("config.toml")
+    );
+    let first = std::fs::read_to_string(&record).unwrap();
+    assert_eq!(
+        first.lines().next().unwrap(),
+        instance.display().to_string()
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r2: an executable inside the private home is reported without its path.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_binary_inside_its_home_is_reported_without_the_path() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    use std::os::unix::fs::PermissionsExt;
+    let root = fresh_dir("binary");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(instance.join("bin")).unwrap();
+    let binary = instance.join("bin/codex");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nexec '{}' \"$@\"\n",
+            env!("CARGO_BIN_EXE_goat2-fake-codex")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(binary.clone()),
+            args: Vec::new(),
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(root.join("shared")),
+    };
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let p = factory(api_key_catalog(page))
+        .probe_instance(&target)
+        .await
+        .unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.binary_path.as_deref(), Some("<instance home>/bin/codex"));
+    // The layout-failure branch too.
+    std::fs::write(root.join("shared/config.toml"), "").unwrap();
+    std::fs::write(instance.join("config.toml"), "mine").unwrap();
+    let p = factory(Vec::new()).probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert_eq!(p.binary_path.as_deref(), Some("<instance home>/bin/codex"));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r3: the catalog never shows the private home. Names and option labels are redacted;
+/// a model whose id names the home is left out (its id is what a turn sends back), and the
+/// probe says so with a warning.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_catalog_never_shows_its_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("catalog");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let home = instance.display().to_string();
+    let page = json!({"data": [
+        model("gpt-6.1-terra", true, json!({
+            "displayName": format!("terra from {home}"),
+            "serviceTiers": [{"id": "priority", "name": "Fast", "description": format!("cached in {home}/tiers")}]
+        })),
+        model(&format!("{home}/models/local"), false, json!({"displayName": "local"})),
+    ]});
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex("catalog", &root.join("record"))),
+            args: Vec::new(),
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(root.join("shared")),
+    };
+    let p = factory(api_key_catalog(page))
+        .probe_instance(&target)
+        .await
+        .unwrap();
+    let shown = serde_json::to_string(&p).unwrap();
+    assert!(!shown.contains(&home), "{shown}");
+    assert!(shown.contains("<instance home>/tiers"), "{shown}");
+    assert_eq!(p.models.len(), 1);
+    assert_eq!(p.models[0].slug, "gpt-6.1-terra");
+    assert!(
+        p.models[0].name.contains("<instance home>"),
+        "{}",
+        p.models[0].name
+    );
+    assert_eq!(p.status, ServerProviderState::Warning);
+    assert_eq!(
+        p.message.as_deref(),
+        Some("1 Codex model(s) named this instance's private home and are not listed.")
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

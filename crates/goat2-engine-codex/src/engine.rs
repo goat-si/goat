@@ -14,8 +14,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use goat2_engine_api::{
-    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
-    RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
+    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession, LaunchSpec,
+    ProviderTarget, RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings,
+    TurnStartResult,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -27,6 +28,7 @@ use crate::contract::{
     EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderRequestKind, RequestId,
     RequestKind, RequestOutcome, RuntimeMode, ThreadId,
 };
+use crate::home_layout::{self, HomeLayout, Redactor};
 use crate::items::{self, ItemContext};
 use crate::process::{ChildProcess, Launch, group_rss_bytes_of};
 use crate::protocol::client::{
@@ -117,14 +119,33 @@ impl EngineFactory for CodexEngineFactory {
     async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
         Ok(crate::probe::probe(&self.options).await)
     }
+
+    /// [Self::probe] for one instance: its launch settings and its own Codex home (v1 probes each
+    /// instance with its CODEX_HOME; a second account's sign-in differs from the first).
+    async fn probe_instance(
+        &self,
+        target: &goat2_engine_api::ProviderTarget,
+    ) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        Ok(crate::probe::probe_instance(&self.options, target).await)
+    }
 }
 
 /// v1 `codexAppServerArgs(launchArgs, routeArgs, unloadImmediately = true)` with v1's client
 /// identity: the factory's binary, arguments and environment.
-pub(crate) fn base_launch(options: &CodexEngineOptions, program: &Path, cwd: PathBuf) -> Launch {
+/// With an instance home layout, v1 `codexHomeLaunchArgs` go before the launch arguments (so an
+/// explicit source still wins) and its CODEX_HOME is set last.
+pub(crate) fn base_launch(
+    options: &CodexEngineOptions,
+    program: &Path,
+    cwd: PathBuf,
+    layout: Option<&HomeLayout>,
+) -> Launch {
     let mut launch = Launch::new(program).without_host_identity();
     for arg in ["app-server", "-c", "thread_unload_delay_secs=0"] {
         launch = launch.arg(arg);
+    }
+    if let Some(layout) = layout {
+        launch.args.extend(layout.launch_args());
     }
     launch.args.extend(options.extra_args.iter().cloned());
     launch.cwd = Some(cwd);
@@ -135,26 +156,226 @@ pub(crate) fn base_launch(options: &CodexEngineOptions, program: &Path, cwd: Pat
         CODEX_CLIENT_NAME.into(),
     ));
     launch.env_set.extend(options.env_set.iter().cloned());
+    if let Some(home) = layout.and_then(HomeLayout::codex_home) {
+        launch
+            .env_set
+            .push(("CODEX_HOME".into(), home.as_os_str().to_owned()));
+    }
     launch
 }
 
-/// The launch for one session: [base_launch], then the host's [LaunchSpec] (binary, extra
-/// arguments, environment) on top.
-fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
-    let program = spec
-        .launch()
-        .and_then(|l| l.binary.clone())
-        .unwrap_or_else(|| options.program.clone());
-    let mut launch = base_launch(options, &program, PathBuf::from(&spec.engine.cwd));
-    if let Some(host) = spec.launch() {
-        launch.args.extend(host.args.iter().map(OsString::from));
-        launch.env_set.extend(
-            host.env
+/// The factory's options for one provider instance: its binary, and its arguments and
+/// environment after the factory's (v1 `codexAppServerArgs` puts the instance's launch arguments
+/// after GOAT's own).
+pub(crate) fn instance_options(
+    options: &CodexEngineOptions,
+    launch: Option<&LaunchSpec>,
+) -> CodexEngineOptions {
+    let mut out = options.clone();
+    if let Some(launch) = launch {
+        if let Some(binary) = &launch.binary {
+            out.program = binary.clone();
+        }
+        out.extra_args
+            .extend(launch.args.iter().map(OsString::from));
+        out.env_set.extend(
+            launch
+                .env
                 .iter()
                 .map(|(k, v)| (OsString::from(k), OsString::from(v))),
         );
     }
-    launch
+    out
+}
+
+/// v1 `resolveManagedCodexHomeLayout` for a provider instance (src/home_layout.rs). `None` when the
+/// target names neither a private home nor a shared one: the default instance runs as today.
+/// The shared home is the one the default instance uses: the target's `shared_home` (v1 `homePath`),
+/// else the factory's or the host's CODEX_HOME, else `~/.codex`.
+pub(crate) fn instance_layout(
+    options: &CodexEngineOptions,
+    target: Option<&ProviderTarget>,
+) -> Option<HomeLayout> {
+    let target = target?;
+    if target.home.is_none() && target.shared_home.is_none() {
+        return None;
+    }
+    let env = |name: &str| {
+        options
+            .env_set
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| PathBuf::from(v))
+            .or_else(|| std::env::var_os(name).map(PathBuf::from))
+            .filter(|p| !p.as_os_str().is_empty())
+    };
+    let shared = target.shared_home.clone().or_else(|| env("CODEX_HOME"));
+    let user_home = env("HOME").unwrap_or_default();
+    Some(home_layout::resolve(
+        shared.as_deref(),
+        target.home.as_deref(),
+        &user_home,
+    ))
+}
+
+/// v1 materializes the instance's home before it starts or probes it (CodexAdapterV2.ts:598-608,
+/// CodexDriver.ts:310); the message names no path (home paths are never shown or logged).
+pub(crate) fn materialize(layout: &HomeLayout) -> Result<(), String> {
+    layout
+        .materialize()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to materialize the Codex shadow home: {e}."))
+}
+
+/// The launch for one session: the instance's home ([instance_layout], from the factory's own
+/// settings so an instance's environment cannot move the shared home) and options
+/// ([instance_options]) through [base_launch], with the redactor for its private home.
+fn launch_for(
+    options: &CodexEngineOptions,
+    spec: &SessionSpec,
+) -> Result<(Launch, Redactor), EngineError> {
+    let layout = instance_layout(options, spec.instance.as_ref());
+    if let Some(layout) = &layout {
+        materialize(layout).map_err(EngineError::StartFailed)?;
+    }
+    // After the layout, so the home exists and its canonical spelling is known too.
+    let redact = Redactor::for_layout(layout.as_ref());
+    let options = instance_options(options, spec.launch());
+    let launch = base_launch(
+        &options,
+        &options.program,
+        PathBuf::from(&spec.engine.cwd),
+        layout.as_ref(),
+    );
+    Ok((launch, redact))
+}
+
+/// [EngineEvent] with an instance's private home replaced in every text and item. Exhaustive,
+/// so a new event kind needs a decision here.
+fn redact_event(redact: &Redactor, event: EngineEvent) -> EngineEvent {
+    let text = |t: String| redact.apply(&t);
+    let item = |i: Box<goat2_contracts::TurnItem>| Box::new(redact.value(*i));
+    match event {
+        EngineEvent::TextDelta {
+            turn_id,
+            item_id,
+            text: t,
+        } => EngineEvent::TextDelta {
+            turn_id,
+            item_id,
+            text: text(t),
+        },
+        EngineEvent::ContentDelta {
+            turn_id,
+            item_id,
+            stream_kind,
+            text: t,
+        } => EngineEvent::ContentDelta {
+            turn_id,
+            item_id,
+            stream_kind,
+            text: text(t),
+        },
+        EngineEvent::ItemCompleted {
+            turn_id,
+            item: i,
+            locator,
+        } => EngineEvent::ItemCompleted {
+            turn_id,
+            item: item(i),
+            locator,
+        },
+        EngineEvent::RequestOpened {
+            turn_id,
+            key,
+            item_id,
+            kind,
+            summary,
+            item: i,
+        } => EngineEvent::RequestOpened {
+            turn_id,
+            key,
+            item_id,
+            kind,
+            summary: text(summary),
+            item: i.map(item),
+        },
+        EngineEvent::SessionRequestOpened {
+            key,
+            item_id,
+            kind,
+            summary,
+            item: i,
+        } => EngineEvent::SessionRequestOpened {
+            key,
+            item_id,
+            kind,
+            summary: text(summary),
+            item: i.map(item),
+        },
+        EngineEvent::RequestClosed { key } => EngineEvent::RequestClosed { key },
+        EngineEvent::ContinuationWithdrawn { key } => EngineEvent::ContinuationWithdrawn { key },
+        EngineEvent::AuthRequired {
+            key,
+            turn_id,
+            url,
+            message,
+        } => EngineEvent::AuthRequired {
+            key,
+            turn_id,
+            url: url.map(text),
+            message: text(message),
+        },
+        EngineEvent::TokenUsage { turn_id, usage } => EngineEvent::TokenUsage { turn_id, usage },
+        EngineEvent::SubagentUpdate {
+            turn_id,
+            subagent_id,
+            status,
+            title,
+            progress,
+        } => EngineEvent::SubagentUpdate {
+            turn_id,
+            subagent_id,
+            status,
+            title: title.map(text),
+            progress: progress.map(text),
+        },
+        EngineEvent::SteerUpdated {
+            turn_id,
+            input_ids,
+            status,
+        } => EngineEvent::SteerUpdated {
+            turn_id,
+            input_ids,
+            status,
+        },
+        EngineEvent::TurnFinished { turn_id, outcome } => EngineEvent::TurnFinished {
+            turn_id,
+            outcome: match outcome {
+                TurnOutcome::Failed { reason } => TurnOutcome::Failed {
+                    reason: text(reason),
+                },
+                other => other,
+            },
+        },
+        EngineEvent::ContinuationRequested { key, text: t } => {
+            EngineEvent::ContinuationRequested { key, text: text(t) }
+        }
+        EngineEvent::Exited { reason } => EngineEvent::Exited {
+            reason: text(reason),
+        },
+    }
+}
+
+/// [EngineError] with an instance's private home replaced.
+fn redact_error(redact: &Redactor, error: EngineError) -> EngineError {
+    match error {
+        EngineError::Unavailable(m) => EngineError::Unavailable(redact.apply(&m)),
+        EngineError::StartFailed(m) => EngineError::StartFailed(redact.apply(&m)),
+        EngineError::Transport(m) => EngineError::Transport(redact.apply(&m)),
+        EngineError::Unsupported(m) => EngineError::Unsupported(redact.apply(&m)),
+    }
 }
 
 /// GOAT's instructions go into Codex's developer instructions (its system slot) on thread/start
@@ -180,7 +401,18 @@ async fn start_session(
     options: CodexEngineOptions,
     spec: SessionSpec,
 ) -> Result<EngineHandle, EngineError> {
-    let launch = launch_for(&options, &spec);
+    let (launch, redact) = launch_for(&options, &spec)?;
+    start_launched(options, spec, launch, redact.clone())
+        .await
+        .map_err(|e| redact_error(&redact, e))
+}
+
+async fn start_launched(
+    options: CodexEngineOptions,
+    spec: SessionSpec,
+    launch: Launch,
+    redact: Redactor,
+) -> Result<EngineHandle, EngineError> {
     let mut child = ChildProcess::spawn(&launch).map_err(|error| {
         EngineError::StartFailed(format!("spawn {}: {error}", launch.program.display()))
     })?;
@@ -213,6 +445,7 @@ async fn start_session(
     let (events, event_rx) = mpsc::unbounded_channel();
     let (internal, internal_rx) = mpsc::unbounded_channel();
     let actor = Actor {
+        redact: redact.clone(),
         options,
         spec_thread: spec.thread_id.clone(),
         cwd: spec.engine.cwd.clone(),
@@ -253,7 +486,11 @@ async fn start_session(
     actor.arm_idle();
     tokio::spawn(actor.run());
     Ok(EngineHandle {
-        session: Box::new(CodexSession { commands, pgid }),
+        session: Box::new(CodexSession {
+            commands,
+            pgid,
+            redact,
+        }),
         events: event_rx,
         engine_ref: EngineRef {
             driver: EngineDriver::Codex,
@@ -343,6 +580,34 @@ enum Command {
 pub struct CodexSession {
     commands: mpsc::UnboundedSender<Command>,
     pgid: u32,
+    /// The instance's private home never leaves in a reason or error.
+    redact: Redactor,
+}
+
+impl CodexSession {
+    fn redact_start(&self, result: TurnStartResult) -> TurnStartResult {
+        let r = |reason: String| self.redact.apply(&reason);
+        match result {
+            TurnStartResult::Accepted { turn_id } => TurnStartResult::Accepted { turn_id },
+            TurnStartResult::RefusedUnowned { reason } => {
+                TurnStartResult::RefusedUnowned { reason: r(reason) }
+            }
+            TurnStartResult::Declined { reason } => TurnStartResult::Declined { reason: r(reason) },
+            TurnStartResult::Unknown { reason } => TurnStartResult::Unknown { reason: r(reason) },
+        }
+    }
+
+    fn redact_steer(&self, result: SteerResult) -> SteerResult {
+        let r = |reason: String| self.redact.apply(&reason);
+        match result {
+            SteerResult::Accepted => SteerResult::Accepted,
+            SteerResult::Declined { reason } => SteerResult::Declined { reason: r(reason) },
+            SteerResult::RefusedUnowned { reason } => {
+                SteerResult::RefusedUnowned { reason: r(reason) }
+            }
+            SteerResult::Unknown { reason } => SteerResult::Unknown { reason: r(reason) },
+        }
+    }
 }
 
 #[async_trait]
@@ -363,9 +628,9 @@ impl EngineSession for CodexSession {
                 reason: "the Codex process has ended".into(),
             };
         }
-        answer.await.unwrap_or(TurnStartResult::Unknown {
+        self.redact_start(answer.await.unwrap_or(TurnStartResult::Unknown {
             reason: "the Codex driver stopped before answering".into(),
-        })
+        }))
     }
 
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
@@ -380,9 +645,9 @@ impl EngineSession for CodexSession {
                 reason: "the Codex process has ended".into(),
             };
         }
-        answer.await.unwrap_or(SteerResult::Unknown {
+        self.redact_steer(answer.await.unwrap_or(SteerResult::Unknown {
             reason: "the Codex driver stopped before answering".into(),
-        })
+        }))
     }
 
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
@@ -397,7 +662,10 @@ impl EngineSession for CodexSession {
         {
             return Ok(());
         }
-        answer.await.unwrap_or(Ok(()))
+        answer
+            .await
+            .unwrap_or(Ok(()))
+            .map_err(|e| redact_error(&self.redact, e))
     }
 
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
@@ -412,6 +680,7 @@ impl EngineSession for CodexSession {
         result
             .await
             .unwrap_or_else(|_| Err(EngineError::Transport("the Codex driver stopped".into())))
+            .map_err(|e| redact_error(&self.redact, e))
     }
 
     /// Codex takes the model and runtime mode with every turn/start (v1 CodexTurnStartParams), so
@@ -521,6 +790,8 @@ struct Pending {
 const SETTLED_RING: usize = 64;
 
 struct Actor {
+    /// The instance's private home never leaves in an event reason.
+    redact: Redactor,
     options: CodexEngineOptions,
     spec_thread: ThreadId,
     cwd: String,
@@ -656,8 +927,11 @@ impl Actor {
         deadline
     }
 
+    /// Every event reaching the host has the instance's private home replaced (never shown or
+    /// logged): reasons and Codex's text, request summaries and the waiting and completed
+    /// items with their commands, file paths and prompts.
     fn emit(&self, event: EngineEvent) {
-        let _ = self.events.send(event);
+        let _ = self.events.send(redact_event(&self.redact, event));
     }
 
     fn arm_idle(&mut self) {

@@ -295,3 +295,47 @@ async fn real_codex_probe() {
     }));
     assert!(goat2_engine_codex::probe::parse_rfc3339_ms(&probe.checked_at).is_some());
 }
+
+/// A second instance with no sign-in of its own, in an overlay over a temporary shared home (the
+/// person's ~/.codex is not touched): the real Codex accepts the overlay CODEX_HOME and the
+/// bundled-marketplace override and reports the missing login.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "runs the real installed codex"]
+async fn real_codex_instance_probe_in_an_empty_overlay() {
+    let root = std::env::temp_dir().join(format!("goat2-real-overlay-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    std::fs::create_dir_all(root.join("instance")).unwrap();
+    let target = goat2_engine_api::ProviderTarget {
+        instance_id: goat2_contracts::ProviderInstanceId::new("codex_2"),
+        launch: None,
+        home: Some(root.join("instance")),
+        shared_home: Some(root.join("shared")),
+    };
+    let probe = CodexEngineFactory::new(CodexEngineOptions::default())
+        .probe_instance(&target)
+        .await
+        .expect("probe");
+    eprintln!(
+        "instance probe: status {:?}, version {:?}, auth {:?}, message {:?}",
+        probe.status, probe.version, probe.auth.status, probe.message
+    );
+    assert_eq!(probe.version.as_deref(), Some("0.167.0"));
+    assert_eq!(
+        probe.auth.status,
+        goat2_contracts::ServerProviderAuthStatus::Unauthenticated
+    );
+    assert!(
+        std::fs::symlink_metadata(root.join("instance/sessions"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let message = probe.message.unwrap_or_default();
+    assert!(
+        !message.contains(root.join("instance").to_str().unwrap()),
+        "{message}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
