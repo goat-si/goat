@@ -11,7 +11,11 @@
 /// the log is never migrated.
 pub const LOG_FORMAT_VERSION: u32 = 1;
 
-/// Bot instructions limit in UTF-8 bytes.
+/// Bot instructions limit in characters (Unicode scalar values), checked by serde and by the JSON
+/// Schema `maxLength` alike (v1 `BotInstructions`).
+pub const BOT_INSTRUCTIONS_MAX_CHARS: usize = 16384;
+/// v1 `BotInstructions` also caps UTF-8 bytes. JSON Schema cannot express a byte limit, so the
+/// contract does not carry it; the host's bot store enforces it when it writes `bots/<botId>.json`.
 pub const BOT_INSTRUCTIONS_MAX_BYTES: usize = 16384;
 /// `RequestOpened.context`, in characters (lane P2-E; v1 decision context has no cap).
 pub const REQUEST_CONTEXT_MAX_CHARS: usize = 4000;

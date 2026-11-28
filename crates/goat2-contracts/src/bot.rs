@@ -39,7 +39,8 @@ pub struct BotProfile {
     pub session_thread_id: ThreadId,
     /// v1 `defaultModelSelection`.
     pub default_model_selection: ModelSelection,
-    /// v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes (bytes checked by serde only).
+    /// v1 `BotInstructions`: at most 16384 characters, checked by serde and schema alike. v1's
+    /// 16384 UTF-8 byte cap is enforced by the host's bot store, not by this contract.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -54,6 +55,8 @@ pub struct BotProfile {
 #[serde(rename_all = "camelCase")]
 pub struct ChannelBotNote {
     pub index: u32,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub date: Option<String>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,6 +70,8 @@ pub struct ChannelBotNote {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelListBotNotesResult {
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub revision: Option<String>,
     pub notes: Vec<ChannelBotNote>,
     pub truncated: bool,

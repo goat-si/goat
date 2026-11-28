@@ -1,0 +1,19 @@
+{
+  "installed": true,
+  "version": "0.4.2",
+  "cli": "present",
+  "status": "warning",
+  "auth": {
+    "status": "unauthenticated",
+    "action": {
+      "elicitationId": "elic-1",
+      "url": "javascript:alert(1)",
+      "message": "Open the link to sign in to Kimi",
+      "createdAt": "2026-11-28T13:00:00Z",
+      "expiresAt": "2026-11-28T13:10:00Z"
+    }
+  },
+  "models": [],
+  "checkedAt": "2026-11-28T13:00:00Z",
+  "message": "Sign-in required"
+}

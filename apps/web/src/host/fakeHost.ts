@@ -274,11 +274,6 @@ export class FakeHost implements Transport {
         for (const sub of this.cardSubs) this.emit({ type: "bot_changed", subId: sub, bot });
         return this.ok({ botId: bot.botId, bot });
       }
-      case "mark_read": {
-        const t = this.world.threads[frame.threadId];
-        if (!t) return this.fail("thread_not_found", "No such thread.");
-        return this.ok({ threadId: t.card.id });
-      }
       case "get_turn_item": {
         const t = this.world.threads[frame.threadId];
         if (!t) return this.fail("thread_not_found", "No such thread.");
@@ -286,6 +281,9 @@ export class FakeHost implements Transport {
         if (!item) return this.unavailable("item_not_found", "not_found", "No such item.");
         return this.ok({ threadId: t.card.id, turnItem: item });
       }
+      // The demo host keeps no read state (the real host stores lastReadSeq in ui-state.json),
+      // so mark_read is refused like the other commands it does not serve.
+      case "mark_read":
       case "list_bot_notes":
       case "write_bot_notes":
       case "refresh_providers":
