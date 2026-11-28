@@ -1,4 +1,5 @@
 import * as NodeNet from "node:net";
+import { listensOnLoopback } from "./hostClassification.ts";
 import { guardErrors } from "./errorGuards.ts";
 
 import * as Data from "effect/Data";
@@ -53,7 +54,7 @@ export interface NetServiceShape {
 
   readonly reserveLoopbackPort: (host?: string) => Effect.Effect<number, NetError>;
 
-  readonly findAvailablePort: (preferred: number) => Effect.Effect<number, NetError>;
+  readonly findAvailablePort: (preferred: number, host?: string) => Effect.Effect<number, NetError>;
 }
 
 export class NetService extends Context.Service<NetService, NetServiceShape>()(
@@ -220,11 +221,17 @@ export const make = () => {
     isPortAvailableOnLoopback,
     hasListenerOnHost,
     reserveLoopbackPort,
-    findAvailablePort: Effect.fn("Net.findAvailablePort")(function* (preferred) {
-      if (preferred > 0 && (yield* isPortAvailableOnLoopback(preferred))) {
+    findAvailablePort: Effect.fn("Net.findAvailablePort")(function* (preferred, host) {
+      const available = listensOnLoopback(host)
+        ? isPortAvailableOnLoopback(preferred)
+        : Effect.gen(function* () {
+            if (yield* hasListenerOnHost(preferred, host ?? "")) return false;
+            return yield* canListenOnHost(preferred, host ?? "");
+          });
+      if (preferred > 0 && (yield* available)) {
         return preferred;
       }
-      return yield* reserveLoopbackPort();
+      return yield* reserveLoopbackPort(listensOnLoopback(host) ? undefined : host);
     }),
   } satisfies NetServiceShape;
 };
