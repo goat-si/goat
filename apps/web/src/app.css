@@ -29,6 +29,3 @@ textarea.goat2-input::placeholder { color: #5D5D5D; opacity: 1; }
 /* Thread frame columns follow the window height (the board draws them at 900px). */
 [data-thread-frame] [data-sidebar-col] { height: 100% !important; }
 [data-thread-frame] [data-rail-col] { height: calc(100% - 40px) !important; }
-/* Workspace border rule (owner 2026-11-28): top + left 0.5px #E2E2E2. The re-exported thread boards still draw
-   1px #ECECEC (reported to the owner); this keeps the rule until Paper is corrected. */
-[data-thread-frame] [data-overlay] { border-color: #E2E2E2 !important; border-width: 0.5px 0 0 0.5px !important; }

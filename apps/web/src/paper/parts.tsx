@@ -1144,7 +1144,7 @@ export function ThreadFrame({ rail, main, header, lights, sidebar, toggle, menu,
           <div data-workspace-bg="" style={{ backgroundColor: '#F7F7F7', borderBottomLeftRadius: '14px', borderTopLeftRadius: '14px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
           {sidebar}
         </div>
-        <div data-overlay="" style={{ borderBottomLeftRadius: '14px', borderLeftColor: '#ECECEC', borderLeftStyle: 'solid', borderLeftWidth: '1px', borderTopColor: '#ECECEC', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '1px', bottom: '0px', boxSizing: 'border-box', left: '44px', position: 'absolute', right: '0px', top: '39px' }} />
+        <div data-overlay="" style={{ borderBottomLeftRadius: '14px', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', bottom: '0px', boxSizing: 'border-box', left: '44px', position: 'absolute', right: '0px', top: '39px' }} />
         <div {...toggle} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', height: '28px', justifyContent: 'center', left: '91px', position: 'absolute', top: '6px', width: '28px' }}>
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: '0' }}>
             <path d="M22 11C22 7.229 22 5.343 20.828 4.172C19.657 3 17.771 3 14 3H10C6.229 3 4.343 3 3.172 4.172C2 5.343 2 7.229 2 11V13C2 16.771 2 18.657 3.172 19.828C4.343 21 6.229 21 10 21H14C17.771 21 19.657 21 20.828 19.828C22 18.657 22 16.771 22 13V11Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
