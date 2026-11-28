@@ -351,7 +351,7 @@ pub enum SubagentOrigin {
 }
 
 /// A finished item, as `item.completed` stores it and the chat renderer draws it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnItem {
     pub id: ItemId,
@@ -372,7 +372,7 @@ pub struct TurnItem {
 }
 
 /// The `type`-tagged part of a [TurnItem].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(
     tag = "type",
     rename_all = "snake_case",

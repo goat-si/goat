@@ -1,5 +1,63 @@
 {
   "$defs": {
+    "Actor": {
+      "description": "v1 `OrchestrationV2Actor`.",
+      "enum": [
+        "user",
+        "agent",
+        "system"
+      ],
+      "type": "string"
+    },
+    "ApprovalDecision": {
+      "description": "v1 `ProviderApprovalDecision`.",
+      "enum": [
+        "accept",
+        "acceptForSession",
+        "acceptAlways",
+        "decline",
+        "cancel"
+      ],
+      "type": "string"
+    },
+    "ApprovalOption": {
+      "description": "v1 `ProviderApprovalOption`.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "label": {
+          "type": "string"
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "label"
+      ],
+      "type": "object"
+    },
+    "AssistantDelivery": {
+      "description": "v1 assistant `delivery: \"async\"`: sent mid-turn, apart from the turn's answer.",
+      "enum": [
+        "async"
+      ],
+      "type": "string"
+    },
+    "AssistantMessagePhase": {
+      "description": "v1 `AssistantMessagePhase`.",
+      "enum": [
+        "commentary",
+        "partial_answer",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "BlobRef": {
       "description": "Where a large body or attachment lives inside the thread folder.",
       "properties": {
@@ -95,6 +153,80 @@
         "total"
       ],
       "type": "object"
+    },
+    "CommandAction": {
+      "description": "v1 `OrchestrationV2CommandAction`: what a read-only shell command does.",
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "search",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CreationSource": {
+      "description": "v1 `OrchestrationV2CreationSource`.",
+      "enum": [
+        "web",
+        "mobile",
+        "mcp",
+        "provider",
+        "server"
+      ],
+      "type": "string"
     },
     "DecisionOption": {
       "description": "One choice of a `decision` request.",
@@ -200,6 +332,40 @@
     "Epoch": {
       "description": "Generation of a `goat.jsonl` file or of the card index. A UUID string.",
       "type": "string"
+    },
+    "FileChangeDetail": {
+      "description": "v1 `OrchestrationV2FileChangeDetail`.",
+      "properties": {
+        "fileType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "path"
+      ],
+      "type": "object"
     },
     "Fold": {
       "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.\n\nSteers: `input.delivered {as: steer, outcome: accepted}` moves the input from\n`queuedInputs` to `steeredInputs`. A later `{as: steer, outcome: declined}` for an input in\n`steeredInputs` (the engine dropped an accepted steer, `EngineEvent::SteerUpdated` Cancelled)\nmoves it back to the END of `queuedInputs` with mode `followup`, same inputId, text, source\nand attachments (v1 re-dispatches through the normal queue). A declined steer still queued is\nunchanged. `steeredInputs` is cleared at the next `run.started`, so a cancel that arrives as\nthe turn ends still requeues.",
@@ -432,6 +598,10 @@
       "description": "A finished item inside a run (TurnItem id).",
       "type": "string"
     },
+    "MessageId": {
+      "description": "A chat message id carried by user and assistant TurnItems.",
+      "type": "string"
+    },
     "ModelSelection": {
       "description": "v1 `ModelSelection`: provider instance, model and model options.",
       "properties": {
@@ -457,6 +627,52 @@
       ],
       "type": "object"
     },
+    "NativeItemRef": {
+      "description": "v1 `OrchestrationV2ProviderRef`: where the engine keeps this item.",
+      "properties": {
+        "driver": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nativeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ordinal": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "strength": {
+          "$ref": "#/$defs/NativeRefStrength"
+        }
+      },
+      "required": [
+        "driver",
+        "strength"
+      ],
+      "type": "object"
+    },
+    "NativeRefStrength": {
+      "description": "v1 `OrchestrationV2NativeRefStrength`.",
+      "enum": [
+        "strong",
+        "weak",
+        "none"
+      ],
+      "type": "string"
+    },
     "NeedsYou": {
       "description": "The open human request summarised on the card.",
       "properties": {
@@ -473,6 +689,14 @@
         "summary"
       ],
       "type": "object"
+    },
+    "NoticeSeverity": {
+      "description": "v1 `OrchestrationV2NoticeSeverity`.",
+      "enum": [
+        "info",
+        "warning"
+      ],
+      "type": "string"
     },
     "ParentRef": {
       "description": "Parent link, written on the child (`parent: {threadId, byItemId}`).",
@@ -491,8 +715,109 @@
       ],
       "type": "object"
     },
+    "PlanId": {
+      "description": "A plan id carried by plan and todo TurnItems.",
+      "type": "string"
+    },
+    "PlanStep": {
+      "description": "v1 `OrchestrationV2PlanStep`.",
+      "properties": {
+        "durationAnchorAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PlanStepStatus"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status"
+      ],
+      "type": "object"
+    },
+    "PlanStepStatus": {
+      "description": "v1 `OrchestrationV2PlanStep` status.",
+      "enum": [
+        "pending",
+        "running",
+        "completed"
+      ],
+      "type": "string"
+    },
     "ProjectId": {
       "description": "A project the thread belongs to (card index column).",
+      "type": "string"
+    },
+    "ProviderFailure": {
+      "description": "v1 `OrchestrationV2ProviderFailure`. Producers redact credentials before construction.",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/ProviderFailureClass"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "resetAt": {
+          "description": "v1 `optional(NullOr(IsoDateTime))`: absent, `null` and a value are distinct.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "class",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ProviderFailureClass": {
+      "description": "v1 `OrchestrationV2ProviderFailureClass`.",
+      "enum": [
+        "usage_limit",
+        "provider_error",
+        "transport_error",
+        "permission_error",
+        "validation_error",
+        "unknown"
+      ],
       "type": "string"
     },
     "ProviderInstanceId": {
@@ -525,6 +850,52 @@
         }
       ],
       "description": "v1 `ProviderOptionSelectionValue`: a trimmed string or a boolean."
+    },
+    "ProviderRequestKind": {
+      "description": "v1 `ProviderRequestKind`.",
+      "enum": [
+        "command",
+        "file-read",
+        "file-change",
+        "mcp-elicitation",
+        "permission"
+      ],
+      "type": "string"
+    },
+    "ProviderRetry": {
+      "description": "v1 `OrchestrationV2ProviderRetry`.",
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxAttempts": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retryDelayMs": {
+          "default": null,
+          "description": "v1 `NullOr`: written as `null` when unknown; a missing field reads as `null`.",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt"
+      ],
+      "type": "object"
     },
     "QueuedInput": {
       "description": "One queued (or held) input as it stands after `input.changed` edits.",
@@ -593,6 +964,17 @@
             "string",
             "null"
           ]
+        },
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnItem"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The waiting approval/question item itself, for a request with no run (`runId` null,\nfrom `EngineEvent::SessionRequestOpened`): it cannot be an `item.completed` line, which\nneeds a run, so the request carries its own card, including a question's choices. A request\ninside a run references its item through `itemId` instead and leaves this unset."
         },
         "itemId": {
           "anyOf": [
@@ -683,6 +1065,14 @@
         "auto-accept-edits",
         "auto",
         "full-access"
+      ],
+      "type": "string"
+    },
+    "SubagentOrigin": {
+      "description": "v1 subagent `origin`.",
+      "enum": [
+        "provider_native",
+        "app_owned"
       ],
       "type": "string"
     },
@@ -1042,6 +1432,794 @@
         "amount",
         "currency"
       ],
+      "type": "object"
+    },
+    "TurnItem": {
+      "description": "A finished item, as `item.completed` stores it and the chat renderer draws it.",
+      "oneOf": [
+        {
+          "properties": {
+            "attachments": {
+              "items": {
+                "$ref": "#/$defs/ChatAttachment"
+              },
+              "type": "array"
+            },
+            "createdBy": {
+              "$ref": "#/$defs/Actor"
+            },
+            "creationSource": {
+              "$ref": "#/$defs/CreationSource"
+            },
+            "inputIntent": {
+              "$ref": "#/$defs/UserMessageInputIntent"
+            },
+            "messageId": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "senderThreadId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "user_message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "createdBy",
+            "creationSource",
+            "messageId",
+            "inputIntent",
+            "text",
+            "attachments"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "attachments": {
+              "items": {
+                "$ref": "#/$defs/ChatAttachment"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "delivery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistantDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "messageId": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AssistantMessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "assistant_message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "text",
+            "streaming"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "streaming": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reasoning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "streaming"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "planId": {
+              "$ref": "#/$defs/PlanId"
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "proposed_plan",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "planId",
+            "markdown",
+            "streaming"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "explanation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "planId": {
+              "$ref": "#/$defs/PlanId"
+            },
+            "steps": {
+              "items": {
+                "$ref": "#/$defs/PlanStep"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "todo_list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "planId",
+            "steps"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "questions": {
+              "items": {
+                "$ref": "#/$defs/UserInputQuestion"
+              },
+              "type": "array"
+            },
+            "requestId": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "type": {
+              "const": "user_input_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "questions"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "options": {
+              "items": {
+                "$ref": "#/$defs/ApprovalOption"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "requestId": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "requestKind": {
+              "$ref": "#/$defs/ProviderRequestKind"
+            },
+            "type": {
+              "const": "approval_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "requestKind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "additions": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "changes": {
+              "items": {
+                "$ref": "#/$defs/FileChangeDetail"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "deletions": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "diffStr": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fileName": {
+              "type": "string"
+            },
+            "patch": {
+              "description": "This edit alone as a git-style patch. Omitted from the log; read it from the engine.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "patchOmitted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "file_change",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fileName"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "commandActions": {
+              "items": {
+                "$ref": "#/$defs/CommandAction"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "exitCode": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "description": "Omitted from the log (`outputOmitted: true`); read it from the engine.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outputIndicatesFailure": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "outputOmitted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "command_execution",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "patterns": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "results": {
+              "items": {
+                "$ref": "#/$defs/WebSearchResult"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "web_search",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "MCP and dynamic tool calls.",
+          "properties": {
+            "input": true,
+            "output": {
+              "description": "Absent when there is no output; an explicit `null` output is kept as `null`."
+            },
+            "outputOmitted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "toolName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "toolSummary": {
+              "description": "A muted one-line outcome for the row; display only.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "dynamic_tool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "afterTokenCount": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "beforeTokenCount": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "driver": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "compaction",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "severity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NoticeSeverity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "system_notice",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "failure": {
+              "$ref": "#/$defs/ProviderFailure"
+            },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProviderRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "failure"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An engine-native subagent (Codex collab agent). GOAT worker threads use `child.*` events.",
+          "properties": {
+            "childThreadId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "driver": {
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/SubagentOrigin"
+            },
+            "progress": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "providerInstanceId": {
+              "type": "string"
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subagentId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "subagent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subagentId",
+            "origin",
+            "driver",
+            "providerInstanceId",
+            "prompt"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ItemId"
+        },
+        "nativeItemRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeItemRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ordinal": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parentItemId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/TurnItemStatus"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "threadId",
+        "ordinal",
+        "status",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "TurnItemStatus": {
+      "description": "v1 `OrchestrationV2TurnItemStatus`.",
+      "enum": [
+        "idle",
+        "pending",
+        "running",
+        "waiting",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "UserInputOption": {
+      "description": "v1 `OrchestrationV2UserInputQuestion` option.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "UserInputQuestion": {
+      "description": "v1 `OrchestrationV2UserInputQuestion`.",
+      "properties": {
+        "allowCustomAnswer": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "initialAnswer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multiSelect": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "header",
+        "question",
+        "options"
+      ],
+      "type": "object"
+    },
+    "UserMessageInputIntent": {
+      "description": "v1 `OrchestrationV2UserMessageInputIntent`.",
+      "enum": [
+        "turn_start",
+        "queued_turn",
+        "steer",
+        "promoted_queued_to_steer"
+      ],
+      "type": "string"
+    },
+    "WebSearchResult": {
+      "description": "v1 `OrchestrationV2WebSearchResult`.",
+      "properties": {
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     }
   },

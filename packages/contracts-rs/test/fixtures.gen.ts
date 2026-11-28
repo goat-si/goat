@@ -1659,6 +1659,51 @@ export const log_event__request_opened_context = {
   "type": "request.opened"
 } satisfies LogEvent;
 
+export const log_event__request_opened_runless_item = {
+  "item": {
+    "completedAt": null,
+    "id": "example",
+    "nativeItemRef": null,
+    "ordinal": 1,
+    "parentItemId": null,
+    "providerThreadId": null,
+    "providerTurnId": null,
+    "questions": [
+      {
+        "allowCustomAnswer": true,
+        "header": "Target",
+        "id": "target",
+        "options": [
+          {
+            "description": "Update the main branch",
+            "label": "main"
+          },
+          {
+            "description": "Update the release branch",
+            "label": "release",
+            "value": "release/1.2"
+          }
+        ],
+        "question": "Which branch should the background job update?"
+      }
+    ],
+    "requestId": "example",
+    "runId": null,
+    "startedAt": null,
+    "status": "completed",
+    "threadId": "example",
+    "title": null,
+    "type": "user_input_request",
+    "updatedAt": "2026-11-28T10:00:00Z"
+  },
+  "itemId": null,
+  "kind": "question",
+  "requestId": "example",
+  "runId": null,
+  "summary": "Pick a target for the background job",
+  "type": "request.opened"
+} satisfies LogEvent;
+
 export const log_event__request_resolved = {
   "optionId": "yes",
   "outcome": "decided",
@@ -2460,6 +2505,54 @@ export const log_line__request_opened_context = {
   "runId": null,
   "seq": 1,
   "summary": "example",
+  "type": "request.opened",
+  "v": 1
+} satisfies LogLine;
+
+export const log_line__request_opened_runless_item = {
+  "at": "2026-11-28T10:00:00Z",
+  "item": {
+    "completedAt": null,
+    "id": "example",
+    "nativeItemRef": null,
+    "ordinal": 1,
+    "parentItemId": null,
+    "providerThreadId": null,
+    "providerTurnId": null,
+    "questions": [
+      {
+        "allowCustomAnswer": true,
+        "header": "Target",
+        "id": "target",
+        "options": [
+          {
+            "description": "Update the main branch",
+            "label": "main"
+          },
+          {
+            "description": "Update the release branch",
+            "label": "release",
+            "value": "release/1.2"
+          }
+        ],
+        "question": "Which branch should the background job update?"
+      }
+    ],
+    "requestId": "example",
+    "runId": null,
+    "startedAt": null,
+    "status": "completed",
+    "threadId": "example",
+    "title": null,
+    "type": "user_input_request",
+    "updatedAt": "2026-11-28T10:00:00Z"
+  },
+  "itemId": null,
+  "kind": "question",
+  "requestId": "example",
+  "runId": null,
+  "seq": 1,
+  "summary": "Pick a target for the background job",
   "type": "request.opened",
   "v": 1
 } satisfies LogLine;
