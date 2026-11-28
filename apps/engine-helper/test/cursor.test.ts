@@ -421,3 +421,21 @@ test("Cursor applies an in-session model change to the next SDK send", async () 
     assert.equal(unsupported.error?.code, "unsupported");
   } finally { h.child.kill(); }
 });
+
+test("Cursor streams reasoning and command output on completed item ids and redacts split secrets", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    for (const prompt of ["projects", "content-secret"]) {
+      const turn = (await h.request("turn.start", { inputs: input(prompt), settings })).result;
+      await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
+      const events = h.lines.flatMap(l => l.event?.turnId === turn.turnId ? [l.event] : []);
+      for (const [kind, expected] of prompt === "projects" ? [["reasoning_text", "reason"], ["plan_text", "do work"], ["command_output", "file"]] : [["reasoning_text", "[redacted]"]]) {
+        const deltas = events.filter(e => e.type === "content_delta" && e.streamKind === kind);
+        assert.equal(deltas.map(e => e.text).join(""), expected);
+        assert.ok(deltas.every(e => events.findIndex(c => c.type === "item_completed" && c.item.id === e.itemId) > events.indexOf(e)));
+      }
+      assert.ok(!JSON.stringify(events).includes("fake-key"));
+    }
+  } finally { h.child.kill(); }
+});

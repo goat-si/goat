@@ -23,6 +23,7 @@ export class CursorProjection {
   #transport = new CursorTransportFailure();
   #pending = new Map<string, ToolCall>();
   #shellOutput = new Map<string, string>();
+  #plans = new Map<string, string>();
   turnEnded = false;
   get transportFailure() { return this.#transport.failure; }
   private readonly turnId: string;
@@ -54,7 +55,7 @@ export class CursorProjection {
       this.#seenText = true;
       this.#transport.push(text);
       this.host.emit({ type: "text_delta", turnId: this.turnId, itemId: this.#current.id, text });
-    }
+    } else this.host.emit({ type: "content_delta", turnId: this.turnId, itemId: this.#current.id, streamKind: "reasoning_text", text });
   }
   update(update: InteractionUpdate) {
     if (update.type === "turn-ended") this.turnEnded = true;
@@ -66,18 +67,28 @@ export class CursorProjection {
       case "tool-call-started": case "partial-tool-call":
         this.flush();
         if (update.type === "partial-tool-call" && update.toolCall.type === "task") break;
+        if (update.toolCall.type === "createPlan") {
+          const previous = this.#plans.get(update.callId) ?? "";
+          const plan = update.toolCall.args.plan;
+          if (plan.startsWith(previous) && plan.length > previous.length) {
+            this.host.emit({ type: "content_delta", turnId: this.turnId, itemId: `${this.sessionId}:${this.turnId}:tool:${update.callId}`, streamKind: "plan_text", text: plan.slice(previous.length) });
+            this.#plans.set(update.callId, plan);
+          }
+        }
         if (update.toolCall.type === "task" && !this.#pending.has(update.callId)) this.subagent(update.callId, update.toolCall, "running");
         this.#pending.set(update.callId, update.toolCall);
         break;
       case "tool-call-completed":
         this.flush();
         this.#pending.delete(update.callId);
+        this.#plans.delete(update.callId);
         if (update.toolCall.type === "task") this.subagent(update.callId, update.toolCall, update.toolCall.result?.status === "error" ? "failed" : "completed");
         this.tool(update.callId, update.toolCall); break;
       case "shell-output-delta": {
         const id = typeof update.event.toolCallId === "string" ? update.event.toolCallId : [...this.#pending].findLast(([, call]) => call.type === "shell")?.[0];
         const value = update.event.value;
         if (id && this.#pending.get(id)?.type === "shell" && (update.event.case === "stdout" || update.event.case === "stderr") && typeof value === "object" && value !== null && "data" in value && typeof value.data === "string") {
+          this.host.emit({ type: "content_delta", turnId: this.turnId, itemId: `${this.sessionId}:${this.turnId}:tool:${id}`, streamKind: "command_output", text: value.data });
           const output = (this.#shellOutput.get(id) ?? "") + value.data;
           this.#shellOutput.set(id, output.length > 512 * 1024 ? output.slice(-256 * 1024) : output);
         }
@@ -94,6 +105,7 @@ export class CursorProjection {
       this.tool(callId, call, finalStatus);
     }
     this.#pending.clear();
+    this.#plans.clear();
   }
   private subagent(callId: string, call: Extract<ToolCall, { type: "task" }>, status: "running" | "completed" | "failed" | "interrupted") {
     this.host.emit({ type: "subagent_update", turnId: this.turnId, subagentId: call.args.agentId ?? callId,

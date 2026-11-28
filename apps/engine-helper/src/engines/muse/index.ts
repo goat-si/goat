@@ -36,6 +36,7 @@ class MuseSession implements EngineSession {
   private model: string;
   private readonly secrets: string[];
   private readonly deltaTails = new Map<string, string>();
+  private readonly deltaKinds = new Map<string, "assistant_text" | "reasoning_text" | "command_output">();
   private readonly native: Host;
   private readonly params: InitializeParams;
   private readonly host: EngineHost;
@@ -68,17 +69,25 @@ class MuseSession implements EngineSession {
     return value;
   }
   // Hold a suffix that could be the beginning of a credential split across deltas.
-  private delta(turn: Active, id: string, text: string, final = false) {
-    let value = this.redact((this.deltaTails.get(id) ?? "") + text);
+  private delta(turn: Active, id: string, text: string, final = false, kind: "assistant_text" | "reasoning_text" | "command_output" = "assistant_text") {
+    const key = `${turn.id}:${id}`;
+    if (!final && this.deltaKinds.has(key) && this.deltaKinds.get(key) !== kind) return;
+    if (!final) this.deltaKinds.set(key, kind);
+    kind = this.deltaKinds.get(key) ?? kind;
+    let value = this.redact((this.deltaTails.get(key) ?? "") + text);
     let hold = 0;
     if (!final) for (const secret of this.secrets) {
       for (let n = Math.min(secret.length - 1, value.length); n > hold; n--) {
         if (value.endsWith(secret.slice(0, n))) { hold = n; break; }
       }
     }
-    this.deltaTails.set(id, hold ? value.slice(-hold) : "");
+    if (final) { this.deltaTails.delete(key); this.deltaKinds.delete(key); }
+    else this.deltaTails.set(key, hold ? value.slice(-hold) : "");
     value = hold ? value.slice(0, -hold) : value;
-    if (value) this.host.emit({ type: "text_delta", turnId: turn.id, itemId: `${turn.id}:${id}`, text: value });
+    if (value) {
+      if (kind === "assistant_text") this.host.emit({ type: "text_delta", turnId: turn.id, itemId: key, text: value });
+      else this.host.emit({ type: "content_delta", turnId: turn.id, itemId: key, streamKind: kind, text: value });
+    }
   }
   private fail(reason: string) {
     if (this.closed) return;
@@ -127,21 +136,28 @@ class MuseSession implements EngineSession {
       const previous = turn.items.get(native.itemId);
       if (previous && previous.revision >= native.revision) return;
       turn.items.set(native.itemId, native);
-      if (native.kind === "agentMessage" && native.status !== "inProgress") this.delta(turn, native.itemId, "", true);
+      if (native.status !== "inProgress") this.delta(turn, native.itemId, "", true);
       if (native.kind === "subagent") this.host.emit({ type: "subagent_update", turnId: turn.id, subagentId: native.subagentId ?? native.itemId, status: native.status === "inProgress" ? "running" : native.status === "completed" ? "completed" : native.status === "cancelled" ? "cancelled" : "failed", title: native.objective ?? native.role ?? "Muse agent", progress: native.result?.summary ?? null });
       if (method === "item/completed" || (native.status !== "inProgress" && method === "item/updated")) this.emitItem(turn, native);
     } else if (method === "item/delta") {
       const native = turn.items.get(p.itemId);
       if (!native || native.status !== "inProgress" || typeof p.delta !== "string") return;
-      if ((p.field ?? "text") === "text") {
-        native.text = (native.text ?? "") + p.delta;
-        if (native.kind === "agentMessage") this.delta(turn, native.itemId, p.delta);
-      }
+      const field = p.field ?? "text";
+      if (field === "text") native.text = (native.text ?? "") + p.delta;
+      else if (field === "output" || field === "visibleOutput") native.visibleOutput = (native.visibleOutput ?? "") + p.delta;
+      else if (/^summary\.(?:0|[1-9]\d?)$/.test(field)) {
+        const index = Number(field.slice(8));
+        native.summary ??= [];
+        native.summary[index] = (native.summary[index] ?? "") + p.delta;
+      } else return;
+      if (native.kind === "agentMessage" && field === "text") this.delta(turn, native.itemId, p.delta);
+      else if (native.kind === "reasoning" && (field === "text" || field.startsWith("summary."))) this.delta(turn, native.itemId, p.delta, false, "reasoning_text");
+      else if ((native.kind === "userShell" || /shell|bash|exec_command/i.test(native.tool ?? "")) && (field === "output" || field === "visibleOutput" || field === "text")) this.delta(turn, native.itemId, p.delta, false, "command_output");
     } else if (method === "turn/completed" && p.turnId === turn.id) {
       this.active = undefined;
       turn.finish();
       for (const native of turn.items.values()) if (native.status === "inProgress") {
-        if (native.kind === "agentMessage") this.delta(turn, native.itemId, "", true);
+        this.delta(turn, native.itemId, "", true);
         this.emitItem(turn, { ...native, status: p.terminal === "completed" ? "completed" : "cancelled" });
       }
       for (const [id, retry] of turn.retries) {

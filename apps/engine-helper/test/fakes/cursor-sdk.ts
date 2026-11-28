@@ -53,8 +53,17 @@ export class CursorAgentPlatform {
           await options.onDelta({ update: { type: "text-delta", text: message === "secret" ? "fake-" : "hello " } });
           await options.onDelta({ update: { type: "text-delta", text: message === "secret" ? "key" : "world" } });
         }
+        if (message === "content-secret") {
+          await options.onDelta({ update: { type: "thinking-delta", text: "fake-" } });
+          await options.onDelta({ update: { type: "thinking-delta", text: "key" } });
+        }
         if (message === "projects") {
           await options.onDelta({ update: { type: "thinking-delta", text: "reason" } });
+          await options.onDelta({ update: { type: "partial-tool-call", callId: "plan", toolCall: { type: "createPlan", args: { plan: "do " } } } });
+          await options.onDelta({ update: { type: "partial-tool-call", callId: "plan", toolCall: { type: "createPlan", args: { plan: "do work" } } } });
+          await options.onDelta({ update: { type: "tool-call-completed", callId: "plan", toolCall: { type: "createPlan", args: { plan: "do work" } } } });
+          await options.onDelta({ update: { type: "tool-call-started", callId: "cmd", toolCall: { type: "shell", args: { command: "ls" } } } });
+          await options.onDelta({ update: { type: "shell-output-delta", event: { toolCallId: "cmd", case: "stdout", value: { data: "file" } } } });
           await options.onDelta({ update: { type: "tool-call-completed", callId: "cmd", toolCall: { type: "shell", args: { command: "ls" }, result: { status: "success", value: { exitCode: 0, stdout: "file", stderr: "" } } } } });
           await options.onDelta({ update: { type: "tool-call-completed", callId: "edit", toolCall: { type: "edit", args: { path: "a.ts" }, result: { status: "success", value: { diffString: "+x", linesAdded: 1, linesRemoved: 0 } } } } });
           await options.onDelta({ update: { type: "tool-call-completed", callId: "todos", toolCall: { type: "updateTodos", args: { todos: [{ content: "work", status: "completed" }] } } } });

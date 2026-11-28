@@ -156,12 +156,20 @@ async fn cursor_projects_validated_items_and_subagent_lifecycle() {
     let (mut command, mut edit, mut todos, mut subagent, mut message) =
         (false, false, false, false, false);
     let mut lifecycle = Vec::new();
+    let mut reasoning_delta = false;
     loop {
         let event = tokio::time::timeout(Duration::from_secs(10), handle.events.recv())
             .await
             .expect("event timeout")
             .expect("event stream");
         match event {
+            EngineEvent::ContentDelta {
+                stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+                text,
+                ..
+            } => {
+                reasoning_delta |= text == "reason";
+            }
             EngineEvent::SubagentUpdate {
                 subagent_id,
                 status,
@@ -232,6 +240,7 @@ async fn cursor_projects_validated_items_and_subagent_lifecycle() {
             _ => {}
         }
     }
+    assert!(reasoning_delta, "reasoning must stream to Rust");
     assert!(
         command && edit && todos && subagent && message,
         "all projected items must reach Rust"

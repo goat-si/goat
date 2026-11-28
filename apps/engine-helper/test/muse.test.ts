@@ -182,3 +182,20 @@ test("runless child approvals fail visibly instead of being dropped", async () =
   assert.deepEqual(failures, ["Muse background work requires unsupported host coordination"]);
   await session.shutdown();
 });
+
+test("Muse streams reasoning and command output on completed item ids", async () => {
+  const h = setup();
+  let finish!: () => void;
+  const finished = new Promise<void>(resolve => { finish = resolve; });
+  const session = await museEngine.start(init, { ...h.host, emit: event => { h.host.emit(event); if (event.type === "turn_finished") finish(); } });
+  try {
+    const started = await session.startTurn(input("hello"), settings);
+    assert.equal(started.status, "accepted");
+    await finished;
+    for (const [kind, expected] of [["reasoning_text", "think"], ["command_output", "file"]]) {
+      const deltas = h.events.filter(e => e.type === "content_delta" && e.streamKind === kind);
+      assert.equal(deltas.map(e => e.type === "content_delta" ? e.text : "").join(""), expected);
+      for (const delta of deltas) if (delta.type === "content_delta") assert.ok(h.events.findIndex(e => e.type === "item_completed" && e.item.id === delta.itemId) > h.events.indexOf(delta));
+    }
+  } finally { await session.shutdown(); }
+});

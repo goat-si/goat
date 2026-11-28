@@ -23,26 +23,26 @@ function safeHost(host: EngineHost, secrets: ReadonlyArray<string>): EngineHost 
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, /^(authorization|password|secret|api[_-]?key|access[_-]?token|bearer[_-]?token)$/i.test(k) ? "[redacted]" : redact(v)]));
     return value;
   };
-  const tails = new Map<string, string>();
+  const tails = new Map<string, { text: string; event: Extract<Parameters<EngineHost["emit"]>[0], { type: "text_delta" | "content_delta" }> }>();
   const keep = Math.max(0, ...secrets.map(secret => secret.length - 1));
   const emitTail = (turnId: string, itemId: string) => {
     const tail = tails.get(itemId);
-    if (tail) host.emit({ type: "text_delta", turnId, itemId, text: redact(tail) as string });
+    if (tail?.text) host.emit(redact({ ...tail.event, turnId, itemId, text: tail.text }) as typeof tail.event);
     tails.delete(itemId);
   };
   return {
     now: host.now,
     emit: event => {
-      if (event.type === "text_delta") {
-        const text = (tails.get(event.itemId) ?? "") + event.text;
+      if (event.type === "text_delta" || event.type === "content_delta") {
+        const text = (tails.get(event.itemId)?.text ?? "") + event.text;
         let cutoff = Math.max(0, text.length - keep);
         for (const secret of secrets) {
           if (!secret) continue;
           const start = text.indexOf(secret, Math.max(0, cutoff - secret.length + 1));
           if (start >= 0 && start < cutoff && start + secret.length > cutoff) cutoff = start;
         }
-        tails.set(event.itemId, text.slice(cutoff));
-        if (cutoff) host.emit({ ...event, text: redact(text.slice(0, cutoff)) as string });
+        tails.set(event.itemId, { text: text.slice(cutoff), event });
+        if (cutoff) host.emit(redact({ ...event, text: text.slice(0, cutoff) }) as typeof event);
         return;
       }
       if (event.type === "item_completed") emitTail(event.turnId, event.item.id);

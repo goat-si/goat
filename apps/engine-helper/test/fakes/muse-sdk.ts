@@ -21,6 +21,12 @@ export function spawnMspConnection(options: any) {
     emit("item/started", { sessionId, turnId, item: { itemId: "message", turnId, kind: "agentMessage", revision: 1, status: "inProgress" } });
     emit("item/delta", { sessionId, turnId, itemId: "message", delta: "hello" });
     emit("item/completed", { sessionId, turnId, item: { itemId: "message", turnId, kind: "agentMessage", revision: 2, status: "completed", text: "hello" } });
+    for (const [itemId, kind, tool, field, delta] of [["reason", "reasoning", undefined, "summary.0", "think"], ["cmd", "toolCall", "shell", "output", "file"]]) {
+      const base = { itemId, turnId, kind, ...(tool ? { tool, args: '{"command":"ls"}' } : {}), revision: 1, status: "inProgress" };
+      emit("item/started", { sessionId, turnId, item: base });
+      emit("item/delta", { sessionId, turnId, itemId, field, delta });
+      emit("item/completed", { sessionId, turnId, item: { ...base, revision: 2, status: "completed", ...(kind === "reasoning" ? { summary: [delta] } : { visibleOutput: delta }) } });
+    }
     emit("item/completed", { sessionId, turnId, item: { itemId: "tool", turnId, kind: "toolCall", tool: "goat_call", args: '{"path":"thread.read"}', revision: 1, status: "completed", result: { summary: "Read thread" } } });
     emit("turn/completed", { sessionId, turnId, terminal: "completed" });
     active = undefined;

@@ -59,6 +59,7 @@ async fn muse_fake_turn_crosses_helper_and_validates_items() {
         )
         .await;
     assert!(matches!(result, TurnStartResult::Accepted { .. }));
+    let mut reasoning_delta = false;
     let mut delta = String::new();
     let mut message = false;
     let mut tool = false;
@@ -69,6 +70,13 @@ async fn muse_fake_turn_crosses_helper_and_validates_items() {
             .expect("event stream");
         match event {
             EngineEvent::TextDelta { text, .. } => delta.push_str(&text),
+            EngineEvent::ContentDelta {
+                stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+                text,
+                ..
+            } => {
+                reasoning_delta |= text == "think";
+            }
             EngineEvent::ItemCompleted { item, .. } => match item.body {
                 TurnItemBody::AssistantMessage { text, .. } => message = text == "hello",
                 TurnItemBody::DynamicTool { tool_name, .. } => {
@@ -84,6 +92,7 @@ async fn muse_fake_turn_crosses_helper_and_validates_items() {
             _ => {}
         }
     }
+    assert!(reasoning_delta, "reasoning must stream to Rust");
     assert_eq!(delta, "hello");
     assert!(message && tool, "both items must deserialize through Rust");
     handle.session.shutdown().await;
