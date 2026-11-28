@@ -2,11 +2,11 @@
 //! Adapters/AntigravityAdapterV2.ts:67-84 at 916b5ccc1b2.
 use crate::{
     capabilities::acp_base_capabilities,
-    flavor::{AcpFlavor, AuthPolicy, LaunchCommand, ResumeMethod},
+    flavor::{AcpFlavor, AuthPolicy, LaunchCommand, ModelWrite, ResumeMethod},
     policy::{self, Disposition, RuntimePolicy},
-    wire::{InitializeInfo, ModeState},
+    wire::{InitializeInfo, ModeState, SessionSetup, select_values},
 };
-use goat2_contracts::{EngineDriver, ProviderCapabilities, RuntimeMode};
+use goat2_contracts::{EngineDriver, ModelSelection, ProviderCapabilities, RuntimeMode};
 use goat2_engine_api::{EngineError, SessionSpec};
 use serde_json::{Map, Value, json};
 #[derive(Debug, Default)]
@@ -104,6 +104,35 @@ impl AcpFlavor for Antigravity {
     fn steers_with_prompt(&self, i: &InitializeInfo) -> bool {
         version(i.agent_version.as_deref()).is_some_and(|v| v >= (1, 5, 0))
     }
+    /// v1 AntigravityAcpSupport.ts:295-352: accept a listed model or an old family suffix.
+    fn model_write(&self, selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
+        let model = selection.model.trim();
+        if model.is_empty() || model == "default" {
+            return ModelWrite::Keep;
+        }
+        let option = setup.config_options.iter().find(|option| {
+            option.get("id").and_then(Value::as_str) == Some("model")
+                && option.get("type").and_then(Value::as_str) == Some("select")
+        });
+        let offered = option.map(select_values).unwrap_or_default();
+        if offered.iter().any(|(value, _)| {
+            value == model
+                || model
+                    .strip_prefix(value)
+                    .is_some_and(|suffix| suffix.starts_with('-'))
+        }) {
+            ModelWrite::ConfigOption {
+                config_id: "model".into(),
+                value: model.into(),
+            }
+        } else {
+            ModelWrite::Unavailable {
+                message: format!(
+                    "Antigravity model '{model}' is unavailable for this Google account. Select an available model."
+                ),
+            }
+        }
+    }
     fn session_mode_for(&self, m: RuntimeMode, modes: Option<&ModeState>) -> Option<String> {
         Some(
             if m == RuntimeMode::Auto && modes.is_some_and(|s| s.has("auto")) {
@@ -123,5 +152,42 @@ impl AcpFlavor for Antigravity {
         } else {
             d
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_selection_accepts_listed_and_legacy_family_but_rejects_unknown() {
+        let setup = SessionSetup {
+            config_options: vec![
+                json!({"id":"model", "type":"select", "currentValue":"gemini-3.8-flash", "options":[{"value":"gemini-3.8-flash", "name":"Flash"}]}),
+            ],
+            ..Default::default()
+        };
+        let selection = |model: &str| ModelSelection {
+            instance_id: "agy".into(),
+            model: model.into(),
+            options: None,
+        };
+        for model in ["gemini-3.8-flash", "gemini-3.8-flash-high"] {
+            assert_eq!(
+                Antigravity::default().model_write(&selection(model), &setup),
+                ModelWrite::ConfigOption {
+                    config_id: "model".into(),
+                    value: model.into()
+                }
+            );
+        }
+        assert!(matches!(
+            Antigravity::default().model_write(&selection("gemini-3.8-pro"), &setup),
+            ModelWrite::Unavailable { .. }
+        ));
+        assert_eq!(
+            Antigravity::default().model_write(&selection("default"), &setup),
+            ModelWrite::Keep
+        );
     }
 }
