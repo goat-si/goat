@@ -129,8 +129,7 @@ Boards: "봇 홈 — 봇 고정 (드래그해서 핀)", "모바일 iOS — 봇 �
 Mobile multiplexer (2026-11-28, from Ovis `devswha/ovis` DESIGN.md, Shell and Tab strip
 sections): up to 768pt wide a split shows one pane at a time, full size and borderless, like a
 zoomed pane; no cards, no inner frames. Header is one glass line (Ovis `--header-h` 52): back,
-the pane title with a chevron (tap opens the pane sheet: every pane with kind, machine, state and
-New pane), a lens button (chat <-> terminal, outlined 44), and More. Swipe left/right moves
+the pane title with a chevron (tap opens the pane overview, X2), a lens button (chat <-> terminal, outlined 44), and More. Swipe left/right moves
 between panes; a small dot row above the composer shows position. Chat lens keeps the floating
 composer only (the Muse tab card hides inside a thread). Terminal lens swaps the composer for the
 48pt key bar (esc tab ctrl arrows / | ~). From 769pt the split draws again: panes side by side,
@@ -143,7 +142,20 @@ kept; when half folded the hinge is the pane boundary (ReservedRegion), never th
 Galaxy Z Fold8 cover ~475x751dp is the phone layout; inner ~933x704dp (4:3) uses a navigation
 rail and 1+2 panes (chat left, two terminals stacked right). dp values assume the 420dpi bucket.
 State, drafts and the open pane survive fold/unfold; layout only reflows. Boards on the
-"스레드 모드" page: M1 to M7.
+"모바일 (멀티플렉서 전환)" page: M1, M2, M4 to M7.
+
+Mobile pane switching (2026-11-28, page "모바일 (멀티플렉서 전환)", boards D0, X1 to X5). One pane
+order everywhere (the pane list order). Five ways: (1) swipe left/right moves the whole pane,
+header and bottom included, 1:1 with the finger, settling in 240ms (velocity over 0.3 commits);
+only the status bar and the dot row stay put. (2) Title tap or pinch opens the overview: two
+columns of live pane previews (171x250, kind glyph, title, machine, state), current pane ringed in
+ink, tap to open, drag to reorder, swipe up to close, floating "New pane"; the current pane
+shrinks into its tile in 260ms. (3) A pane that needs you raises a glass banner under the header
+(blue dot, pane title, the question, Open); Open jumps there without stopping the pane you were in.
+(4) The overview title ▾ switches workspace (menu of workspaces with pane count and state, New
+workspace). (5) Fold/unfold keeps the focused pane on the left and adds the next pane on the
+right; folding back keeps only the focused pane; drafts, scroll and terminal links survive.
+Reduced motion: every transition is a 120ms crossfade. Dials: variance 3, motion 4, density D5.
 
 Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
 no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
