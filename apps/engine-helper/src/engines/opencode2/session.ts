@@ -97,7 +97,7 @@ export class OpenCode2Session implements EngineSession {
       try { catalog = (await bounded(10_000, undefined, (signal) => client.model.list({ location: { directory: params.cwd } }, { signal }))).data; } catch { /* v1 keeps the selected variant when the catalog is unavailable. */ }
       const selected = modelRef(params.modelSelection, OpenCode2Session.variants(catalog, params.modelSelection.model));
       if (!selected) throw new HelperError("bad_request", "OpenCode model must use provider/model format");
-      const names = { goat: goatMcpServerName(params.threadId), cua: null };
+      const names = params.mcp ? { goat: goatMcpServerName(params.threadId), cua: null } : null;
       const permissions = sessionRules({ runtimeMode: params.runtimeMode }, [], [], names, false);
       const native = await bounded(15_000, undefined, (signal) => params.resume ? client.session.get({ sessionID: params.resume }, { signal }) : client.session.create({ location: { directory: params.cwd }, model: selected, permissions }, { signal }));
       if (!native?.id) throw new Error("session missing");
@@ -225,7 +225,7 @@ export class OpenCode2Session implements EngineSession {
     for (const [id, steer] of turn.steers) { steer.outcome ??= "cancelled"; this.emitSteer(turn, id); }
     for (const key of this.requests.keys()) { this.requests.delete(key); this.host.emit({ type: "request_closed", key }); }
     const model = this.catalog.get(this.settings.modelSelection.model); const limit = model?.limit?.input ?? model?.limit?.context;
-    turn.projection.finish(limit); this.active = undefined;
+    turn.projection.finish(limit, outcome.type); this.active = undefined;
     this.host.emit({ type: "turn_finished", turnId: turn.id, outcome });
     turn.finished.resolve(); turn.settlement?.abort();
     if (this.fatalReason) { const reason = this.fatalReason; this.fatalReason = undefined; this.host.fail(reason); }
@@ -352,7 +352,9 @@ export class OpenCode2Session implements EngineSession {
     if (this.closed) throw new HelperError("transport", "OpenCode 2 session is closed");
     if (settings.modelSelection.instanceId !== this.params.modelSelection.instanceId) throw new HelperError("bad_request", "OpenCode model belongs to a different instance");
     const model = this.selection(settings); if (!model) throw new HelperError("bad_request", "OpenCode model must use provider/model format");
-    const permissions = sessionRules({ runtimeMode: settings.runtimeMode }, [], this.grants.get(this.engineRef) ?? [], { goat: goatMcpServerName(this.params.threadId), cua: null }, false);
+    const names = this.params.mcp ? { goat: goatMcpServerName(this.params.threadId), cua: null } : null;
+    const grants = settings.runtimeMode === "full-access" ? [] : this.grants.get(this.engineRef) ?? [];
+    const permissions = sessionRules({ runtimeMode: settings.runtimeMode }, [], grants, names, false);
     try {
       if (settings.runtimeMode !== this.settings.runtimeMode) await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.update({ sessionID: this.engineRef, permissions }, { signal }));
       if (this.closed) throw new HelperError("transport", "OpenCode 2 session is closed");
@@ -443,7 +445,7 @@ export class OpenCode2Session implements EngineSession {
     request.answering = true;
     try {
       if (request.type === "form") { const reply = formReply(request.value, answer); if (reply.type === "cancel") await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.form.cancel(reply, { signal })); else await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.form.reply(reply, { signal })); }
-      else { const grants = this.grants.get(request.value.sessionID) ?? []; const result = permissionReply(request.value, answer.outcome, grants); if (result.grants.length !== grants.length) { await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.update({ sessionID: request.value.sessionID, permissions: sessionRules({ runtimeMode: this.settings.runtimeMode }, [], result.grants, { goat: goatMcpServerName(this.params.threadId), cua: null }, false) }, { signal })); this.grants.set(request.value.sessionID, result.grants); } await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.permission.reply(result.reply, { signal })); }
+      else { const grants = this.grants.get(request.value.sessionID) ?? []; const result = permissionReply(request.value, answer.outcome, grants); if (result.grants.length !== grants.length) { const names = this.params.mcp ? { goat: goatMcpServerName(this.params.threadId), cua: null } : null; const applied = this.settings.runtimeMode === "full-access" ? [] : result.grants; await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.update({ sessionID: request.value.sessionID, permissions: sessionRules({ runtimeMode: this.settings.runtimeMode }, [], applied, names, false) }, { signal })); this.grants.set(request.value.sessionID, result.grants); } await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.permission.reply(result.reply, { signal })); }
     } catch (error) { if (error instanceof HelperError) throw error; throw new HelperError("transport", "OpenCode 2 request response failed"); }
     finally { delete request.answering; }
     if (this.requests.delete(key)) this.host.emit({ type: "request_closed", key });

@@ -420,9 +420,9 @@ test("shutdown during preparation does not perform later MCP or prompt work", as
 });
 
 test("child approval grants stay scoped to the child and duplicate replies are rejected", async () => {
-  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, runtimeMode: "approval-required" }, hostFor(events));
   try {
-    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    assert.equal((await session.startTurn(input("i", "hold"), { ...settings, runtimeMode: "approval-required" })).status, "accepted"); await tick();
     fake.emit("session.created", { sessionID: "child", parentID: session.engineRef });
     fake.emit("permission.asked", { id: "p-child", sessionID: "child", action: "shell", resources: ["child-only"], save: ["child-only"] }); await tick();
     const gate = fake.holdReply();
@@ -431,7 +431,7 @@ test("child approval grants stay scoped to the child and duplicate replies are r
       await assert.rejects(session.answerRequest("p-child", { outcome: "decline" }), /already being answered/);
       gate.release(); await first;
     } finally { gate.release(); }
-    await session.setConfig({ ...settings, runtimeMode: "approval-required" });
+    await session.setConfig({ ...settings, runtimeMode: "auto-accept-edits" });
     const updates = fake.calls.filter((call) => call.method === "session.update").map((call) => call.input as { sessionID: string; permissions: Array<{ resource: string; effect: string }> });
     assert.ok(updates.find((update) => update.sessionID === "child")?.permissions.some((rule) => rule.resource === "child-only" && rule.effect === "allow"));
     assert.ok(!updates.findLast((update) => update.sessionID === session.engineRef)?.permissions.some((rule) => rule.resource === "child-only"));

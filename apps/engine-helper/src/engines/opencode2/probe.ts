@@ -103,6 +103,7 @@ function projectModels(catalog: CatalogModel[], names: Map<string, string>): Ser
 export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost, "now">, dependencies: OpenCode2ProbeDependencies = {}): Promise<ProbeResult> {
   let installed = false;
   let version: string | null = null;
+  const now = dependencies.now ?? Date.now; const budgetDeadline = now() + 25_000;
   try {
     let selected: ProbedOpenCode;
     try { selected = await (dependencies.select ?? selectBinary)(params); }
@@ -117,7 +118,7 @@ export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost,
       if (!actual || actual.generation !== "v2" || actual.version !== runtime.version) throw new Error("Invalid running version");
       version = runtime.version;
       const input = { location: { directory: cwd } };
-      const now = dependencies.now ?? Date.now; const wait = dependencies.sleep ?? sleep;
+      const wait = dependencies.sleep ?? sleep;
       const read = async (deadline = 20_000) => {
         const reads = new AbortController();
         try {
@@ -129,7 +130,7 @@ export async function probeOpenCode2(params: ProbeParams, host: Pick<EngineHost,
         } finally { reads.abort(); }
       };
       // GOAT 2's host and helper cap probes at 30s. Return a useful warning before that cap.
-      const controller = new AbortController(); const budgetDeadline = now() + 25_000;
+      const controller = new AbortController();
       const pending = (): ProbeResult => ({ installed, version, status: "warning", auth: { status: "unknown" }, models: [], checkedAt: host.now(), capabilities: capabilitiesForOpenCode2(version!), message: "OpenCode is still starting its plugins; models will appear on the next check." });
       let first: Awaited<ReturnType<typeof read>>;
       for (;;) {

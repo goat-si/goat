@@ -35,6 +35,15 @@ test("OpenCode 2 rejects a completed text snapshot that rewrites streamed text",
   assert.throws(() => projection.handle({ id: "b", type: "session.text.ended", data: { assistantMessageID: "m", ordinal: 0, text: "B" } } as unknown as V2Event), /changed after streaming/);
 });
 
+test("an unfinished compaction receives a terminal failure item", () => {
+  const events: EngineEvent[] = []; const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.handle({ id: "a", type: "session.compaction.started", data: { sessionID: "session" } } as unknown as V2Event);
+  projection.finish(undefined, "failed");
+  const completed = events.find((event) => event.type === "item_completed");
+  assert.ok(completed?.type === "item_completed" && completed.item.type === "compaction" && completed.item.status === "failed");
+});
+
 test("reasoning content redacts a token split across native deltas", () => {
   const events: EngineEvent[] = [];
   const raw = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

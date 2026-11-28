@@ -84,8 +84,12 @@ export class OpenCode2Projection {
       default: return false;
     }
   }
-  finish(maxTokens?: number) {
+  finish(maxTokens?: number, outcome: "done" | "failed" | "interrupted" = "done") {
     for (const [id, state] of this.texts) this.completeText(id, state);
+    if (this.compactionId) {
+      const id = this.compactionId; this.compactionId = undefined;
+      this.host.emit({ type: "item_completed", turnId: this.turnId, item: item({ ...this.base(id), title: "Context compacted", status: outcome === "failed" ? "failed" : "interrupted" }, "compaction", { driver: "opencode" }), locator: { turnId: this.turnId, itemId: id } });
+    }
     if (this.lastUsage) this.host.emit({ type: "token_usage", turnId: this.turnId, usage: { ...this.lastUsage, ...(typeof maxTokens === "number" && Number.isSafeInteger(maxTokens) && maxTokens > 0 ? { maxTokens } : {}) } });
   }
 }

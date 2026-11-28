@@ -192,3 +192,15 @@ test("endless plugin activation returns a warning within the injected 25-second 
   assert.deepEqual(result.models, []); assert.equal(result.capabilities?.turns.supportsNativeGoals, true);
   assert.match(result.message ?? "", /still starting its plugins/); assert.equal(clock, 25_000); assert.equal(reads, 25); assert.equal(closed, 1);
 });
+
+test("the probe budget includes version and server startup time", async () => {
+  const f = fake(); let clock = 0, reads = 0;
+  f.deps.now = () => clock; f.deps.sleep = async (ms) => { clock += ms; };
+  f.deps.select = async () => { clock += 9_000; return { generation: "v2", version: "2.2.5" }; };
+  f.deps.startRuntime = async () => { clock += 15_000; return { version: "2.2.5", client: {
+    model: { async list() { reads++; return { data: [model(`partial-${reads}`)] }; } },
+    provider: { async list() { return { data: [] }; } },
+  }, close: async () => {} } as unknown as Awaited<ReturnType<NonNullable<OpenCode2ProbeDependencies["startRuntime"]>>>; };
+  const result = await probeOpenCode2(params, host, f.deps);
+  assert.equal(result.status, "warning"); assert.deepEqual(result.models, []); assert.equal(clock, 25_000);
+});
