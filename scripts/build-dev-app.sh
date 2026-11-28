@@ -65,16 +65,31 @@ OUT_TAG="$OUT_TAG_ARG"
 LOCK_OWNER="goat2_desktop build-dev-app $(hostname -s) $$"
 OWN_MERGE_LOCK=0
 OWN_BUILD_LOCK=0
+STAGE=""            # local copy of a remote build
+REMOTE_LEFTOVERS=0  # 1 while a remote script copy / hand-over folder may exist on $BUILD_HOST
+# take_lock <dir> <flag variable>: the flag is set right after our mkdir, so cleanup knows the
+# directory is ours even if we stop before the owner line is written.
 take_lock() {
   mkdir "$1" 2>/dev/null || return 1
-  echo "$LOCK_OWNER" > "$1/owner"
+  printf -v "$2" 1
+  if ! echo "$LOCK_OWNER" > "$1/owner"; then
+    rmdir "$1" 2>/dev/null || true
+    printf -v "$2" 0
+    echo "could not write the owner of $1: not building" >&2
+    exit 1
+  fi
 }
-# Called only for a lock our own mkdir created. The owner file can be missing only if we stopped
-# before writing it; a different owner means it is not ours after all, and it stays.
+# Only for a lock our own mkdir created (flag set). Our owner line: remove it. No owner line yet: we
+# stopped between mkdir and the write, so the directory is still empty and rmdir removes only that;
+# a directory with anyone else's owner file is never touched (review devbuild2-3).
 drop_lock() {
   local owner
   owner="$(cat "$1/owner" 2>/dev/null || true)"
-  if [[ -z "$owner" || "$owner" == "$LOCK_OWNER" ]]; then rm -rf "$1"; fi
+  if [[ "$owner" == "$LOCK_OWNER" ]]; then
+    rm -rf "$1"
+  elif [[ -z "$owner" ]]; then
+    rmdir "$1" 2>/dev/null || true
+  fi
 }
 release_merge_lock() {
   if [[ $OWN_MERGE_LOCK == 1 ]]; then drop_lock "$MERGE_LOCK"; OWN_MERGE_LOCK=0; fi
@@ -82,44 +97,72 @@ release_merge_lock() {
 cleanup() {
   release_merge_lock
   if [[ $OWN_BUILD_LOCK == 1 ]]; then drop_lock "$BUILD_LOCK"; OWN_BUILD_LOCK=0; fi
+  if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf "$STAGE"; fi
+  if [[ $REMOTE_LEFTOVERS == 1 ]]; then
+    ssh -o BatchMode=yes "$BUILD_HOST" "rm -rf \$HOME/$OUT_ROOT/$OUT_TAG; rm -f \$HOME/$REMOTE_SCRIPT" || true
+  fi
 }
 # Installed before any mkdir so no exit path after taking a lock can leave it behind (SIGKILL aside).
 trap cleanup EXIT
 
-# $DEVBUILD must be its own registered worktree root: never the merge checkout, the checkout this
-# script runs from, the repository's main worktree, or a folder inside one of them (review devbuild-1).
+# On-disk form of a path that may not exist yet: realpath of the existing parent + the last name.
+# On a case-insensitive disk git can record ~/Developer while the folder is ~/developer, and bash's
+# pwd -P keeps the case it was given (seen on mac-studio), so every comparison uses this form.
+ondisk_path() {
+  if [[ -e "$1" ]]; then
+    realpath "$1"
+  else
+    local parent
+    parent="$(dirname "$1")"
+    [[ -d "$parent" ]] || { echo "$parent does not exist" >&2; return 1; }
+    echo "$(realpath "$parent")/$(basename "$1")"
+  fi
+}
+
+# $DEVBUILD must be the dedicated worktree: never the merge checkout, the checkout this script runs
+# from, the repository's main worktree, any other worktree, or a folder inside one of them, whether or
+# not it exists yet (reviews devbuild-1, devbuild2-1). An existing one must be a registered worktree root.
 check_devbuild_path() {
-  local repo="$1" real top
-  [[ -d "$DEVBUILD" ]] || return 0
-  real="$(realpath "$DEVBUILD")"
-  top="$(git -C "$DEVBUILD" rev-parse --show-toplevel 2>/dev/null || true)"
-  [[ -n "$top" ]] && top="$(realpath "$top")"
-  local main forbidden
-  main="$(git -C "$repo" worktree list --porcelain | sed -n '1s/^worktree //p')"
-  for forbidden in "$SOURCE_REPO" "$repo" "$main" "${INVOKED_REPO:-}"; do
-    [[ -n "$forbidden" && -d "$forbidden" ]] || continue
-    if [[ "$real" == "$(realpath "$forbidden")" ]]; then
-      echo "$DEVBUILD is $forbidden, not the dedicated build worktree: not building" >&2
+  local repo="$1" real path p
+  real="$(ondisk_path "$DEVBUILD")" || { echo "bad build folder $DEVBUILD: not building" >&2; exit 1; }
+  local protected=("$SOURCE_REPO" "$repo" "${INVOKED_REPO:-}")
+  while IFS= read -r path; do protected+=("$path"); done \
+    < <(git -C "$repo" worktree list --porcelain | sed -n 's/^worktree //p')
+  local registered=0
+  for path in "${protected[@]}"; do
+    [[ -n "$path" && -d "$path" ]] || continue
+    p="$(realpath "$path")"
+    if [[ "$real" == "$p" ]]; then
+      # Only the dedicated worktree itself may match a registered path, and never a protected checkout.
+      if [[ "$p" == "$(realpath "$SOURCE_REPO" 2>/dev/null)" || "$p" == "$(realpath "$repo")" ||
+        ( -n "${INVOKED_REPO:-}" && "$p" == "$(realpath "${INVOKED_REPO}")" ) ||
+        "$p" == "$(realpath "$(git -C "$repo" worktree list --porcelain | sed -n '1s/^worktree //p')")" ]]; then
+        echo "$DEVBUILD is $path, not the dedicated build worktree: not building" >&2
+        exit 1
+      fi
+      registered=1
+    elif [[ "$real" == "$p"/* ]]; then
+      echo "$DEVBUILD is inside $path: not building" >&2
       exit 1
     fi
   done
-  # Every path is compared in its on-disk form (realpath): on a case-insensitive disk git can record
-  # ~/Developer while the folder is ~/developer, and bash's pwd -P keeps the case it was given
-  # (seen on mac-studio).
-  local registered=0 path
-  while IFS= read -r path; do
-    if [[ -d "$path" && "$(realpath "$path")" == "$real" ]]; then registered=1; fi
-  done < <(git -C "$repo" worktree list --porcelain | sed -n 's/^worktree //p')
-  if [[ "$top" != "$real" || $registered != 1 ]]; then
-    echo "$DEVBUILD exists but is not a registered worktree root of $repo: not building" >&2
-    exit 1
+  if [[ -e "$DEVBUILD" ]]; then
+    local top
+    top="$(git -C "$DEVBUILD" rev-parse --show-toplevel 2>/dev/null || true)"
+    [[ -n "$top" ]] && top="$(realpath "$top")"
+    if [[ "$top" != "$real" || $registered != 1 ]]; then
+      echo "$DEVBUILD exists but is not a registered worktree root of $repo: not building" >&2
+      exit 1
+    fi
   fi
 }
 
 # Checks <sha> out detached in $DEVBUILD (a worktree of $1), cleaned except dependency/Rust caches.
+# Never updates origin/goat2 here (that ref is read under the merge lock): a missing commit is fetched
+# by SHA, which only writes FETCH_HEAD (review devbuild2-2).
 prepare_devbuild() {
   local repo="$1" sha="$2"
-  git -C "$repo" fetch -q origin goat2
+  git -C "$repo" cat-file -e "$sha^{commit}" 2>/dev/null || git -C "$repo" fetch -q origin "$sha"
   git -C "$repo" cat-file -e "$sha^{commit}"
   check_devbuild_path "$repo"
   if [[ -e "$DEVBUILD" ]]; then
@@ -127,6 +170,7 @@ prepare_devbuild() {
   else
     echo "==> creating the build worktree $DEVBUILD"
     git -C "$repo" worktree add -q --detach "$DEVBUILD" "$sha"
+    check_devbuild_path "$repo"
   fi
   git -C "$DEVBUILD" clean -q -fdx -e node_modules -e target
   if [[ "$(git -C "$DEVBUILD" rev-parse HEAD)" != "$sha" || -n "$(git -C "$DEVBUILD" status --porcelain)" ]]; then
@@ -135,6 +179,7 @@ prepare_devbuild() {
     exit 1
   fi
 }
+
 
 # Installs the .app at $1 (stamp already checked) to /Applications, quitting and relaunching a running one.
 install_app() {
@@ -175,18 +220,16 @@ install_app() {
 if [[ $INSTALL == 1 ]]; then
   INVOKED_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   # Held for the whole run (build, copy, install): one Dev build at a time on this Mac.
-  if ! take_lock "$BUILD_LOCK"; then
+  if ! take_lock "$BUILD_LOCK" OWN_BUILD_LOCK; then
     echo "another Dev build is running ($BUILD_LOCK: $(cat "$BUILD_LOCK/owner" 2>/dev/null)): not building" >&2
     exit 1
   fi
-  OWN_BUILD_LOCK=1
   # The merge procedure holds this lock while a lane merges into ~/Developer/goat2 and tests the result,
   # so origin/goat2 is read under it; the build itself runs without it.
-  if ! take_lock "$MERGE_LOCK"; then
+  if ! take_lock "$MERGE_LOCK" OWN_MERGE_LOCK; then
     echo "a merge into goat2 is in progress ($MERGE_LOCK exists): not building. Run again when it is gone." >&2
     exit 1
   fi
-  OWN_MERGE_LOCK=1
   git -C "$INVOKED_REPO" fetch -q origin goat2
   SHA="$(git -C "$INVOKED_REPO" rev-parse --verify 'origin/goat2^{commit}')"
   release_merge_lock
@@ -196,6 +239,7 @@ if [[ $INSTALL == 1 ]]; then
     OUT_TAG="$COMMIT-$(hostname -s)-$$-$(date +%s)"
     REMOTE_SCRIPT="Developer/.goat2-build-dev-app.$OUT_TAG.sh"
     echo "==> building goat2 $COMMIT on $BUILD_HOST"
+    REMOTE_LEFTOVERS=1
     ssh -o BatchMode=yes "$BUILD_HOST" "cat > $REMOTE_SCRIPT" < "${BASH_SOURCE[0]}"
     # Login shell for the build host's PATH (node, pnpm, cargo, kache); stdin closed so no build step
     # can read from this ssh session. The build host serialises its own builds with its build lock and
@@ -206,6 +250,7 @@ if [[ $INSTALL == 1 ]]; then
     echo "==> copying the app back from $BUILD_HOST"
     rsync -a --delete "$BUILD_HOST:$OUT_ROOT/$OUT_TAG/" "$STAGE/"
     ssh -o BatchMode=yes "$BUILD_HOST" "rm -rf \$HOME/$OUT_ROOT/$OUT_TAG"
+    REMOTE_LEFTOVERS=0
     FETCHED="$STAGE/$APP_NAME.app"
     # Files copied off another machine can carry quarantine; macOS would then refuse the ad-hoc app.
     xattr -cr "$FETCHED"
@@ -224,11 +269,10 @@ if [[ $INSTALL == 1 ]]; then
   BRANCH="goat2"
 elif [[ -n "$BUILD_SHA" ]]; then
   # The remote half: serialise builds on this machine; the app is handed over in $OUT_ROOT/$OUT_TAG.
-  if ! take_lock "$BUILD_LOCK"; then
+  if ! take_lock "$BUILD_LOCK" OWN_BUILD_LOCK; then
     echo "another Dev build is running on $(hostname -s) ($(cat "$BUILD_LOCK/owner" 2>/dev/null)): not building" >&2
     exit 1
   fi
-  OWN_BUILD_LOCK=1
   prepare_devbuild "$SOURCE_REPO" "$BUILD_SHA"
   SHA="$BUILD_SHA"
   REPO="$DEVBUILD"
