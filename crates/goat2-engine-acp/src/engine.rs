@@ -531,6 +531,7 @@ impl Shared {
                 turn_id,
                 url,
                 message,
+                key: None,
             },
         );
     }
@@ -1042,35 +1043,46 @@ impl Shared {
                 None => format!("elicitation:{}", state.request_counter),
             };
             if mode == "url" {
-                // v1 registry onUrlElicitation (adapter.ts:5329-5362): the person gets the page.
-                // The link goes only through AuthRequired, which the host keeps in memory
-                // (SigninLink: links carry one-time codes and never enter the thread log), and the
-                // agent is told it was handed over. engine-api has no path for the person's
-                // answer to a host sign-in back to the engine; v1's explicit consent waits on it.
-                let url = text_field(&params, "url");
+                // v1 registry onUrlElicitation (adapter.ts:5329-5362, coordinator
+                // requestUrlAuthentication): the agent's request stays open until the person
+                // accepts or declines. The link goes only through AuthRequired, which the host
+                // keeps in memory (SigninLink: links carry one-time codes and never enter the
+                // thread log); its key is this request, answered by answer_request(key,
+                // Accept | Decline) (engine-api step 3a). Session scope: the host keeps the sign-in
+                // past the end of the turn (host test a_sign_in_outside_a_turn_lasts_until_the_engine_stops).
+                let Some(url) = text_field(&params, "url") else {
+                    drop(state);
+                    for event in out {
+                        emit(self, event);
+                    }
+                    respond(responder, json!({"action": "decline"}));
+                    return;
+                };
+                state.pending.insert(
+                    key.clone(),
+                    Pending::Elicitation {
+                        responder,
+                        form: None,
+                        nested,
+                    },
+                );
                 drop(state);
                 for event in out {
                     emit(self, event);
                 }
-                let action = if url.is_some() { "accept" } else { "decline" };
-                // Session scope (no turn): the host keeps such a sign-in and its link until the
-                // person resolves it or the engine stops, so a turn the agent ends right after the
-                // hand-off cannot drop the link before the person sees it (final review 2 finding
-                // 1; host test a_sign_in_outside_a_turn_lasts_until_the_engine_stops). Answering
-                // after the person's choice waits for engine-api step 3 (lane C).
                 emit(
                     self,
                     EngineEvent::AuthRequired {
                         turn_id: None,
-                        url,
+                        url: Some(url),
                         message: if message.is_empty() {
                             format!("Sign in to {} to continue.", self.flavor.driver())
                         } else {
                             message
                         },
+                        key: Some(key),
                     },
                 );
-                respond(responder, json!({ "action": action }));
                 return;
             }
             let schema = params
@@ -2440,10 +2452,12 @@ fn signin_links(events: Option<mpsc::UnboundedReceiver<EngineEvent>>) -> Vec<Eng
             ..
         } = event
         {
+            // The agent that asked is gone, so there is nothing to answer.
             links.push(EngineEvent::AuthRequired {
                 turn_id: None,
                 url: Some(url),
                 message,
+                key: None,
             });
         }
     }
