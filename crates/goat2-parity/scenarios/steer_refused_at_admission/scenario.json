@@ -60,8 +60,15 @@
     "exhaustive": [
       "input.accepted",
       "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
       "run.finished",
-      "run.started"
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
     ],
     "threads": {
       "t1": [

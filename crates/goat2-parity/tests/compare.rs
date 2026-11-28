@@ -330,3 +330,80 @@ fn reversed_sequence_numbers_in_expected_array_order_fail() {
     }
     assert!(!compare(&s, &o).passed());
 }
+#[test]
+fn complete_scenarios_reject_any_extra_semantic_event() {
+    use goat2_parity::scenario::{LoadedScenario, SupportStatus};
+    use goat2_parity::trace::{ObservedEvent, ObservedTrace, Outcome, StreamReport, TraceEvent};
+    use std::collections::BTreeMap;
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenarios");
+    let mut checked = Vec::new();
+    for entry in std::fs::read_dir(&root).unwrap() {
+        let dir = entry.unwrap().path();
+        if !dir.join("scenario.json").exists() {
+            continue;
+        }
+        let mut s = LoadedScenario::load(&dir).unwrap();
+        if !s.scenario.expect.complete || !s.scenario.expect.happens_before.is_empty() {
+            continue;
+        }
+        s.scenario.targets.get_mut("v1").unwrap().status = SupportStatus::Supported;
+        let mut seq = 0;
+        let mut events = Vec::new();
+        for list in s.scenario.expect.threads.values() {
+            for e in list {
+                seq += 1;
+                events.push(ObservedEvent {
+                    seq,
+                    event: e.event.clone(),
+                });
+            }
+        }
+        let streams: BTreeMap<_, _> = s
+            .outbound_counts
+            .iter()
+            .map(|(k, n)| {
+                (
+                    k.clone(),
+                    StreamReport {
+                        consumed_all: true,
+                        outbound_checked: *n as u32,
+                        outbound_mismatches: vec![],
+                    },
+                )
+            })
+            .collect();
+        let mut o = ObservedTrace {
+            v: 1,
+            target: "v1".into(),
+            scenario: s.scenario.name.clone(),
+            outcome: Outcome::Ok,
+            events,
+            streams,
+            incomplete: false,
+        };
+        assert!(
+            compare(&s, &o).passed(),
+            "{} should pass its own expectation",
+            s.scenario.name
+        );
+        let thread = s.scenario.expect.threads.keys().next().unwrap().clone();
+        o.events.push(ObservedEvent {
+            seq: seq + 1,
+            event: TraceEvent::SteerApplied {
+                thread,
+                run: "r1".into(),
+                input: "i_extra".into(),
+            },
+        });
+        assert!(
+            !compare(&s, &o).passed(),
+            "{} accepted an extra steer.applied",
+            s.scenario.name
+        );
+        checked.push(s.scenario.name.clone());
+    }
+    assert!(
+        checked.contains(&"steer_refused_at_admission".to_string()),
+        "{checked:?}"
+    );
+}

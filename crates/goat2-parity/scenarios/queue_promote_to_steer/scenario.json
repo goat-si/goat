@@ -64,10 +64,16 @@
     "complete": true,
     "exhaustive": [
       "input.accepted",
+      "input.refused",
       "queue.changed",
-      "run.finished",
       "run.started",
-      "steer.applied"
+      "steer.applied",
+      "run.finished",
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
     ],
     "threads": {
       "t1": [

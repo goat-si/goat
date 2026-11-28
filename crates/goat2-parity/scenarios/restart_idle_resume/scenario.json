@@ -7,8 +7,7 @@
   ],
   "v1Refs": [
     "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/codex_transcript.ndjson:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/input.ts:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/input.ts:1"
+    "apps/server/src/orchestration-v2/testkit/OrchestratorReplayRecovery.integration.test.ts:294-369"
   ],
   "streams": {
     "codex": {
@@ -59,10 +58,17 @@
   "expect": {
     "complete": true,
     "exhaustive": [
-      "host.restarted",
       "input.accepted",
+      "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
       "run.finished",
-      "run.started"
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
     ],
     "threads": {
       "t1": [
