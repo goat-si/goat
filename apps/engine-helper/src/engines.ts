@@ -4,8 +4,6 @@ import type { EngineLoaders } from "./server.ts";
 export const engineLoaders: EngineLoaders = {
   fake: async () => (await import("./engines/fake.ts")).fakeEngine,
   cursor: async () => (await import("./engines/cursor/index.ts")).cursorEngine,
-  opencode: async () => {
-    throw new Error("the opencode engine is not built yet");
-  },
+  opencode: async () => (await import("./engines/opencode/index.ts")).opencodeEngine,
   muse: async () => (await import("./engines/muse/index.ts")).museEngine,
 };
