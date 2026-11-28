@@ -185,12 +185,14 @@ struct Actor {
     /// at most once: later events naming one are ignored.
     settled_signin_keys: std::collections::HashSet<String>,
     /// Turns accepted in the current engine session and their runs (newest last, at most
-    /// [TURN_RUNS_KEPT]): items a driver delivers after their turn ended (background
-    /// subagents) go to their origin run.
+    /// [TURN_RUNS_KEPT] settled ones): items a driver delivers after their turn ended
+    /// (background subagents) go to their origin run. A turn with a live subagent is never
+    /// evicted, so its subagent's late item always finds its run.
     turn_runs: std::collections::VecDeque<(String, RunId)>,
     /// Engine-native subagents still running in this session (non-terminal SubagentUpdate):
-    /// the engine is not idle-stopped while any runs (v1 keeps background subagents alive).
-    live_subagents: std::collections::HashSet<String>,
+    /// subagent id -> the turn it belongs to. The engine is not idle-stopped while any runs
+    /// (v1 keeps background subagents alive).
+    live_subagents: std::collections::HashMap<String, Option<String>>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -217,7 +219,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         undeclined_signin_keys: Vec::new(),
         settled_signin_keys: std::collections::HashSet::new(),
         turn_runs: std::collections::VecDeque::new(),
-        live_subagents: std::collections::HashSet::new(),
+        live_subagents: std::collections::HashMap::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
@@ -770,9 +772,7 @@ impl Actor {
                 })];
                 events.extend(delivered(DeliveryOutcome::Accepted));
                 self.append(events);
-                if self.turn_runs.len() >= TURN_RUNS_KEPT {
-                    self.turn_runs.pop_front();
-                }
+                self.forget_settled_turn();
                 self.turn_runs.push_back((turn_id.clone(), run_id.clone()));
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
@@ -875,7 +875,7 @@ impl Actor {
                 let item_id = item.id.clone();
                 if let TurnItemBody::Subagent { subagent_id, .. } = &item.body
                     && is_terminal(item.status)
-                    && self.live_subagents.remove(subagent_id)
+                    && self.live_subagents.remove(subagent_id).is_some()
                     && self.live_subagents.is_empty()
                     && matches!(self.phase, Phase::Idle)
                 {
@@ -992,6 +992,7 @@ impl Actor {
                 message,
             } => self.on_auth_required(turn_id, key, url, message).await,
             EngineEvent::SubagentUpdate {
+                turn_id,
                 subagent_id,
                 status,
                 ..
@@ -1002,14 +1003,18 @@ impl Actor {
                 // the engine from being idle-stopped.
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
                 if is_terminal(status) {
-                    if self.live_subagents.remove(&subagent_id)
+                    if self.live_subagents.remove(&subagent_id).is_some()
                         && self.live_subagents.is_empty()
                         && matches!(self.phase, Phase::Idle)
                     {
                         self.arm_idle();
                     }
                 } else {
-                    self.live_subagents.insert(subagent_id);
+                    // Keep the turn a first update named if a later one leaves it out.
+                    let turn = self.live_subagents.entry(subagent_id).or_insert(None);
+                    if turn_id.is_some() {
+                        *turn = turn_id;
+                    }
                 }
             }
             EngineEvent::SteerUpdated {
@@ -1038,6 +1043,23 @@ impl Actor {
             .store
             .fold(&self.id)
             .is_some_and(|f| f.open_requests.iter().any(|r| &r.request_id == request_id))
+    }
+
+    /// Make room in [Actor::turn_runs] before a new turn is recorded: at [TURN_RUNS_KEPT],
+    /// the oldest turn without a live subagent goes. Turns with live subagents stay even past
+    /// the cap; they leave once their subagents finish and a later turn needs the room.
+    fn forget_settled_turn(&mut self) {
+        if self.turn_runs.len() < TURN_RUNS_KEPT {
+            return;
+        }
+        let live = |turn: &str| {
+            self.live_subagents
+                .values()
+                .any(|t| t.as_deref() == Some(turn))
+        };
+        if let Some(pos) = self.turn_runs.iter().position(|(t, _)| !live(t)) {
+            self.turn_runs.remove(pos);
+        }
     }
 
     /// An accepted steer the engine later cancelled (owner 2026-11-29, a deliberate difference
