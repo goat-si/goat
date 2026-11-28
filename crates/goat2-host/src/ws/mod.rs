@@ -86,8 +86,12 @@ async fn upgrade(
 }
 type Tx = mpsc::UnboundedSender<Value>;
 fn send(tx: &Tx, frame: impl serde::Serialize) {
-    if let Ok(v) = serde_json::to_value(frame) {
-        let _ = tx.send(v);
+    match serde_json::to_value(frame) {
+        Ok(v) => {
+            let _ = tx.send(v);
+        }
+        // Never the frame content (it can hold sign-in links): only that it was dropped.
+        Err(_) => tracing::error!("a frame failed to serialize and was not sent"),
     }
 }
 fn error(
@@ -153,9 +157,11 @@ async fn connection(socket: WebSocket, app: App) {
                                 });
                             }
                             ClientFrame::Pong { .. } => {}
-                            // Until the providers module lands, refuse the subscription with its
-                            // subId so the client can match the refusal to its request.
-                            ClientFrame::SubscribeProviders { sub_id } => error(&tx,Some(sub_id),None,"not_available","provider subscriptions are not available yet (providers module pending)"),
+                            ClientFrame::SubscribeProviders { sub_id } => {
+                                if let Some((handle,_)) = subs.remove(&sub_id) { handle.abort(); }
+                                let rx=app.host.watch_providers(); let tx=tx.clone(); let id=sub_id.clone();
+                                let handle=tokio::spawn(async move { providers(rx,tx,id).await }); subs.insert(sub_id,(handle,None));
+                            }
                             _ => error(&tx,None,None,"bad_frame","unsupported frame"),
                         }
                     }
@@ -173,6 +179,29 @@ async fn connection(socket: WebSocket, app: App) {
     }
     for (_, (handle, _)) in subs {
         handle.abort();
+    }
+}
+
+/// `subscribe_providers`: the whole list once it exists, then again on every change.
+async fn providers(
+    mut rx: tokio::sync::watch::Receiver<crate::providers::ProviderList>,
+    tx: Tx,
+    sub_id: String,
+) {
+    loop {
+        let list = rx.borrow_and_update().clone();
+        if let Some(providers) = list {
+            send(
+                &tx,
+                HostFrame::Providers {
+                    sub_id: sub_id.clone(),
+                    providers,
+                },
+            );
+        }
+        if rx.changed().await.is_err() {
+            return;
+        }
     }
 }
 

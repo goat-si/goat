@@ -10,6 +10,7 @@ pub mod config;
 pub mod core;
 pub mod engine;
 pub mod mcp;
+pub mod providers;
 pub mod server;
 pub mod stall;
 pub mod store;

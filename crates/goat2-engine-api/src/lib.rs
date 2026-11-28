@@ -13,7 +13,9 @@ use std::path::PathBuf;
 
 use goat2_contracts::{
     ChatAttachment, EngineConfig, EngineItemLocator, EngineRef, InputId, ItemId,
-    ProviderCapabilities, ProviderProbeResult, RequestKind, ThreadId, TurnItem, TurnItemStatus,
+    ProviderAuthMethod, ProviderAuthState, ProviderCapabilities, ProviderInstallState,
+    ProviderInstanceId, ProviderProbeResult, ProviderSetup, RequestKind, ThreadId, TurnItem,
+    TurnItemStatus,
 };
 use tokio::sync::mpsc;
 
@@ -57,12 +59,28 @@ pub struct Instructions {
 
 /// Executable, arguments and environment for one engine process (v1 provider settings
 /// `binaryPath`, `launchArgs`, instance env; ACP registry commands per runtime mode).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// `Debug` prints environment keys only: an instance env can hold API keys.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct LaunchSpec {
     /// None = the driver's default binary name, looked up on PATH.
     pub binary: Option<PathBuf>,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for LaunchSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let env: BTreeMap<&str, &str> = self
+            .env
+            .keys()
+            .map(|k| (k.as_str(), "<redacted>"))
+            .collect();
+        f.debug_struct("LaunchSpec")
+            .field("binary", &self.binary)
+            .field("args", &self.args)
+            .field("env", &env)
+            .finish()
+    }
 }
 
 /// One input handed to the engine.
@@ -311,6 +329,78 @@ pub trait EngineFactory: Send + Sync + 'static {
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
         Err(EngineError::Unsupported("probe".into()))
     }
+
+    // Provider sign-in and install (v1 providerAuth.* / providerInstall.*, provider wire). The
+    // driver owns the provider-specific steps; the host routes commands, shows the latest state
+    // on the provider entry and re-probes after a success. Stream rule for every flow: the
+    // returned value is the state at start; every later phase change goes on `updates`; the
+    // driver drops the sender after a terminal phase (succeeded, failed, cancelled). The host
+    // never invents phases and drops a flow on restart (v1 marks it failed). An
+    // `authorizationUrl` stays in host memory and on the providers frame, never in a log.
+
+    /// v1 provider setup flags: whether GOAT can sign in to or install this provider.
+    fn setup(&self) -> ProviderSetup {
+        ProviderSetup {
+            can_authenticate: false,
+            can_install: false,
+            documentation_url: None,
+        }
+    }
+    /// The sign-in methods the provider offers for this instance.
+    async fn auth_methods(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<Vec<ProviderAuthMethod>, EngineError> {
+        let _ = target;
+        Err(EngineError::Unsupported("auth_methods".into()))
+    }
+    /// Start a sign-in. Every state returned or sent carries `target.instance_id`.
+    async fn auth_start(
+        &self,
+        target: &ProviderTarget,
+        method_id: Option<String>,
+        updates: mpsc::UnboundedSender<ProviderAuthState>,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let _ = (target, method_id, updates);
+        Err(EngineError::Unsupported("auth_start".into()))
+    }
+    async fn auth_cancel(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let _ = (target, flow_id);
+        Err(EngineError::Unsupported("auth_cancel".into()))
+    }
+    async fn auth_logout(&self, target: &ProviderTarget) -> Result<ProviderAuthState, EngineError> {
+        let _ = target;
+        Err(EngineError::Unsupported("auth_logout".into()))
+    }
+    /// Install or update the provider (per driver: `ProviderInstallState.driver` is this
+    /// factory's kind).
+    async fn install_start(
+        &self,
+        launch: Option<&LaunchSpec>,
+        updates: mpsc::UnboundedSender<ProviderInstallState>,
+    ) -> Result<ProviderInstallState, EngineError> {
+        let _ = (launch, updates);
+        Err(EngineError::Unsupported("install_start".into()))
+    }
+    async fn install_cancel(
+        &self,
+        operation_id: &str,
+    ) -> Result<ProviderInstallState, EngineError> {
+        let _ = operation_id;
+        Err(EngineError::Unsupported("install_cancel".into()))
+    }
+}
+
+/// The provider instance a sign-in is for: several instances can share one driver kind, each
+/// with its own binary and environment (e.g. its `CODEX_HOME`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderTarget {
+    pub instance_id: ProviderInstanceId,
+    pub launch: Option<LaunchSpec>,
 }
 
 /// Controls one engine process.
@@ -368,4 +458,31 @@ pub trait EngineSession: Send + Sync {
     }
     /// Stop the process group (lane B `kill_group()`). Idempotent.
     async fn shutdown(&self);
+}
+
+#[cfg(test)]
+mod launch_spec_tests {
+    use super::{LaunchSpec, ProviderTarget};
+
+    #[test]
+    fn debug_never_prints_environment_values() {
+        let spec = LaunchSpec {
+            binary: Some("/usr/local/bin/codex".into()),
+            args: vec!["--profile".into(), "work".into()],
+            env: [("OPENAI_API_KEY".to_owned(), "sk-SECRET-VALUE".to_owned())].into(),
+        };
+        let target = ProviderTarget {
+            instance_id: "codex".into(),
+            launch: Some(spec.clone()),
+        };
+        for printed in [
+            format!("{spec:?}"),
+            format!("{target:?}"),
+            format!("{target:#?}"),
+        ] {
+            assert!(!printed.contains("sk-SECRET-VALUE"), "{printed}");
+            assert!(printed.contains("OPENAI_API_KEY"), "{printed}");
+            assert!(printed.contains("/usr/local/bin/codex"), "{printed}");
+        }
+    }
 }
