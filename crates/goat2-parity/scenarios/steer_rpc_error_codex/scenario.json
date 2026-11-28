@@ -87,8 +87,8 @@
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "unsupported",
+      "reason": "v1 cannot reach the source-derived end state with recorded frames: a Codex turn/steer RPC error becomes ProviderAdapterSteerRunError (CodexAdapterV2.ts:7338), a ProviderTurnControlError without steerDeclined/missedBeforeSubmit that EffectWorker rethrows (EffectWorker.ts:310-318); steer effects are retryable (providerTurnControlFailure.ts: only interrupts are not) with 100ms*2^n backoff up to 5 attempts (EffectWorker.ts:862-880); after the turn completes the retry fails missedBeforeSubmit (ProviderTurnControlService.ts:157-165) and the same message is re-dispatched start_immediately as a new run (EffectWorker.ts:310-360), which needs a second recorded Codex turn this synthetic transcript does not contain. Observed v1 replay of the recorded window (runner 2026-11-28): input.accepted i1 start, run.started r1, input.accepted i2 steer, run.finished r1 done, no steer.applied, stream consumed (6 outbound checked); the backoff retry did not fire within the replay."
     },
     "goat2": {
       "status": "pending",
