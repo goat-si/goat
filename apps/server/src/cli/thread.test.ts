@@ -395,7 +395,7 @@ it.effect("show rejects a negative --messages before reaching the server", () =>
     assert.strictEqual(flagError.option, "messages");
     assert.strictEqual(flagError.value, "-1");
     // Zero is valid: it shows the thread's state with no messages.
-    assert.strictEqual((yield* show("0"))._tag, "ThreadServerNotRunningError");
+    assert.strictEqual((yield* show("0"))._tag, "CliCredentialError");
   }).pipe(
     Effect.scoped,
     Effect.provide(

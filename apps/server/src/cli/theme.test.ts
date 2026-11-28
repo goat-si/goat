@@ -151,13 +151,13 @@ describe("goat theme", () => {
         const themeFile = NodePath.join(baseDir, `nightfall.${extension}`);
         NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
 
-        yield* runCliIn(baseDir, [
-          "theme",
-          "set",
-          relativePath ?? themeFile,
-          "--base-dir",
-          baseDir,
-        ]);
+        const previous = process.cwd();
+        try {
+          process.chdir(baseDir);
+          yield* runCli(["theme", "set", relativePath ?? themeFile, "--base-dir", baseDir]);
+        } finally {
+          process.chdir(previous);
+        }
 
         const published = NodePath.join(baseDir, "userdata", "themes", "nightfall.json");
         assert.equal(NodeFS.readFileSync(published, "utf8"), NIGHTFALL_THEME_JSON);
