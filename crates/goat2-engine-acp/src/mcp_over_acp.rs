@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 /// v1 mcpOverAcpBridge.ts:11-12.
 const MAX_CONNECTIONS: usize = 16;
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Calls the agent may have in flight at once (the stdio bridge's limit, goat2-acp-mcp-bridge
+/// MAX_CONCURRENT_REQUESTS).
+pub const MAX_IN_FLIGHT: usize = 64;
 /// Total size of one response the relay collects (the bridge's JSON body cap).
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,6 +41,9 @@ pub struct McpOverAcp {
     authorization: String,
     connections: Mutex<HashMap<String, Arc<Connection>>>,
     next_connection: AtomicU64,
+    /// Requests and notifications in flight (final review 6A finding 1): beyond
+    /// [MAX_IN_FLIGHT] the agent is refused at once instead of piling up waiting tasks.
+    in_flight: Arc<tokio::sync::Semaphore>,
     /// Bumped by [McpOverAcp::stop_calls]; every call in flight races it (v1 `callsStopped`).
     stop: tokio::sync::watch::Sender<u64>,
 }
@@ -67,6 +73,7 @@ impl McpOverAcp {
             connections: Mutex::new(HashMap::new()),
             next_connection: AtomicU64::new(0),
             stop: tokio::sync::watch::channel(0).0,
+            in_flight: Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT)),
         }
     }
 
@@ -127,6 +134,12 @@ impl McpOverAcp {
         Ok(payloads)
     }
 
+    fn admit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+        Arc::clone(&self.in_flight)
+            .try_acquire_owned()
+            .map_err(|_| "Too many MCP-over-ACP calls in flight.".to_owned())
+    }
+
     /// `mcp/connect`.
     pub fn connect(&self, params: &Value) -> Result<Value, String> {
         let server = params
@@ -170,6 +183,7 @@ impl McpOverAcp {
 
     /// `mcp/message` request: the MCP result of the matching response.
     pub async fn message(&self, params: &Value) -> Result<Value, String> {
+        let _admitted = self.admit()?;
         let connection = self.connection(params)?;
         let id = connection.next_request_id.fetch_add(1, Ordering::SeqCst) + 1;
         let payloads = self
@@ -187,6 +201,7 @@ impl McpOverAcp {
 
     /// `mcp/message` notification.
     pub async fn notify(&self, params: &Value) -> Result<(), String> {
+        let _admitted = self.admit()?;
         let connection = self.connection(params)?;
         self.send(&connection, Self::envelope(params, None))
             .await
@@ -390,5 +405,60 @@ mod tests {
         .expect("the call ends instead of collecting forever");
         let error = result.expect_err("an oversized answer fails");
         assert!(error.contains("exceeds"), "{error}");
+    }
+
+    /// An MCP endpoint that accepts requests and never answers them.
+    fn endpoint_that_never_answers() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                held.push(stream);
+            }
+        });
+        url
+    }
+
+    /// Final review 6A finding 1: past [MAX_IN_FLIGHT] calls the agent is refused at once
+    /// instead of piling up waiting tasks and request bodies.
+    #[tokio::test]
+    async fn calls_beyond_the_in_flight_limit_are_refused() {
+        let bridge = Arc::new(McpOverAcp::new(endpoint_that_never_answers(), "Bearer t"));
+        let connected = bridge
+            .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
+            .unwrap();
+        let id = connected["connectionId"].as_str().unwrap().to_owned();
+        let mut waiting = Vec::new();
+        // A fixed 64 (the documented limit), so the test does not follow a changed constant.
+        for _ in 0..64 {
+            let bridge = Arc::clone(&bridge);
+            let id = id.clone();
+            waiting.push(tokio::spawn(async move {
+                bridge
+                    .message(&json!({"connectionId": id, "method": "tools/list"}))
+                    .await
+            }));
+        }
+        // Every earlier call holds its slot once it has started.
+        // Let every spawned call start (single-threaded test runtime: each runs to its first wait).
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let refused = tokio::time::timeout(
+            Duration::from_secs(5),
+            bridge.message(&json!({"connectionId": id, "method": "tools/list"})),
+        )
+        .await
+        .expect("refused at once, not queued");
+        assert_eq!(
+            refused.unwrap_err(),
+            "Too many MCP-over-ACP calls in flight."
+        );
+        bridge.stop_calls();
+        for call in waiting {
+            assert!(call.await.unwrap().is_err());
+        }
     }
 }
