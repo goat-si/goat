@@ -723,7 +723,12 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
-        if (message.type === "cuaHumanInput" || message.type === "cuaPrivateMode") {
+        if (
+          message.type === "cuaHumanInput" ||
+          message.type === "cuaPrivateMode" ||
+          message.type === "cuaPersonStop" ||
+          message.type === "cuaSessionLock"
+        ) {
           return recordContact.pipe(
             Effect.andThen(PubSub.publish(cuaSafety, message)),
             Effect.asVoid,

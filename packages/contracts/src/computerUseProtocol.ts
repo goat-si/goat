@@ -622,6 +622,10 @@ export const ComputerUseEvent = Schema.Union([
     type: Schema.Literal("humanInput"),
     source: ComputerUseHumanInputSource,
   }),
+  Schema.Struct({
+    type: Schema.Literal("personStop"),
+    reason: Schema.Literal("person_esc"),
+  }),
 ]);
 export type ComputerUseEvent = typeof ComputerUseEvent.Type;
 

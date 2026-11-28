@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import type { ComputerUsePrimitiveReply } from "@goat/contracts";
-import { driverError } from "./DesktopDriverReplies.ts";
+import { driverError, driverResult, driverWarnings } from "./DesktopDriverReplies.ts";
 
 type DriverJson = NonNullable<ComputerUsePrimitiveReply["result"]>;
 const replyIdentity = {
@@ -126,4 +126,130 @@ it("a tool result's structured content wins over error data, even when empty", (
     effectStarted: false,
     nextStep: "Observe the desktop and try again.",
   });
+});
+
+it("maps expanded pre-dispatch refusal codes accurately instead of permission_denied", () => {
+  const cases: ReadonlyArray<{
+    readonly code: string;
+    readonly expectedCode: string;
+    readonly expectedRefused: string;
+  }> = [
+    { code: "secure_input_active", expectedCode: "private", expectedRefused: "privateMode" },
+    { code: "secure_field", expectedCode: "private", expectedRefused: "privateMode" },
+    {
+      code: "titlebar_would_raise_window",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "sheet_or_modal_on_target_window",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "foreign_overlay_above_granted",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "hit_test_foreign_pid",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "focused_window_mismatch",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "focused_element_foreign_pid",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "focused_element_not_at_point",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "mouse_containment_unverifiable",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "keyboard_containment_unverifiable",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "off_space_containment_unverifiable",
+      expectedCode: "unsupported",
+      expectedRefused: "backgroundUnavailable",
+    },
+    {
+      code: "user_actively_typing",
+      expectedCode: "user_interacting",
+      expectedRefused: "targetRefused",
+    },
+    {
+      code: "recent_hid_keydown_would_misdirect",
+      expectedCode: "user_interacting",
+      expectedRefused: "targetRefused",
+    },
+    {
+      code: "identity_not_unique",
+      expectedCode: "stale_reference",
+      expectedRefused: "staleElement",
+    },
+    {
+      code: "identity_unproven",
+      expectedCode: "stale_reference",
+      expectedRefused: "staleElement",
+    },
+    {
+      code: "ambiguous_target",
+      expectedCode: "stale_reference",
+      expectedRefused: "staleElement",
+    },
+    {
+      code: "lock_timeout",
+      expectedCode: "unavailable",
+      expectedRefused: "helperUnavailable",
+    },
+  ];
+  for (const entry of cases) {
+    for (const structured of [{ effect: "refused", code: entry.code }, { code: entry.code }]) {
+      const error = driverError(failedCall(structured), "click", { x: 1, y: 2 });
+      expect(error).toMatchObject({
+        code: entry.expectedCode,
+        effectStarted: false,
+        refused: entry.expectedRefused,
+      });
+      expect(error?.code).not.toBe("permission_denied");
+    }
+  }
+});
+
+it("surfaces focus_confirmed false as a warning and never promotes the reply to confirmed", () => {
+  const reply: ComputerUsePrimitiveReply = {
+    ...replyIdentity,
+    status: "settled",
+    result: {
+      isError: false,
+      structuredContent: { effect: "confirmed", focus_confirmed: false },
+    },
+  };
+  const result = driverResult("click", reply);
+  expect(result.category).toBe("unverifiable");
+  expect(result.warnings).toContain(
+    "target focus was not confirmed after input; verify focus before typing",
+  );
+  expect(result.evidence).toContain("driver:focus_confirmed=false");
+  expect(result.evidence).not.toContain("driver:effect=confirmed");
+  expect(result.safety).toMatchObject({
+    possibleCommit: true,
+    writeStatus: "may_have_applied",
+    code: "write_indeterminate",
+  });
+  expect(driverWarnings(reply, "read")).toEqual([]);
 });

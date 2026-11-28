@@ -394,6 +394,20 @@ describe("computer use safety signals", () => {
         event: { type: "humanInput", source: "touch" },
       }),
     ).toBe(false);
+    expect(
+      decodes(ComputerUseEventFrame, {
+        generation: "g2",
+        watchId: "w1",
+        event: { type: "personStop", reason: "person_esc" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(ComputerUseEventFrame, {
+        generation: "g2",
+        watchId: "w1",
+        event: { type: "personStop", reason: "other" },
+      }),
+    ).toBe(false);
     // Events carry no content: a typed-text field does not survive decoding.
     const typed = Schema.decodeUnknownSync(ComputerUseEventFrame)({
       generation: "g2",

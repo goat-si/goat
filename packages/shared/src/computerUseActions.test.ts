@@ -349,3 +349,65 @@ describe("computer use foreground failures", () => {
     });
   });
 });
+
+describe("expanded pre-dispatch refusal codes and unconfirmed focus", () => {
+  it("classifies expanded pre-dispatch refusal codes without marking them dispatched", () => {
+    const { save, request } = setup();
+    const click = request({ action: "click", at: { element: save } });
+    const expected: ReadonlyArray<readonly [string, string]> = [
+      ["titlebar_would_raise_window", "backgroundUnavailable"],
+      ["secure_input_active", "privateMode"],
+      ["secure_field", "privateMode"],
+      ["sheet_or_modal_on_target_window", "backgroundUnavailable"],
+      ["foreign_overlay_above_granted", "backgroundUnavailable"],
+      ["hit_test_foreign_pid", "backgroundUnavailable"],
+      ["focused_window_mismatch", "backgroundUnavailable"],
+      ["focused_element_foreign_pid", "backgroundUnavailable"],
+      ["focused_element_not_at_point", "backgroundUnavailable"],
+      ["mouse_containment_unverifiable", "backgroundUnavailable"],
+      ["keyboard_containment_unverifiable", "backgroundUnavailable"],
+      ["off_space_containment_unverifiable", "backgroundUnavailable"],
+      ["user_actively_typing", "userIntervened"],
+      ["recent_hid_keydown_would_misdirect", "userIntervened"],
+      ["identity_not_unique", "staleElement"],
+      ["identity_unproven", "staleElement"],
+      ["ambiguous_target", "staleElement"],
+      ["lock_timeout", "helperUnavailable"],
+    ];
+    for (const [code, reason] of expected) {
+      const mapped = actionResultFromDriver(click, {
+        isError: true,
+        text: `Refused: ${code}`,
+        structured: { code },
+      });
+      expect(mapped).toMatchObject({ outcome: "refused", reason });
+      expect(classifyComputerUseActionOutcome(mapped)).toMatchObject({ possibleCommit: false });
+    }
+    const unknown = actionResultFromDriver(click, {
+      isError: true,
+      text: "Unexpected error",
+      structured: { code: "unclassified_post_dispatch_error" },
+    });
+    expect(unknown).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+    expect(classifyComputerUseActionOutcome(unknown)).toMatchObject({ possibleCommit: true });
+  });
+
+  it("downgrades confirmed replies with focus_confirmed false to unverifiable", () => {
+    const { save, request } = setup();
+    const click = request({ action: "click", at: { element: save } });
+    const mapped = actionResultFromDriver(click, {
+      isError: false,
+      text: "Clicked.",
+      structured: { effect: "confirmed", focus_confirmed: false },
+    });
+    expect(mapped).toMatchObject({
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
+    });
+    expect(classifyComputerUseActionOutcome(mapped)).toMatchObject({
+      possibleCommit: true,
+      writeStatus: "may_have_applied",
+      code: "write_indeterminate",
+    });
+  });
+});

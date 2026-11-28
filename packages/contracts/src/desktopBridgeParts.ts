@@ -20,6 +20,8 @@ interface DesktopFileActionsBridge {
   startFileDrag?: (input: { environmentId: EnvironmentId; path: string }) => Promise<boolean>;
 }
 
+export type DesktopCuaPermissionPane = "accessibility" | "screen-recording" | "input-monitoring";
+
 /** Desktop bridge methods that live in their own modules, so ipc.ts stays within its budget. */
 export type DesktopBridgeParts = DesktopPrimaryPasteBridge &
   DesktopWindowMaterialBridge &
