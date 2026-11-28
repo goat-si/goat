@@ -163,11 +163,21 @@ export function collectComposerInlineTokens(
   // They remain formula source rather than becoming composer context chips.
   // Confirmed trailing file links are masked too, so a kept chip is not read as TeX.
   const math = matches.length > 0 ? composerMathRanges(text, matches) : [];
-  return matches
+  const sorted = matches
     .filter(
       (match) => !math.some((formula) => match.start < formula.end && match.end > formula.start),
     )
-    .sort((left, right) => left.start - right.start);
+    .sort((left, right) => left.start - right.start || right.end - left.end);
+  const resolved: ComposerInlineToken[] = [];
+  let cursor = 0;
+  for (const token of sorted) {
+    if (token.start < cursor) {
+      continue;
+    }
+    resolved.push(token);
+    cursor = token.end;
+  }
+  return resolved;
 }
 
 export function composerFileLinksToPlainText(text: string): string {
