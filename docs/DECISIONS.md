@@ -83,3 +83,7 @@ Newest at the bottom.
   "Worked for {duration}" folds are lifted from v1 `apps/web/src/components/chat/`, not redrawn from Paper.
 - **The old prototype UI is obsolete.** The Dev app and the published prototype must show the Paper UI
   (lane F), not the pre-rail prototype.
+- **Lift from GOAT v1 first, always from the real code.** Whatever can be carried over from v1 (components,
+  types, algorithms, copy, icons, tokens, tests) is carried over; new code only where v1 has nothing usable or a
+  GOAT 2 decision differs. Agents must read v1 source (`~/Developer/goat` `origin/dev`), never screenshots or
+  memory, and record every lift in `docs/PROVENANCE.md`. Applies to code and to Paper boards.

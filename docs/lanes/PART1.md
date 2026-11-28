@@ -5,6 +5,19 @@ Design source of truth (read first): https://goat-si.github.io/goat2-design/prd/
 Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `storage`, `runtime`,
 `mcp`, `plan` (decisions, "host is Rust", "GOAT v1 equal-behaviour port", lane table).
 
+## Lift from GOAT v1 first (owner rule, 2026-11-28, applies to every lane)
+- **Anything that can be carried over from GOAT v1 must be carried over.** Before writing a component, type,
+  algorithm, UI piece, copy string, icon, token or test, look for it in v1 (`~/Developer/goat`, `origin/dev`)
+  and lift it: same structure, same values, same names where they still fit. New code only where v1 has nothing
+  usable or where a written GOAT 2 decision says to differ.
+- **Always read the actual v1 source code** (`git show origin/dev:<path>`, `git grep`), never a screenshot, a
+  running app, memory or a description of it. UI work resolves v1's Tailwind classes against v1
+  `apps/web/src/index.css` tokens; Rust ports keep v1's semantics with file:line refs.
+- Every lift is recorded in `docs/PROVENANCE.md` (GOAT 2 path, v1 path at `origin/dev` commit, verbatim /
+  adapted / ported-to-Rust). PR/merge notes list what was lifted vs written new and why.
+- Paper boards follow the same rule: screens are drawn from v1 component code (structure, sizes, colors,
+  copy), not re-imagined.
+
 ## structure/ (code-structure SSOT)
 - `structure/` on `goat2` is the single source of truth for where code lives and how parts talk
   (map, processes, data, wire, deps, lanes, gaps). Read it before adding a crate, module, frame or dependency.

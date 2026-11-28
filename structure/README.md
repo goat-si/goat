@@ -5,6 +5,8 @@ The PRD (goat-si/goat2-design) says *what* and *why*; `structure/` says *where* 
 Code must match it. If code and `structure/` disagree, one of them is a bug: ask the owner before
 changing either.
 
+Rule above everything: lift from GOAT v1 first, from its actual source code (`docs/lanes/PART1.md`).
+
 Owner: the design-owner Aside session (see `docs/lanes/PART1.md`). Lanes read it; they do not edit it.
 Lanes propose changes with `aside session queue <owner> "[goat2_<lane> thread <id>] structure: <file> - <what/why>"`.
 The owner updates it after every merge into `goat2` that changes a boundary.
