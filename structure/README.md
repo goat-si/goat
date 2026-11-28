@@ -17,6 +17,7 @@ The owner updates it after every merge into `goat2` that changes a boundary.
 | [30_wire.md](30_wire.md) | Host ↔ UI frames, MCP, engine protocols |
 | [40_deps.md](40_deps.md) | Allowed dependencies between crates/packages |
 | [50_lanes.md](50_lanes.md) | Lanes, branches, worktrees, GOAT threads |
+| [60_planned.md](60_planned.md) | UI shells for surfaces whose backend is later or undecided |
 | [90_gaps.md](90_gaps.md) | Known gaps between this structure and the code |
 
 Last synced: goat2 `65250c7` (2026-11-28).
