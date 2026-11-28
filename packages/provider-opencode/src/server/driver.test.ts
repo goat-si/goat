@@ -57,7 +57,7 @@ const layer = Layer.mergeAll(
   Layer.succeed(HostProcess.Environment, {
     HOME: "/fixture/opencode-test",
     XDG_DATA_HOME: "/fixture/opencode-test",
-    PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+    PATH: "/fixture/bin",
   }),
   Layer.succeed(
     ProviderEventLoggers.ProviderEventLoggers,
