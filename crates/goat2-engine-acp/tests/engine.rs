@@ -903,59 +903,48 @@ async fn missing_bridge_fails_closed() {
     assert!(error.contains("MCP bridge"), "{error}");
 }
 
-/// v1 registry onUrlElicitation: a sign-in page during a turn is a request the person answers;
-/// accepting answers the agent with accept, anything else declines (review 1 finding 1).
+/// A sign-in page during a turn reaches the host only through AuthRequired (kept in memory, never
+/// in the thread log: final review finding 1) and the agent is told the link was handed over.
 #[tokio::test]
-async fn url_elicitation_is_an_answerable_signin() {
-    for (outcome, expected) in [
-        (RequestOutcome::Accept, r#"{"action":"accept"}"#),
-        (RequestOutcome::Decline, r#"{"action":"decline"}"#),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let flavor = MockFlavor::new(&[("GOAT_ACP_EMIT_URL_ELICITATION", "1")]);
-        let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
-        handle
-            .session
-            .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
-            .await;
-        let mut events = Vec::new();
-        let finished = loop {
-            let event = next(&mut handle).await;
-            if let EngineEvent::RequestOpened {
-                key, kind, summary, ..
-            } = &event
-            {
-                assert_eq!(*kind, RequestKind::Signin);
-                assert!(
-                    summary.contains("https://example.invalid/sign-in"),
-                    "{summary}"
-                );
-                handle
-                    .session
-                    .answer_request(
-                        key,
-                        RequestAnswer {
-                            outcome,
-                            text: None,
-                            answers: None,
-                        },
-                    )
-                    .await
-                    .unwrap();
-            }
-            if let EngineEvent::TurnFinished { outcome, .. } = &event {
-                break outcome.clone();
-            }
-            events.push(event);
-        };
-        assert_eq!(finished, TurnOutcome::Done);
+async fn url_elicitation_hands_the_link_over_without_logging_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let flavor = MockFlavor::new(&[("GOAT_ACP_EMIT_URL_ELICITATION", "1")]);
+    let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    handle
+        .session
+        .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+        .await;
+    let (events, outcome) = until_finished(&mut handle).await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    let auth: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::AuthRequired { turn_id, url, .. } => Some((turn_id.clone(), url.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(auth.len(), 1);
+    assert!(auth[0].0.is_some());
+    assert_eq!(
+        auth[0].1.as_deref(),
+        Some("https://example.invalid/sign-in")
+    );
+    // Nothing the host stores carries the link.
+    for event in &events {
+        if matches!(event, EngineEvent::AuthRequired { .. }) {
+            continue;
+        }
         assert!(
-            answer_text(&events).contains(&format!("url elicitation: {expected}")),
-            "{}",
-            answer_text(&events)
+            !format!("{event:?}").contains("example.invalid/sign-in"),
+            "link leaked into {event:?}"
         );
-        handle.session.shutdown().await;
     }
+    assert!(
+        answer_text(&events).contains(r#"url elicitation: {"action":"accept"}"#),
+        "{}",
+        answer_text(&events)
+    );
+    handle.session.shutdown().await;
 }
 
 /// A sign-in URL the agent prints on stderr reaches the host after startup (the stderr hook keeps

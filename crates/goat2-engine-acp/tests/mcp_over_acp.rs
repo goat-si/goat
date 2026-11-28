@@ -42,11 +42,16 @@ impl AcpFlavor for Mock {
 type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 
 fn fake_mcp_endpoint() -> (String, Seen) {
-    fake_mcp_endpoint_with(None)
+    fake_mcp_endpoint_with(None, 0)
 }
 
 /// The fake endpoint; with `hold`, a tools/call is never answered and the sender is told it came.
-fn fake_mcp_endpoint_with(hold: Option<std::sync::mpsc::Sender<()>>) -> (String, Seen) {
+/// `failing_deletes` DELETEs are answered 500 before the endpoint accepts one.
+fn fake_mcp_endpoint_with(
+    hold: Option<std::sync::mpsc::Sender<()>>,
+    failing_deletes: usize,
+) -> (String, Seen) {
+    let mut failing_deletes = failing_deletes;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/mcp", listener.local_addr().unwrap());
     let seen: Seen = Arc::default();
@@ -79,8 +84,15 @@ fn fake_mcp_endpoint_with(hold: Option<std::sync::mpsc::Sender<()>>) -> (String,
             reader.read_exact(&mut body).unwrap();
             if request_line.starts_with("DELETE") {
                 log.lock().unwrap().push(("DELETE".into(), auth, session));
-                let _ = stream.write_all(
-                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                let status = if failing_deletes > 0 {
+                    failing_deletes -= 1;
+                    "500 Internal Server Error"
+                } else {
+                    "200 OK"
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                 );
                 continue;
             }
@@ -209,7 +221,7 @@ async fn interrupt_stops_mcp_calls_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let result = dir.path().join("call.json");
     let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (url, _seen) = fake_mcp_endpoint_with(Some(held_tx));
+    let (url, _seen) = fake_mcp_endpoint_with(Some(held_tx), 0);
     let factory = AcpEngineFactory::new(Arc::new(Mock(vec![
         ("GOAT_ACP_MCP_ACP".into(), "1".into()),
         ("GOAT_ACP_EMIT_MCP_OVER_ACP".into(), "1".into()),
@@ -283,4 +295,112 @@ async fn interrupt_stops_mcp_calls_in_flight() {
     assert_eq!(outcome, TurnOutcome::Interrupted);
     let answer = std::fs::read_to_string(&result).expect("the agent got an answer to its call");
     assert!(answer.contains("The MCP call was stopped."), "{answer}");
+}
+
+/// Run one turn of the fake agent against GOAT's endpoint at `url`; the assistant text and outcome.
+async fn run_turn(url: String, env: &[(&str, &str)]) -> (String, TurnOutcome) {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = AcpEngineFactory::new(Arc::new(Mock(
+        env.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    )))
+    .without_mcp_bridge();
+    let selection = ModelSelection {
+        instance_id: ProviderInstanceId::new("mock"),
+        model: "default".into(),
+        options: None,
+    };
+    let mut handle = factory
+        .start(SessionSpec {
+            thread_id: "t".into(),
+            engine: EngineConfig {
+                provider_instance_id: ProviderInstanceId::new("mock"),
+                model_selection: selection.clone(),
+                runtime_mode: RuntimeMode::FullAccess,
+                cwd: dir.path().to_string_lossy().into_owned(),
+            },
+            resume: None,
+            mcp: McpEndpoint {
+                url,
+                bearer_token: "secret".into(),
+            },
+            host_generation: 1,
+            process_generation: 1,
+            instructions: None,
+            launch: None,
+        })
+        .await
+        .expect("start");
+    handle
+        .session
+        .start_turn(
+            vec![EngineInput {
+                input_id: InputId::new("i"),
+                text: "go".into(),
+                attachments: vec![],
+            }],
+            &TurnSettings {
+                model_selection: selection,
+                runtime_mode: RuntimeMode::FullAccess,
+            },
+        )
+        .await;
+    let mut text = String::new();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match handle.events.recv().await.expect("event") {
+                EngineEvent::ItemCompleted { item, .. } => {
+                    if let TurnItemBody::AssistantMessage { text: t, .. } = item.body {
+                        text.push_str(&t);
+                    }
+                }
+                EngineEvent::TurnFinished { outcome, .. } => break outcome,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    handle.session.shutdown().await;
+    (text, outcome)
+}
+
+/// v1 disconnect (mcpOverAcpBridge.ts:168-221): a refused DELETE is an error and the connection
+/// stays usable, so a retry ends it (final review finding 2).
+#[tokio::test]
+async fn failed_disconnect_keeps_the_connection_for_a_retry() {
+    let (url, seen) = fake_mcp_endpoint_with(None, 1);
+    let (text, outcome) = run_turn(
+        url,
+        &[
+            ("GOAT_ACP_MCP_ACP", "1"),
+            ("GOAT_ACP_EMIT_MCP_OVER_ACP", "1"),
+            ("GOAT_ACP_MCP_DISCONNECT_TWICE", "1"),
+        ],
+    )
+    .await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("mcp disconnect:"))
+        .expect(&text)
+        .to_owned();
+    let parts: Vec<&str> = line
+        .trim_start_matches("mcp disconnect: ")
+        .split(" | ")
+        .collect();
+    assert!(
+        parts[0].contains("rejected disconnect with HTTP 500"),
+        "{line}"
+    );
+    assert_eq!(parts[1], "1", "the connection still lists tools: {line}");
+    assert_eq!(parts[2], "{}", "{line}");
+    let deletes = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _, _)| m == "DELETE")
+        .count();
+    assert_eq!(deletes, 2);
 }

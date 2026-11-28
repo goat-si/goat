@@ -251,6 +251,32 @@ impl HttpRelay {
             .send()
             .await;
     }
+    /// DELETE the session and report the outcome (v1 mcpOverAcpBridge.ts:189-221): a transport
+    /// failure or a status other than 2xx/404 is an error, so the caller can keep the session and
+    /// retry. Without a session there is nothing to end.
+    pub async fn terminate_checked(&self) -> Result<(), BridgeError> {
+        if self.state.lock().unwrap().session.is_none() {
+            return Ok(());
+        }
+        let response = self
+            .headers(self.client.delete(&self.endpoint))
+            .send()
+            .await
+            .map_err(|e| BridgeError::new(ErrorKind::Transport, e.to_string()))?;
+        let status = response.status();
+        if status.is_success() || status.as_u16() == 404 {
+            return Ok(());
+        }
+        let mut error = BridgeError::new(
+            ErrorKind::Http,
+            format!(
+                "GOAT MCP endpoint rejected disconnect with HTTP {}.",
+                status.as_u16()
+            ),
+        );
+        error.status = Some(status.as_u16());
+        Err(error)
+    }
     /// Initialize a reusable tool session. v1 AcpMcpStdioBridge.ts:208-230.
     pub async fn initialize(&self, client_name: &str) -> Result<(), BridgeError> {
         let id = "t3-acp-cli-initialize";

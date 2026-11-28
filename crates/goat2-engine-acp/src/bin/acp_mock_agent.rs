@@ -12,7 +12,8 @@
 //! - `GOAT_ACP_MCP_ACP=1` (GOAT 2): advertise `mcpCapabilities.acp`; with `GOAT_ACP_EMIT_MCP_OVER_ACP=1` a prompt runs
 //!   `mcp/connect`, `initialize`, `tools/list` and `mcp/disconnect` over ACP and prints `mcp tools: <names>`.
 //!   `GOAT_ACP_MCP_CALL_RESULT_PATH=<file>` (GOAT 2) instead makes a `tools/call`, writes what came back to the
-//!   file, then waits for `session/cancel`.
+//!   file, then waits for `session/cancel`. `GOAT_ACP_MCP_DISCONNECT_TWICE=1` (GOAT 2) disconnects, lists tools
+//!   again and disconnects again, printing `mcp disconnect: <a> | <tools> | <b>`.
 //! - `GOAT_ACP_AUTH_METHOD_ID=<id>`: advertise an agent auth method; `session/new` answers -32000
 //!   until `authenticate` with it.
 //! - `GOAT_ACP_SYSTEM_PROMPT=1` (GOAT 2): advertise `sessionCapabilities.systemPrompt`.
@@ -365,7 +366,18 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
             .iter()
             .filter_map(|t| t["name"].as_str().map(str::to_owned))
             .collect();
-        let _ = agent.request("mcp/disconnect", json!({"connectionId": connection}));
+        if flag("GOAT_ACP_MCP_DISCONNECT_TWICE") {
+            let first = agent.request("mcp/disconnect", json!({"connectionId": connection}));
+            let again = agent.request(
+                "mcp/message",
+                json!({"connectionId": connection, "method": "tools/list"}),
+            );
+            let second = agent.request("mcp/disconnect", json!({"connectionId": connection}));
+            let tools = again["tools"].as_array().map(|t| t.len()).unwrap_or(0);
+            agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("mcp disconnect: {first} | {tools} | {second}\n")}}));
+        } else {
+            let _ = agent.request("mcp/disconnect", json!({"connectionId": connection}));
+        }
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("mcp tools: {}\n", names.join(","))}}));
     }
     if flag("GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE") {

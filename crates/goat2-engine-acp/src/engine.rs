@@ -231,6 +231,8 @@ struct Shared {
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     /// Bumped when the agent advertises commands or config options (probes wait on it).
     advertised: watch::Sender<u64>,
+    /// A provider probe (see [AcpEngineFactory::for_probe]).
+    probe: bool,
     /// GOAT's MCP endpoint served over this connection, when the agent took it that way.
     mcp_over_acp: OnceLock<Arc<crate::mcp_over_acp::McpOverAcp>>,
     /// The environment the agent process runs with (v1 `watchPromptOutcome` reads it).
@@ -807,11 +809,17 @@ impl Shared {
             let Some(turn_id) = state.turn.as_ref().map(|t| t.turn_id.clone()) else {
                 drop(state);
                 if mode == "url" {
-                    // Setup or a probe: nobody can consent now. Show the link (the host keeps a
-                    // session sign-in; a probe records it) and decline, as v1 does without a
-                    // coordinator that admits it (probe.ts:440-466, adapter.ts:5329-5362).
-                    self.auth_required(text_field(&params, "url"), Some(message));
-                    respond(responder, json!({"action": "decline"}));
+                    // Outside a turn: the link goes to the host's session sign-in (kept in memory
+                    // only) and the agent is told the person has it. A probe declines: nobody can
+                    // consent there (v1 probe.ts:440-466 without a coordinator).
+                    let url = text_field(&params, "url");
+                    let action = if self.probe || url.is_none() {
+                        "decline"
+                    } else {
+                        "accept"
+                    };
+                    self.auth_required(url, Some(message));
+                    respond(responder, json!({ "action": action }));
                 } else {
                     respond(responder, json!({"action": "cancel"}));
                 }
@@ -826,39 +834,19 @@ impl Shared {
                 None => format!("elicitation:{}", state.request_counter),
             };
             if mode == "url" {
-                // v1 registry onUrlElicitation (adapter.ts:5329-5362, AcpRegistryRuntimeCoordinator
-                // requestUrlAuthentication): the person consents to open the page; their answer
-                // accepts or declines. The request carries the link in its summary.
-                let Some(url) = text_field(&params, "url") else {
-                    drop(state);
-                    respond(responder, json!({"action": "decline"}));
-                    return;
-                };
-                let summary = if message.is_empty() {
-                    format!("Sign in: {url}")
-                } else {
-                    format!("{message} {url}")
-                };
-                state.pending.insert(
-                    key.clone(),
-                    Pending::Elicitation {
-                        responder,
-                        form: None,
-                        nested,
-                    },
-                );
-                out.push(EngineEvent::RequestOpened {
-                    turn_id,
-                    key,
-                    item_id: None,
-                    kind: RequestKind::Signin,
-                    summary,
-                    item: None,
-                });
+                // v1 registry onUrlElicitation (adapter.ts:5329-5362): the person gets the page.
+                // The link goes only through AuthRequired, which the host keeps in memory
+                // (SigninLink: links carry one-time codes and never enter the thread log), and the
+                // agent is told it was handed over. engine-api has no path for the person's
+                // answer to a host sign-in back to the engine; v1's explicit consent waits on it.
+                let url = text_field(&params, "url");
                 drop(state);
                 for event in out {
                     emit(self, event);
                 }
+                let action = if url.is_some() { "accept" } else { "decline" };
+                self.auth_required(url, Some(message));
+                respond(responder, json!({ "action": action }));
                 return;
             }
             let schema = params
@@ -1887,6 +1875,7 @@ impl AcpEngineFactory {
             shutdown_tx: Mutex::new(None),
             advertised: watch::channel(0).0,
             mcp_over_acp: OnceLock::new(),
+            probe: self.probe,
             agent_env,
         });
 

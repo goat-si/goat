@@ -27,6 +27,8 @@ struct Connection {
     negotiation: tokio::sync::Mutex<()>,
     negotiated: AtomicBool,
     next_request_id: AtomicU64,
+    /// Set while `mcp/disconnect` runs; new calls on the connection are refused (v1 `closing`).
+    closing: AtomicBool,
 }
 
 pub struct McpOverAcp {
@@ -81,6 +83,7 @@ impl McpOverAcp {
             .lock()
             .expect("connections")
             .get(id)
+            .filter(|c| !c.closing.load(Ordering::SeqCst))
             .cloned()
             .ok_or_else(|| format!("Unknown MCP-over-ACP connection \"{id}\"."))
     }
@@ -153,6 +156,7 @@ impl McpOverAcp {
                 negotiation: tokio::sync::Mutex::new(()),
                 negotiated: AtomicBool::new(false),
                 next_request_id: AtomicU64::new(0),
+                closing: AtomicBool::new(false),
             }),
         );
         Ok(json!({ "connectionId": id }))
@@ -194,19 +198,44 @@ impl McpOverAcp {
             .map(|_| ())
     }
 
-    /// `mcp/disconnect`: end the HTTP session, then forget the connection.
+    /// `mcp/disconnect` (v1 mcpOverAcpBridge.ts:168-187): mark the connection closing, end the
+    /// HTTP session, and forget the connection only when that worked; on failure it stays usable
+    /// so the agent can retry.
     pub async fn disconnect(&self, params: &Value) -> Result<Value, String> {
         let connection = self.connection(params)?;
+        if connection
+            .closing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            let id = params
+                .get("connectionId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(format!("Unknown MCP-over-ACP connection \"{id}\"."));
+        }
         let id = params
             .get("connectionId")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        tokio::time::timeout(DISCONNECT_TIMEOUT, connection.relay.terminate())
-            .await
-            .map_err(|_| "GOAT MCP endpoint did not answer disconnect.".to_owned())?;
-        self.connections.lock().expect("connections").remove(&id);
-        Ok(json!({}))
+        let result =
+            match tokio::time::timeout(DISCONNECT_TIMEOUT, connection.relay.terminate_checked())
+                .await
+            {
+                Err(_) => Err("GOAT MCP endpoint did not answer disconnect.".to_owned()),
+                Ok(result) => result.map_err(|e| e.to_string()),
+            };
+        match result {
+            Ok(()) => {
+                self.connections.lock().expect("connections").remove(&id);
+                Ok(json!({}))
+            }
+            Err(message) => {
+                connection.closing.store(false, Ordering::SeqCst);
+                Err(message)
+            }
+        }
     }
 
     /// v1 `dispose`: end every session (session shutdown).

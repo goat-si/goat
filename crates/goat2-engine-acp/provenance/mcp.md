@@ -9,4 +9,4 @@
 Bridge binary lookup ($GOAT2_ACP_MCP_BRIDGE, else beside the executable) is GOAT 2's replacement for v1's self-invocation (selfInvocationArgs).
 | crates/goat2-engine-acp/src/mcp_over_acp.rs | packages/provider-acp/src/server/mcpOverAcpBridge.ts (connect/message/notification/disconnect/dispose, limits, errors) | ported-to-Rust |
 | crates/goat2-engine-acp/src/mcp.rs (acp branch) | packages/provider-acp/src/server/AcpSessionRuntime.ts:1487-1493; mcpContext.ts:61 | ported-to-Rust |
-MCP-over-ACP keeps the v1 wire (mcp/connect + connectionId), not the later connection-less schema. Gap: stopCalls on interrupt not ported.
+MCP-over-ACP keeps the v1 wire (mcp/connect + connectionId), not the later connection-less schema.
