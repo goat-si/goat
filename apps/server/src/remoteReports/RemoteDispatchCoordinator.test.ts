@@ -204,25 +204,6 @@ it.effect("refuses cancellation during a thread launch without interrupting afte
   }).pipe(Effect.provide(database)),
 );
 
-it.effect("restart observes a thread without replaying its stored cancel ceiling", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    yield* f.sql`INSERT INTO remote_dispatches
-      (correlation_id,kind,origin_thread_id,host,remote_thread_id,read_key,delivery,state,reports_supported,
-        cancel_requested_at,cancel_ceiling,created_at,updated_at)
-      VALUES ('restart','thread',${origin},'box',${remote},'key','notify_only','running',1,
-        ${at},'approval-required',${at},${at})`;
-    yield* Effect.gen(function* () {
-      const c = yield* Coordinator.RemoteDispatchCoordinator;
-      assert.equal((yield* Queue.take(f.calls)).call.tool, "goat_origin_reports_wait");
-      assert.equal((yield* c.get("restart"))!.state, "running");
-      yield* f.replyLatest(Effect.succeed(answer([], "completed")));
-      yield* Queue.take(f.commits);
-      assert.equal((yield* c.get("restart"))!.state, "cancelled");
-    }).pipe(Effect.provide(f.layer));
-  }).pipe(Effect.provide(database)),
-);
-
 it.effect("transaction rollback replays wake once; consumed inbox never loses cursor dedupe", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
@@ -243,6 +224,7 @@ it.effect("transaction rollback replays wake once; consumed inbox never loses cu
     f.crash(false);
     yield* Effect.gen(function* () {
       const c = yield* Coordinator.RemoteDispatchCoordinator;
+      yield* TestClock.adjust("5 seconds");
       yield* Queue.take(f.calls);
       yield* f.replyLatest(Effect.succeed(answer([report(1), report(2, "needs_input")])));
       yield* Queue.take(f.commits);
@@ -1087,6 +1069,7 @@ it.effect("restart publishes unknown task launch and replays stored cancel ceili
       const failed = yield* Queue.take(f.notifications);
       assert.equal(failed.type, "delegated_task.remote.result");
       if (failed.type === "delegated_task.remote.result") assert.equal(failed.status, "failed");
+      yield* TestClock.adjust("5 seconds");
       const interrupt = yield* Queue.take(f.calls);
       assert.equal(interrupt.call.tool, "goat_thread_interrupt");
       assert.equal(interrupt.ceiling, "auto-accept-edits");

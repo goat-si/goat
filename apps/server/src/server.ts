@@ -1074,7 +1074,7 @@ const layerMakeServer = Layer.unwrap(
     const ownership = yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath);
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
-    const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    const layerActivation = yield* ServerActivation.makeServerActivationLayer(awaitActivation);
     // One hold for the whole server, read where automation starts; see AutomationHold.
     const layerAutomationHold = Layer.succeed(
       AutomationHold.AutomationHold,
