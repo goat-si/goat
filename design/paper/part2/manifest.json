@@ -5,7 +5,8 @@
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 113186
+  "jsxBytes": 174210,
+  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
  },
  {
   "id": "1Q0P-2",
@@ -13,7 +14,8 @@
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 114666
+  "jsxBytes": 175186,
+  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
  },
  {
   "id": "1QAN-2",
@@ -21,7 +23,8 @@
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 157687
+  "jsxBytes": 245766,
+  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
  },
  {
   "id": "1QM8-2",
@@ -29,7 +32,8 @@
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 109509
+  "jsxBytes": 148052,
+  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
  },
  {
   "id": "1QYE-2",
@@ -37,6 +41,7 @@
   "page": "p-7-1",
   "width": 1440,
   "height": 900,
-  "jsxBytes": 57903
+  "jsxBytes": 134447,
+  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
  }
 ]
