@@ -132,6 +132,41 @@ fn args_of(frame: &Command) -> Value {
     value
 }
 
+/// What the dedupe cache keeps of a command's arguments. A sign-in answer carries secrets (an
+/// API key, terminal input): only a keyed digest is kept, enough to tell a retry from a
+/// different answer.
+fn dedupe_args(frame: &Command) -> Value {
+    let args = args_of(frame);
+    if matches!(frame, Command::ProviderAuthRespond { .. }) {
+        digest_of(&args)
+    } else {
+        args
+    }
+}
+
+/// SHA-256 over a random per-process key and the arguments: a short answer (such as y) cannot be
+/// recovered from the cache by trying candidates.
+fn digest_of(args: &Value) -> Value {
+    use rand::RngCore;
+    use sha2::Digest;
+    static KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        key
+    });
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(key);
+    hasher.update(serde_json::to_vec(args).unwrap_or_default());
+    Value::String(
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+
 /// Run one command with the dedupe rule.
 pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
     let Some(key) = frame.client_request_id().map(str::to_owned) else {
@@ -143,15 +178,8 @@ pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
             "clientRequestId is empty",
         ));
     }
-    // Do not retain secret-bearing auth responses in the generic idempotency cache.
-    if matches!(&frame, Command::ProviderAuthRespond { .. }) {
-        return Err(command_error(
-            Reason::NotAvailable,
-            "provider_auth_respond is not available in this host build yet",
-        ));
-    }
     let _guard = host.inner.command_lock.lock().await;
-    let args = args_of(&frame);
+    let args = dedupe_args(&frame);
     if let Some(entry) = host.inner.dedupe.lock().expect("dedupe").get(&key).cloned() {
         if entry.args.as_ref().is_some_and(|a| a != &args) {
             return Err(command_error(
@@ -544,6 +572,30 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 ..Default::default()
             })
         }
+        Command::ProviderAuthRespond {
+            instance_id,
+            flow_id,
+            interaction_id,
+            response,
+            ..
+        } => {
+            let state = host
+                .inner
+                .providers
+                .auth_respond(
+                    host,
+                    instance_id.as_str(),
+                    &flow_id,
+                    &interaction_id,
+                    response,
+                )
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                auth_state: Some(state),
+                ..Default::default()
+            })
+        }
         Command::ProviderInstallStart { instance_id, .. } => {
             let state = host
                 .inner
@@ -598,6 +650,9 @@ fn provider_refusal(refusal: crate::providers::ProviderRefusal) -> crate::api::C
     }
 }
 
+// CommandError passes clippy's 128-byte limit once serde_json/preserve_order is unified into the
+// workspace (agent-client-protocol enables it); the reply type is the contract's, kept as is.
+#[allow(clippy::result_large_err)]
 fn change(host: &Host, thread_id: &ThreadId, changed: ThreadChanged) -> CommandReply {
     if host.inner.store.card(thread_id).is_none() {
         return Err(command_error(Reason::ThreadNotFound, "thread not found"));
@@ -804,5 +859,43 @@ impl WsHost for Host {
 
     fn stalled_ms_since(&self, since: std::time::Instant) -> u64 {
         self.inner.stall.stalled_ms_since(since)
+    }
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+
+    fn respond(secret: &str) -> Command {
+        Command::ProviderAuthRespond {
+            req_id: "r".into(),
+            client_request_id: "k".into(),
+            instance_id: "codex".into(),
+            flow_id: "flow-1".into(),
+            interaction_id: "creds-1".into(),
+            response: goat2_contracts::ProviderAuthResponse::Credentials {
+                values: [("apiKey".to_owned(), secret.to_owned())].into(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_sign_in_answer_is_kept_only_as_a_keyed_digest() {
+        let kept = dedupe_args(&respond("sk-SECRET-1"));
+        let Value::String(digest) = &kept else {
+            panic!("not a digest: {kept}");
+        };
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!kept.to_string().contains("sk-SECRET-1"));
+        // A retry matches; another answer does not.
+        assert_eq!(kept, dedupe_args(&respond("sk-SECRET-1")));
+        assert_ne!(kept, dedupe_args(&respond("sk-SECRET-2")));
+        // Not a bare hash of the arguments: the per-process key is mixed in.
+        use sha2::Digest;
+        let bare =
+            sha2::Sha256::digest(serde_json::to_vec(&args_of(&respond("sk-SECRET-1"))).unwrap());
+        let bare: String = bare.iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(digest, &bare);
     }
 }
