@@ -8,3 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ts-rs = { version = "12", features = ["serde-json-impl"] }
+schemars = "1.2"

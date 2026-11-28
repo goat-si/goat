@@ -1,2 +1,26 @@
-//! Wire and disk contracts shared by the host and the TypeScript UI (ts-rs, JSON Schema).
-//! Owner lane: see docs/lanes/PART1.md.
+//! Wire and disk contracts shared by the GOAT 2 host and the TypeScript UI.
+//!
+//! Every type here derives serde, [ts_rs::TS] and [schemars::JsonSchema]. The generated
+//! TypeScript and JSON Schema live in `packages/contracts-rs/` and are checked for drift by
+//! `cargo test -p goat2-contracts` (set `GOAT2_CONTRACTS_BLESS=1` to rewrite them).
+//!
+//! Design source: goat-si/goat2-design `prd-src/part1/{model,storage,runtime}.md`.
+//! Behaviour reference: goat-si/goat dev `packages/contracts/src/orchestrationV2.ts` and
+//! `providerCapabilityParts.ts` (see `PROVENANCE.md` in this crate).
+
+pub mod capabilities;
+pub mod card;
+pub mod codegen;
+pub mod ids;
+pub mod limits;
+pub mod log;
+pub mod subscribe;
+pub mod text;
+pub mod turn_item;
+
+pub use capabilities::*;
+pub use card::*;
+pub use ids::*;
+pub use log::*;
+pub use subscribe::*;
+pub use turn_item::*;
