@@ -118,14 +118,24 @@ impl Providers {
         self.list.borrow().clone()
     }
 
-    /// The driver factory of an instance, for engine starts.
-    pub fn factory_for(&self, instance_id: &str) -> Option<Arc<dyn EngineFactory>> {
+    /// The factory a thread's engine starts with (the factory registry: provider instance ->
+    /// its driver), or why it cannot start (v1 refuses a provider that is off or unknown).
+    pub fn factory_for_start(&self, instance_id: &str) -> Result<Arc<dyn EngineFactory>, String> {
         let state = self.state.lock().expect("providers");
-        let instance = state
+        let Some(instance) = state
             .instances
             .iter()
-            .find(|i| i.instance_id == instance_id)?;
-        self.factories.get(&instance.driver).cloned()
+            .find(|i| i.instance_id == instance_id)
+        else {
+            return Err(format!("provider {instance_id} is not set up in this host"));
+        };
+        if !instance.enabled {
+            return Err(format!("provider {instance_id} is turned off in settings"));
+        }
+        self.factories
+            .get(&instance.driver)
+            .cloned()
+            .ok_or_else(|| format!("this host has no {} driver", instance.driver))
     }
 
     /// Probe one instance (or every listed one) again, then publish.

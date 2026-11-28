@@ -151,7 +151,6 @@ struct LiveThread {
 pub(crate) struct Inner {
     pub opts: HostOptions,
     pub store: Arc<dyn ThreadStore>,
-    pub engine: Arc<dyn EngineFactory>,
     pub sched: Arc<Scheduler>,
     pub stall: StallRecorder,
     pub mcp_url: OnceLock<String>,
@@ -199,26 +198,39 @@ pub struct Host {
 }
 
 impl Host {
-    /// Build the host and settle the previous generation's runs (PRD runtime.md "재시작").
-    /// Call [Host::set_mcp_url] before any engine starts, then [Host::start_background].
+    /// Build the host with one engine factory, registered as the `codex` driver (tests, and the
+    /// host until more drivers are built in). See [Host::open_with_factories].
     pub fn open(
         opts: HostOptions,
         store: Arc<dyn ThreadStore>,
         engine: Arc<dyn EngineFactory>,
         stall: StallRecorder,
     ) -> StoreResult<Self> {
+        Self::open_with_factories(
+            opts,
+            store,
+            std::collections::BTreeMap::from([("codex".to_owned(), engine)]),
+            stall,
+        )
+    }
+
+    /// Build the host and settle the previous generation's runs (PRD runtime.md "재시작").
+    /// `factories`: driver kind (v1 `ProviderDriverKind` slug) -> its factory; a thread's
+    /// engine starts through the factory of its provider instance's driver.
+    /// Call [Host::set_mcp_url] before any engine starts, then [Host::start_background].
+    pub fn open_with_factories(
+        opts: HostOptions,
+        store: Arc<dyn ThreadStore>,
+        factories: std::collections::BTreeMap<String, Arc<dyn EngineFactory>>,
+        stall: StallRecorder,
+    ) -> StoreResult<Self> {
         let (cards_tx, _) = broadcast::channel(1024);
-        // Only Codex is built in so far; the Part 2 drivers register here as they merge.
-        let providers = crate::providers::Providers::open(
-            &opts.data_dir,
-            std::collections::BTreeMap::from([("codex".to_owned(), engine.clone())]),
-        );
+        let providers = crate::providers::Providers::open(&opts.data_dir, factories);
         let host = Self {
             inner: Arc::new(Inner {
                 sched: Scheduler::new(opts.max_runs, opts.max_starts),
                 opts,
                 store,
-                engine,
                 stall,
                 mcp_url: OnceLock::new(),
                 cards_tx,
