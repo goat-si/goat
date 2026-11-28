@@ -99,6 +99,7 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("workspace-file"),
     workspaceRoot: Schema.String,
     baseRelativePath: Schema.String,
+    entryFileName: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -448,6 +449,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
             kind: "workspace-file" as const,
             workspaceRoot: canonicalWorkspaceRoot,
             baseRelativePath: path.dirname(resolved.relativePath),
+            entryFileName: path.basename(resolved.relativePath),
             expiresAt: input.expiresAt,
           },
       fileName: path.basename(resolved.relativePath),
@@ -969,6 +971,7 @@ const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,
     previewBaseRelativePath: claims.baseRelativePath,
+    previewEntry: decodedPath === claims.entryFileName,
   });
 });
 
