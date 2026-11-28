@@ -1,3 +1,5 @@
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
+import type * as Path from "effect/Path";
 import { LEGACY_MANAGED_WORKTREE_PATH } from "@goat/contracts/legacyT3Names";
 import * as Schema from "effect/Schema";
 import {
@@ -23,6 +25,36 @@ export function isGoatManagedWorktree(
     normalized.includes("/.goat/worktrees/") ||
     normalized.includes(LEGACY_MANAGED_WORKTREE_PATH)
   );
+}
+
+export function makeExcludedProjectPath(
+  path: Path.Path,
+  home: string,
+  tmp: string,
+  base: string,
+  realBase: string,
+  worktrees: string,
+  realWorktrees: string,
+  fold: boolean,
+) {
+  const roots = new Set(
+    [home, tmp, "/tmp", "/private/tmp"].map((p) =>
+      normalizeProjectPathForComparison(path.resolve(p)),
+    ),
+  );
+  const ancestors = [
+    path.join(home, "Downloads"),
+    path.join(home, "Documents", "Codex"),
+    base,
+    realBase,
+  ];
+  return (candidate: string) =>
+    roots.has(normalizeProjectPathForComparison(candidate)) ||
+    ancestors.some((p) =>
+      normalizeForWorktreeMatch(candidate, fold).startsWith(normalizeForWorktreeMatch(p, fold)),
+    ) ||
+    isGoatManagedWorktree(candidate, worktrees, fold) ||
+    isGoatManagedWorktree(candidate, realWorktrees, fold);
 }
 
 export const selectCwdPath = createTranscriptJsonSelector(
