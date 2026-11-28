@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::config::{EngineChoice, HostConfig};
 use crate::core::{Host, HostOptions};
 use crate::engine::EngineFactory;
-use crate::engine::codex::CodexFactory;
+use crate::engine::codex::codex_factory;
 use crate::engine::fake::{FakeEngine, FakeScript};
 use crate::stall::StallRecorder;
 use crate::store::LaneAStore;
@@ -247,7 +247,7 @@ pub async fn start_with_engine(
     let engine: Arc<dyn EngineFactory> = match engine {
         Some(engine) => engine,
         None => match cfg.engine {
-            EngineChoice::Codex => Arc::new(CodexFactory),
+            EngineChoice::Codex => Arc::new(codex_factory(&data_dir)),
             EngineChoice::Fake => Arc::new(FakeEngine::new(FakeScript {
                 turn_ms: 400,
                 ..FakeScript::default()
