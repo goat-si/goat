@@ -413,3 +413,12 @@ profile of the same runtime, not a Node helper driver.
 | `crates/goat2-engine-sdk/src/pi/events.rs`, `session.rs` | `packages/provider-pi/src/server/adapter.ts:545-590,1485-1538,1776-1785,1900-1901`; `tokenUsage.ts:10-39`; `modelContextWindow.ts:3-19` | Ported live and final token usage snapshots; failed or invalid statistics are skipped. |
 
 Pi contract gaps: account usage and limits have no engine event. Live tool start/output and retry-progress updates from `packages/provider-pi/src/server/adapter.ts:1837-1847,1918-1943` are not carried: GOAT 2 has no live item updates (`docs/lanes/PART1.md:41`); terminal items and retry failures are projected. `EngineSession` exposes no conversation snapshot, rollback, or fork operation even though the retained v1 capabilities describe them. The API has no event to replace an existing `EngineRef`; if Pi changes the native session file the driver exits visibly instead of risking a stale resume. Native work or interactive dialogs outside a host-owned turn require lane C's continuation contract and fail visibly. The current attachment contract does not carry captured-window accessibility data or a resolver for extracted text paths. The host must register both Pi and OmO factories and provide its thread-scoped attachment resolver; host wiring is outside this slice.
+## P2-S opencode
+
+| GOAT 2 path | v1 path at 916b5ccc1b2 | Kind and note |
+|---|---|---|
+| `apps/engine-helper/src/engines/opencode/goatMcpConfig.ts` | `packages/provider-opencode/src/server/goatMcpConfig.ts:1-10` | adapted: remote GOAT MCP configuration shape. |
+| `apps/engine-helper/src/engines/opencode/openCodeConfigContent.ts` | `packages/provider-opencode/src/server/openCodeConfigContent.ts:1-10` | adapted: launch and inherited config precedence. |
+| `apps/engine-helper/test/opencode.test.ts` | `packages/provider-opencode/src/server/goatMcpConfig.ts:5-10`, `openCodeConfigContent.ts:1-10` | new: isolated checks of the lifted configuration rules. |
+
+Not lifted yet: adapter, server lifecycle, probe, usage/limits, account pools, text generation, cloud, checkpoints, and OpenCode 2 generation.
