@@ -224,6 +224,8 @@ struct State {
     shutting_down: bool,
     /// The process is being stopped on purpose (interrupt or shutdown).
     stopping: bool,
+    /// The interrupt control in flight: request id and the turn it stops.
+    interrupt_request: Option<(String, String)>,
     /// Why the process is going away when it is not the CLI's own doing.
     exit_hint: Option<String>,
 }
@@ -260,6 +262,9 @@ struct Inner {
     stderr: Mutex<Option<(u64, Arc<Mutex<StderrTail>>)>>,
     /// Woken whenever the active turn settles.
     settled: Notify,
+    /// Held for the whole of an interrupt and of a turn start, so no turn starts on a process an
+    /// interrupt is closing.
+    stop_gate: tokio::sync::Mutex<()>,
     generation: AtomicU64,
     next_request: AtomicU64,
     pgid: AtomicU32,
@@ -327,6 +332,7 @@ async fn start_session(
             exited: false,
             shutting_down: false,
             stopping: false,
+            interrupt_request: None,
             exit_hint: None,
         }),
         events,
@@ -335,6 +341,7 @@ async fn start_session(
         process: tokio::sync::Mutex::new(None),
         stderr: Mutex::new(None),
         settled: Notify::new(),
+        stop_gate: tokio::sync::Mutex::new(()),
         generation: AtomicU64::new(0),
         next_request: AtomicU64::new(0),
         pgid: AtomicU32::new(0),
@@ -394,12 +401,21 @@ impl Inner {
     /// Send a control request and wait for its answer (R9-R11). A timed-out request is withdrawn
     /// with `control_cancel_request` (R13).
     async fn control(&self, request: Value, timeout: Duration) -> Result<Value, String> {
+        let id = self.request_id();
+        self.control_with_id(id, request, timeout).await
+    }
+
+    async fn control_with_id(
+        &self,
+        id: String,
+        request: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let subtype = request
             .get("subtype")
             .and_then(Value::as_str)
             .unwrap_or("control")
             .to_string();
-        let id = self.request_id();
         let (tx, rx) = oneshot::channel();
         if let Ok(mut controls) = self.controls.lock() {
             controls.insert(id.clone(), tx);
@@ -563,6 +579,20 @@ impl Inner {
         };
         match frame {
             Inbound::ControlResponse { request_id, result } => {
+                // A refused interrupt is undone before any later frame is read, so the turn's own
+                // result decides its outcome.
+                if let Ok(mut state) = self.state.lock()
+                    && let Some((id, turn_id)) = state.interrupt_request.take()
+                {
+                    if id != request_id {
+                        state.interrupt_request = Some((id, turn_id));
+                    } else if result.is_err()
+                        && let Some(turn) = state.turn.as_mut()
+                        && turn.id == turn_id
+                    {
+                        turn.interrupted = false;
+                    }
+                }
                 let waiter = self
                     .controls
                     .lock()
@@ -1971,6 +2001,7 @@ impl EngineSession for ClaudeSession {
         settings: &TurnSettings,
     ) -> TurnStartResult {
         let inner = &self.inner;
+        let _gate = inner.stop_gate.lock().await;
         {
             let Ok(state) = inner.state.lock() else {
                 return TurnStartResult::Declined {
@@ -2140,6 +2171,7 @@ impl EngineSession for ClaudeSession {
 
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
         let inner = Arc::clone(&self.inner);
+        let _gate = inner.stop_gate.lock().await;
         {
             let Ok(mut state) = inner.state.lock() else {
                 return Err(EngineError::Transport("state poisoned".into()));
@@ -2157,12 +2189,26 @@ impl EngineSession for ClaudeSession {
         let generation = inner.generation.load(Ordering::SeqCst);
         // v1 `interruptUnlessClosed`: the interrupt control (10 s; a timeout still closes), then
         // close. A refused interrupt while Claude is still running fails and keeps the turn.
-        if let Err(error) = inner
-            .control(json!({"subtype": "interrupt"}), deadline)
-            .await
-        {
+        let request_id = inner.request_id();
+        if let Ok(mut state) = inner.state.lock() {
+            state.interrupt_request = Some((request_id.clone(), turn_id.to_string()));
+        }
+        let answer = inner
+            .control_with_id(request_id, json!({"subtype": "interrupt"}), deadline)
+            .await;
+        if let Ok(mut state) = inner.state.lock() {
+            state.interrupt_request = None;
+        }
+        if let Err(error) = answer {
             let exited = inner.state.lock().map(|s| s.exited).unwrap_or(true);
             if !exited && !error.starts_with("Control request timeout") {
+                // Claude refused: the turn goes on and its own result decides the outcome.
+                if let Ok(mut state) = inner.state.lock()
+                    && let Some(turn) = state.turn.as_mut()
+                    && turn.id == turn_id
+                {
+                    turn.interrupted = false;
+                }
                 return Err(EngineError::Transport(error));
             }
         }
