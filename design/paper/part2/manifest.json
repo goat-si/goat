@@ -1,47 +1,42 @@
 [
  {
+  "board": "P1",
   "id": "1PBB-2",
-  "name": "P1 \u00b7 Settings \u203a Providers (v1 code)",
-  "page": "p-7-1",
-  "width": 1440,
-  "height": 900,
-  "jsxBytes": 174210,
-  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
+  "jsxBytes": 75093
  },
  {
+  "board": "P2",
   "id": "1Q0P-2",
-  "name": "P2 \u00b7 Provider sign-in (Antigravity, v1 code)",
-  "page": "p-7-1",
-  "width": 1440,
-  "height": 900,
-  "jsxBytes": 175186,
-  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
+  "jsxBytes": 70536
  },
  {
+  "board": "P3",
   "id": "1QAN-2",
-  "name": "P3 \u00b7 Add provider \u203a ACP Registry (v1 code)",
-  "page": "p-7-1",
-  "width": 1440,
-  "height": 900,
-  "jsxBytes": 245766,
-  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
+  "jsxBytes": 90655
  },
  {
+  "board": "P4",
   "id": "1QM8-2",
-  "name": "P4 \u00b7 Composer model picker (bot home, v1 code)",
-  "page": "p-7-1",
-  "width": 1440,
-  "height": 900,
-  "jsxBytes": 148052,
-  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
+  "jsxBytes": 60234
  },
  {
+  "board": "P5",
   "id": "1QYE-2",
-  "name": "P5 \u00b7 Bot settings model picker (v1 GoatBotModelPicker)",
-  "page": "p-7-1",
-  "width": 1440,
-  "height": 900,
-  "jsxBytes": 134447,
-  "source": "rendered v1 components, goat2_providers_ui 145728d88f7"
+  "jsxBytes": 60435
+ },
+ {
+  "board": "P6",
+  "id": "2LET-2",
+  "jsxBytes": 77587
+ },
+ {
+  "board": "P7",
+  "id": "2LEU-2",
+  "jsxBytes": 72142
+ },
+ {
+  "board": "P8",
+  "id": "2LEV-2",
+  "jsxBytes": 47438
  }
 ]

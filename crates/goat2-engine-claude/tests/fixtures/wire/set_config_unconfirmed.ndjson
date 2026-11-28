@@ -1,0 +1,4 @@
+{"type": "transcript_start", "provider": "claudeAgent", "protocol": "claude-stream-json", "version": "2.1.332", "scenario": "set_config_unconfirmed", "metadata": {"prompts": [], "model": "claude-sonnet-5-5", "nativeSessionId": "11111111-2222-4333-8444-555555555555", "generatedBy": "goat2 hand-written from claude 2.1.332 wire shapes"}}
+{"type": "expect_outbound", "label": "query.open", "frame": {"type": "query.open", "options": {"model": "claude-sonnet-5-5", "permissionMode": "default", "sessionId": "11111111-2222-4333-8444-555555555555"}}}
+{"type": "expect_wire", "label": "set_permission_mode never answered", "frame": {"type": "control_request", "request": {"subtype": "set_permission_mode", "mode": "acceptEdits"}}, "defer": true}
+{"type": "runtime_exit", "status": "success"}

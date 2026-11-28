@@ -5,6 +5,7 @@ members = [
   "crates/goat2-thread-store",
   "crates/goat2-engine-api",
   "crates/goat2-engine-codex",
+  "crates/goat2-engine-claude",
   "crates/goat2-parity",
   "crates/goat2-host",
 ]

@@ -221,6 +221,15 @@ pub enum EngineEvent {
     /// `steer.updated`, `ProviderAdapter.ts:149-157`; Claude `command_lifecycle`, Pi). An
     /// accepted steer is v1 `pending` until the engine reads it. Not stored as such; the host
     /// decides what a cancelled steer means for its inputs.
+    ///
+    /// Contract: a driver whose engine can hold an accepted steer unread (Claude, Pi, OpenCode)
+    /// reports `SteerUpdated` for each such steer, `Cancelled` for any left unread, before that
+    /// turn's `TurnFinished`. The host reads events in order, so a cancel lands while its run is
+    /// still active; one after `TurnFinished` is ignored. An accepted steer with no
+    /// `SteerUpdated` is treated as `Completed`. That is the host's v1-compatible policy, not
+    /// proof the engine read it: v1 never emits `steer.updated` for Codex, and the Codex driver
+    /// sends none, although Codex queues an accepted steer and can discard queued input. Known
+    /// limitation: such an input is not requeued.
     SteerUpdated {
         turn_id: String,
         input_ids: Vec<InputId>,

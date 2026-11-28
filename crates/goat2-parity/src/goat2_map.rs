@@ -138,6 +138,8 @@ pub struct AliasMap {
     bound_wakes: std::collections::BTreeMap<String, (String, String, String)>,
     child_inputs: std::collections::BTreeMap<String, (String, String)>,
     run_count: usize,
+    /// Runs started and not yet finished, for the idle-thread steer rule in [AliasMap::map].
+    active_runs: std::collections::BTreeSet<String>,
     wake_count: usize,
     child_counts: std::collections::BTreeMap<String, usize>,
 }
@@ -277,6 +279,15 @@ impl AliasMap {
             }
             _ => {}
         }
+        match event {
+            LogEvent::RunStarted(e) => {
+                self.active_runs.insert(e.run_id.to_string());
+            }
+            LogEvent::RunFinished(e) => {
+                self.active_runs.remove(e.run_id.as_str());
+            }
+            _ => {}
+        }
         let mut result = map_log_event(thread, event)?;
         if let (LogEvent::InputAccepted(source), Some(TraceEvent::InputAccepted { mode, .. })) =
             (event, result.first_mut())
@@ -285,6 +296,14 @@ impl AliasMap {
             // limited to a start or queue request: an observed steer/interrupt, or a requested
             // steer/interrupt observed as followup/collect, keeps the observed mode so the
             // contradiction with the request shows up in compare.
+            // GOAT 2 logs a thread's first input (start_thread) and any steer to an idle thread as
+            // steer; with no active run it starts a run, which is the scenario's start.
+            if source.mode == InputMode::Steer
+                && self.active_runs.is_empty()
+                && self.request_modes.get(&source.client_request_id) == Some(&SendMode::Start)
+            {
+                *mode = SendMode::Start;
+            }
             if matches!(source.mode, InputMode::Followup | InputMode::Collect) {
                 if let Some(requested) = self.request_modes.get(&source.client_request_id) {
                     if matches!(requested, SendMode::Start | SendMode::Queue) {

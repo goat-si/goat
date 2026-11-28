@@ -1,0 +1,4 @@
+{"type": "transcript_start", "provider": "claudeAgent", "protocol": "claude-stream-json", "version": "2.1.332", "scenario": "exit_during_mcp_registration", "metadata": {"prompts": [], "model": "claude-sonnet-5-5", "nativeSessionId": "11111111-2222-4333-8444-555555555555", "generatedBy": "goat2 hand-written from claude 2.1.332 wire shapes"}}
+{"type": "expect_outbound", "label": "query.open", "frame": {"type": "query.open", "options": {"model": "claude-sonnet-5-5", "permissionMode": "default", "sessionId": "11111111-2222-4333-8444-555555555555"}}}
+{"type": "close_stdin", "label": "exit instead of answering", "before": "mcp_set_servers", "exit": true}
+{"type": "runtime_exit", "status": "success"}
