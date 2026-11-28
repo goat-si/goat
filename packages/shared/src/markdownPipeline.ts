@@ -88,12 +88,13 @@ function markStandaloneImages(node: MarkdownImageHastNode) {
 // Whole tags, attributes, and comments, so closing-anchor text inside them never counts as a tag.
 const RAW_HTML_TAG_PATTERN = /<!--[\s\S]*?(?:-->|$)|<\/?[A-Za-z](?:[^"'<>]|"[^"]*"|'[^']*')*>/g;
 
-function rehypePreserveBareAnchorPlaceholders() {
+function scanRawHtmlAnchors(rawType: "raw" | "html") {
   return (tree: MarkdownImageHastNode) => {
     const anchors: Array<MarkdownImageHastNode | null> = [];
+    const anchorAt = new Map<MarkdownImageHastNode, MarkdownImageHastNode | null>();
     let rawTextTag: string | undefined;
     const visit = (node: MarkdownImageHastNode) => {
-      if (node.type === "raw" && typeof node.value === "string") {
+      if (node.type === rawType && typeof node.value === "string") {
         const tags = new RegExp(RAW_HTML_TAG_PATTERN);
         let offset = 0;
         while (rawTextTag !== "plaintext") {
@@ -122,14 +123,27 @@ function rehypePreserveBareAnchorPlaceholders() {
             anchors.pop();
           }
         }
+      } else if (rawType === "html" && node.type === "text" && (rawTextTag || anchors.length > 0)) {
+        anchorAt.set(node, rawTextTag || anchors.includes(null) ? null : (anchors.at(-1) ?? null));
       }
+      if (rawType === "html" && (node.type === "link" || node.type === "linkReference")) return;
       node.children?.forEach(visit);
     };
-
     visit(tree);
-    for (const anchor of anchors) {
-      if (anchor) anchor.type = "text";
-    }
+    const bare = new Set(anchors.filter((anchor) => anchor !== null));
+    return {
+      bare,
+      insideAnchor: (node: MarkdownImageHastNode) => {
+        const anchor = anchorAt.get(node);
+        return anchorAt.has(node) && (anchor == null || !bare.has(anchor));
+      },
+    };
+  };
+}
+
+function rehypePreserveBareAnchorPlaceholders() {
+  return (tree: MarkdownImageHastNode) => {
+    for (const anchor of scanRawHtmlAnchors("raw")(tree).bare) anchor.type = "text";
   };
 }
 
@@ -683,17 +697,11 @@ function remarkEndAutolinksAtScriptPunctuation(this: Processor): Transformer<Roo
 function remarkLinkAbsoluteFilePaths(): Transformer<Root> {
   return (tree) => {
     // Raw `<a>` tags are sibling html nodes, so text inside one is not under a link node.
-    let rawAnchorDepth = 0;
+    const { insideAnchor } = scanRawHtmlAnchors("html")(tree);
     const visit = (node: Root | RootContent) => {
       if (!("children" in node) || node.type === "link" || node.type === "linkReference") return;
       node.children = node.children.flatMap((child): typeof node.children => {
-        if (child.type === "html") {
-          for (const [tag] of child.value.matchAll(RAW_HTML_TAG_PATTERN)) {
-            if (/^<a[\s/>]/i.test(tag)) rawAnchorDepth += 1;
-            else if (/^<\/a[\s>]/i.test(tag)) rawAnchorDepth = Math.max(0, rawAnchorDepth - 1);
-          }
-        }
-        if (child.type !== "text" || rawAnchorDepth > 0) {
+        if (child.type !== "text" || insideAnchor(child)) {
           visit(child);
           return [child];
         }

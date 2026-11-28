@@ -24,4 +24,20 @@ it.each([
   expect(links("-       /Users/me/app.ts:42")).toEqual(["/Users/me/app.ts:42"]);
   expect(links("-       `/Users/me/app.ts:42`")).toEqual([]);
   expect(links("    /Users/me/code.ts:42")).toEqual([]);
+  expect(links("Use <a> for links.\n\nSee /Users/me/app.ts:42")).toEqual(["/Users/me/app.ts:42"]);
+  expect(
+    links(
+      'Use <a> for /Users/me/a.ts and <a href="https://example.com">/Users/me/b.ts</a> then /Users/me/c.ts',
+    ),
+  ).toEqual(["/Users/me/a.ts", "/Users/me/c.ts"]);
+  expect(
+    links("<a>/Users/me/closed.ts</a> <a/>/Users/me/also-closed.ts</a> /Users/me/after.ts"),
+  ).toEqual(["/Users/me/after.ts"]);
+  expect(links("Use <textarea><a></textarea> and /Users/me/app.ts:42")).toEqual([
+    "/Users/me/app.ts:42",
+  ]);
+  expect(links('[<a href="x">label](https://example.com) /Users/me/app.ts:42')).toEqual([
+    "https://example.com",
+    "/Users/me/app.ts:42",
+  ]);
 });
