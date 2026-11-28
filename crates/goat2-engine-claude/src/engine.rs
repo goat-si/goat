@@ -1094,8 +1094,8 @@ impl Inner {
 
     /// The turn ended (v1 finalizeActiveTurn, ClaudeAdapterV2.ts:5296-5305): a still pending
     /// accepted steer reports `Completed` when `done` (a completed turn on a CLI without
-    /// `command_lifecycle`), `Cancelled` otherwise; a steer whose `steer` call still waits is
-    /// declined through it.
+    /// `command_lifecycle`), `Cancelled` otherwise; a steer whose `steer` call still waits for a
+    /// verdict is released without one (Unknown).
     fn end_steers(
         &self,
         turn_id: &str,
@@ -1123,8 +1123,11 @@ impl Inner {
                         status,
                     });
                 }
-            } else if let Some(waiter) = waiters.remove(&uuid) {
-                let _ = waiter.send(Err(why.clone()));
+            } else {
+                // No verdict yet and Claude is still running: it has the message (or will once
+                // the write lands) and may run it as its own prompt, so its `steer` call answers
+                // Unknown. (An exit declines waiting steers before this, as nothing will run.)
+                waiters.remove(&uuid);
             }
         }
     }
@@ -2429,11 +2432,16 @@ impl EngineSession for ClaudeSession {
                     answer = Some(SteerResult::Accepted);
                 }
             }
-            if !present && absent {
-                // The turn ended while the message was being written: Claude may run it as its
-                // own next prompt, outside any GOAT turn.
-                answer = Some(SteerResult::Unknown {
-                    reason: "The Claude turn ended while the message was being written".into(),
+            if !present {
+                // The turn settled while the message was being written. A verdict that arrived
+                // first stands; otherwise Claude may run it as its own next prompt, outside any
+                // GOAT turn.
+                answer = Some(match rx.try_recv() {
+                    Ok(Ok(())) => SteerResult::Accepted,
+                    Ok(Err(reason)) => SteerResult::Declined { reason },
+                    Err(_) => SteerResult::Unknown {
+                        reason: "The Claude turn ended while the message was being written".into(),
+                    },
                 });
             }
             if let Some(answer) = answer {
@@ -2445,7 +2453,7 @@ impl EngineSession for ClaudeSession {
             Ok(Ok(Ok(()))) => SteerResult::Accepted,
             Ok(Ok(Err(reason))) => SteerResult::Declined { reason },
             Ok(Err(_)) => SteerResult::Unknown {
-                reason: "Claude closed before acknowledging the message".into(),
+                reason: "The Claude turn ended before Claude acknowledged the message".into(),
             },
             Err(_) => {
                 let pending = inner
