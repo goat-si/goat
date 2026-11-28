@@ -172,20 +172,33 @@ const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>,
       }
       if (unsaved.length) throw new Error(`GOAT does not save this setting yet: ${unsaved.join(", ")}.`);
       const touched: ProviderInstanceId[] = [];
-      for (const id of ids) {
-        const before = current.providerInstances[id];
-        const after = next.providerInstances[id]!;
-        const now = wireInstance(id, after, after.enabled !== false);
-        const was = before ? wireInstance(id, before, before.enabled !== false) : null;
-        if (JSON.stringify(now) === JSON.stringify(was)) continue;
-        await currentProviderPort().call("goat2.setProviderInstance", now);
-        touched.push(id);
+      // Every instance a provider frame changes while this write is out, even one later changed back.
+      const movedByFrames = new Set<string>();
+      let seen = start;
+      const unwatch = registry.subscribe(goat2SettingsAtom, (s) => {
+        for (const id of ids) {
+          if (JSON.stringify(s.providerInstances[id]) !== JSON.stringify(seen.providerInstances[id])) movedByFrames.add(id);
+        }
+        seen = s;
+      });
+      try {
+        for (const id of ids) {
+          const before = current.providerInstances[id];
+          const after = next.providerInstances[id]!;
+          const now = wireInstance(id, after, after.enabled !== false);
+          const was = before ? wireInstance(id, before, before.enabled !== false) : null;
+          if (JSON.stringify(now) === JSON.stringify(was)) continue;
+          await currentProviderPort().call("goat2.setProviderInstance", now);
+          touched.push(id);
+        }
+      } finally {
+        unwatch();
       }
       // Provider frames may have updated the settings while the host answered; keep them. An instance this write sent
-      // is laid on top only if no frame changed it meanwhile; if one did, that frame is the host's newer word on it.
+      // is laid on top only if no frame touched it meanwhile; if one did, the frames are the host's newer word on it.
       const latest = registry.get(goat2SettingsAtom);
-      const untouchedByFrames = touched.filter((id) =>
-        JSON.stringify(latest.providerInstances[id]) === JSON.stringify(start.providerInstances[id]));
+      const untouchedByFrames = touched.filter((id) => !movedByFrames.has(id)
+        && JSON.stringify(latest.providerInstances[id]) === JSON.stringify(start.providerInstances[id]));
       const saved = untouchedByFrames.length === 0 ? latest : {
         ...latest,
         providerInstances: { ...latest.providerInstances, ...Object.fromEntries(untouchedByFrames.map((id) => [id, next.providerInstances[id]!])) },
