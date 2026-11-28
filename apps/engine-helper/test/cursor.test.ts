@@ -120,6 +120,19 @@ test("Cursor probe distinguishes invalid keys from an unknown sign-in", async ()
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
+test("Cursor probe never sends an inherited key to a different backend", async () => {
+  let calls = 0;
+  const server = createServer((_req, res) => { calls++; res.statusCode = 500; res.end(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const h = helper({ GOAT_TEST_SIGNED_IN: "1" });
+  try {
+    const reply = await h.request("probe", { protocol: 1, engine: "cursor", cwd: null, launch: { env: { CURSOR_BACKEND_URL: `http://127.0.0.1:${address.port}` } } });
+    assert.equal(reply.result.auth.status, "unknown");
+    assert.equal(calls, 0);
+  } finally { h.child.kill(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
 test("Cursor model catalog preserves v1 parameter mapping and defaults", async () => {
   const { cursorCatalog } = await import("../src/engines/cursor/catalog.ts");
   const models = cursorCatalog([{ id: "m", displayName: "Model", parameters: [
@@ -312,4 +325,18 @@ test("Cursor refuses overlapping probe and initialize before changing environmen
     assert.equal(result.result?.auth.status, "authenticated");
     assert.equal((await h.request("initialize", init)).result?.engineRef, "cursor-new");
   } finally { for (const entry of held) if (!entry.response.writableEnded) entry.response.end(); h.child.kill(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+test("Cursor applies an in-session model change to the next SDK send", async () => {
+  const h = helper();
+  try {
+    await h.request("initialize", init);
+    const changed = { ...settings, modelSelection: { ...settings.modelSelection, model: "new-model" } };
+    assert.deepEqual((await h.request("session.set_config", { settings: changed })).result, {});
+    const turn = (await h.request("turn.start", { inputs: input("switch-model"), settings })).result;
+    assert.equal(turn.status, "accepted");
+    assert.equal((await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId)).event.outcome.type, "done");
+    const unsupported = await h.request("session.set_config", { settings: { ...changed, runtimeMode: "approval-required" } });
+    assert.equal(unsupported.error?.code, "unsupported");
+  } finally { h.child.kill(); }
 });

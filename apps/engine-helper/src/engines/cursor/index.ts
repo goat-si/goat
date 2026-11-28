@@ -120,6 +120,7 @@ class CursorSession implements EngineSession {
   private readonly host: EngineHost;
   private readonly platform: CursorAgentPlatform;
   private recoverAbandoned: boolean;
+  private configured: TurnSettings | undefined;
   constructor(agent: SDKAgent, platform: CursorAgentPlatform, params: InitializeParams, host: EngineHost) {
     this.agent = agent; this.platform = platform; this.params = params; this.host = host;
     this.recoverAbandoned = params.resume !== null;
@@ -128,7 +129,8 @@ class CursorSession implements EngineSession {
   }
   async startTurn(inputs: ReadonlyArray<EngineInput>, settings: TurnSettings) {
     if (this.starting || this.active) return { status: "declined" as const, reason: "a turn is already running" };
-    if (settings.runtimeMode !== this.params.runtimeMode) return { status: "declined" as const, reason: "Cursor cannot change runtime mode within a session" };
+    const turnSettings = this.configured ?? settings;
+    if (turnSettings.runtimeMode !== this.params.runtimeMode) return { status: "declined" as const, reason: "Cursor cannot change runtime mode within a session" };
     this.starting = true;
     const images: SDKImage[] = [];
     const parts: string[] = [];
@@ -158,7 +160,7 @@ class CursorSession implements EngineSession {
     const pending: InteractionUpdate[] = [];
     try {
       const send = () => this.agent.send(images.length ? { text: message, images } : message, {
-        model: cursorSdkModelSelection(settings.modelSelection), mode: "agent",
+        model: cursorSdkModelSelection(turnSettings.modelSelection), mode: "agent",
         mcpServers: cursorMcpServers(this.params) ?? {},
         onDelta: ({ update }) => { if (activeRef?.finalized) return; if (projection) projection.update(update); else pending.push(update); },
       });
@@ -180,11 +182,12 @@ class CursorSession implements EngineSession {
         run = await send();
       }
       this.recoverAbandoned = false;
-      projection = new CursorProjection(run.id, this.engineRef, settings.modelSelection.instanceId, this.host);
+      projection = new CursorProjection(run.id, this.engineRef, turnSettings.modelSelection.instanceId, this.host);
       const active: NonNullable<CursorSession["active"]> = { run, projection, interrupted: false, prompt: message, finalized: false };
       activeRef = active;
       this.active = active;
       this.preamble = "";
+      if (this.configured === turnSettings) this.configured = undefined;
       this.interruptedPrompt = undefined;
       for (const update of pending) projection.update(update);
       setImmediate(() => { void this.finish(active); });
@@ -248,6 +251,10 @@ class CursorSession implements EngineSession {
     setTimeout(() => { if (!active.finalized) { this.interruptedPrompt = active.prompt; this.finalize(active, { type: "interrupted" }); } }, 10_000).unref();
   }
   async answerRequest(_key: string, _answer: RequestAnswer) { throw new HelperError("bad_request", "Cursor SDK has no live approval or question callbacks"); }
+  async setConfig(settings: TurnSettings) {
+    if (settings.runtimeMode !== this.params.runtimeMode) throw new HelperError("unsupported", "Cursor cannot change runtime mode within a session");
+    this.configured = settings;
+  }
   async shutdown() {
     try { if (this.active) { this.active.interrupted = true; await this.active.run.cancel(); } this.agent.close(); }
     catch { throw new HelperError("transport", "Cursor could not close the agent."); }

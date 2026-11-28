@@ -274,3 +274,38 @@ async fn cursor_crash_is_isolated_from_another_session() {
     assert!(message, "healthy session must produce its message");
     healthy.session.shutdown().await;
 }
+
+#[tokio::test]
+async fn cursor_set_config_reaches_next_send() {
+    let (factory, spec, mut settings) = setup("cursor-switch-model");
+    let mut handle = factory.start(spec).await.expect("helper starts");
+    let original = settings.clone();
+    settings.model_selection.model = "new-model".into();
+    handle
+        .session
+        .set_config(&settings)
+        .await
+        .expect("set model");
+    assert!(matches!(
+        handle
+            .session
+            .start_turn(input("switch-model"), &original)
+            .await,
+        TurnStartResult::Accepted { .. }
+    ));
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), handle.events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event stream");
+        match event {
+            EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Done,
+                ..
+            } => break,
+            EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
+            _ => {}
+        }
+    }
+    handle.session.shutdown().await;
+}
