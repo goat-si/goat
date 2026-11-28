@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 pub struct Grok {
     pub has_api_key: bool,
 }
+
 impl AcpFlavor for Grok {
     fn driver(&self) -> &str {
         "grok"
@@ -77,6 +78,67 @@ impl AcpFlavor for Grok {
     }
     fn supports_image_prompts(&self, _: &InitializeInfo) -> bool {
         true
+    }
+    /// v1 `xaiMcpToolCall.ts:13-54`; the shared driver must also normalize after merging
+    /// tool state to handle input and metadata split across updates.
+    fn normalize_update(&self, mut params: Value) -> Value {
+        let Some(update) = params.get_mut("update").and_then(Value::as_object_mut) else {
+            return params;
+        };
+        if !matches!(
+            update.get("sessionUpdate").and_then(Value::as_str),
+            Some("tool_call" | "tool_call_update")
+        ) {
+            return params;
+        }
+        let input = update.get("rawInput").and_then(Value::as_object);
+        let name = input
+            .and_then(|v| v.get("tool_name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let use_tool = update
+            .get("_meta")
+            .and_then(|v| v.get("x.ai/tool"))
+            .and_then(|v| v.get("name"))
+            .and_then(Value::as_str)
+            == Some("use_tool");
+        if let Some((server, tool)) = name
+            .split_once("__")
+            .filter(|(a, b)| !a.is_empty() && !b.is_empty())
+            .filter(|_| use_tool)
+        {
+            let arguments = input
+                .and_then(|v| v.get("tool_input"))
+                .filter(|v| v.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let rewritten = json!({"server":server,"tool":tool,"arguments":arguments});
+            let mut meta = update
+                .get("_meta")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            meta.insert("is_mcp_tool_call".into(), json!(true));
+            update.insert("rawInput".into(), rewritten);
+            update.insert("_meta".into(), Value::Object(meta));
+        }
+        if let Some(output) = update
+            .get("rawOutput")
+            .filter(|v| v.get("type").and_then(Value::as_str) == Some("MCP"))
+            .and_then(|v| v.get("output"))
+        {
+            let error = output.get("Error").and_then(Value::as_str);
+            let text = error.or_else(|| output.get("OkayOutput").and_then(Value::as_str));
+            if let Some(text) = text {
+                let mut result = json!({"content":[{"type":"text","text":text}]});
+                if error.is_some() {
+                    result["isError"] = json!(true);
+                }
+                update.insert("rawOutput".into(), result);
+            }
+        }
+        params
     }
     fn permission_disposition(&self, p: &RuntimePolicy, r: &Value) -> Disposition {
         if p.runtime_mode == RuntimeMode::Auto {
@@ -161,6 +223,30 @@ impl AcpFlavor for Grok {
         )
     }
     fn ext_notification(&self, method: &str, p: &Value) -> Vec<FlavorEvent> {
+        // v1 xaiAcpExtension.ts:50-78,1464-1473: only identified root completions.
+        if matches!(
+            method,
+            "x.ai/session_notification" | "_x.ai/session_notification" | "_x.ai/session/update"
+        ) {
+            if p.get("sessionId").and_then(Value::as_str).is_none() {
+                return Vec::new();
+            }
+            let Some(update) = p.get("update").filter(|v| {
+                v.get("sessionUpdate").and_then(Value::as_str) == Some("turn_completed")
+            }) else {
+                return Vec::new();
+            };
+            let Some(id) = update
+                .get("prompt_id")
+                .or_else(|| update.get("promptId"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && !s.starts_with("task-completed-"))
+            else {
+                return Vec::new();
+            };
+            return self.ext_notification("_x.ai/session/prompt_complete", &json!({"promptId":id,"stopReason":update.get("stop_reason").or_else(|| update.get("stopReason")).and_then(Value::as_str).unwrap_or("end_turn")}));
+        }
         if method == "x.ai/session/prompt_complete" || method == "_x.ai/session/prompt_complete" {
             let reason = p
                 .get("stopReason")
@@ -189,5 +275,52 @@ impl AcpFlavor for Grok {
             }];
         }
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_use_tool_and_result_are_normalized() {
+        let g = Grok::default();
+        let p = json!({"sessionId":"s","update":{"sessionUpdate":"tool_call", "_meta":{"x.ai/tool":{"name":"use_tool"}},"rawInput":{"tool_name":"server__read","tool_input":{"path":"x"}},"rawOutput":{"type":"MCP","output":{"Error":"denied"}}}});
+        let actual = g.normalize_update(p);
+        assert_eq!(
+            actual["update"]["rawInput"],
+            json!({"server":"server","tool":"read","arguments":{"path":"x"}})
+        );
+        assert_eq!(actual["update"]["_meta"]["is_mcp_tool_call"], true);
+        assert_eq!(
+            actual["update"]["rawOutput"],
+            json!({"isError":true,"content":[{"type":"text","text":"denied"}]})
+        );
+        let p = json!({"update":{"sessionUpdate":"tool_call_update","rawOutput":{"type":"MCP","output":{"OkayOutput":"ok"}}}});
+        assert_eq!(
+            g.normalize_update(p)["update"]["rawOutput"],
+            json!({"content":[{"type":"text","text":"ok"}]})
+        );
+    }
+
+    #[test]
+    fn turn_completed_requires_root_identity() {
+        let g = Grok::default();
+        let method = "_x.ai/session_notification";
+        assert!(
+            g.ext_notification(
+                method,
+                &json!({"update":{"sessionUpdate":"turn_completed"}})
+            )
+            .is_empty()
+        );
+        assert!(
+            g.ext_notification(
+                method,
+                &json!({"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"task-completed-1"}})
+            )
+            .is_empty()
+        );
+        assert_eq!(g.ext_notification(method, &json!({"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"cancelled"}})), vec![FlavorEvent::PromptComplete {prompt_id:Some("p1".into()),stop_reason:"cancelled".into()}]);
     }
 }
