@@ -185,11 +185,11 @@ const removeLinkedWorktreeScoped = Effect.fn("WorktreeRemoval.removeScoped")(fun
     worktreePath,
     (yield* gitOutput(worktreePath, ["rev-parse", "--absolute-git-dir"]).pipe(
       Effect.mapError(() => notAWorktree),
-    )).trim(),
+    )).replace(/\n$/, ""),
   );
   const commonDir = path.resolve(
     input.cwd,
-    (yield* gitOutput(input.cwd, ["rev-parse", "--git-common-dir"])).trim(),
+    (yield* gitOutput(input.cwd, ["rev-parse", "--git-common-dir"])).replace(/\n$/, ""),
   );
   const pointsBack = yield* fileSystem.readFileString(path.join(adminDir, "gitdir")).pipe(
     Effect.flatMap((gitdir) => samePath(path.resolve(adminDir, gitdir.trim()), gitFile)),
