@@ -646,6 +646,10 @@ impl Inner {
             // v1 (ClaudeAgentSdkQueryRunner.ts:609-625): servers Claude could not attach are
             // logged by name only, as errors can echo headers, and the session carries on; the
             // deadline fails the open. A Claude that is gone fails it too.
+            // Only names GOAT registered are logged; any other key Claude reports (it could hold
+            // header text) is counted, never printed.
+            let requested = ["goat"];
+            let mut unknown = 0usize;
             let failed: Vec<String> = match self
                 .control(
                     json!({"subtype": "mcp_set_servers", "servers": servers}),
@@ -653,11 +657,20 @@ impl Inner {
                 )
                 .await
             {
-                Ok(response) => response
-                    .get("errors")
-                    .and_then(Value::as_object)
-                    .map(|errors| errors.keys().cloned().collect())
-                    .unwrap_or_default(),
+                Ok(response) => {
+                    let keys: Vec<String> = response
+                        .get("errors")
+                        .and_then(Value::as_object)
+                        .map(|errors| errors.keys().cloned().collect())
+                        .unwrap_or_default();
+                    let named: Vec<String> = keys
+                        .iter()
+                        .filter(|key| requested.contains(&key.as_str()))
+                        .cloned()
+                        .collect();
+                    unknown = keys.len() - named.len();
+                    named
+                }
                 Err(error) if error.starts_with("Control request timeout") => {
                     return Err(format!(
                         "Claude did not register the GOAT MCP server: {error}"
@@ -672,10 +685,11 @@ impl Inner {
                 // Claude refused the request: every server counts as unavailable.
                 Err(_) => vec!["goat".to_string()],
             };
-            if !failed.is_empty() {
+            if !failed.is_empty() || unknown > 0 {
                 tracing::warn!(
                     thread_id = ?self.thread_id,
                     servers = ?failed,
+                    unknown_servers = unknown,
                     "claude-mcp-servers-unavailable"
                 );
             }
@@ -899,6 +913,16 @@ impl Inner {
             )
             .await;
         }
+    }
+
+    /// [Self::bump_generation], unless background work runs (then None, nothing changes).
+    fn bump_generation_unless_background(&self) -> Option<u64> {
+        let _gate = self.frame_gate.lock();
+        let state = self.state.lock().ok()?;
+        if !state.async_subagents.is_empty() || !state.background_commands.is_empty() {
+            return None;
+        }
+        Some(self.generation.fetch_add(1, Ordering::SeqCst) + 1)
     }
 
     /// The next process generation, taken under the state lock so an exit settlement sees either
@@ -2132,18 +2156,12 @@ impl Inner {
         if relaunch {
             // v1 refuses to replace a process that runs background work
             // (ClaudeAdapterV2.ts:8918-8926; text from ClaudeQueryRunnerErrors.ts:61-67).
-            let background = self
-                .state
-                .lock()
-                .map(|state| {
-                    !state.async_subagents.is_empty() || !state.background_commands.is_empty()
-                })
-                .unwrap_or(false);
-            if background {
+            // v1 reopens the query when its policy or model identity changes. The background check
+            // and the generation change are one step under the frame gate, so a task_started frame
+            // is either seen (and refuses the reopen) or belongs to the replaced process.
+            if self.bump_generation_unless_background().is_none() {
                 return Err(BACKGROUND_WORK_BLOCKS_REOPEN.to_string());
             }
-            // v1 reopens the query when its policy or model identity changes.
-            self.bump_generation();
             self.kill_process().await;
             let identity = SessionIdentity::Resume(session_id);
             if let Err(error) = self.spawn(&identity, &model, mode).await {
