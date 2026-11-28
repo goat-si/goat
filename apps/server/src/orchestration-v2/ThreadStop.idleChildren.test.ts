@@ -2,8 +2,10 @@ import { assert, it } from "@effect/vitest";
 import { CommandId, EventId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { makeStopDelegatedTasks } from "./StopDelegatedTasks.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
   instanceId,
@@ -125,4 +127,54 @@ it.effect(
       assert.deepEqual((yield* threadState(activeGrandchildId)).runs, ["interrupted"]);
       assert.deepEqual((yield* threadState(followupChildId)).runs, ["completed", "interrupted"]);
     }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("stopDelegatedTasks still stops grandchildren when stopping a child fails", () =>
+  Effect.gen(function* () {
+    const parentId = ThreadId.make("thread:stop-fail-parent");
+    const childId = ThreadId.make("thread:stop-fail-child");
+    const grandchildId = ThreadId.make("thread:stop-fail-grandchild");
+    const stopped: Array<ThreadId> = [];
+    const records = new Map<ThreadId, Record<string, unknown>>([
+      [
+        parentId,
+        {
+          subagents: [{ origin: "app_owned", childThreadId: childId, status: "running" }],
+        },
+      ],
+      [
+        childId,
+        {
+          subagents: [{ origin: "app_owned", childThreadId: grandchildId, status: "running" }],
+        },
+      ],
+      [grandchildId, { subagents: [] }],
+    ]);
+    const walk = makeStopDelegatedTasks({
+      dispatch: (command) => {
+        if (command.type === "thread.stop") {
+          stopped.push(command.threadId);
+          if (command.threadId === childId) {
+            return Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+              }),
+            );
+          }
+        }
+        return Effect.succeed({} as never);
+      },
+      getThreadRecords: ((threadId: ThreadId) =>
+        Effect.succeed(records.get(threadId) ?? { subagents: [] })) as never,
+    });
+
+    const exit = yield* walk({
+      threadId: parentId,
+      commandId: CommandId.make("stop-fail-cascade"),
+    }).pipe(Effect.exit);
+
+    assert.isTrue(Exit.isFailure(exit));
+    assert.deepEqual(stopped, [childId, grandchildId]);
+  }),
 );

@@ -44,6 +44,17 @@ export function makeStopDelegatedTasks(deps: {
       if (input.childThreadIds !== undefined && !input.childThreadIds.includes(threadId)) continue;
       if (stoppedChildThreadIds.has(threadId)) continue;
       stoppedChildThreadIds.add(threadId);
+      const recordFailure = (
+        error:
+          | Orchestrator.OrchestratorV2Error
+          | ThreadManagementProviderInstanceDisabledError
+          | ThreadManagementWorktreeUnrestorableError,
+      ) =>
+        Effect.logWarning("Unable to stop a delegated task", {
+          parentThreadId: input.threadId,
+          threadId,
+          error,
+        }).pipe(Effect.andThen(Effect.sync(() => failures.push(error))));
       yield* Effect.gen(function* () {
         let shouldStop = activeChildThreadIds.has(threadId);
         let hasAppOwnedChildren = true;
@@ -62,14 +73,16 @@ export function makeStopDelegatedTasks(deps: {
           );
         }
         if (shouldStop)
-          yield* deps.dispatch({
-            type: "thread.stop",
-            commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
-            threadId,
-            stopDelegatedTasks: false,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
-            stopCascadeFrom,
-          });
+          yield* deps
+            .dispatch({
+              type: "thread.stop",
+              commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
+              threadId,
+              stopDelegatedTasks: false,
+              ...(input.reason === undefined ? {} : { reason: input.reason }),
+              stopCascadeFrom,
+            })
+            .pipe(Effect.catch(recordFailure));
         if (hasAppOwnedChildren)
           yield* stopDelegatedTasks({
             ...input,
@@ -77,15 +90,7 @@ export function makeStopDelegatedTasks(deps: {
             childThreadIds: undefined,
             stopCascadeFrom,
           });
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Unable to stop a delegated task", {
-            parentThreadId: input.threadId,
-            threadId,
-            error,
-          }).pipe(Effect.andThen(Effect.sync(() => failures.push(error)))),
-        ),
-      );
+      }).pipe(Effect.catch(recordFailure));
     }
     if (failures[0] !== undefined) return yield* failures[0];
   });
