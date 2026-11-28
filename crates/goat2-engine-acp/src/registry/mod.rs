@@ -4,6 +4,7 @@
 
 pub mod index;
 pub mod resolve;
+pub mod agents;
 
 use goat2_contracts::{EngineDriver, ProviderCapabilities};
 use goat2_engine_api::{EngineError, SessionSpec};
