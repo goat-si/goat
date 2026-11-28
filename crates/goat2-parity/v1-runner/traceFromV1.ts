@@ -1,4 +1,4 @@
-export function traceFromV1(scenario: any, stored: readonly any[], augmented: any, state: any, threadId: string, messageInputs: ReadonlyMap<string, string>, replayObserved: ReadonlyArray<{readonly cursor: number; readonly label: string | undefined; readonly frame: any}>, failure?: string) {
+export function traceFromV1(scenario: any, stored: readonly any[], augmented: any, state: any, threadId: string, messageInputs: ReadonlyMap<string, string>, replayObserved: ReadonlyArray<{readonly cursor: number; readonly label: string | undefined; readonly frame: any}>, restartBoundary: number | undefined, failure?: string) {
   const events: any[] = [];
   const sendByInput = new Map(scenario.steps.filter((step: any) => step.do === "send").map((step: any) => [step.input, step]));
   const thread = scenario.steps.find((step: any) => step.thread)?.thread;
@@ -39,7 +39,11 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
       pendingSteers.splice(pendingSteers.indexOf(steer), 1);
     }
   };
-  for (const {event} of [...stored].sort((a, b) => a.sequence - b.sequence)) {
+  // host.restarted is a runner lifecycle marker: emitted once the second runtime was built, before
+  // the first stored event that runtime wrote (sequences above the first runtime's last event).
+  let restartEmitted = restartBoundary === undefined;
+  for (const {event, sequence} of [...stored].sort((a, b) => a.sequence - b.sequence)) {
+    if (!restartEmitted && sequence > restartBoundary!) { emit({kind: "host.restarted", thread}); restartEmitted = true; }
     const p = event.payload;
     if (event.threadId !== threadId) continue;
     if (event.type === "message.updated" && p.role === "user" && !messageAliases.has(p.id)) {
