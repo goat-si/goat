@@ -47,8 +47,10 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const threadAliases = new Set(scenario.steps.map((s: any) => s.thread).filter(Boolean));
   if (threadAliases.size !== 1) throw new Error(`single-thread runner got threads ${[...threadAliases]}`);
   const sends = scenario.steps.filter((s: any) => s.do === "send");
-  const editSteps = scenario.steps.filter((s: any) => s.do === "queue_edit" || s.do === "queue_cancel");
+  const editSteps = scenario.steps.filter((s: any) => s.do === "queue_edit" || s.do === "queue_cancel" || s.do === "queue_promote");
   if (editSteps.length > 1 || (editSteps.length === 1 && (sends.length !== 2 || editSteps[0].input !== sends[1].input || editSteps[0].thread !== sends[1].thread))) throw new Error("unsupported queue edit target");
+  // Only start/queue sends create runs (fixture DSL runIndex); a steer joins an existing run.
+  const createsRun = (s: any) => s.mode === "start" || s.mode === "queue";
   // v1's fixture DSL creates one run per start/queue send, numbered by send order
   // (shared.ts runIndex). Resolve a scenario run alias through the expected trace:
   // the run.started event names the input whose send created that run.
@@ -59,8 +61,8 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     const started = events.filter((e: any) => e.kind === "run.started" && e.run === alias);
     if (started.length !== 1 || started[0].inputs?.length !== 1) throw new Error(`cannot resolve run alias ${alias}`);
     const index = sends.findIndex((s: any) => s.input === started[0].inputs[0]);
-    if (index < 0 || !["start", "queue"].includes(sends[index].mode)) throw new Error(`run alias ${alias} not created by a start/queue send`);
-    return index + 1;
+    if (index < 0 || !createsRun(sends[index])) throw new Error(`run alias ${alias} not created by a start/queue send`);
+    return sends.slice(0, index + 1).filter(createsRun).length;
   };
   // Each await is re-inserted right after the dispatch of the send it directly follows, so it
   // keeps its position and its own run. An await after any other step kind (queue edit/cancel,
@@ -69,12 +71,16 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const fixtureSteps: any[] = [];
   let sendCount = 0;
   let previous: string | undefined;
-  for (const s of scenario.steps) {
+  for (const [i, s] of scenario.steps.entries()) {
     if (s.do === "send" && s.mode === "start") { fixtureSteps.push({type: "message", text: s.text}); sendCount += 1; }
     else if (s.do === "send" && s.mode === "queue") { fixtureSteps.push({type: "queue_message", text: s.text}); sendCount += 1; }
-    else if (s.do === "queue_edit" || s.do === "queue_cancel") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
+    else if (s.do === "send" && s.mode === "steer" && s.run !== undefined) { fixtureSteps.push({type: "steer", text: s.text, targetRunIndex: runOrdinal(s.run)}); sendCount += 1; }
+    else if (s.do === "queue_edit" || s.do === "queue_cancel" || s.do === "queue_promote") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
     else if (s.do === "interrupt" && s.run === "r1") fixtureSteps.push({type: "interrupt", targetRunIndex: 1});
-    else if (s.do === "await" && s.until === "run_status") {
+    else if (s.do === "await" && s.until === "steerable" && scenario.steps[i + 1]?.do === "send" && scenario.steps[i + 1].mode === "steer" && scenario.steps[i + 1].run === s.run && scenario.steps[i + 1].thread === s.thread) {
+      // The fixture DSL's steer step itself awaits this run being steerable before dispatching.
+      continue;
+    } else if (s.do === "await" && (s.until === "run_status" || s.until === "steerable")) {
       if (previous !== "send") throw new Error(`await ${s.id} after a ${previous ?? "start of scenario"} step is unsupported`);
       const list = awaitsAfterSend.get(sendCount - 1) ?? [];
       list.push(s);
@@ -106,8 +112,9 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
       // never be satisfied as intended; refuse rather than reorder.
       if (step.await !== false) throw new Error(`await ${a.id} follows a foreground send`);
       const ordinal = runOrdinal(a.run);
-      if (ordinal > sendIndex + 1) throw new Error(`await ${a.id} waits for run ${a.run}, created by a later send`);
-      steps.push({type: "await_run_status", threadId, runId: ids.derive.run({threadId, ordinal}), status: a.status});
+      if (ordinal > sends.slice(0, sendIndex + 1).filter(createsRun).length) throw new Error(`await ${a.id} waits for run ${a.run}, created by a later send`);
+      const runId = ids.derive.run({threadId, ordinal});
+      steps.push(a.until === "steerable" ? {type: "await_run_steerable", threadId, runId} : {type: "await_run_status", threadId, runId, status: a.status});
     }
   }
   const edit = editSteps[0];
@@ -115,22 +122,33 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     const index = steps.findIndex((s: any) => s.type === "dispatch" && s.command.type === "queued-run.cancel");
     if (index < 0) throw new Error("missing queued edit placeholder");
     const command = steps[index].command;
+    const mutation = edit.do === "queue_edit" ? {...command, type: "queued-run.edit", text: edit.text}
+      : edit.do === "queue_promote" ? {type: "queued-message.promote-to-steer", commandId: command.commandId, threadId, queuedRunId: command.runId, targetRunId: ids.derive.run({threadId, ordinal: 1})}
+      : command;
     steps.splice(index, 1,
       {type: "await_run_status", threadId, runId: command.runId, status: "queued"},
-      {type: "dispatch", command: edit.do === "queue_edit" ? {...command, type: "queued-run.edit", text: edit.text} : command},
+      ...(edit.do === "queue_promote" ? [{type: "await_run_steerable", threadId, runId: ids.derive.run({threadId, ordinal: 1})}] : []),
+      {type: "dispatch", command: mutation},
       {type: "release_replay_gate", label: "turn/completed"},
       {type: "await", key: "run:1"},
       {type: "await_thread_idle", threadId});
   }
   if (sendIndex !== sends.length - 1) throw new Error(`materialized ${sendIndex + 1} sends, scenario has ${sends.length}`);
   let driver: any;
+  // Replay-boundary observations: every inbound frame the driver delivers, with its transcript
+  // position. A turn/steer response is only counted as applied when it is a result (not an error)
+  // answering the outbound turn/steer request the adapter actually sent (the driver verified it).
+  const replayObserved: Array<{readonly cursor: number; readonly label: string | undefined; readonly frame: any}> = [];
+  const observe = (entry: any) => Effect.flatMap(Ref.get(driver.state), (s: any) => Effect.sync(() => { replayObserved.push({cursor: s.cursor, label: entry.label, frame: entry.frame}); }));
   const harness = {...CodexOrchestratorReplayHarness, makeProviderAdapterRegistryLayer: (_: any, options: any) => Layer.unwrap(Effect.gen(function* () {
-    driver = yield* CodexReplay.makeReplayDriver(augmented, options?.replayGate ? {beforeEmitInbound: (entry) => Effect.promise((signal) => options.replayGate.beforeEmit(entry.label, signal))} : {});
+    driver = yield* CodexReplay.makeReplayDriver(augmented, {beforeEmitInbound: (entry) => Effect.andThen(
+      options?.replayGate ? Effect.promise((signal) => options.replayGate.beforeEmit(entry.label, signal)) : Effect.void,
+      observe(entry))});
     return CodexAdapterV2Testkit.layer({transcript, driver});
   }))};
   const exit = yield* Effect.exit(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex`, transcript, commands: materialized.commands, steps, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace, ...runtimePolicy}}, harness));
   const state = yield* Ref.get(driver.state);
-  const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? exit.value.storedEvents : [], driver.transcript, state, threadId, messageInputs, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
+  const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? exit.value.storedEvents : [], driver.transcript, state, threadId, messageInputs, replayObserved, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
   const tmp = `${out}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(trace, null, 2) + "\n");
   renameSync(tmp, out);
