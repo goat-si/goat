@@ -46,7 +46,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
 use crate::flavor::{
-    AcpFlavor, AuthPolicy, ExtAnswer, ExtRequest, FlavorEvent, ModelWrite, ResumeMethod, StdoutLine,
+    AcpFlavor, AuthFailure, AuthPolicy, ConfigWrite, ExtAnswer, ExtRequest, FlavorEvent,
+    ModeContext, ModeWrite, ModelWrite, PromptAttachment, ResumeMethod, StderrLine, StdoutLine,
 };
 use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
@@ -185,7 +186,8 @@ struct State {
     /// Text that goes in front of the next prompt (preamble, instructions without a system channel).
     preamble: Option<String>,
     runtime_mode: Option<goat2_contracts::RuntimeMode>,
-    model: Option<String>,
+    /// The selection last applied; any change (model or options) is written again.
+    model_selection: Option<goat2_contracts::ModelSelection>,
 }
 
 struct Shared {
@@ -394,6 +396,22 @@ impl Shared {
                     // until it answers the prompt; those updates belong to the turn.
                     if let Some(turn) = state.turn.as_mut() {
                         turn.projector.apply(update, &mut out);
+                        // v1 `extractSubagentUpdate`: a native subagent's progress.
+                        if matches!(kind, "tool_call" | "tool_call_update")
+                            && let Some(id) = text_field(update, "toolCallId")
+                            && let Some(subagent) = turn
+                                .projector
+                                .tool(&id)
+                                .and_then(|tool| self.flavor.subagent_update(tool))
+                        {
+                            out.push(EngineEvent::SubagentUpdate {
+                                turn_id: Some(turn.turn_id.clone()),
+                                subagent_id: subagent.native_task_id,
+                                status: subagent.status,
+                                title: subagent.title.or(Some(subagent.prompt)),
+                                progress: subagent.result,
+                            });
+                        }
                     }
                 }
             }
@@ -403,12 +421,32 @@ impl Shared {
         }
     }
 
-    fn on_request(&self, method: &str, params: Value, responder: ValueResponder) {
+    fn on_request(self: &Arc<Self>, method: &str, params: Value, responder: ValueResponder) {
         match method {
             "session/request_permission" => self.on_permission(params, responder),
             "elicitation/create" => self.on_elicitation(params, responder, false),
             "session/elicitation" | "_session/elicitation" => {
                 self.on_elicitation(params, responder, true)
+            }
+            // v1 adapter.ts:5081-5087: the flavor's client file reader, with the thread's folder.
+            "fs/read_text_file" => {
+                let cwd = self.policy.lock().expect("policy").cwd.clone();
+                match self.flavor.read_text_file(&params, cwd.as_deref()) {
+                    None => {
+                        let _ = responder
+                            .respond_with_error(agent_client_protocol::Error::method_not_found());
+                    }
+                    Some(read) => {
+                        let _ = match read.response {
+                            Ok(value) => responder.respond(value),
+                            Err((code, message)) => responder
+                                .respond_with_error(agent_client_protocol::Error::new(code, message)),
+                        };
+                        for event in read.events {
+                            self.on_flavor_event(event);
+                        }
+                    }
+                }
             }
             _ => match self.flavor.ext_request_action(method, &params) {
                 ExtRequest::Respond(result) => {
@@ -449,6 +487,27 @@ impl Shared {
         let mut answerable_params = params.clone();
         if let Some(object) = answerable_params.as_object_mut() {
             object.insert("options".into(), Value::Array(options.clone()));
+        }
+        // v1 adapter.ts:5128-5147: a question asked through the permission method.
+        match self.flavor.permission_request_action(&answerable_params) {
+            None => {}
+            Some(ExtRequest::AskUser {
+                native_id,
+                summary,
+                questions,
+                answer,
+            }) => {
+                self.on_ext_question(native_id, summary, questions, answer, responder);
+                return;
+            }
+            Some(ExtRequest::Respond(value)) => {
+                let _ = responder.respond(value);
+                return;
+            }
+            Some(ExtRequest::Unhandled | ExtRequest::CapturePlan { .. }) => {
+                let _ = responder.respond(cancelled());
+                return;
+            }
         }
         let policy = self.policy.lock().expect("policy").clone();
         let disposition = self.flavor.permission_disposition(&policy, &params);
@@ -664,7 +723,7 @@ impl Shared {
                 .get("requestedSchema")
                 .cloned()
                 .unwrap_or(Value::Null);
-            let Some(form) = parse_elicitation_form(&schema, &message, false) else {
+            let Some(mut form) = parse_elicitation_form(&schema, &message, false) else {
                 drop(state);
                 for event in out {
                     emit(self, event);
@@ -672,6 +731,9 @@ impl Shared {
                 respond(responder, json!({"action": "decline"}));
                 return;
             };
+            form.questions = self
+                .flavor
+                .elicitation_questions(&params, std::mem::take(&mut form.questions));
             let item = self.request_item(
                 &mut state,
                 &turn_id,
@@ -847,7 +909,27 @@ impl Shared {
         if !text.is_empty() {
             blocks.push(ContentBlock::Text(TextContent::new(text)));
         }
-        if self.flavor.supports_image_prompts(&init) {
+        let resolved: Vec<(&ChatAttachment, Option<PathBuf>)> =
+            attachments.iter().map(|a| (*a, resolve(a))).collect();
+        let prompt_attachments: Vec<PromptAttachment<'_>> = resolved
+            .iter()
+            .map(|(attachment, path)| PromptAttachment {
+                attachment,
+                path: path.as_deref(),
+            })
+            .collect();
+        let config_options = self.state.lock().expect("state").config_options.clone();
+        if let Some(result) =
+            self.flavor
+                .prompt_attachment_blocks(&init, &config_options, &prompt_attachments)
+        {
+            for value in result? {
+                blocks.push(
+                    serde_json::from_value::<ContentBlock>(value)
+                        .map_err(|e| format!("Invalid attachment content: {e}"))?,
+                );
+            }
+        } else if self.flavor.supports_image_prompts(&init) {
             for attachment in attachments.iter().filter(|a| {
                 a.kind == ChatAttachmentType::Image
                     && ["image/gif", "image/jpeg", "image/png", "image/webp"]
@@ -879,6 +961,7 @@ impl Shared {
         blocks: Vec<ContentBlock>,
     ) -> Result<(), String> {
         let conn = self.conn().map_err(|e| e.to_string())?.clone();
+        self.flavor.prompt_sent(&self.session_id());
         let mut request = PromptRequest::new(self.session_id(), blocks);
         if let Some(meta) = meta_of(self.flavor.prompt_meta(&prompt_id_of(&turn_id, prompt_seq))) {
             request = request.meta(meta);
@@ -894,33 +977,49 @@ impl Shared {
     }
 
     async fn apply_settings(&self, settings: &TurnSettings) -> Result<(), String> {
-        let (mode_changed, model_changed) = {
+        let (mode_changed, first_mode_write, model_changed) = {
             let state = self.state.lock().expect("state");
             (
                 state.runtime_mode != Some(settings.runtime_mode),
-                state.model.as_deref() != Some(settings.model_selection.model.as_str()),
+                state.runtime_mode.is_none(),
+                state.model_selection.as_ref() != Some(&settings.model_selection),
             )
         };
         if mode_changed {
             self.policy.lock().expect("policy").runtime_mode = settings.runtime_mode;
-            let modes = self.state.lock().expect("state").modes.clone();
-            if let Some(mode_id) = self
-                .flavor
-                .session_mode_for(settings.runtime_mode, modes.as_ref())
-                && modes
-                    .as_ref()
-                    .is_some_and(|m| m.has(&mode_id) && m.current_mode_id != mode_id)
-            {
-                let request = SetSessionModeRequest::new(self.session_id(), mode_id.clone());
-                self.request(
-                    "session/set_mode",
-                    json_or_null(&request),
-                    self.timeouts.request,
-                )
-                .await
-                .map_err(|e| format!("session/set_mode {mode_id}: {e}"))?;
-                if let Some(modes) = self.state.lock().expect("state").modes.as_mut() {
-                    modes.current_mode_id = mode_id;
+            let (modes, config_options) = {
+                let state = self.state.lock().expect("state");
+                (state.modes.clone(), state.config_options.clone())
+            };
+            let context = ModeContext {
+                modes: modes.as_ref(),
+                config_options: &config_options,
+                first_write: first_mode_write,
+            };
+            match self.flavor.mode_write(settings.runtime_mode, &context) {
+                ModeWrite::Keep => {}
+                ModeWrite::Unavailable(message) => return Err(message),
+                ModeWrite::SetMode(mode_id) => {
+                    let request = SetSessionModeRequest::new(self.session_id(), mode_id.clone());
+                    self.request(
+                        "session/set_mode",
+                        json_or_null(&request),
+                        self.timeouts.request,
+                    )
+                    .await
+                    .map_err(|e| format!("session/set_mode {mode_id}: {e}"))?;
+                    if let Some(modes) = self.state.lock().expect("state").modes.as_mut() {
+                        modes.current_mode_id = mode_id;
+                    }
+                }
+                ModeWrite::Config(write) => {
+                    self.write_config(&write).await?;
+                    if let (Some(modes), Some(mode_id)) = (
+                        self.state.lock().expect("state").modes.as_mut(),
+                        write.value.as_str(),
+                    ) {
+                        modes.current_mode_id = mode_id.to_owned();
+                    }
                 }
             }
             self.state.lock().expect("state").runtime_mode = Some(settings.runtime_mode);
@@ -960,10 +1059,119 @@ impl Shared {
                         .await
                         .map_err(|e| format!("session/set_model {model_id}: {e}"))?;
                 }
+                ModelWrite::ConfigOptions(writes) => {
+                    for write in &writes {
+                        self.write_config(write).await?;
+                    }
+                }
             }
-            self.state.lock().expect("state").model = Some(settings.model_selection.model.clone());
+            self.state.lock().expect("state").model_selection = Some(settings.model_selection.clone());
         }
         Ok(())
+    }
+
+    /// v1 runtime `setConfigOption` (AcpSessionRuntime.ts:1023-1075, 1363-1420) and the
+    /// `configureSession` option loop's skips (adapter.ts:6076-6113).
+    async fn write_config(&self, write: &ConfigWrite) -> Result<(), String> {
+        let shown = match &write.value {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let options = self.state.lock().expect("state").config_options.clone();
+        let option = options
+            .iter()
+            .find(|o| crate::wire::config_option_id(o) == Some(write.config_id.as_str()));
+        match option {
+            None if write.optional => return Ok(()),
+            None => {}
+            Some(option) => {
+                let kind = option.get("type").and_then(Value::as_str);
+                if kind == Some("boolean") && !write.value.is_boolean() {
+                    if write.optional {
+                        return Ok(());
+                    }
+                    return Err(format!(
+                        "Invalid value \"{shown}\" for session config option \"{}\": expected boolean",
+                        write.config_id
+                    ));
+                }
+                if kind != Some("boolean") {
+                    let Some(value) = write.value.as_str() else {
+                        if write.optional {
+                            return Ok(());
+                        }
+                        return Err(format!(
+                            "Invalid value {shown} for session config option \"{}\": expected string",
+                            write.config_id
+                        ));
+                    };
+                    let allowed: Vec<String> = crate::wire::select_values(option)
+                        .into_iter()
+                        .map(|(value, _)| value)
+                        .collect();
+                    if kind == Some("select") && !allowed.iter().any(|a| a == value) {
+                        if write.optional {
+                            return Ok(());
+                        }
+                        if !write.allow_unlisted {
+                            return Err(format!(
+                                "Invalid value \"{value}\" for session config option \"{}\": expected one of {}",
+                                write.config_id,
+                                allowed.join(", ")
+                            ));
+                        }
+                    }
+                }
+                if !write.resend_current && option.get("currentValue") == Some(&write.value) {
+                    return Ok(());
+                }
+            }
+        }
+        let mut request = json!({
+            "sessionId": self.session_id(),
+            "configId": write.config_id,
+            "value": write.value,
+        });
+        if write.value.is_boolean() {
+            request["type"] = json!("boolean");
+        }
+        match self
+            .request("session/set_config_option", request, self.timeouts.request)
+            .await
+        {
+            Ok(response) => {
+                if let Some(options) = response.get("configOptions").and_then(Value::as_array) {
+                    self.state.lock().expect("state").config_options = options.clone();
+                }
+                Ok(())
+            }
+            Err(error)
+                if write.optional
+                    && error.code == agent_client_protocol::ErrorCode::INVALID_PARAMS =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "session/set_config_option {}={shown}: {error}",
+                write.config_id
+            )),
+        }
+    }
+
+    /// v1 an `onStderr` transport error: the open turn fails with `message` and the process ends,
+    /// so the next turn starts a fresh one.
+    fn fail_process(self: &Arc<Self>, message: String) {
+        let current = self
+            .state
+            .lock()
+            .expect("state")
+            .turn
+            .as_ref()
+            .map(|t| (t.turn_id.clone(), t.prompt_seq));
+        if let Some((turn_id, seq)) = current {
+            self.settle(&turn_id, seq, Err(message.clone()));
+        }
+        self.terminate(message);
     }
 
     fn terminate(self: &Arc<Self>, reason: String) {
@@ -1421,10 +1629,16 @@ impl AcpEngineFactory {
             let weak = Arc::downgrade(&shared);
             let flavor = Arc::clone(&flavor);
             Arc::new(move |line: &str| {
-                if let Some(url) = flavor.stderr_auth_url(line)
-                    && let Some(shared) = weak.upgrade()
-                {
-                    shared.auth_required(Some(url), None);
+                let event = flavor.stderr_line(line);
+                if event == StderrLine::Ignore {
+                    return;
+                }
+                if let Some(shared) = weak.upgrade() {
+                    match event {
+                        StderrLine::Ignore => {}
+                        StderrLine::AuthUrl(url) => shared.auth_required(Some(url), None),
+                        StderrLine::Fail(message) => shared.fail_process(message),
+                    }
                 }
             }) as crate::process::StderrHook
         };
@@ -1484,6 +1698,9 @@ impl AcpEngineFactory {
                                 if let Some(shared) = weak.upgrade() {
                                     shared.auth_required(Some(url), None);
                                 }
+                            }
+                            StdoutLine::Fail(message) => {
+                                return Some((Err(std::io::Error::other(message)), reader));
                             }
                         }
                     }
@@ -1640,11 +1857,22 @@ impl AcpEngineFactory {
                 )
                 .await
             {
-                shared.auth_required(
-                    None,
-                    Some(format!("Sign-in with {method_id} failed: {error}")),
-                );
-                return Err(EngineError::StartFailed(format!("authenticate: {error}")));
+                match flavor.auth_failure(i32::from(error.code), &error.message) {
+                    AuthFailure::Default => {
+                        shared.auth_required(
+                            None,
+                            Some(format!("Sign-in with {method_id} failed: {error}")),
+                        );
+                        return Err(EngineError::StartFailed(format!("authenticate: {error}")));
+                    }
+                    AuthFailure::SignIn(message) => {
+                        shared.auth_required(None, Some(message.clone()));
+                        return Err(EngineError::StartFailed(message));
+                    }
+                    AuthFailure::Plain => {
+                        return Err(handshake_error("authenticate", error, &stderr().await));
+                    }
+                }
             }
         }
 

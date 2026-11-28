@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 
 use goat2_contracts::{
-    ApprovalDecision, ApprovalOption, EngineDriver, ModelSelection, ProviderCapabilities,
-    RuntimeMode,
+    ApprovalDecision, ApprovalOption, ChatAttachment, EngineDriver, ModelSelection,
+    ProviderCapabilities, RuntimeMode, TurnItemStatus, UserInputQuestion,
 };
 use goat2_engine_api::{EngineError, SessionSpec};
 use serde_json::{Map, Value};
@@ -74,6 +74,75 @@ pub enum StdoutLine {
     Drop,
     /// A sign-in URL the agent printed; the line is dropped.
     AuthUrl(String),
+    /// The line breaks the protocol: the connection ends with this reason (v1 a `transformStdout`
+    /// failure, e.g. Antigravity's invalid sign-in URL).
+    Fail(String),
+}
+
+/// What a stderr line means (v1 `onStderr`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StderrLine {
+    Ignore,
+    /// A sign-in URL the agent printed.
+    AuthUrl(String),
+    /// The agent can no longer run a turn (v1 an `onStderr` transport error): the open turn fails
+    /// with this message and the process is replaced on the next turn.
+    Fail(String),
+}
+
+/// How a failed `authenticate` is reported (v1 `requiresSignIn`, adapter.ts:8419).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthFailure {
+    /// The driver's own report.
+    Default,
+    /// The person must sign in; the message is shown with the sign-in request.
+    SignIn(String),
+    /// A plain start failure, no sign-in request.
+    Plain,
+}
+
+/// One `session/set_config_option` write with v1 runtime `setConfigOption` semantics
+/// (AcpSessionRuntime.ts:1023-1075, 1363-1420).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigWrite {
+    pub config_id: String,
+    /// A string, or a boolean for boolean options.
+    pub value: Value,
+    /// v1 `allowUnlistedValue`: send a value the select option does not list.
+    pub allow_unlisted: bool,
+    /// v1 `resendCurrentValue`: send even when the option already holds the value.
+    pub resend_current: bool,
+    /// v1 `configureSession` option loop (adapter.ts:6076-6113): skip when the live session lacks
+    /// the option or does not list the value, and let a -32602 refusal pass.
+    pub optional: bool,
+}
+
+impl ConfigWrite {
+    /// A required write of a listed value, skipped when it is already current.
+    pub fn new(config_id: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            config_id: config_id.into(),
+            value: Value::String(value.into()),
+            allow_unlisted: false,
+            resend_current: false,
+            optional: false,
+        }
+    }
+
+    pub fn allow_unlisted(mut self) -> Self {
+        self.allow_unlisted = true;
+        self
+    }
+
+    pub fn resend_current(mut self) -> Self {
+        self.resend_current = true;
+        self
+    }
+
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
+    }
 }
 
 /// How the model of a selection is written to the session.
@@ -94,6 +163,84 @@ pub enum ModelWrite {
     Unavailable {
         message: String,
     },
+    /// Config writes in order, each checked against the options the previous one returned (a
+    /// model write and then the options that depend on the model, v1 `applyModelSelection` plus
+    /// the `configureSession` option loop).
+    ConfigOptions(Vec<ConfigWrite>),
+}
+
+/// How the session mode for a runtime mode is written.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModeWrite {
+    Keep,
+    /// `session/set_mode`.
+    SetMode(String),
+    /// `session/set_config_option` on the mode option; the reported mode becomes the value.
+    Config(ConfigWrite),
+    /// The agent cannot run in the mode; session setup or the turn fails with this message.
+    Unavailable(String),
+}
+
+/// What the session reports when a mode is written.
+#[derive(Debug, Clone, Copy)]
+pub struct ModeContext<'a> {
+    pub modes: Option<&'a ModeState>,
+    pub config_options: &'a [Value],
+    /// The first mode write since the session was opened, loaded or resumed.
+    pub first_write: bool,
+}
+
+/// v1 `AcpSessionRuntime.setMode` (AcpSessionRuntime.ts:2068-2098): nothing when the mode is
+/// current; `session/set_mode` for agents that report modes without a `category: "mode"` select
+/// option; otherwise a write of that option (or `mode`), refused when the option does not list it.
+pub fn runtime_set_mode(mode_id: &str, context: &ModeContext<'_>) -> ModeWrite {
+    if context
+        .modes
+        .is_some_and(|modes| modes.current_mode_id == mode_id)
+    {
+        return ModeWrite::Keep;
+    }
+    let option = context.config_options.iter().find(|option| {
+        option.get("category").and_then(Value::as_str) == Some("mode")
+            && option.get("type").and_then(Value::as_str) == Some("select")
+    });
+    match option {
+        None if context.modes.is_some() => ModeWrite::SetMode(mode_id.to_owned()),
+        _ => ModeWrite::Config(ConfigWrite::new(
+            option
+                .and_then(crate::wire::config_option_id)
+                .unwrap_or("mode"),
+            mode_id,
+        )),
+    }
+}
+
+/// An attachment of the turn with its saved file, when the host could resolve it.
+#[derive(Debug, Clone, Copy)]
+pub struct PromptAttachment<'a> {
+    pub attachment: &'a ChatAttachment,
+    pub path: Option<&'a std::path::Path>,
+}
+
+/// The answer to an `fs/read_text_file` request a flavor serves.
+pub struct ClientRead {
+    /// The response, or a JSON-RPC error code and message.
+    pub response: Result<Value, (i32, String)>,
+    /// Session updates to project after answering (Antigravity reports a served read as done).
+    pub events: Vec<FlavorEvent>,
+}
+
+/// v1 `AcpAdapterV2SubagentUpdate` (adapterFlavor.ts `extractSubagentUpdate`): a tool call that
+/// is a native subagent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentToolUpdate {
+    pub native_task_id: String,
+    pub child_session_id: Option<String>,
+    pub prompt: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub status: TurnItemStatus,
+    pub result: Option<String>,
 }
 
 /// Something an extension notification means for the turn.
@@ -199,10 +346,44 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn normalize_update(&self, params: Value) -> Value {
         params
     }
+    /// v1 `extractSubagentUpdate`: whether a tool call (merged state) is a native subagent.
+    fn subagent_update(&self, _tool: &crate::items::ToolState) -> Option<SubagentToolUpdate> {
+        None
+    }
     fn stdout_line(&self, _line: &str) -> StdoutLine {
         StdoutLine::Json
     }
     fn stderr_auth_url(&self, _line: &str) -> Option<String> {
+        None
+    }
+    /// v1 `onStderr`. The default reports [Self::stderr_auth_url].
+    fn stderr_line(&self, line: &str) -> StderrLine {
+        match self.stderr_auth_url(line) {
+            Some(url) => StderrLine::AuthUrl(url),
+            None => StderrLine::Ignore,
+        }
+    }
+    /// v1 `requiresSignIn`: what a failed eager `authenticate` means.
+    fn auth_failure(&self, _code: i32, _message: &str) -> AuthFailure {
+        AuthFailure::Default
+    }
+    /// v1 `clientFileSystem.readTextFile` (adapter.ts:5081-5087): serve `fs/read_text_file`. None
+    /// answers "method not found". `cwd` is the thread's folder.
+    fn read_text_file(&self, _request: &Value, _cwd: Option<&str>) -> Option<ClientRead> {
+        None
+    }
+    /// Called before each `session/prompt` of `session_id` is sent (v1 Antigravity resets its
+    /// read repair, AntigravityAdapterV2.ts:197-198).
+    fn prompt_sent(&self, _session_id: &str) {}
+    /// v1 `buildPrompt`: the content blocks for the turn's attachments, after the text. None keeps
+    /// the shared handling (images when [Self::supports_image_prompts]). `config_options` is the
+    /// live session's (the current model decides what Antigravity sends).
+    fn prompt_attachment_blocks(
+        &self,
+        _init: &InitializeInfo,
+        _config_options: &[Value],
+        _attachments: &[PromptAttachment<'_>],
+    ) -> Option<Result<Vec<Value>, String>> {
         None
     }
     /// v1 `permissionDisposition`. `request` is the whole `session/request_permission` params.
@@ -213,6 +394,21 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn answerable_permission_options(&self, options: Vec<Value>) -> Vec<Value> {
         options
     }
+    /// v1 `extractPermissionQuestion` (adapter.ts:5128-5147): a permission request that is really a
+    /// question. [ExtRequest::AskUser] holds it open for the person; a dismissed or unmatched
+    /// answer must build `{"outcome":{"outcome":"cancelled"}}`. `request` carries the answerable
+    /// options.
+    fn permission_request_action(&self, _request: &Value) -> Option<ExtRequest> {
+        None
+    }
+    /// v1 `extractElicitationForm` (adapter.ts:5367): rewrite the questions of a parsed form.
+    fn elicitation_questions(
+        &self,
+        _request: &Value,
+        questions: Vec<UserInputQuestion>,
+    ) -> Vec<UserInputQuestion> {
+        questions
+    }
     /// v1 `approvalOptions`: the choices shown for a permission request.
     fn approval_options(&self, request: &Value) -> Vec<ApprovalOption> {
         default_approval_options(request)
@@ -220,6 +416,20 @@ pub trait AcpFlavor: Send + Sync + 'static {
     /// v1 `sessionModeForPolicy`: the ACP session mode for a runtime mode.
     fn session_mode_for(&self, _mode: RuntimeMode, _modes: Option<&ModeState>) -> Option<String> {
         None
+    }
+    /// How the session mode for `mode` is written. The default writes [Self::session_mode_for]
+    /// with `session/set_mode` when the agent offers it and it is not current.
+    fn mode_write(&self, mode: RuntimeMode, context: &ModeContext<'_>) -> ModeWrite {
+        match self.session_mode_for(mode, context.modes) {
+            Some(mode_id)
+                if context
+                    .modes
+                    .is_some_and(|m| m.has(&mode_id) && m.current_mode_id != mode_id) =>
+            {
+                ModeWrite::SetMode(mode_id)
+            }
+            _ => ModeWrite::Keep,
+        }
     }
     /// How to apply the selected model (v1 `applyModelSelection` / runtime `setModel`).
     fn model_write(&self, selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
