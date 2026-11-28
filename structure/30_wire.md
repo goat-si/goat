@@ -18,7 +18,7 @@ WebSocket on 127.0.0.1 with a token. JSON frames, `type` tag, camelCase fields.
 | `edit_queued`, `cancel_queued`, `reorder_queued {threadId, inputIds}`, `promote_to_steer` | command, only while the input is queued → `input.changed` (v1 queue parity) |
 | `change_thread {threadId, model?, runtimeMode?, followUpMode?}` | command → `thread.changed`, from the next run |
 | request kind `decision` | `request.opened` with options `{id, label, consequence?}`; answered by `resolve_request {optionId}`; silence never approves |
-| every command: `reqId` + `clientRequestId` | host dedupes: same id + same args → first `command_result` again, no new line; same id + other args → `idempotency_conflict`; `input.accepted` stores the id so it survives restarts |
+| every command: `reqId` + `clientRequestId` | host dedupes: same id + same args → first `command_result` again, no new line; same id + other args → `idempotency_conflict`; a deduplicated reply carries the current frame's `reqId` with the first result; `input.accepted` stores the id so it survives restarts |
 
 | Host → client | |
 |---|---|
