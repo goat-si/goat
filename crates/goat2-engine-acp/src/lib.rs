@@ -9,6 +9,7 @@ pub mod flavor;
 pub mod items;
 pub mod normalize;
 pub mod policy;
+pub mod probe;
 pub mod process;
 pub mod registry;
 pub mod wire;
