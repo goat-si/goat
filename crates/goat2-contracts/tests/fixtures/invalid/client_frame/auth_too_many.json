@@ -1,0 +1,30 @@
+{
+  "type": "provider_auth_respond",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "flowId": "flow",
+  "interactionId": "interaction",
+  "response": {
+    "type": "credentials",
+    "values": {
+      "key0": "x",
+      "key1": "x",
+      "key2": "x",
+      "key3": "x",
+      "key4": "x",
+      "key5": "x",
+      "key6": "x",
+      "key7": "x",
+      "key8": "x",
+      "key9": "x",
+      "key10": "x",
+      "key11": "x",
+      "key12": "x",
+      "key13": "x",
+      "key14": "x",
+      "key15": "x",
+      "key16": "x"
+    }
+  }
+}
