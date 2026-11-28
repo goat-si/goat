@@ -206,8 +206,9 @@ pub enum EngineEvent {
     /// (`RequestClosed`), or the session ends. Keys follow the sign-in rules: one request per
     /// key, each key answered at most once per session. Sent by Muse and Pi; OpenCode only for
     /// its background turns; never by Codex, Claude or Cursor.
-    /// Host support is lane E's work item (after the providers module and E-WF); until then
-    /// the host logs and ignores it, so drivers keep failing visibly instead of emitting it.
+    /// The host does not store the waiting `item` (an `item.completed` needs a run): a runless
+    /// request carries its `summary` only. A key the host has settled is ignored when repeated;
+    /// a request the host could not record is declined at once.
     SessionRequestOpened {
         key: String,
         item_id: Option<ItemId>,
@@ -224,7 +225,8 @@ pub enum EngineEvent {
     /// A later `ContinuationRequested` for the thread replaces a pending one (the earlier input
     /// is cancelled while still queued). That is GOAT 2's rule: v1's queue keeps distinct offers
     /// and replaces only one with the same key. Sent by Muse and Pi; OpenCode
-    /// only for its background turns. Host support: as for [EngineEvent::SessionRequestOpened].
+    /// only for its background turns. A continuation still queued when its session ends (or the
+    /// host restarts) is dropped, never sent as a fresh prompt.
     ContinuationRequested { key: String, text: String },
     /// The engine withdrew a pending continuation it no longer holds: the host cancels its input
     /// while still queued; once its run has started this is ignored. A GOAT 2 event: v1 Muse

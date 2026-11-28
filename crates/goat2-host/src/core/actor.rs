@@ -187,6 +187,13 @@ struct Actor {
     /// Engine sign-in keys already answered or declined in this session. Each key is answered
     /// at most once: later events naming one are ignored.
     settled_signin_keys: std::collections::HashSet<String>,
+    /// Runless engine requests of this session (`SessionRequestOpened`): engine key -> request.
+    /// Open until the person answers, the engine closes it, or the session ends.
+    session_requests: Vec<(String, RequestId)>,
+    /// Session request keys already answered or closed in this session (each at most once).
+    settled_session_keys: std::collections::HashSet<String>,
+    /// Continuation inputs of this session (`ContinuationRequested`): input -> engine key.
+    continuations: Vec<(InputId, String)>,
     /// Set when a write to this thread's log fails. A failed write can leave the store refusing
     /// writes until restart, and an engine request nobody can see must not wait: the fenced
     /// thread stops its engine session and starts no run until the host restarts.
@@ -228,10 +235,14 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         fenced: std::sync::atomic::AtomicBool::new(false),
         turn_runs: std::collections::VecDeque::new(),
         live_subagents: std::collections::HashMap::new(),
+        session_requests: Vec::new(),
+        settled_session_keys: std::collections::HashSet::new(),
+        continuations: Vec::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
         actor.close_stale_session_signins();
+        actor.close_stale_session_work().await;
         while let Some(msg) = rx.recv().await {
             let started = Instant::now();
             let label = format!("{msg:?}");
@@ -476,7 +487,9 @@ impl Actor {
             .unwrap_or_else(|| input_mode_for(card.follow_up_mode));
         // A person's input or a parent's `thread.send` releases a Stop hold (v1: the next send
         // releases it); child results and answers do not.
-        if matches!(input.from, InputSource::User | InputSource::System) {
+        if matches!(input.from, InputSource::User | InputSource::System)
+            && !input.client_request_id.starts_with(CONTINUATION_PREFIX)
+        {
             self.held = false;
         }
         let input_id = InputId::new(new_id("in"));
@@ -641,6 +654,154 @@ impl Actor {
         let events = self.close_signins(&stale, "the engine that asked has stopped");
         if !events.is_empty() {
             self.append(events);
+        }
+    }
+
+    /// Runless engine requests and queued continuations left by an engine session that no
+    /// longer exists (a host restart): the engine that held them is gone. Requests close; the
+    /// continuations are dropped, never sent as a fresh prompt.
+    async fn close_stale_session_work(&self) {
+        let Some(fold) = self.host.inner.store.fold(&self.id) else {
+            return;
+        };
+        let stale: Vec<RequestId> = fold
+            .open_requests
+            .iter()
+            .filter(|r| {
+                r.run_id.is_none()
+                    && r.item_id
+                        .as_ref()
+                        .is_some_and(|i| i.as_str().starts_with(SESSION_REQUEST_ITEM_PREFIX))
+            })
+            .map(|r| r.request_id.clone())
+            .collect();
+        let events = self.close_signins(&stale, "the engine that asked has stopped");
+        if !events.is_empty() {
+            self.append(events);
+        }
+        let system: Vec<InputId> = fold
+            .queued_inputs
+            .iter()
+            .filter(|q| q.source == InputSource::System)
+            .map(|q| q.input_id.clone())
+            .collect();
+        if system.is_empty() {
+            return;
+        }
+        // Queued inputs do not keep their clientRequestId: read it from the log once.
+        let store = self.host.inner.store.clone();
+        let id = self.id.clone();
+        let lines = tokio::task::spawn_blocking(move || store.read_after(&id, 0))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        let continuations: Vec<InputId> = lines
+            .iter()
+            .filter_map(|l| match &l.event {
+                LogEvent::InputAccepted(a)
+                    if a.client_request_id.starts_with(CONTINUATION_PREFIX)
+                        && system.contains(&a.input_id) =>
+                {
+                    Some(a.input_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        self.cancel_queued(&continuations);
+    }
+
+    /// Cancel the inputs among `ids` that are still queued (not carried by a run).
+    fn cancel_queued(&self, ids: &[InputId]) {
+        if ids.is_empty() {
+            return;
+        }
+        let pending = self.pending();
+        let events: Vec<LogEvent> = ids
+            .iter()
+            .filter(|id| pending.iter().any(|q| &q.input_id == *id))
+            .map(|id| {
+                LogEvent::InputChanged(InputChanged {
+                    input_id: id.clone(),
+                    text: None,
+                    mode: None,
+                    cancelled: Some(true),
+                    position: None,
+                })
+            })
+            .collect();
+        if !events.is_empty() {
+            self.append(events);
+        }
+    }
+
+    /// `SessionRequestOpened`: a request the engine raised outside any GOAT turn, filed with no
+    /// run. It counts in openAsks and the inbox like any open request, and is answered through
+    /// the session. One request per key; each key is settled at most once per session.
+    async fn on_session_request(&mut self, key: String, kind: RequestKind, summary: String) {
+        if self.settled_session_keys.contains(&key)
+            || self.session_requests.iter().any(|(k, _)| *k == key)
+        {
+            tracing::debug!(thread = %self.id, "a runless request for a key already seen: ignored");
+            return;
+        }
+        let request_id = RequestId::new(new_id("req"));
+        // The waiting item cannot be stored without a run (item.completed needs one); the
+        // synthetic item id marks the request as a runless engine request across a restart.
+        let item_id =
+            goat2_contracts::ItemId::new(format!("{SESSION_REQUEST_ITEM_PREFIX}{request_id}"));
+        let recorded = self.append(vec![LogEvent::RequestOpened(RequestOpened {
+            request_id: request_id.clone(),
+            run_id: None,
+            item_id: Some(item_id),
+            kind,
+            summary: goat2_contracts::text::clamp_chars(
+                &summary,
+                goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS,
+            ),
+            context: None,
+            options: None,
+            recommended: None,
+        })]);
+        if recorded.is_none() {
+            // Nobody can see or answer an unrecorded request: decline it now so the engine does
+            // not wait forever. The engine's error text can name the key: not logged.
+            self.settled_session_keys.insert(key.clone());
+            if let Some(s) = &self.session {
+                let answer = RequestAnswer {
+                    outcome: RequestOutcome::Decline,
+                    text: None,
+                    answers: None,
+                };
+                if s.session.answer_request(&key, answer).await.is_err() {
+                    tracing::warn!(thread = %self.id, "failed to decline an unrecorded runless request");
+                }
+            }
+            return;
+        }
+        self.session_requests.push((key, request_id));
+    }
+
+    /// `ContinuationRequested`: recorded like a child wake, as a quiet system input that runs
+    /// through the normal queue and starts with start_continuation. A later offer replaces a
+    /// pending one (cancelled while still queued).
+    async fn on_continuation(&mut self, key: String, text: String) {
+        let replaced: Vec<InputId> = self.continuations.drain(..).map(|(id, _)| id).collect();
+        self.cancel_queued(&replaced);
+        match self
+            .accept(NewInput {
+                from: InputSource::System,
+                text,
+                attachments: Vec::new(),
+                mode: Some(InputMode::Followup),
+                client_request_id: format!("{CONTINUATION_PREFIX}{key}"),
+            })
+            .await
+        {
+            Ok(ack) => self.continuations.push((ack.input_id, key)),
+            Err(refusal) => {
+                tracing::warn!(thread = %self.id, code = ?refusal.code, "an engine continuation was not recorded");
+            }
         }
     }
 
@@ -820,6 +981,20 @@ impl Actor {
             self.phase = Phase::Idle;
             return;
         }
+        // A continuation the engine offered runs alone, through start_continuation; it is
+        // consumed by this start whatever the engine answers.
+        let continuation = match batch.as_slice() {
+            [only] => self
+                .continuations
+                .iter()
+                .find(|(id, _)| *id == only.input_id)
+                .map(|(_, key)| key.clone()),
+            _ => None,
+        };
+        if continuation.is_some() {
+            self.continuations
+                .retain(|(id, _)| *id != batch[0].input_id);
+        }
         let Some(card) = self.host.inner.store.card(&self.id) else {
             self.phase = Phase::Idle;
             return;
@@ -862,7 +1037,11 @@ impl Actor {
                 })
                 .collect::<Vec<_>>()
         };
-        match session.start_turn(inputs, &settings).await {
+        let result = match &continuation {
+            Some(key) => session.start_continuation(key, inputs, &settings).await,
+            None => session.start_turn(inputs, &settings).await,
+        };
+        match result {
             TurnStartResult::Accepted { turn_id } => {
                 let mut events = vec![LogEvent::RunAccepted(RunAccepted {
                     run_id: run_id.clone(),
@@ -895,6 +1074,33 @@ impl Actor {
                     run_id,
                     outcome: RunOutcome::Failed,
                     reason: Some(reason),
+                }));
+                self.append(events);
+                drop(permit);
+                self.phase = Phase::Idle;
+                self.after_run(Some(run_id_for_report), ChildResultStatus::Failed)
+                    .await;
+                self.maybe_start();
+            }
+            TurnStartResult::Declined { reason } if continuation.is_some() => {
+                // The engine no longer holds the continuation: dropped, never sent as a fresh
+                // prompt, and the queue goes on (nothing to retry).
+                let run_id_for_report = run_id.clone();
+                let mut events = delivered(DeliveryOutcome::Declined);
+                events.push(LogEvent::RunFinished(RunFinished {
+                    token_usage: None,
+                    run_id,
+                    outcome: RunOutcome::Failed,
+                    reason: Some(reason),
+                }));
+                events.extend(input_ids.iter().map(|id| {
+                    LogEvent::InputChanged(InputChanged {
+                        input_id: id.clone(),
+                        text: None,
+                        mode: None,
+                        cancelled: Some(true),
+                        position: None,
+                    })
                 }));
                 self.append(events);
                 drop(permit);
@@ -1075,6 +1281,14 @@ impl Actor {
                     }
                     _ => None,
                 };
+                // A runless request of this session the engine closed itself.
+                if request.is_none()
+                    && let Some(index) = self.session_requests.iter().position(|(k, _)| *k == key)
+                {
+                    let (_, request_id) = self.session_requests.remove(index);
+                    self.settled_session_keys.insert(key.clone());
+                    request = Some(request_id);
+                }
                 // The engine closed a keyed sign-in itself (e.g. an interrupt cancelled the
                 // agent's request): close the person's sign-in too, and treat the key as
                 // answered so nothing answers it later.
@@ -1204,16 +1418,24 @@ impl Actor {
                 }
             },
             // Engine work outside a GOAT-started turn (Muse, Pi, OpenCode background turns).
-            // Host support is lane E's work item after the providers module and E-WF; until it
-            // lands drivers do not emit these, and anything that arrives is logged and ignored.
-            EngineEvent::SessionRequestOpened { kind, .. } => {
-                tracing::warn!(thread = %self.id, ?kind, "a request outside any turn is not handled yet: ignored");
+            EngineEvent::SessionRequestOpened {
+                key, kind, summary, ..
+            } => {
+                self.on_session_request(key, kind, summary).await;
             }
-            EngineEvent::ContinuationRequested { .. } => {
-                tracing::warn!(thread = %self.id, "an engine continuation is not handled yet: ignored");
+            EngineEvent::ContinuationRequested { key, text } => {
+                self.on_continuation(key, text).await;
             }
-            EngineEvent::ContinuationWithdrawn { .. } => {
-                tracing::warn!(thread = %self.id, "an engine continuation withdrawal is not handled yet: ignored");
+            EngineEvent::ContinuationWithdrawn { key } => {
+                let withdrawn: Vec<InputId> = self
+                    .continuations
+                    .iter()
+                    .filter(|(_, k)| *k == key)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                self.continuations.retain(|(_, k)| *k != key);
+                // Still queued: cancelled. Once its run started this changes nothing.
+                self.cancel_queued(&withdrawn);
             }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
@@ -1767,7 +1989,8 @@ impl Actor {
             self.undeclined_signin_keys.retain(|k| k != &key);
             self.settled_signin_keys.insert(key);
         }
-        // Engine request of the running turn: answer the engine first.
+        // Engine request of the running turn, or a runless request of this session: answer the
+        // engine first.
         let engine_key = match &self.phase {
             Phase::Running(run) => run
                 .engine_requests
@@ -1775,7 +1998,13 @@ impl Actor {
                 .find(|(_, id)| id == &r.request_id)
                 .map(|(k, _)| k.clone()),
             _ => None,
-        };
+        }
+        .or_else(|| {
+            self.session_requests
+                .iter()
+                .find(|(_, id)| id == &r.request_id)
+                .map(|(k, _)| k.clone())
+        });
         if let (Some(key), Some(session)) = (&engine_key, &self.session) {
             session
                 .session
@@ -1795,6 +2024,10 @@ impl Actor {
                 })?;
             if let Phase::Running(run) = &mut self.phase {
                 run.engine_requests.retain(|(k, _)| k != key);
+            }
+            if self.session_requests.iter().any(|(k, _)| k == key) {
+                self.session_requests.retain(|(k, _)| k != key);
+                self.settled_session_keys.insert(key.clone());
             }
         } else if request.item_id.is_some()
             && !matches!(request.kind, RequestKind::Resend | RequestKind::Signin)
@@ -1991,10 +2224,17 @@ impl Actor {
         self.turn_runs.clear();
         self.live_subagents.clear();
         let signins = std::mem::take(&mut self.session_signins);
-        let closed = self.close_signins(&signins, "the engine stopped");
+        let mut closed = self.close_signins(&signins, "the engine stopped");
+        // Runless requests live only as long as the session that raised them.
+        self.settled_session_keys.clear();
+        let requests: Vec<RequestId> = self.session_requests.drain(..).map(|(_, id)| id).collect();
+        closed.extend(self.close_signins(&requests, "the engine stopped"));
         if !closed.is_empty() {
             self.append(closed);
         }
+        // A continuation the session held is gone with it: dropped, never sent as a prompt.
+        let continuations: Vec<InputId> = self.continuations.drain(..).map(|(id, _)| id).collect();
+        self.cancel_queued(&continuations);
         if let Some(s) = self.session.take() {
             let mut sessions = self.host.inner.sessions.lock().expect("sessions");
             if sessions.get(&self.id).is_some_and(|(p, _)| *p == s.pgen) {
@@ -2048,6 +2288,11 @@ impl Actor {
 /// a path, bare codes), so none of it goes to `goat.jsonl`. The message and link stay in memory
 /// only ([crate::core::SigninLink]).
 const SIGNIN_SUMMARY: &str = "Sign in to continue";
+/// Item id prefix of a runless engine request (`SessionRequestOpened`): marks it across a
+/// restart, when the session that raised it is gone.
+pub(crate) const SESSION_REQUEST_ITEM_PREFIX: &str = "engine-session:";
+/// `clientRequestId` prefix of an engine continuation input (`continuation:<key>`).
+const CONTINUATION_PREFIX: &str = "continuation:";
 
 /// Turns of one engine session remembered for late items.
 const TURN_RUNS_KEPT: usize = 64;

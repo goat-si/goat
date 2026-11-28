@@ -74,6 +74,12 @@ pub enum FakeCall {
         key: String,
         outcome: goat2_contracts::RequestOutcome,
     },
+    Continuation {
+        thread_id: ThreadId,
+        key: String,
+        turn_id: Option<String>,
+        input_ids: Vec<String>,
+    },
     Shutdown {
         thread_id: ThreadId,
     },
@@ -85,6 +91,8 @@ struct Shared {
     calls: Vec<FakeCall>,
     turn_results: HashMap<ThreadId, VecDeque<TurnStartResult>>,
     steer_results: HashMap<ThreadId, VecDeque<SteerResult>>,
+    /// When set, start_continuation answers Declined (the engine no longer holds the key).
+    decline_continuations: bool,
     senders: HashMap<ThreadId, mpsc::UnboundedSender<EngineEvent>>,
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
@@ -185,6 +193,11 @@ impl FakeEngine {
     /// Make every probe take `delay`.
     pub fn set_probe_delay(&self, delay: Duration) {
         self.shared.lock().expect("fake").probe_delay = delay;
+    }
+
+    /// Make start_continuation answer Declined (the engine no longer holds the key).
+    pub fn decline_continuations(&self, decline: bool) {
+        self.shared.lock().expect("fake").decline_continuations = decline;
     }
 
     /// How many probes ran so far.
@@ -562,6 +575,40 @@ impl EngineSession for FakeSession {
                 });
             });
         }
+        result
+    }
+
+    async fn start_continuation(
+        &self,
+        key: &str,
+        inputs: Vec<EngineInput>,
+        _settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let mut shared = self.engine.shared.lock().expect("fake");
+        let result = if shared.decline_continuations {
+            TurnStartResult::Declined {
+                reason: "continuation no longer available".into(),
+            }
+        } else {
+            TurnStartResult::Accepted {
+                turn_id: new_id("turn"),
+            }
+        };
+        let turn_id = match &result {
+            TurnStartResult::Accepted { turn_id } => {
+                shared
+                    .active_turn
+                    .insert(self.thread_id.clone(), turn_id.clone());
+                Some(turn_id.clone())
+            }
+            _ => None,
+        };
+        shared.calls.push(FakeCall::Continuation {
+            thread_id: self.thread_id.clone(),
+            key: key.to_owned(),
+            turn_id,
+            input_ids: ids(&inputs),
+        });
         result
     }
 
