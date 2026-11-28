@@ -1124,7 +1124,22 @@ impl Installer {
                 "tar"
             };
             tokio::task::spawn_blocking(move || -> Result<(), Fault> {
-                let Some(listing) = archive::list_entries(kind, &archive_path)? else {
+                // Final review 6 finding C1: past the expansion limit is an invalid archive.
+                let too_large = || {
+                    Fault::from(RegistryError::new(
+                        Reason::ArchiveInvalid,
+                        format!(
+                            "ACP Registry agent {id} archive expands past {} GiB or {} entries.",
+                            archive::MAX_EXTRACTED_BYTES / (1024 * 1024 * 1024),
+                            archive::MAX_ARCHIVE_ENTRIES
+                        ),
+                    ))
+                };
+                let listed = match archive::list_entries(kind, &archive_path) {
+                    Err(e) if e.kind() == io::ErrorKind::FileTooLarge => return Err(too_large()),
+                    listed => listed?,
+                };
+                let Some(listing) = listed else {
                     return Err(RegistryError::new(
                         Reason::ArchiveInvalid,
                         format!("ACP Registry install command '{tool}' produced more output than expected."),
@@ -1139,6 +1154,9 @@ impl Installer {
                     .into());
                 }
                 archive::extract(kind, &archive_path, &extraction).map_err(|e| {
+                    if e.kind() == io::ErrorKind::FileTooLarge {
+                        return too_large();
+                    }
                     if e.kind() == io::ErrorKind::InvalidData {
                         RegistryError::new(
                             Reason::ArchiveInvalid,

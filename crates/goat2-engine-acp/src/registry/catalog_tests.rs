@@ -422,6 +422,33 @@ async fn rejects_an_archive_with_a_traversal_entry() {
     assert!(leftovers(dir.path()).is_empty());
 }
 
+/// Final review 6 finding C1: an archive that would expand past the extraction limit is refused
+/// as invalid and leaves nothing behind (v1 extracts it whole, AcpRegistrySupport.ts:1402-1416).
+#[tokio::test]
+async fn rejects_an_archive_that_expands_past_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start().await;
+    server.route(
+        "/agent.tar.gz",
+        200,
+        super::archive::tests::tar_gz_declaring("agent", 4 * 1024 * 1024 * 1024 + 1, &[0; 4096]),
+    );
+    server.registry(&example(json!({"binary": {"linux-x86_64": {
+        "archive": "https://registry.test/agent.tar.gz", "cmd": "agent"}}})));
+    let c = catalog(dir.path(), &server, base_env());
+    let error = c.prepare(&prepare_input()).await.unwrap_err();
+    assert_eq!(error.reason, Reason::ArchiveInvalid, "{}", error.detail);
+    assert_eq!(
+        error.detail,
+        "ACP Registry agent example-agent archive expands past 4 GiB or 200000 entries."
+    );
+    assert!(
+        leftovers(dir.path()).is_empty(),
+        "{:?}",
+        leftovers(dir.path())
+    );
+}
+
 // v1 AcpRegistrySupport.binaryInstall.test.ts:147-207.
 #[tokio::test]
 async fn leaves_an_outside_file_alone_when_the_command_links_to_it() {
